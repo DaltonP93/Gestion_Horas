@@ -1,6 +1,4 @@
 node_modules/
-.env
-.env.local
 *.log
 __pycache__/
 .next/
@@ -8,10 +6,28 @@ __pycache__/
 .venv/
 venv/
 dist/
-# .env.production SI se sube (solo URLs públicas, sin secretos)
 
-# Capacitor — carpetas nativas generadas localmente
+# ── Secretos: NUNCA commitear ────────────────────────────────
+.env
+.env.*
+!.env.example
+!*/.env.example
+# .env.production puede subirse SOLO si contiene URLs públicas (sin secretos)
+# El archivo está validado: revisar antes de cada push.
+
+# ── Capacitor — carpetas nativas generadas localmente ────────
 web/android/
 web/ios/
 web/out/
 web/.capacitor/
+
+# ── Editores ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# ── Logs y temporales ────────────────────────────────────────
+logs/
+*.log.*
+tmp/
