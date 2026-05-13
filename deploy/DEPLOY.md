@@ -283,7 +283,113 @@ Desde Xcode:
 
 ---
 
-## 7. Resumen de servicios PM2
+## 7. ⚠️ Rotación de credenciales tras alerta GitGuardian
+
+GitGuardian detectó secretos expuestos en `web/.env.local` (commit `569d115`).
+El archivo ya fue eliminado del tracking en commit `ae8a7f8`, pero **el historial
+de git aún contiene los valores antiguos**, así que TODO secreto que haya
+estado en ese archivo debe rotarse.
+
+### Secretos a rotar (ejecutar EN EL SERVER)
+
+```bash
+ssh root@antigravity
+cd /var/www/html/Gestion_Horas
+
+# 1. Backup del .env actual
+cp api/.env api/.env.bak.$(date +%Y%m%d)
+
+# 2. Generar valores nuevos seguros
+echo ""
+echo "JWT_SECRET=$(openssl rand -base64 48)"
+echo "JWT_REFRESH_SECRET=$(openssl rand -base64 48)"
+echo "BRIDGE_API_KEY=$(openssl rand -hex 32)"
+echo "INTEGRATION_API_KEY=$(openssl rand -hex 32)"
+echo "ANALYTICS_API_KEY=$(openssl rand -hex 32)"
+echo ""
+
+# 3. Editar api/.env y reemplazar los 5 valores
+nano api/.env
+
+# 4. Si BRIDGE_API_KEY estaba en bridge/, también actualizar ahí:
+nano bridge/.env
+
+# 5. Reiniciar todos los servicios para que tomen los nuevos secretos
+pm2 reload all
+
+# 6. (Importante) los JWT viejos ahora son inválidos.
+#    TODOS los usuarios deberán volver a hacer login.
+#    Avisar al equipo antes de hacer esto.
+```
+
+### Sobre SMTP
+
+El `web/.env.local` tenía `SMTP_USER=` y `SMTP_PASS=` **vacíos** (no había
+credenciales reales en esos campos). GitGuardian alertó porque detecta el
+patrón del par de variables. **Si nunca usaste SMTP real en producción, no
+hay nada que rotar para SMTP.**
+
+Si alguna vez configuraste SMTP real (por ej. desde la UI en Reportes →
+Configurar SMTP), revoca esa "App password" de Gmail:
+1. Ir a https://myaccount.google.com/apppasswords
+2. Eliminar el App password que tenías para SisHoras
+3. Crear uno nuevo
+4. Actualizar `SMTP_PASS=` en `api/.env`
+
+### Sobre IPs ZKTeco
+
+Las IPs `172.16.20.16x` que aparecieron en el `.env.local` son LAN privada.
+No son secretos públicos pero exponen tu topología de red. La nueva versión
+del sistema lee esas IPs **desde la BD** (tabla `devices`), no desde el
+`.env`, así que ya no es problema futuro.
+
+### Opcional — Borrar los secretos del historial de git
+
+El commit `ae8a7f8` los quitó del HEAD, pero los commits viejos en GitHub
+todavía los tienen. Para borrarlos del historial completo:
+
+> ⚠️ **Esto es destructivo**: cambia todos los hashes de commits viejos.
+> Si alguien más cloneó el repo, deberá hacer fresh clone después.
+
+```bash
+# En tu PC (NO en el server, porque destruye history):
+git clone https://github.com/DaltonP93/Gestion_Horas.git Gestion_Horas_clean
+cd Gestion_Horas_clean
+
+# Instalar git-filter-repo (más rápido y seguro que filter-branch)
+# Ubuntu/Debian: sudo apt install git-filter-repo
+# Windows con Python: pip install git-filter-repo
+# Mac: brew install git-filter-repo
+
+# Borrar el archivo del historial completo
+git filter-repo --invert-paths --path web/.env.local
+
+# Force-push
+git remote add origin https://github.com/DaltonP93/Gestion_Horas.git
+git push --force --all origin
+git push --force --tags origin
+```
+
+Luego en el server:
+```bash
+cd /var/www/html/Gestion_Horas
+git fetch origin
+git reset --hard origin/main
+```
+
+### Recomendación práctica
+
+**No hace falta reescribir history** si rotás los secretos. Los valores
+viejos en GitHub quedan inservibles. Solo reescribí history si el repo es
+**público** y querés que no aparezcan en buscadores tipo TruffleHog.
+
+Tu repo `DaltonP93/Gestion_Horas` puede ser privado — verificá en GitHub:
+- https://github.com/DaltonP93/Gestion_Horas/settings → Danger Zone → "Change
+  visibility" → si dice "Make public" significa que YA ES PRIVADO ✅
+
+---
+
+## 8. Resumen de servicios PM2
 
 ```
 ┌─────┬───────────┬─────────┬──────┬───────┬──────────┐
