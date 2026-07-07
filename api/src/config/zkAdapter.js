@@ -30,15 +30,23 @@ const logger           = require('./logger');
 //   WorkCode    varchar(10)
 
 async function fetchCheckInOut({ dateFrom, dateTo, limit = 5000 } = {}) {
+  // Parametrizar entradas del usuario para evitar inyección SQL de 2º grado
+  // sobre la BD att2000. Los nombres de columna se siguen resolviendo por
+  // lista blanca vía pickCol(); solo valores viajan como parámetros.
+  const params = {};
   let where = '1=1';
-  if (dateFrom) where += ` AND CHECKTIME >= '${dateFrom}'`;
-  if (dateTo)   where += ` AND CHECKTIME <= '${dateTo}'`;
+  if (dateFrom) { where += ' AND CHECKTIME >= @dateFrom'; params.dateFrom = new Date(dateFrom); }
+  if (dateTo)   { where += ' AND CHECKTIME <= @dateTo';   params.dateTo   = new Date(dateTo); }
+
+  // Sanear limit a entero positivo acotado (SQL Server admite TOP (@n))
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 200000);
+  params.limit = safeLimit;
 
   const chkCols  = await getTableColumns('CHECKINOUT');
   const userCols = await getTableColumns('USERINFO');
 
   const rows = await queryAtt2000(`
-    SELECT TOP ${limit}
+    SELECT TOP (@limit)
       ${pickCol(chkCols,  'USERID',     { prefix: 'c.' })},
       ${pickCol(chkCols,  'CHECKTIME',  { prefix: 'c.' })},
       ${pickCol(chkCols,  'CHECKTYPE',  { prefix: 'c.' })},
@@ -52,7 +60,7 @@ async function fetchCheckInOut({ dateFrom, dateTo, limit = 5000 } = {}) {
     LEFT JOIN USERINFO u ON c.USERID = u.USERID
     WHERE ${where}
     ORDER BY c.CHECKTIME DESC
-  `);
+  `, params);
   return rows;
 }
 
