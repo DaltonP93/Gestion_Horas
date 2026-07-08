@@ -105,34 +105,34 @@ export default function FirmaDigitalPage() {
           <PenLine className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Firma digital de planillas</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Firma digital de planillas</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">
             Esta firma e información se inserta automáticamente en los PDFs de planilla mensual.
           </p>
         </div>
       </div>
 
       {/* Datos del firmante */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-        <h3 className="font-semibold text-slate-700">Datos del firmante</h3>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h3 className="font-semibold text-slate-700 dark:text-white/80">Datos del firmante</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Nombre completo</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Nombre completo</label>
             <input value={signerName} onChange={e => setSignerName(e.target.value)}
               placeholder="Ej: Juan Pérez"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Cargo</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Cargo</label>
             <input value={signerPosition} onChange={e => setSignerPosition(e.target.value)}
               placeholder="Ej: Gerente de RRHH"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
           </div>
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-slate-700 mb-1">Documento (opcional)</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Documento (opcional)</label>
             <input value={signerDocId} onChange={e => setSignerDocId(e.target.value)}
               placeholder="C.I. 1234567"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
           </div>
         </div>
         <button onClick={saveText} disabled={saving}
@@ -142,34 +142,34 @@ export default function FirmaDigitalPage() {
       </div>
 
       {/* Firma */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h3 className="font-semibold text-slate-700 flex items-center gap-2 dark:text-white/80">
           <PenLine size={16} className="text-amber-600" /> Imagen de firma
         </h3>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-500 dark:text-white/40">
           PNG con fondo transparente recomendado. Tamaño sugerido: 400×150 px.
         </p>
 
         {signatureUrl ? (
-          <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <img src={apiUrl(signatureUrl)} alt="Firma" className="h-20 max-w-[300px] object-contain bg-white p-2 rounded" />
+          <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+            <img src={apiUrl(signatureUrl)} alt="Firma" className="h-20 max-w-[300px] object-contain bg-white p-2 rounded dark:bg-white/[0.04]" />
             <div className="flex-1">
-              <p className="text-sm text-slate-700 font-medium">Firma actual</p>
-              <p className="text-xs text-slate-400 font-mono">{signatureUrl}</p>
+              <p className="text-sm text-slate-700 font-medium dark:text-white/80">Firma actual</p>
+              <p className="text-xs text-slate-400 font-mono dark:text-white/30">{signatureUrl}</p>
             </div>
             <button onClick={clearSignature} className="text-rose-600 hover:bg-rose-50 px-3 py-2 rounded-lg text-sm">
               <Trash2 size={14} />
             </button>
           </div>
         ) : (
-          <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-xl text-slate-400">
+          <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 dark:text-white/30 dark:border-white/[0.08]">
             <PenLine size={32} className="mx-auto mb-2 opacity-40" />
             <p className="text-sm">Sin firma cargada</p>
           </div>
         )}
 
         {/* Tabs subir / dibujar */}
-        <div className="flex bg-slate-100 rounded-xl p-1 w-fit">
+        <div className="flex bg-slate-100 rounded-xl p-1 w-fit dark:bg-white/[0.06]">
           <button onClick={() => setSigMode('upload')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               sigMode === 'upload' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500'
@@ -189,7 +189,7 @@ export default function FirmaDigitalPage() {
             <input ref={sigInputRef} type="file" accept="image/png,image/jpeg" className="hidden"
               onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f, 'signature') }} />
             <button onClick={() => sigInputRef.current?.click()}
-              className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors">
+              className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <Upload size={14} /> Subir imagen de firma
             </button>
           </>
@@ -205,27 +205,27 @@ export default function FirmaDigitalPage() {
       </div>
 
       {/* Sello */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h3 className="font-semibold text-slate-700 flex items-center gap-2 dark:text-white/80">
           <Stamp size={16} className="text-rose-600" /> Sello (opcional)
         </h3>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-500 dark:text-white/40">
           PNG circular con fondo transparente. Tamaño sugerido: 300×300 px.
         </p>
 
         {sealUrl ? (
-          <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
-            <img src={apiUrl(sealUrl)} alt="Sello" className="h-20 w-20 object-contain bg-white p-2 rounded" />
+          <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+            <img src={apiUrl(sealUrl)} alt="Sello" className="h-20 w-20 object-contain bg-white p-2 rounded dark:bg-white/[0.04]" />
             <div className="flex-1">
-              <p className="text-sm text-slate-700 font-medium">Sello actual</p>
-              <p className="text-xs text-slate-400 font-mono">{sealUrl}</p>
+              <p className="text-sm text-slate-700 font-medium dark:text-white/80">Sello actual</p>
+              <p className="text-xs text-slate-400 font-mono dark:text-white/30">{sealUrl}</p>
             </div>
             <button onClick={clearSeal} className="text-rose-600 hover:bg-rose-50 px-3 py-2 rounded-lg text-sm">
               <Trash2 size={14} />
             </button>
           </div>
         ) : (
-          <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-xl text-slate-400">
+          <div className="text-center py-8 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 dark:text-white/30 dark:border-white/[0.08]">
             <Stamp size={32} className="mx-auto mb-2 opacity-40" />
             <p className="text-sm">Sin sello cargado</p>
           </div>
@@ -234,7 +234,7 @@ export default function FirmaDigitalPage() {
         <input ref={sealInputRef} type="file" accept="image/png,image/jpeg" className="hidden"
           onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f, 'seal') }} />
         <button onClick={() => sealInputRef.current?.click()}
-          className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors">
+          className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
           <Upload size={14} /> Subir imagen de sello
         </button>
       </div>

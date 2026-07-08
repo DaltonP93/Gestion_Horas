@@ -106,7 +106,7 @@ export default function MiPerfilPage() {
   }
 
   if (loading) return (
-    <div className="p-10 flex items-center justify-center gap-2 text-slate-400">
+    <div className="p-10 flex items-center justify-center gap-2 text-slate-400 dark:text-white/30">
       <Loader2 size={18} className="animate-spin" /> Cargando...
     </div>
   )
@@ -144,10 +144,10 @@ export default function MiPerfilPage() {
               onClick={() => photoRef.current?.click()}
               disabled={photoLoading}
               title="Cambiar foto"
-              className="absolute -bottom-1.5 -right-1.5 w-8 h-8 rounded-full bg-white border border-slate-200 shadow flex items-center justify-center hover:bg-slate-50 transition-colors disabled:opacity-50">
+              className="absolute -bottom-1.5 -right-1.5 w-8 h-8 rounded-full bg-white border border-slate-200 shadow flex items-center justify-center hover:bg-slate-50 transition-colors disabled:opacity-50 dark:bg-white/[0.04] dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               {photoLoading
-                ? <Loader2 size={14} className="animate-spin text-slate-500" />
-                : <Camera size={14} className="text-slate-600" />}
+                ? <Loader2 size={14} className="animate-spin text-slate-500 dark:text-white/40" />
+                : <Camera size={14} className="text-slate-600 dark:text-white/60" />}
             </button>
             <input ref={photoRef} type="file" accept="image/jpeg,image/png,image/webp"
               className="hidden"
@@ -155,8 +155,8 @@ export default function MiPerfilPage() {
           </div>
 
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">{displayName}</h1>
-            <p className="text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{displayName}</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">
               {ROLE_LABEL[user.role] || user.role}
               {employee?.department ? ` · ${employee.department}` : ''}
             </p>
@@ -168,7 +168,7 @@ export default function MiPerfilPage() {
           {editing ? (
             <>
               <button onClick={cancelEdit}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-sm hover:bg-slate-50 transition-colors">
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-sm hover:bg-slate-50 transition-colors dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                 <X size={15} /> Cancelar
               </button>
               <button onClick={save} disabled={saving}
@@ -181,7 +181,7 @@ export default function MiPerfilPage() {
             </>
           ) : (
             <button onClick={startEdit}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-sm hover:bg-slate-50 transition-colors">
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-sm hover:bg-slate-50 transition-colors dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <Pencil size={15} /> Editar perfil
             </button>
           )}
@@ -202,8 +202,8 @@ export default function MiPerfilPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* ── Datos de cuenta ────────────────────────────────────── */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-          <h2 className="font-semibold text-slate-900 border-b border-slate-100 pb-2">Cuenta</h2>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-900 border-b border-slate-100 pb-2 dark:text-white dark:border-white/[0.06]">Cuenta</h2>
 
           <Field icon={UserCircle2} label="Nombre completo"
             value={user.full_name} readonly />
@@ -212,14 +212,14 @@ export default function MiPerfilPage() {
 
           {editing ? (
             <div>
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1 dark:text-white/40">
                 <Mail size={13} /> Email
               </label>
               <input
                 type="email"
                 value={form.email}
                 onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
                 placeholder="tu@email.com"
               />
             </div>
@@ -234,11 +234,11 @@ export default function MiPerfilPage() {
         </div>
 
         {/* ── Datos de empleado ──────────────────────────────────── */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-          <h2 className="font-semibold text-slate-900 border-b border-slate-100 pb-2">Empleado</h2>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-900 border-b border-slate-100 pb-2 dark:text-white dark:border-white/[0.06]">Empleado</h2>
 
           {!employee ? (
-            <p className="text-slate-400 text-sm italic">
+            <p className="text-slate-400 text-sm italic dark:text-white/30">
               Tu usuario no está vinculado a un empleado. Pedile a RRHH que te vincule para ver tu asistencia y pedir permisos.
             </p>
           ) : (
@@ -255,26 +255,26 @@ export default function MiPerfilPage() {
               {editing ? (
                 <>
                   <div>
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1">
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1 dark:text-white/40">
                       <Phone size={13} /> Teléfono
                     </label>
                     <input
                       type="tel"
                       value={form.phone}
                       onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
                       placeholder="+595 9xx xxx xxx"
                     />
                   </div>
                   <div>
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1">
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-500 mb-1 dark:text-white/40">
                       <MapPin size={13} /> Dirección
                     </label>
                     <input
                       type="text"
                       value={form.address}
                       onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
                       placeholder="Calle, ciudad"
                     />
                   </div>
@@ -298,7 +298,7 @@ export default function MiPerfilPage() {
 
       {/* ── Nota sobre campos de solo lectura ───────────────────── */}
       {editing && (
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-400 dark:text-white/30">
           Los campos en gris (nombre, código, puesto, departamento) solo pueden modificarse desde el módulo de Empleados por un administrador o RRHH.
         </p>
       )}
@@ -315,8 +315,8 @@ function Field({
 }) {
   return (
     <div className="flex items-start gap-3 text-sm">
-      <Icon size={15} className="text-slate-400 shrink-0 mt-0.5" />
-      <span className="text-slate-500 w-32 shrink-0 leading-relaxed">{label}</span>
+      <Icon size={15} className="text-slate-400 shrink-0 mt-0.5 dark:text-white/30" />
+      <span className="text-slate-500 w-32 shrink-0 leading-relaxed dark:text-white/40">{label}</span>
       <span className={`font-medium break-words min-w-0 ${readonly ? 'text-slate-700' : 'text-slate-900'}`}>
         {value}
       </span>
@@ -333,8 +333,8 @@ function StatusBadge({ status }: { status: string }) {
   const { label, cls } = map[status] || { label: status, cls: 'bg-slate-50 text-slate-500 border-slate-200' }
   return (
     <div className="flex items-center gap-3 text-sm">
-      <Briefcase size={15} className="text-slate-400 shrink-0" />
-      <span className="text-slate-500 w-32 shrink-0">Estado</span>
+      <Briefcase size={15} className="text-slate-400 shrink-0 dark:text-white/30" />
+      <span className="text-slate-500 w-32 shrink-0 dark:text-white/40">Estado</span>
       <span className={`px-2 py-0.5 rounded-full border text-xs font-medium ${cls}`}>{label}</span>
     </div>
   )

@@ -84,8 +84,8 @@ export default function BancoHorasPage() {
             <PiggyBank className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Banco de horas</h1>
-            <p className="text-sm text-slate-500">Acumulación y canje de horas extra por empleado</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Banco de horas</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">Acumulación y canje de horas extra por empleado</p>
           </div>
         </div>
         {isAdmin && (
@@ -97,34 +97,34 @@ export default function BancoHorasPage() {
       </div>
 
       {/* Lista de saldos */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
-          <Search size={16} className="text-slate-400" />
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 dark:border-white/[0.06]">
+          <Search size={16} className="text-slate-400 dark:text-white/30" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Buscar empleado..."
             className="flex-1 outline-none text-sm" />
-          <span className="text-xs text-slate-400">{filtered.length}</span>
+          <span className="text-xs text-slate-400 dark:text-white/30">{filtered.length}</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
               <tr>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs">Empleado</th>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs">Departamento</th>
-                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs">Saldo</th>
-                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs">Acumulado</th>
-                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs">Canjeado</th>
-                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs">Última actividad</th>
+                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Empleado</th>
+                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Departamento</th>
+                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Saldo</th>
+                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Acumulado</th>
+                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Canjeado</th>
+                <th className="text-right px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Última actividad</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {filtered.map((r: any) => (
-                <tr key={r.id} className="hover:bg-slate-50 cursor-pointer"
+                <tr key={r.id} className="hover:bg-slate-50 cursor-pointer dark:hover:bg-white/[0.04]"
                   onClick={() => setSelectedEmp(r)}>
-                  <td className="px-4 py-2.5 font-medium text-slate-800">
-                    {r.employee_name} <span className="text-xs text-slate-400">[{r.code}]</span>
+                  <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-white/90">
+                    {r.employee_name} <span className="text-xs text-slate-400 dark:text-white/30">[{r.code}]</span>
                   </td>
-                  <td className="px-4 py-2.5 text-slate-500 text-xs">{r.department || '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-500 text-xs dark:text-white/40">{r.department || '—'}</td>
                   <td className={`px-4 py-2.5 text-right font-mono font-bold ${
                     r.balance_minutes > 0 ? 'text-emerald-600' :
                     r.balance_minutes < 0 ? 'text-rose-600' : 'text-slate-400'
@@ -137,13 +137,13 @@ export default function BancoHorasPage() {
                   <td className="px-4 py-2.5 text-right font-mono text-rose-600 text-xs">
                     {minsToHM(r.total_redeemed)}
                   </td>
-                  <td className="px-4 py-2.5 text-right text-xs text-slate-400">
+                  <td className="px-4 py-2.5 text-right text-xs text-slate-400 dark:text-white/30">
                     {r.last_activity ? format(new Date(r.last_activity), "d MMM yyyy", { locale: es }) : '—'}
                   </td>
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={6} className="text-center py-8 text-slate-400">Sin datos</td></tr>
+                <tr><td colSpan={6} className="text-center py-8 text-slate-400 dark:text-white/30">Sin datos</td></tr>
               )}
             </tbody>
           </table>
@@ -154,21 +154,21 @@ export default function BancoHorasPage() {
       {selectedEmp && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
           onClick={() => { setSelectedEmp(null); setTxMode(null) }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col dark:bg-white/[0.04]"
             onClick={e => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
               <div>
-                <h3 className="font-bold text-slate-900">{selectedEmp.employee_name}</h3>
-                <p className="text-xs text-slate-500">[{selectedEmp.code}] · {selectedEmp.department || 'Sin depto'}</p>
+                <h3 className="font-bold text-slate-900 dark:text-white">{selectedEmp.employee_name}</h3>
+                <p className="text-xs text-slate-500 dark:text-white/40">[{selectedEmp.code}] · {selectedEmp.department || 'Sin depto'}</p>
               </div>
-              <button onClick={() => setSelectedEmp(null)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setSelectedEmp(null)} className="text-slate-400 hover:text-slate-600 dark:text-white/30">
                 <X size={18} />
               </button>
             </div>
 
-            <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+            <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between dark:bg-white/[0.03] dark:border-white/[0.06]">
               <div>
-                <p className="text-xs text-slate-500 uppercase">Saldo actual</p>
+                <p className="text-xs text-slate-500 uppercase dark:text-white/40">Saldo actual</p>
                 <p className={`text-3xl font-bold font-mono ${
                   (detail?.balance_minutes || 0) > 0 ? 'text-emerald-600' :
                   (detail?.balance_minutes || 0) < 0 ? 'text-rose-600' : 'text-slate-400'
@@ -197,19 +197,19 @@ export default function BancoHorasPage() {
                 </h4>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-slate-600 mb-1">Minutos</label>
+                    <label className="block text-xs text-slate-600 mb-1 dark:text-white/60">Minutos</label>
                     <input type="number" min="1" value={txMinutes} onChange={e => setTxMinutes(e.target.value)}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-600 mb-1">Motivo</label>
+                    <label className="block text-xs text-slate-600 mb-1 dark:text-white/60">Motivo</label>
                     <input value={txReason} onChange={e => setTxReason(e.target.value)}
                       placeholder={txMode === 'deposit' ? 'Ej: hora extra autorizada' : 'Ej: día compensado'}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
                   </div>
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <button onClick={() => setTxMode(null)} className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm">Cancelar</button>
+                  <button onClick={() => setTxMode(null)} className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
                   <button onClick={submitTransaction}
                     className={`text-white px-4 py-2 rounded-xl text-sm font-medium ${
                       txMode === 'deposit' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'
@@ -222,21 +222,21 @@ export default function BancoHorasPage() {
 
             <div className="flex-1 overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="bg-white border-b border-slate-100 sticky top-0">
+                <thead className="bg-white border-b border-slate-100 sticky top-0 dark:bg-white/[0.04] dark:border-white/[0.06]">
                   <tr>
-                    <th className="text-left px-4 py-2 text-slate-500 font-medium text-xs">Fecha</th>
-                    <th className="text-left px-4 py-2 text-slate-500 font-medium text-xs">Tipo</th>
-                    <th className="text-right px-4 py-2 text-slate-500 font-medium text-xs">Minutos</th>
-                    <th className="text-left px-4 py-2 text-slate-500 font-medium text-xs">Motivo</th>
+                    <th className="text-left px-4 py-2 text-slate-500 font-medium text-xs dark:text-white/40">Fecha</th>
+                    <th className="text-left px-4 py-2 text-slate-500 font-medium text-xs dark:text-white/40">Tipo</th>
+                    <th className="text-right px-4 py-2 text-slate-500 font-medium text-xs dark:text-white/40">Minutos</th>
+                    <th className="text-left px-4 py-2 text-slate-500 font-medium text-xs dark:text-white/40">Motivo</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-50">
+                <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                   {(detail?.transactions || []).map((t: any) => (
-                    <tr key={t.id} className="hover:bg-slate-50">
+                    <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
                       <td className="px-4 py-2 text-xs">
                         {format(new Date(t.created_at), "d MMM yyyy HH:mm", { locale: es })}
                         {t.reference_date && (
-                          <span className="block text-slate-400">
+                          <span className="block text-slate-400 dark:text-white/30">
                             (ref: {format(new Date(t.reference_date), "d MMM", { locale: es })})
                           </span>
                         )}
@@ -256,11 +256,11 @@ export default function BancoHorasPage() {
                       }`}>
                         {t.minutes > 0 ? '+' : ''}{minsToHM(t.minutes)}
                       </td>
-                      <td className="px-4 py-2 text-xs text-slate-500">{t.reason || '—'}</td>
+                      <td className="px-4 py-2 text-xs text-slate-500 dark:text-white/40">{t.reason || '—'}</td>
                     </tr>
                   ))}
                   {(!detail?.transactions || detail.transactions.length === 0) && (
-                    <tr><td colSpan={4} className="text-center py-6 text-slate-400 text-sm">Sin transacciones</td></tr>
+                    <tr><td colSpan={4} className="text-center py-6 text-slate-400 text-sm dark:text-white/30">Sin transacciones</td></tr>
                   )}
                 </tbody>
               </table>
@@ -273,29 +273,29 @@ export default function BancoHorasPage() {
       {showSync && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
           onClick={() => setShowSync(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4"
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 dark:bg-white/[0.04]"
             onClick={e => e.stopPropagation()}>
-            <h3 className="font-bold text-slate-900 flex items-center gap-2">
+            <h3 className="font-bold text-slate-900 flex items-center gap-2 dark:text-white">
               <RefreshCw size={18} className="text-blue-600" /> Sincronizar desde resumen diario
             </h3>
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-slate-600 dark:text-white/60">
               Acredita automáticamente al banco las horas extra registradas en el resumen diario para el rango seleccionado. Idempotente: cada día se acredita una sola vez.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Desde</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Desde</label>
                 <input type="date" value={syncFrom} onChange={e => setSyncFrom(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
               </div>
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Hasta</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Hasta</label>
                 <input type="date" value={syncTo} onChange={e => setSyncTo(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
               </div>
             </div>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowSync(false)}
-                className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm">Cancelar</button>
+                className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
               <button onClick={syncFromDaily}
                 className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
                 Sincronizar

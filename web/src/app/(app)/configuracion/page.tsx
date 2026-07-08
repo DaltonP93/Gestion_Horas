@@ -78,7 +78,7 @@ function ConfiguracionPageInner() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold text-slate-900">Configuración</h1>
+        <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Configuración</h1>
         <div className="flex gap-2 flex-wrap">
           <a href="/configuracion/turnos"
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium shadow-sm hover:bg-blue-700 transition-colors">
@@ -114,7 +114,7 @@ function ConfiguracionPageInner() {
           </a>
         </div>
       </div>
-      <div className="flex gap-1 border-b border-slate-200 flex-wrap">
+      <div className="flex gap-1 border-b border-slate-200 flex-wrap dark:border-white/[0.08]">
         {tabs.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors ${
@@ -124,7 +124,7 @@ function ConfiguracionPageInner() {
             }`}>{t.label}</button>
         ))}
       </div>
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {tab === 'sistema'  && <SistemaTab />}
         {tab === 'relojes'  && <RelojesTab />}
         {tab === 'sync'     && <SyncTab />}
@@ -163,7 +163,7 @@ function SistemaTab() {
     setSaving(false)
   }
 
-  if (loading) return <div className="py-8 text-center text-slate-400">Cargando configuración...</div>
+  if (loading) return <div className="py-8 text-center text-slate-400 dark:text-white/30">Cargando configuración...</div>
 
   const gradients = [
     { value: 'from-slate-900 to-blue-900',    label: 'Slate → Azul (default)' },
@@ -177,15 +177,15 @@ function SistemaTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="font-semibold text-slate-800">Personalización del Sistema</h2>
-        <p className="text-sm text-slate-500 mt-0.5">Logo, nombre, colores y pantalla de login</p>
+        <h2 className="font-semibold text-slate-800 dark:text-white/90">Personalización del Sistema</h2>
+        <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Logo, nombre, colores y pantalla de login</p>
       </div>
 
       {/* Identidad */}
-      <div className="border border-slate-200 rounded-2xl p-5 space-y-4">
+      <div className="border border-slate-200 rounded-2xl p-5 space-y-4 dark:border-white/[0.08]">
         <div className="flex items-center gap-2 mb-1">
           <Monitor size={16} className="text-blue-600" />
-          <h3 className="font-medium text-slate-800">Identidad del Sistema</h3>
+          <h3 className="font-medium text-slate-800 dark:text-white/90">Identidad del Sistema</h3>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -197,7 +197,7 @@ function SistemaTab() {
             <input value={settings.system_company} onChange={setField('system_company')} placeholder="Mi Empresa S.A." className={inputCls} />
           </div>
         </div>
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600 dark:bg-white/[0.03] dark:text-white/60 dark:border-white/[0.08]">
           Logo, favicon, colores y pantalla de login se configuran ahora en{' '}
           <a href="/configuracion/apariencia" className="text-blue-600 hover:underline font-medium">
             Personalizar apariencia →
@@ -206,12 +206,12 @@ function SistemaTab() {
       </div>
 
       {/* Visualización de empleados */}
-      <div className="border border-slate-200 rounded-2xl p-5 space-y-4">
+      <div className="border border-slate-200 rounded-2xl p-5 space-y-4 dark:border-white/[0.08]">
         <div className="flex items-center gap-2 mb-1">
           <Users size={16} className="text-blue-600" />
-          <h3 className="font-medium text-slate-800">Visualización de empleados</h3>
+          <h3 className="font-medium text-slate-800 dark:text-white/90">Visualización de empleados</h3>
         </div>
-        <p className="text-xs text-slate-500 -mt-2">
+        <p className="text-xs text-slate-500 -mt-2 dark:text-white/40">
           Cómo mostrar los empleados en toda la aplicación. Útil si los ZKTeco no tienen nombres cargados.
         </p>
         <div className="grid grid-cols-3 gap-3">
@@ -230,9 +230,9 @@ function SistemaTab() {
                 checked={settings.employee_display_mode === opt.value}
                 onChange={e => setSettings(s => ({ ...s, employee_display_mode: e.target.value as any }))}
                 className="sr-only" />
-              <div className="font-semibold text-sm text-slate-800">{opt.label}</div>
-              <div className="text-xs text-slate-500 mt-0.5">{opt.desc}</div>
-              <div className="font-mono text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 mt-2 text-slate-700">{opt.sample}</div>
+              <div className="font-semibold text-sm text-slate-800 dark:text-white/90">{opt.label}</div>
+              <div className="text-xs text-slate-500 mt-0.5 dark:text-white/40">{opt.desc}</div>
+              <div className="font-mono text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 mt-2 text-slate-700 dark:bg-white/[0.04] dark:text-white/80 dark:border-white/[0.08]">{opt.sample}</div>
             </label>
           ))}
         </div>
@@ -245,8 +245,8 @@ function SistemaTab() {
             <Zap size={18} className="text-purple-600" />
           </div>
           <div>
-            <h3 className="font-semibold text-slate-800">Integraciones HR externas</h3>
-            <p className="text-xs text-slate-500">Sincronizar empleados desde SAP, Bejerman, Meta4, Odoo, CSV remoto, etc.</p>
+            <h3 className="font-semibold text-slate-800 dark:text-white/90">Integraciones HR externas</h3>
+            <p className="text-xs text-slate-500 dark:text-white/40">Sincronizar empleados desde SAP, Bejerman, Meta4, Odoo, CSV remoto, etc.</p>
           </div>
         </div>
         <a href="/configuracion/integraciones-hr"
@@ -256,10 +256,10 @@ function SistemaTab() {
       </div>
 
       {/* Login */}
-      <div className="border border-slate-200 rounded-2xl p-5 space-y-4">
+      <div className="border border-slate-200 rounded-2xl p-5 space-y-4 dark:border-white/[0.08]">
         <div className="flex items-center gap-2 mb-1">
           <Image size={16} className="text-blue-600" />
-          <h3 className="font-medium text-slate-800">Pantalla de Login</h3>
+          <h3 className="font-medium text-slate-800 dark:text-white/90">Pantalla de Login</h3>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -280,22 +280,22 @@ function SistemaTab() {
                   settings.system_login_bg === g.value ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-200 hover:border-slate-300'
                 }`}>
                 <div className={`w-8 h-6 rounded-lg bg-gradient-to-br ${g.value} flex-shrink-0`} />
-                <span className="text-slate-600 text-xs">{g.label}</span>
+                <span className="text-slate-600 text-xs dark:text-white/60">{g.label}</span>
               </button>
             ))}
           </div>
         </div>
         {/* Preview */}
         <div className={`rounded-xl bg-gradient-to-br ${settings.system_login_bg} p-4 flex items-center justify-center`} style={{ minHeight: 110 }}>
-          <div className="bg-white rounded-2xl p-4 text-center shadow-xl w-44">
+          <div className="bg-white rounded-2xl p-4 text-center shadow-xl w-44 dark:bg-white/[0.04]">
             {settings.system_logo_url
               ? <img src={settings.system_logo_url} alt="logo" className="h-8 mx-auto mb-2 object-contain"
                   onError={e => { (e.target as HTMLImageElement).style.display='none' }} />
               : <div className="w-8 h-8 rounded-lg mx-auto mb-2 flex items-center justify-center text-white text-sm"
                   style={{ backgroundColor: settings.system_primary_color }}>🕐</div>
             }
-            <p className="text-xs font-bold text-slate-900 leading-tight">{settings.system_login_title || 'Sistema'}</p>
-            <p className="text-xs text-slate-400">{settings.system_login_subtitle}</p>
+            <p className="text-xs font-bold text-slate-900 leading-tight dark:text-white">{settings.system_login_title || 'Sistema'}</p>
+            <p className="text-xs text-slate-400 dark:text-white/30">{settings.system_login_subtitle}</p>
           </div>
         </div>
       </div>
@@ -488,15 +488,15 @@ function RelojesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="font-semibold text-slate-800">Relojes Biométricos ZKTeco</h2>
-          <p className="text-sm text-slate-500 mt-0.5">
+          <h2 className="font-semibold text-slate-800 dark:text-white/90">Relojes Biométricos ZKTeco</h2>
+          <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">
             Gestión y operaciones directas (puerto 4370)
-            {lastCheck && <span className="ml-2 text-slate-400">— verificado a las {lastCheck}</span>}
+            {lastCheck && <span className="ml-2 text-slate-400 dark:text-white/30">— verificado a las {lastCheck}</span>}
           </p>
         </div>
         <div className="flex gap-2">
           <button onClick={pingAll} disabled={pinging}
-            className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors">
+            className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-colors dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
             <Activity size={14} className={pinging ? 'animate-pulse text-blue-500' : ''} />
             {pinging ? 'Verificando...' : 'Verificar estado'}
           </button>
@@ -511,8 +511,8 @@ function RelojesTab() {
       {showForm && (
         <div className="border border-blue-100 bg-blue-50 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="font-medium text-slate-800">{editDevice ? 'Editar reloj' : 'Agregar nuevo reloj'}</h3>
-            <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+            <h3 className="font-medium text-slate-800 dark:text-white/90">{editDevice ? 'Editar reloj' : 'Agregar nuevo reloj'}</h3>
+            <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600 dark:text-white/30"><X size={18} /></button>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={labelCls}>Nombre *</label><input value={form.name} onChange={e => setForm(f=>({...f,name:e.target.value}))} placeholder="ej: Reloj Comedor" className={inputCls} /></div>
@@ -525,8 +525,8 @@ function RelojesTab() {
           <div><label className={labelCls}>N° de serie (opcional)</label><input value={form.serial_no} onChange={e => setForm(f=>({...f,serial_no:e.target.value}))} placeholder="ej: ABCD123456" className={inputCls} /></div>
 
           {/* Parámetros avanzados de conexión */}
-          <details className="rounded-lg bg-white border border-blue-100 p-3">
-            <summary className="text-sm font-medium text-slate-700 cursor-pointer">
+          <details className="rounded-lg bg-white border border-blue-100 p-3 dark:bg-white/[0.04]">
+            <summary className="text-sm font-medium text-slate-700 cursor-pointer dark:text-white/80">
               ⚙️ Parámetros de conexión ZKTeco (avanzado)
             </summary>
             <div className="mt-3 space-y-3">
@@ -540,7 +540,7 @@ function RelojesTab() {
                       <input type="radio" checked={form.connection_mode === m}
                         onChange={() => setForm(f => ({ ...f, connection_mode: m }))} className="sr-only" />
                       <span className="font-medium">{m.toUpperCase()}</span>
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-slate-500 dark:text-white/40">
                         {m === 'auto' && '(TCP con fallback UDP)'}
                         {m === 'tcp' && '(modelos modernos)'}
                         {m === 'udp' && '(GT200 y modelos antiguos)'}
@@ -548,7 +548,7 @@ function RelojesTab() {
                     </label>
                   ))}
                 </div>
-                <p className="text-xs text-slate-400 mt-1">
+                <p className="text-xs text-slate-400 mt-1 dark:text-white/30">
                   Si el reloj acepta TCP pero no responde al protocolo ZKTeco, probar <strong>UDP</strong>.
                 </p>
               </div>
@@ -575,16 +575,16 @@ function RelojesTab() {
               className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50">
               <Save size={14} /> {saving ? 'Guardando...' : editDevice ? 'Actualizar' : 'Agregar'}
             </button>
-            <button onClick={() => setShowForm(false)} className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50">Cancelar</button>
+            <button onClick={() => setShowForm(false)} className="px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
           </div>
         </div>
       )}
 
       {/* Lista */}
       {loading ? (
-        <div className="py-8 text-center text-slate-400">Cargando relojes...</div>
+        <div className="py-8 text-center text-slate-400 dark:text-white/30">Cargando relojes...</div>
       ) : devices.length === 0 ? (
-        <div className="py-8 text-center text-slate-400">
+        <div className="py-8 text-center text-slate-400 dark:text-white/30">
           <Clock size={32} className="mx-auto mb-2 opacity-30" />
           <p>No hay relojes registrados.</p>
           <button onClick={openAdd} className="mt-3 text-blue-600 text-sm hover:underline">+ Agregar el primer reloj</button>
@@ -613,15 +613,15 @@ function RelojesTab() {
                     {status === 'online' ? <Wifi size={20} /> : <WifiOff size={20} />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-slate-800">{d.name}</p>
-                    <p className="text-sm font-mono text-slate-500">{d.ip_address}:{d.port}</p>
+                    <p className="font-semibold text-slate-800 dark:text-white/90">{d.name}</p>
+                    <p className="text-sm font-mono text-slate-500 dark:text-white/40">{d.ip_address}:{d.port}</p>
                     {(d.location || d.serial_no) && (
-                      <p className="text-xs text-slate-400 mt-0.5">
+                      <p className="text-xs text-slate-400 mt-0.5 dark:text-white/30">
                         {d.location && <span><MapPin size={10} className="inline mr-1"/>{d.location}</span>}
                         {d.serial_no && <span className="ml-2"><Hash size={10} className="inline mr-1"/>{d.serial_no}</span>}
                       </p>
                     )}
-                    {d.last_sync && <p className="text-xs text-slate-400">Sync: {new Date(d.last_sync).toLocaleString()}</p>}
+                    {d.last_sync && <p className="text-xs text-slate-400 dark:text-white/30">Sync: {new Date(d.last_sync).toLocaleString()}</p>}
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span className={`text-xs font-semibold px-2.5 py-1 rounded-full hidden sm:block ${
@@ -631,12 +631,12 @@ function RelojesTab() {
                     </span>
                     <button onClick={() => doDiagnose(d)} disabled={!!deviceLoading[d.id]}
                       title="Diagnosticar conectividad"
-                      className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg disabled:opacity-50">
+                      className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg disabled:opacity-50 dark:text-white/30">
                       <Activity size={15}/>
                     </button>
-                    <button onClick={() => openEdit(d)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={15}/></button>
-                    <button onClick={() => deleteDevice(d.id, d.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={15}/></button>
-                    <button onClick={() => toggleExpand(d.id)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg">
+                    <button onClick={() => openEdit(d)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg dark:text-white/30"><Edit2 size={15}/></button>
+                    <button onClick={() => deleteDevice(d.id, d.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg dark:text-white/30"><Trash2 size={15}/></button>
+                    <button onClick={() => toggleExpand(d.id)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg dark:text-white/30 dark:hover:bg-white/[0.06]">
                       {isOpen ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                     </button>
                   </div>
@@ -650,17 +650,17 @@ function RelojesTab() {
                       <button onClick={() => setDiagnose(p => { const n = {...p}; delete n[d.id]; return n })}
                         className="text-amber-600 hover:text-amber-800"><X size={14}/></button>
                     </div>
-                    <div className="space-y-1 font-mono text-slate-700">
+                    <div className="space-y-1 font-mono text-slate-700 dark:text-white/80">
                       {diagnose[d.id].steps?.map((s: any, i: number) => (
                         <div key={i} className="flex gap-2">
                           <span className={s.ok ? 'text-green-600' : 'text-red-500'}>{s.ok ? '✓' : '✗'}</span>
                           <span className="font-semibold">{s.step}:</span>
-                          <span className="text-slate-500">{s.detail}</span>
+                          <span className="text-slate-500 dark:text-white/40">{s.detail}</span>
                         </div>
                       ))}
                     </div>
                     {diagnose[d.id].recommendation && (
-                      <div className="mt-2 p-2 rounded bg-white border border-amber-200 text-amber-900">
+                      <div className="mt-2 p-2 rounded bg-white border border-amber-200 text-amber-900 dark:bg-white/[0.04]">
                         💡 <strong>Recomendación:</strong> {diagnose[d.id].recommendation}
                       </div>
                     )}
@@ -669,7 +669,7 @@ function RelojesTab() {
 
                 {/* Panel expandido */}
                 {isOpen && (
-                  <div className="border-t border-slate-100 bg-white">
+                  <div className="border-t border-slate-100 bg-white dark:bg-white/[0.04] dark:border-white/[0.06]">
 
                     {/* ── Estado de conexión + botón Conectar ── */}
                     {!data.info && !deviceLoading[d.id] && (
@@ -678,8 +678,8 @@ function RelojesTab() {
                           <Server size={24} className="text-blue-500"/>
                         </div>
                         <div>
-                          <p className="font-semibold text-slate-800">Conectar al reloj</p>
-                          <p className="text-xs text-slate-500 mt-1">
+                          <p className="font-semibold text-slate-800 dark:text-white/90">Conectar al reloj</p>
+                          <p className="text-xs text-slate-500 mt-1 dark:text-white/40">
                             Establecerá una conexión directa vía protocolo ZKTeco (puerto 4370).<br/>
                             Asegúrese de que ningún otro software esté usando el reloj.
                           </p>
@@ -690,7 +690,7 @@ function RelojesTab() {
                             <Wifi size={15}/> Conectar al reloj
                           </button>
                           <button onClick={() => loadPushStatus(d)} disabled={deviceLoading[d.id] === 'push'}
-                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors disabled:opacity-50">
+                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors disabled:opacity-50 dark:bg-white/[0.06] dark:text-white/80">
                             <RefreshCw size={14} className={deviceLoading[d.id] === 'push' ? 'animate-spin' : ''}/> Verificar PUSH
                           </button>
                         </div>
@@ -723,10 +723,10 @@ function RelojesTab() {
 
                     {/* Conectando... */}
                     {deviceLoading[d.id] === 'info' && !data.info && (
-                      <div className="p-8 flex flex-col items-center gap-3 text-slate-500">
+                      <div className="p-8 flex flex-col items-center gap-3 text-slate-500 dark:text-white/40">
                         <RefreshCw size={24} className="animate-spin text-blue-500"/>
                         <p className="text-sm font-medium">Conectando a {d.ip_address}:{d.port}...</p>
-                        <p className="text-xs text-slate-400">Protocolo ZKTeco — puede tardar hasta 15 segundos</p>
+                        <p className="text-xs text-slate-400 dark:text-white/30">Protocolo ZKTeco — puede tardar hasta 15 segundos</p>
                       </div>
                     )}
 
@@ -776,13 +776,13 @@ function RelojesTab() {
                             </span>
                           </div>
                           <button onClick={() => loadInfo(d)} disabled={deviceLoading[d.id] === 'info'}
-                            className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50">
+                            className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 disabled:opacity-50 dark:text-white/40">
                             <RefreshCw size={11} className={deviceLoading[d.id] === 'info' ? 'animate-spin' : ''}/> Recargar
                           </button>
                         </div>
 
                         {/* Sub-tabs */}
-                        <div className="flex border-b border-slate-100">
+                        <div className="flex border-b border-slate-100 dark:border-white/[0.06]">
                           {[
                             { id: 'info',      label: '📊 Información' },
                             { id: 'usuarios',  label: '👥 Usuarios' },
@@ -809,10 +809,10 @@ function RelojesTab() {
                             const str = (v: any) => v || '—'
                             return (
                               <div className="space-y-4">
-                                <div className="border border-slate-100 rounded-xl overflow-hidden">
-                                  <div className="grid grid-cols-2 divide-x divide-slate-100">
+                                <div className="border border-slate-100 rounded-xl overflow-hidden dark:border-white/[0.06]">
+                                  <div className="grid grid-cols-2 divide-x divide-slate-100 dark:divide-white/[0.06]">
                                     <table className="text-xs w-full">
-                                      <tbody className="divide-y divide-slate-50">
+                                      <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                                         {[
                                           ['Usuarios registrados', fmt(inf.userCounts)],
                                           ['Huellas digitales',    fmt(inf.fpCount)],
@@ -822,14 +822,14 @@ function RelojesTab() {
                                           ['Número de serie',      str(inf.serialNumber)],
                                         ].map(([label, val]) => (
                                           <tr key={label}>
-                                            <td className="px-3 py-1.5 text-slate-500 w-40">{label}</td>
-                                            <td className="px-3 py-1.5 text-slate-800 font-semibold">{val}</td>
+                                            <td className="px-3 py-1.5 text-slate-500 w-40 dark:text-white/40">{label}</td>
+                                            <td className="px-3 py-1.5 text-slate-800 font-semibold dark:text-white/90">{val}</td>
                                           </tr>
                                         ))}
                                       </tbody>
                                     </table>
                                     <table className="text-xs w-full">
-                                      <tbody className="divide-y divide-slate-50">
+                                      <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                                         {[
                                           ['Marcaciones totales', fmt(inf.logCounts)],
                                           ['Administradores',     fmt(inf.adminCount)],
@@ -839,8 +839,8 @@ function RelojesTab() {
                                           ['Capacidad registros', fmt(inf.logCapacity)],
                                         ].map(([label, val]) => (
                                           <tr key={label}>
-                                            <td className="px-3 py-1.5 text-slate-500 w-40">{label}</td>
-                                            <td className="px-3 py-1.5 text-slate-800 font-semibold">{val}</td>
+                                            <td className="px-3 py-1.5 text-slate-500 w-40 dark:text-white/40">{label}</td>
+                                            <td className="px-3 py-1.5 text-slate-800 font-semibold dark:text-white/90">{val}</td>
                                           </tr>
                                         ))}
                                       </tbody>
@@ -869,7 +869,7 @@ function RelojesTab() {
                           {tab === 'usuarios' && (
                             <div>
                               {deviceLoading[d.id] === 'users' && (
-                                <div className="py-8 flex flex-col items-center gap-3 text-slate-400">
+                                <div className="py-8 flex flex-col items-center gap-3 text-slate-400 dark:text-white/30">
                                   <RefreshCw size={20} className="animate-spin text-blue-500"/>
                                   <p className="text-sm">Leyendo usuarios del reloj...</p>
                                 </div>
@@ -887,27 +887,27 @@ function RelojesTab() {
                               {data.users?.users && (
                                 <div className="space-y-3">
                                   <div className="flex items-center justify-between">
-                                    <p className="text-sm font-semibold text-slate-700">
+                                    <p className="text-sm font-semibold text-slate-700 dark:text-white/80">
                                       {data.users.total} usuario{data.users.total !== 1 ? 's' : ''} enrolado{data.users.total !== 1 ? 's' : ''}
                                     </p>
                                     <button onClick={() => loadUsers(d)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">
                                       <RefreshCw size={12}/> Actualizar
                                     </button>
                                   </div>
-                                  <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-100">
+                                  <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
                                     <table className="w-full text-xs">
-                                      <thead className="bg-slate-50 sticky top-0">
+                                      <thead className="bg-slate-50 sticky top-0 dark:bg-white/[0.03]">
                                         <tr>
-                                          <th className="text-left px-3 py-2 text-slate-500 font-medium">ID</th>
-                                          <th className="text-left px-3 py-2 text-slate-500 font-medium">Nombre</th>
-                                          <th className="text-left px-3 py-2 text-slate-500 font-medium">Rol</th>
+                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">ID</th>
+                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Nombre</th>
+                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Rol</th>
                                         </tr>
                                       </thead>
-                                      <tbody className="divide-y divide-slate-50">
+                                      <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                                         {data.users.users.map((u: any, i: number) => (
-                                          <tr key={i} className="hover:bg-slate-50">
-                                            <td className="px-3 py-2 font-mono text-slate-600">{u.userId}</td>
-                                            <td className="px-3 py-2 text-slate-800">{u.name || <span className="text-slate-400 italic">sin nombre</span>}</td>
+                                          <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                                            <td className="px-3 py-2 font-mono text-slate-600 dark:text-white/60">{u.userId}</td>
+                                            <td className="px-3 py-2 text-slate-800 dark:text-white/90">{u.name || <span className="text-slate-400 italic dark:text-white/30">sin nombre</span>}</td>
                                             <td className="px-3 py-2">
                                               <span className={`px-1.5 py-0.5 rounded font-medium ${u.privilege === 14 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
                                                 {u.privilege === 14 ? 'Admin' : 'Usuario'}
@@ -988,12 +988,12 @@ function RelojesTab() {
         </div>
       )}
 
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600 space-y-1.5">
-        <p className="font-semibold text-slate-700">Flujo de trabajo</p>
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600 space-y-1.5 dark:bg-white/[0.03] dark:text-white/60 dark:border-white/[0.08]">
+        <p className="font-semibold text-slate-700 dark:text-white/80">Flujo de trabajo</p>
         <p>① <strong>Conectar al reloj</strong> — establece conexión directa vía protocolo ZKTeco</p>
         <p>② <strong>Descargar → att2000 + MySQL local</strong> — baja las marcaciones al servidor</p>
         <p>③ <strong>Sincronización BD</strong> (otra pestaña) — procesa att2000 y genera reportes</p>
-        <p className="text-xs text-slate-400 pt-1">⚠️ Cerrá el software Attendance Management (Windows) antes de conectar.</p>
+        <p className="text-xs text-slate-400 pt-1 dark:text-white/30">⚠️ Cerrá el software Attendance Management (Windows) antes de conectar.</p>
       </div>
     </div>
   )
@@ -1103,17 +1103,17 @@ function SyncTab() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="font-semibold text-slate-800">Sincronización con Base de Datos Externa</h2>
-        <p className="text-sm text-slate-500 mt-0.5">Importa empleados y marcajes desde SQL Server</p>
+        <h2 className="font-semibold text-slate-800 dark:text-white/90">Sincronización con Base de Datos Externa</h2>
+        <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Importa empleados y marcajes desde SQL Server</p>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Columna izquierda: Configuración */}
         <div className="space-y-4">
-          <div className="border border-slate-200 rounded-2xl p-5 space-y-4">
+          <div className="border border-slate-200 rounded-2xl p-5 space-y-4 dark:border-white/[0.08]">
             <div className="flex items-center gap-2">
               <Server size={16} className="text-blue-600" />
-              <h3 className="font-medium text-slate-800">Configuración de Conexión</h3>
+              <h3 className="font-medium text-slate-800 dark:text-white/90">Configuración de Conexión</h3>
             </div>
             <div>
               <label className={labelCls}>Nombre / Etiqueta</label>
@@ -1143,7 +1143,7 @@ function SyncTab() {
                 <div className="relative">
                   <input type={showPass ? 'text' : 'password'} value={conn.password} onChange={setField('password')}
                     placeholder="••••••••" className={inputCls + ' pr-10'} />
-                  <button onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                  <button onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-white/30">
                     {showPass ? <EyeOff size={16}/> : <Eye size={16}/>}
                   </button>
                 </div>
@@ -1152,10 +1152,10 @@ function SyncTab() {
           </div>
 
           {/* Período */}
-          <div className="border border-slate-200 rounded-2xl p-5 space-y-3">
+          <div className="border border-slate-200 rounded-2xl p-5 space-y-3 dark:border-white/[0.08]">
             <div className="flex items-center gap-2">
               <Database size={16} className="text-blue-600" />
-              <h3 className="font-medium text-slate-800">Período a Sincronizar</h3>
+              <h3 className="font-medium text-slate-800 dark:text-white/90">Período a Sincronizar</h3>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={labelCls}>Desde</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className={inputCls} /></div>
@@ -1172,7 +1172,7 @@ function SyncTab() {
               <Save size={16}/>{saved ? '✓ Guardado' : 'Guardar'}
             </button>
             <button onClick={testConnection} disabled={testing || !conn.host}
-              className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50">
+              className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <Zap size={16} className="text-yellow-500"/>
               {testing ? 'Probando...' : 'Probar conexión'}
             </button>
@@ -1187,9 +1187,9 @@ function SyncTab() {
         {/* Columna derecha: Resultado de la conexión */}
         <div className="space-y-4">
           {!connResult && (
-            <div className="border border-dashed border-slate-200 rounded-2xl p-8 flex flex-col items-center justify-center text-center text-slate-400 h-full min-h-48">
+            <div className="border border-dashed border-slate-200 rounded-2xl p-8 flex flex-col items-center justify-center text-center text-slate-400 h-full min-h-48 dark:text-white/30 dark:border-white/[0.08]">
               <Database size={32} className="mb-3 opacity-30"/>
-              <p className="text-sm">Haz clic en <strong className="text-slate-600">Probar conexión</strong> para ver la información de la base de datos</p>
+              <p className="text-sm">Haz clic en <strong className="text-slate-600 dark:text-white/60">Probar conexión</strong> para ver la información de la base de datos</p>
             </div>
           )}
           {connResult && !connResult.ok && (
@@ -1225,15 +1225,15 @@ function SyncTab() {
 
               {/* Relojes */}
               {connResult.machines && connResult.machines.length > 0 && (
-                <div className="border border-slate-200 rounded-2xl p-4 space-y-2">
-                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5">
+                <div className="border border-slate-200 rounded-2xl p-4 space-y-2 dark:border-white/[0.08]">
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5 dark:text-white/40">
                     <Clock size={12}/> Relojes en la base de datos
                   </p>
                   {connResult.machines.map((m, i) => (
                     <div key={i} className="flex items-center gap-3 text-sm">
                       <Wifi size={13} className="text-green-500 flex-shrink-0"/>
-                      <span className="text-slate-700 font-medium">{m.MACHINE_ALIAS}</span>
-                      <span className="font-mono text-slate-400 text-xs">{m.IP_ADDRESS}</span>
+                      <span className="text-slate-700 font-medium dark:text-white/80">{m.MACHINE_ALIAS}</span>
+                      <span className="font-mono text-slate-400 text-xs dark:text-white/30">{m.IP_ADDRESS}</span>
                     </div>
                   ))}
                 </div>
@@ -1241,26 +1241,26 @@ function SyncTab() {
 
               {/* Últimas marcadas */}
               {connResult.recentRecords && connResult.recentRecords.length > 0 && (
-                <div className="border border-slate-200 rounded-2xl overflow-hidden">
-                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Últimas marcadas registradas</p>
+                <div className="border border-slate-200 rounded-2xl overflow-hidden dark:border-white/[0.08]">
+                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide dark:text-white/40">Últimas marcadas registradas</p>
                   </div>
                   <div className="max-h-48 overflow-y-auto">
                     <table className="w-full text-xs">
-                      <thead className="bg-slate-50 sticky top-0">
+                      <thead className="bg-slate-50 sticky top-0 dark:bg-white/[0.03]">
                         <tr>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium">ID</th>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium">Nombre</th>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium">Fecha/Hora</th>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium">Tipo</th>
+                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">ID</th>
+                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Nombre</th>
+                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Fecha/Hora</th>
+                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Tipo</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-50">
+                      <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                         {connResult.recentRecords.map((rec, i) => (
-                          <tr key={i} className="hover:bg-slate-50">
-                            <td className="px-3 py-1.5 font-mono text-slate-600">{rec.USERID}</td>
-                            <td className="px-3 py-1.5 text-slate-800">{rec.nombre || <span className="text-slate-400 italic">—</span>}</td>
-                            <td className="px-3 py-1.5 text-slate-500">{new Date(rec.CHECKTIME).toLocaleString()}</td>
+                          <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                            <td className="px-3 py-1.5 font-mono text-slate-600 dark:text-white/60">{rec.USERID}</td>
+                            <td className="px-3 py-1.5 text-slate-800 dark:text-white/90">{rec.nombre || <span className="text-slate-400 italic dark:text-white/30">—</span>}</td>
+                            <td className="px-3 py-1.5 text-slate-500 dark:text-white/40">{new Date(rec.CHECKTIME).toLocaleString()}</td>
                             <td className="px-3 py-1.5">
                               <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${rec.CHECKTYPE === 'I' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'}`}>
                                 {rec.CHECKTYPE === 'I' ? 'Entrada' : 'Salida'}
@@ -1285,14 +1285,14 @@ function SyncTab() {
       )}
 
       {/* ── Sección: Enviar marcajes locales → att2000 ─────────── */}
-      <div className="border border-slate-200 rounded-2xl overflow-hidden">
-        <div className="bg-gradient-to-r from-indigo-50 to-blue-50 px-5 py-3 border-b border-slate-200 flex items-center gap-3">
+      <div className="border border-slate-200 rounded-2xl overflow-hidden dark:border-white/[0.08]">
+        <div className="bg-gradient-to-r from-indigo-50 to-blue-50 px-5 py-3 border-b border-slate-200 flex items-center gap-3 dark:border-white/[0.08]">
           <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0">
             <Database size={16} className="text-indigo-600"/>
           </div>
           <div>
-            <p className="font-semibold text-slate-800 text-sm">Enviar marcajes locales → att2000</p>
-            <p className="text-xs text-slate-500">Publica en att2000 los registros almacenados en SisHoras (marcajes manuales o desde relojes).</p>
+            <p className="font-semibold text-slate-800 text-sm dark:text-white/90">Enviar marcajes locales → att2000</p>
+            <p className="text-xs text-slate-500 dark:text-white/40">Publica en att2000 los registros almacenados en SisHoras (marcajes manuales o desde relojes).</p>
           </div>
         </div>
         <div className="p-5 space-y-4">
@@ -1321,14 +1321,14 @@ function SyncTab() {
 
           <div className="flex items-center gap-3 flex-wrap">
             <button onClick={previewPush} disabled={previewing || pushing}
-              className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50">
+              className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <Eye size={15}/> {previewing ? 'Verificando...' : 'Vista previa'}
             </button>
 
             {pushPreview && (
               <div className="flex items-center gap-3">
-                <span className="text-sm text-slate-600">
-                  <strong className="text-slate-900">{pushPreview.total?.toLocaleString()}</strong> registros listos
+                <span className="text-sm text-slate-600 dark:text-white/60">
+                  <strong className="text-slate-900 dark:text-white">{pushPreview.total?.toLocaleString()}</strong> registros listos
                 </span>
                 <button onClick={pushToAtt2000} disabled={pushing || pushPreview.total === 0}
                   className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm hover:bg-indigo-700 disabled:opacity-50 font-medium">
@@ -1340,8 +1340,8 @@ function SyncTab() {
           </div>
 
           {/* Flujo visual */}
-          <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
-            <span className="px-2 py-1 bg-slate-100 rounded text-slate-600 font-medium">MySQL local</span>
+          <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap dark:text-white/30">
+            <span className="px-2 py-1 bg-slate-100 rounded text-slate-600 font-medium dark:bg-white/[0.06] dark:text-white/60">MySQL local</span>
             <span>→ SisHoras procesa →</span>
             <span className="px-2 py-1 bg-indigo-100 rounded text-indigo-700 font-medium">att2000.CHECKINOUT</span>
             <span>→ att2000 genera reportes →</span>
@@ -1411,8 +1411,8 @@ function WebhooksTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-semibold text-slate-800">Webhooks y notificaciones externas</h2>
-          <p className="text-sm text-slate-500 mt-0.5">Envía eventos a Slack, Telegram, WhatsApp, Discord o cualquier endpoint JSON</p>
+          <h2 className="font-semibold text-slate-800 dark:text-white/90">Webhooks y notificaciones externas</h2>
+          <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Envía eventos a Slack, Telegram, WhatsApp, Discord o cualquier endpoint JSON</p>
         </div>
         <button onClick={() => setShowForm(true)} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm hover:bg-blue-700">
           <Plus size={16}/> Agregar
@@ -1421,11 +1421,11 @@ function WebhooksTab() {
 
       {/* Broadcast custom */}
       <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 space-y-2">
-        <h3 className="font-medium text-slate-700 text-sm">Enviar mensaje a todos los webhooks</h3>
+        <h3 className="font-medium text-slate-700 text-sm dark:text-white/80">Enviar mensaje a todos los webhooks</h3>
         <div className="flex gap-2">
           <input value={broadcastMsg} onChange={e => setBroadcastMsg(e.target.value)}
             placeholder="Escribe un mensaje para Slack/Telegram/WhatsApp..."
-            className="flex-1 border border-amber-200 rounded-xl px-3 py-2 text-sm bg-white" />
+            className="flex-1 border border-amber-200 rounded-xl px-3 py-2 text-sm bg-white dark:bg-white/[0.04]" />
           <button onClick={broadcast} disabled={!broadcastMsg.trim()}
             className="bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-medium">
             Difundir
@@ -1435,13 +1435,13 @@ function WebhooksTab() {
 
       {showForm && (
         <div className="border border-blue-100 bg-blue-50 rounded-xl p-5 space-y-3">
-          <h3 className="font-medium text-slate-700">Nuevo Webhook</h3>
+          <h3 className="font-medium text-slate-700 dark:text-white/80">Nuevo Webhook</h3>
           <input placeholder="Nombre (ej: Slack #recursos-humanos)" value={form.name}
             onChange={e => setForm((f: any) => ({...f, name: e.target.value}))}
-            className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+            className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm dark:border-white/[0.08]" />
           <div className="grid grid-cols-2 gap-2">
             <select value={form.format} onChange={e => setForm((f: any) => ({...f, format: e.target.value}))}
-              className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white">
+              className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
               <option value="json">JSON estándar</option>
               <option value="slack">Slack</option>
               <option value="telegram">Telegram</option>
@@ -1451,37 +1451,37 @@ function WebhooksTab() {
             {FORMAT_HINTS[form.format]?.channelLabel && (
               <input placeholder={FORMAT_HINTS[form.format].channelLabel} value={form.channel}
                 onChange={e => setForm((f: any) => ({...f, channel: e.target.value}))}
-                className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+                className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm dark:border-white/[0.08]" />
             )}
           </div>
-          <p className="text-xs text-slate-500">{FORMAT_HINTS[form.format]?.hint}</p>
+          <p className="text-xs text-slate-500 dark:text-white/40">{FORMAT_HINTS[form.format]?.hint}</p>
           <input placeholder="URL del endpoint" value={form.url}
             onChange={e => setForm((f: any) => ({...f, url: e.target.value}))}
-            className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+            className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm dark:border-white/[0.08]" />
           {form.format === 'json' && (
             <input placeholder="Secreto HMAC (opcional)" value={form.secret}
               onChange={e => setForm((f: any) => ({...f, secret: e.target.value}))}
-              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm" />
+              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm dark:border-white/[0.08]" />
           )}
           <div className="flex gap-3">
             <button onClick={createWebhook} className="bg-blue-600 text-white px-4 py-2 rounded-xl text-sm hover:bg-blue-700">Guardar</button>
-            <button onClick={() => setShowForm(false)} className="border border-slate-200 px-4 py-2 rounded-xl text-sm hover:bg-slate-50">Cancelar</button>
+            <button onClick={() => setShowForm(false)} className="border border-slate-200 px-4 py-2 rounded-xl text-sm hover:bg-slate-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
           </div>
         </div>
       )}
       <div className="space-y-2">
-        {(webhooks as Webhook[]).length === 0 && <p className="text-center py-8 text-slate-400 text-sm">No hay webhooks registrados.</p>}
+        {(webhooks as Webhook[]).length === 0 && <p className="text-center py-8 text-slate-400 text-sm dark:text-white/30">No hay webhooks registrados.</p>}
         {(webhooks as Webhook[]).map(wh => (
-          <div key={wh.id} className="flex items-center gap-4 p-4 rounded-xl border border-slate-100">
+          <div key={wh.id} className="flex items-center gap-4 p-4 rounded-xl border border-slate-100 dark:border-white/[0.06]">
             <Globe size={20} className="text-blue-500 flex-shrink-0"/>
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-slate-800">{wh.name}</p>
-              <p className="text-sm text-slate-500 truncate">{wh.url}</p>
+              <p className="font-medium text-slate-800 dark:text-white/90">{wh.name}</p>
+              <p className="text-sm text-slate-500 truncate dark:text-white/40">{wh.url}</p>
             </div>
             <div className="flex items-center gap-2">
               {wh.last_status === 200 ? <CheckCircle size={16} className="text-green-500"/> :
                wh.last_status > 0 ? <XCircle size={16} className="text-red-500"/> :
-               <AlertCircle size={16} className="text-slate-400"/>}
+               <AlertCircle size={16} className="text-slate-400 dark:text-white/30"/>}
               <button onClick={() => deleteWebhook(wh.id)} className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50">
                 <Trash2 size={14}/>
               </button>
@@ -1515,8 +1515,8 @@ function ApiTab() {
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="font-semibold text-slate-800">API & Documentación</h2>
-        <p className="text-sm text-slate-500 mt-0.5">Integra con Oracle APEX, ERP, nómina y cualquier sistema</p>
+        <h2 className="font-semibold text-slate-800 dark:text-white/90">API & Documentación</h2>
+        <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Integra con Oracle APEX, ERP, nómina y cualquier sistema</p>
       </div>
       <a href={`${baseUrl}/api/docs`} target="_blank"
         className="flex items-center gap-4 p-4 rounded-xl border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-colors">
@@ -1528,10 +1528,10 @@ function ApiTab() {
       </a>
       <div className="space-y-2">
         {endpoints.map(e => (
-          <div key={e.path} className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100 font-mono text-sm">
+          <div key={e.path} className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100 font-mono text-sm dark:bg-white/[0.03] dark:border-white/[0.06]">
             <span className={`px-2 py-0.5 rounded font-bold text-xs ${e.method === 'GET' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{e.method}</span>
-            <span className="text-slate-700 flex-1">{e.path}</span>
-            <span className="text-slate-400 text-xs font-sans">{e.desc}</span>
+            <span className="text-slate-700 flex-1 dark:text-white/80">{e.path}</span>
+            <span className="text-slate-400 text-xs font-sans dark:text-white/30">{e.desc}</span>
           </div>
         ))}
       </div>
@@ -1541,7 +1541,7 @@ function ApiTab() {
 
 export default function ConfiguracionPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-slate-400">Cargando...</div>}>
+    <Suspense fallback={<div className="p-6 text-slate-400 dark:text-white/30">Cargando...</div>}>
       <ConfiguracionPageInner />
     </Suspense>
   )

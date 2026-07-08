@@ -149,6 +149,16 @@ export default function LoginPage() {
         <div className="absolute inset-0 bg-gradient-to-br from-black/40 via-black/20 to-black/50 pointer-events-none" />
       )}
 
+      {/* Orbes ambientales Futurista (solo sobre el fondo por defecto, sin imagen) */}
+      {!bgImage && (
+        <>
+          <div className="absolute -top-[20%] left-[30%] w-[600px] h-[600px] rounded-full pointer-events-none"
+               style={{ background: 'radial-gradient(circle, rgba(34,211,238,0.12), transparent 65%)' }} />
+          <div className="absolute -bottom-[30%] -right-[10%] w-[700px] h-[700px] rounded-full pointer-events-none"
+               style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.10), transparent 65%)' }} />
+        </>
+      )}
+
       {/* Reloj flotante (esquina) */}
       {showClock && (
         <div className="hidden md:flex absolute top-6 right-8 items-center gap-2 text-white bg-black/60 backdrop-blur px-4 py-2 rounded-xl z-10"
@@ -177,7 +187,7 @@ export default function LoginPage() {
               <ClockIcon className="text-white" size={28} />
             </div>
           )}
-          <h1 className="text-2xl font-bold text-slate-900">{settings.system_login_title}</h1>
+          <h1 className="font-display text-2xl font-bold text-slate-900 tracking-tight">{settings.system_login_title}</h1>
           <p className="text-slate-500 text-sm mt-1">{settings.system_login_subtitle}</p>
           {showClock && (
             <p className="md:hidden text-xs text-slate-400 mt-3" suppressHydrationWarning>{datetimeStr || ' '}</p>

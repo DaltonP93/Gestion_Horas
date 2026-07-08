@@ -105,7 +105,7 @@ const SignaturePad = forwardRef<SignaturePadHandle, Props>(function SignaturePad
 
   return (
     <div className={className}>
-      <div className="relative border-2 border-dashed border-slate-300 rounded-2xl bg-white overflow-hidden">
+      <div className="relative border-2 border-dashed border-slate-300 rounded-2xl bg-white overflow-hidden dark:bg-white/[0.04]">
         <canvas
           ref={canvasRef}
           style={{ width, height, display: 'block', touchAction: 'none' }}
@@ -122,7 +122,7 @@ const SignaturePad = forwardRef<SignaturePadHandle, Props>(function SignaturePad
       </div>
       <div className="flex justify-end mt-2">
         <button type="button" onClick={clear}
-          className="flex items-center gap-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors">
+          className="flex items-center gap-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors dark:text-white/40">
           <Eraser size={13} /> Borrar firma
         </button>
       </div>

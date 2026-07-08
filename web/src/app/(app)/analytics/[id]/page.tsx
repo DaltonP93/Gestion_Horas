@@ -44,7 +44,7 @@ export default function AnalyticsPage() {
   })
 
   if (isLoading || !data) {
-    return <div className="p-6 text-slate-400">Cargando analytics...</div>
+    return <div className="p-6 text-slate-400 dark:text-white/30">Cargando analytics...</div>
   }
 
   const { summary, weekly, byDayOfWeek, daily, period } = data
@@ -73,7 +73,7 @@ export default function AnalyticsPage() {
     <div className="p-6 space-y-6 max-w-6xl">
       {/* Back */}
       <div className="flex items-center justify-between">
-        <Link href={`/empleados/${id}`} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800">
+        <Link href={`/empleados/${id}`} className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 dark:text-white/40">
           <ArrowLeft size={16} /> Volver al empleado
         </Link>
         <div className="flex gap-2">
@@ -95,8 +95,8 @@ export default function AnalyticsPage() {
             {emp.first_name?.[0]}{emp.last_name?.[0]}
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">{emp.first_name} {emp.last_name}</h1>
-            <p className="text-slate-500 text-sm">{emp.department_name || ''} · Analytics {period.from} – {period.to}</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{emp.first_name} {emp.last_name}</h1>
+            <p className="text-slate-500 text-sm dark:text-white/40">{emp.department_name || ''} · Analytics {period.from} – {period.to}</p>
           </div>
         </div>
       )}
@@ -113,17 +113,17 @@ export default function AnalyticsPage() {
           <div key={i} className={`${kpi.bg} rounded-2xl border border-slate-100 shadow-sm p-5`}>
             <div className="flex items-center gap-2 mb-2" style={{ color: kpi.color }}>
               {kpi.icon}
-              <span className="text-xs font-medium text-slate-500">{kpi.label}</span>
+              <span className="text-xs font-medium text-slate-500 dark:text-white/40">{kpi.label}</span>
             </div>
-            <p className="text-2xl font-bold text-slate-900">{kpi.value}</p>
+            <p className="text-2xl font-bold text-slate-900 dark:text-white">{kpi.value}</p>
           </div>
         ))}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Horas por semana */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <h2 className="font-semibold text-slate-700 mb-4 text-sm">Horas trabajadas por semana</h2>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-700 mb-4 text-sm dark:text-white/80">Horas trabajadas por semana</h2>
           <ResponsiveContainer width="100%" height={220}>
             <AreaChart data={weeklyChart}>
               <defs>
@@ -142,8 +142,8 @@ export default function AnalyticsPage() {
         </div>
 
         {/* Asistencia por día de semana */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <h2 className="font-semibold text-slate-700 mb-4 text-sm">Asistencias por día de semana</h2>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-700 mb-4 text-sm dark:text-white/80">Asistencias por día de semana</h2>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={byDayOfWeek}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
@@ -161,8 +161,8 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Heatmap de últimos 30 días */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-        <h2 className="font-semibold text-slate-700 mb-4 text-sm">Últimos 30 días — Horas trabajadas</h2>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h2 className="font-semibold text-slate-700 mb-4 text-sm dark:text-white/80">Últimos 30 días — Horas trabajadas</h2>
         <div className="flex flex-wrap gap-1.5">
           {last30.map((d: any, i: number) => (
             <div key={i} title={`${d.date}: ${d.horas}h (${d.status})`}
@@ -172,7 +172,7 @@ export default function AnalyticsPage() {
             </div>
           ))}
         </div>
-        <div className="flex gap-4 mt-3 text-xs text-slate-500 flex-wrap">
+        <div className="flex gap-4 mt-3 text-xs text-slate-500 flex-wrap dark:text-white/40">
           {Object.entries({ 'Presente': '#22c55e', 'Retardo': '#f59e0b', 'Ausente': '#ef4444', 'Permiso': '#8b5cf6', 'Festivo': '#3b82f6' }).map(([l, c]) => (
             <span key={l} className="flex items-center gap-1">
               <span className="w-3 h-3 rounded" style={{ background: c }} />{l}
@@ -182,45 +182,45 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Tabla detalle */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100">
-          <h2 className="font-semibold text-slate-700 text-sm">Detalle diario ({period.from} – {period.to})</h2>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="px-5 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-700 text-sm dark:text-white/80">Detalle diario ({period.from} – {period.to})</h2>
         </div>
         <div className="overflow-y-auto max-h-80">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 sticky top-0">
+            <thead className="bg-slate-50 sticky top-0 dark:bg-white/[0.03]">
               <tr>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs">Fecha</th>
-                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs">Estado</th>
-                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs">Entrada</th>
-                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs">Salida</th>
-                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs">Trabajado</th>
-                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs">Tardanza</th>
-                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs">Justificación</th>
+                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Fecha</th>
+                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Estado</th>
+                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Entrada</th>
+                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Salida</th>
+                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Trabajado</th>
+                <th className="text-center px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Tardanza</th>
+                <th className="text-left px-4 py-2.5 text-slate-500 font-medium text-xs dark:text-white/40">Justificación</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {daily.map((d: any, i: number) => {
                 const color = STATUS_COLOR[d.status] || '#94a3b8'
                 return (
-                  <tr key={i} className="hover:bg-slate-50">
-                    <td className="px-4 py-2.5 text-slate-600 font-mono text-xs">
+                  <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                    <td className="px-4 py-2.5 text-slate-600 font-mono text-xs dark:text-white/60">
                       {d.date ? format(new Date(d.date + 'T12:00'), "EEE dd/MM", { locale: es }) : '—'}
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
                     </td>
-                    <td className="px-4 py-2.5 text-center font-mono text-xs text-slate-600">
+                    <td className="px-4 py-2.5 text-center font-mono text-xs text-slate-600 dark:text-white/60">
                       {d.first_in ? format(new Date(d.first_in), 'HH:mm') : '—'}
                     </td>
-                    <td className="px-4 py-2.5 text-center font-mono text-xs text-slate-600">
+                    <td className="px-4 py-2.5 text-center font-mono text-xs text-slate-600 dark:text-white/60">
                       {d.last_out ? format(new Date(d.last_out), 'HH:mm') : '—'}
                     </td>
                     <td className="px-4 py-2.5 text-center font-mono text-xs">{minsToHM(d.worked_minutes)}</td>
                     <td className="px-4 py-2.5 text-center text-xs">
                       {d.late_minutes > 0 ? <span className="text-amber-600">+{d.late_minutes}m</span> : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-slate-500 text-xs">{d.justification || ''}</td>
+                    <td className="px-4 py-2.5 text-slate-500 text-xs dark:text-white/40">{d.justification || ''}</td>
                   </tr>
                 )
               })}

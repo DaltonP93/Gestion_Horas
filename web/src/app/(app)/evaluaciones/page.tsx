@@ -67,13 +67,13 @@ function ScoreForm({
         {scorerLabel} — escala {appraisal.scale_min}–{appraisal.scale_max}
       </div>
       {(appraisal.criteria || []).map(c => (
-        <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-4 space-y-2">
+        <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-4 space-y-2 dark:bg-white/[0.04] dark:border-white/[0.08]">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <p className="font-medium text-slate-800 text-sm">{c.name}</p>
-              {c.description && <p className="text-xs text-slate-500">{c.description}</p>}
+              <p className="font-medium text-slate-800 text-sm dark:text-white/90">{c.name}</p>
+              {c.description && <p className="text-xs text-slate-500 dark:text-white/40">{c.description}</p>}
             </div>
-            <span className="text-xs text-slate-400 shrink-0">peso {c.weight}</span>
+            <span className="text-xs text-slate-400 shrink-0 dark:text-white/30">peso {c.weight}</span>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {scaleOptions.map(n => (
@@ -91,7 +91,7 @@ function ScoreForm({
             placeholder="Comentario opcional…"
             value={values[c.id]?.comment || ''}
             onChange={e => setValues(v => ({ ...v, [c.id]: { ...v[c.id], comment: e.target.value } }))}
-            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs resize-none focus:ring-2 focus:ring-violet-300 focus:outline-none"
+            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs resize-none focus:ring-2 focus:ring-violet-300 focus:outline-none dark:border-white/[0.08]"
           />
         </div>
       ))}
@@ -138,7 +138,7 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
   }
 
   if (loading || !data) return (
-    <div className="flex items-center justify-center h-48 text-slate-400 text-sm">Cargando…</div>
+    <div className="flex items-center justify-center h-48 text-slate-400 text-sm dark:text-white/30">Cargando…</div>
   )
 
   const isAdmin  = ADMIN_ROLES.includes(user?.role || '')
@@ -168,11 +168,11 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-slate-900">{data.employee_name}</h2>
-          <p className="text-sm text-slate-500">{data.template_name} · {data.period_label}</p>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">{data.employee_name}</h2>
+          <p className="text-sm text-slate-500 dark:text-white/40">{data.template_name} · {data.period_label}</p>
         </div>
-        <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg">
-          <X size={18} className="text-slate-400" />
+        <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg dark:hover:bg-white/[0.06]">
+          <X size={18} className="text-slate-400 dark:text-white/30" />
         </button>
       </div>
 
@@ -187,14 +187,14 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
           </span>
         )}
         {data.reviewer_name && (
-          <span className="text-xs text-slate-500">Manager: {data.reviewer_name}</span>
+          <span className="text-xs text-slate-500 dark:text-white/40">Manager: {data.reviewer_name}</span>
         )}
       </div>
 
       {/* Radar chart si hay puntajes */}
       {radarData.length > 0 && (
-        <div className="bg-slate-50 rounded-xl p-4">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Resultados por competencia</p>
+        <div className="bg-slate-50 rounded-xl p-4 dark:bg-white/[0.03]">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 dark:text-white/40">Resultados por competencia</p>
           <ResponsiveContainer width="100%" height={220}>
             <RadarChart data={radarData}>
               <PolarGrid />
@@ -241,7 +241,7 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
 
       {filling && (
         <div>
-          <button onClick={() => setFilling(null)} className="text-xs text-slate-500 hover:text-slate-700 mb-3">← Volver</button>
+          <button onClick={() => setFilling(null)} className="text-xs text-slate-500 hover:text-slate-700 mb-3 dark:text-white/40">← Volver</button>
           <ScoreForm appraisal={data} scorerRole={filling}
             onDone={() => { setFilling(null); load(); onUpdated() }} />
         </div>
@@ -249,10 +249,10 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
 
       {/* Cierre (HR) */}
       {(data.status === 'hr_review' || data.status === 'manager_pending') && isAdmin && !filling && (
-        <div className="border-t border-slate-200 pt-4 space-y-2">
+        <div className="border-t border-slate-200 pt-4 space-y-2 dark:border-white/[0.08]">
           <textarea rows={2} value={hrComment} onChange={e => setHrComment(e.target.value)}
             placeholder="Comentario de cierre (opcional)…"
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-emerald-300 focus:outline-none" />
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-emerald-300 focus:outline-none dark:border-white/[0.08]" />
           <button onClick={closeAppraisal} disabled={closing}
             className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl py-2.5 font-medium flex items-center justify-center gap-2 text-sm">
             <CheckCircle2 size={16} /> {closing ? 'Cerrando…' : 'Cerrar evaluación y calcular score'}
@@ -263,10 +263,10 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
       {/* Tabla de puntajes */}
       {(selfScores.length > 0 || managerScores.length > 0) && (
         <div>
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Detalle de puntajes</p>
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 dark:text-white/40">Detalle de puntajes</p>
+          <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-white/[0.08]">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-xs text-slate-500 uppercase">
+              <thead className="bg-slate-50 text-xs text-slate-500 uppercase dark:bg-white/[0.03] dark:text-white/40">
                 <tr>
                   <th className="text-left px-3 py-2">Criterio</th>
                   <th className="text-center px-3 py-2">Auto</th>
@@ -279,8 +279,8 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
                   const m = managerScores.find(x => x.criteria_id === c.id)
                   if (!s && !m) return null
                   return (
-                    <tr key={c.id} className="border-t border-slate-100">
-                      <td className="px-3 py-2 font-medium text-slate-700">{c.name}</td>
+                    <tr key={c.id} className="border-t border-slate-100 dark:border-white/[0.06]">
+                      <td className="px-3 py-2 font-medium text-slate-700 dark:text-white/80">{c.name}</td>
                       <td className="text-center px-3 py-2">
                         {s ? <span className="font-bold text-violet-600">{s.score}</span> : '—'}
                       </td>
@@ -328,40 +328,40 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">Nueva plantilla de evaluación</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col dark:bg-white/[0.04]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nueva plantilla de evaluación</h2>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="text-xs font-medium text-slate-600 block mb-1">Nombre *</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Nombre *</label>
               <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" placeholder="Ej: Evaluación anual 360°" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" placeholder="Ej: Evaluación anual 360°" />
             </div>
             <div className="col-span-2">
-              <label className="text-xs font-medium text-slate-600 block mb-1">Descripción</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Descripción</label>
               <textarea rows={2} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Escala mínima</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Escala mínima</label>
               <input type="number" min={1} max={10} value={form.scale_min}
                 onChange={e => setForm(f => ({ ...f, scale_min: parseInt(e.target.value) }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Escala máxima</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Escala máxima</label>
               <input type="number" min={2} max={10} value={form.scale_max}
                 onChange={e => setForm(f => ({ ...f, scale_max: parseInt(e.target.value) }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Criterios de evaluación</p>
+              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide dark:text-white/60">Criterios de evaluación</p>
               <button onClick={addCriteria}
                 className="text-xs text-violet-600 hover:text-violet-800 font-medium flex items-center gap-1">
                 <Plus size={14} /> Agregar
@@ -373,16 +373,16 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
                   <div className="flex-1 space-y-1">
                     <input value={c.name} onChange={e => updateCriteria(i, 'name', e.target.value)}
                       placeholder={`Criterio ${i + 1} *`}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm" />
+                      className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm dark:border-white/[0.08]" />
                     <input value={c.description} onChange={e => updateCriteria(i, 'description', e.target.value)}
                       placeholder="Descripción (opcional)"
-                      className="w-full border border-slate-100 rounded-lg px-3 py-1.5 text-xs text-slate-500" />
+                      className="w-full border border-slate-100 rounded-lg px-3 py-1.5 text-xs text-slate-500 dark:text-white/40 dark:border-white/[0.06]" />
                   </div>
                   <div className="w-16">
                     <input type="number" min={0.1} step={0.1} value={c.weight}
                       onChange={e => updateCriteria(i, 'weight', parseFloat(e.target.value))}
                       title="Peso"
-                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-center" />
+                      className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-center dark:border-white/[0.08]" />
                   </div>
                   {criteria.length > 1 && (
                     <button onClick={() => removeCriteria(i)} className="p-1.5 hover:bg-red-50 text-red-400 rounded-lg">
@@ -400,8 +400,8 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
             </div>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-slate-100 flex gap-2">
-          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancelar</button>
+        <div className="px-6 py-4 border-t border-slate-100 flex gap-2 dark:border-white/[0.06]">
+          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
           <button onClick={submit} disabled={saving}
             className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium flex items-center justify-center gap-2">
             <Save size={14} /> {saving ? 'Guardando…' : 'Crear plantilla'}
@@ -450,47 +450,47 @@ function NewAppraisalModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">Nueva evaluación</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md dark:bg-white/[0.04]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nueva evaluación</h2>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
         <div className="px-6 py-4 space-y-3">
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Plantilla *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Plantilla *</label>
             <select value={form.template_id} onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               <option value="">Seleccionar plantilla…</option>
               {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Empleado *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Empleado *</label>
             <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               <option value="">Seleccionar empleado…</option>
               {employees.map((e: any) => <option key={e.id} value={e.id}>{e.full_name} ({e.code})</option>)}
             </select>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Manager evaluador</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Manager evaluador</label>
             <select value={form.reviewer_id} onChange={e => setForm(f => ({ ...f, reviewer_id: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               <option value="">Sin asignar</option>
               {reviewers.map((u: any) => <option key={u.id} value={u.id}>{u.full_name || u.username}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Período *</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Período *</label>
               <input value={form.period_label} onChange={e => setForm(f => ({ ...f, period_label: e.target.value }))}
                 placeholder="Ej: 2025-S1"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Fecha límite</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Fecha límite</label>
               <input type="date" value={form.due_date} onChange={e => setForm(f => ({ ...f, due_date: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
           </div>
           {err && (
@@ -499,8 +499,8 @@ function NewAppraisalModal({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-slate-100 flex gap-2">
-          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancelar</button>
+        <div className="px-6 py-4 border-t border-slate-100 flex gap-2 dark:border-white/[0.06]">
+          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
           <button onClick={submit} disabled={saving}
             className="flex-1 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium flex items-center justify-center gap-2">
             <Plus size={14} /> {saving ? 'Creando…' : 'Crear evaluación'}
@@ -564,15 +564,15 @@ export default function EvaluacionesPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2 dark:text-white">
             <Star className="text-violet-500" size={24} /> Evaluaciones de desempeño
           </h1>
-          <p className="text-sm text-slate-500 mt-0.5">Ciclos de evaluación 360°, auto-evaluación y feedback de managers.</p>
+          <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Ciclos de evaluación 360°, auto-evaluación y feedback de managers.</p>
         </div>
         {isMgr && (
           <div className="flex gap-2">
             <button onClick={() => setShowNewTemplate(true)}
-              className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium">
+              className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <FileText size={16} /> Nueva plantilla
             </button>
             <button onClick={() => setShowNewAppraisal(true)}
@@ -600,7 +600,7 @@ export default function EvaluacionesPage() {
 
       {/* Tabs */}
       {isMgr && (
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit dark:bg-white/[0.06]">
           {(['list', 'templates'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors
@@ -616,23 +616,23 @@ export default function EvaluacionesPage() {
         {/* List */}
         <div className={`flex-1 min-w-0 ${selectedId ? 'hidden lg:block' : ''}`}>
           {tab === 'list' && (
-            <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-700">
+            <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
+                <p className="text-sm font-semibold text-slate-700 dark:text-white/80">
                   {total} evaluación{total !== 1 ? 'es' : ''} {statusFilter && `· ${STATUS_LABELS[statusFilter]?.label}`}
                 </p>
                 {statusFilter && (
-                  <button onClick={() => setStatusFilter('')} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
+                  <button onClick={() => setStatusFilter('')} className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 dark:text-white/30">
                     <X size={12} /> Limpiar filtro
                   </button>
                 )}
               </div>
               {loading ? (
-                <div className="py-12 text-center text-slate-400 text-sm">Cargando…</div>
+                <div className="py-12 text-center text-slate-400 text-sm dark:text-white/30">Cargando…</div>
               ) : appraisals.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 text-sm">Sin evaluaciones</div>
+                <div className="py-12 text-center text-slate-400 text-sm dark:text-white/30">Sin evaluaciones</div>
               ) : (
-                <div className="divide-y divide-slate-100">
+                <div className="divide-y divide-slate-100 dark:divide-white/[0.06]">
                   {appraisals.map(a => {
                     const si = STATUS_LABELS[a.status] || STATUS_LABELS.draft
                     return (
@@ -643,8 +643,8 @@ export default function EvaluacionesPage() {
                           {a.employee_name?.charAt(0)}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium text-slate-800 text-sm truncate">{a.employee_name}</p>
-                          <p className="text-xs text-slate-500 truncate">{a.template_name} · {a.period_label}</p>
+                          <p className="font-medium text-slate-800 text-sm truncate dark:text-white/90">{a.employee_name}</p>
+                          <p className="text-xs text-slate-500 truncate dark:text-white/40">{a.template_name} · {a.period_label}</p>
                         </div>
                         <div className="flex flex-col items-end gap-1 shrink-0">
                           <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${si.color}`}>
@@ -663,16 +663,16 @@ export default function EvaluacionesPage() {
           )}
 
           {tab === 'templates' && (
-            <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <p className="text-sm font-semibold text-slate-700">{templates.length} plantilla{templates.length !== 1 ? 's' : ''}</p>
+            <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+              <div className="px-4 py-3 border-b border-slate-100 dark:border-white/[0.06]">
+                <p className="text-sm font-semibold text-slate-700 dark:text-white/80">{templates.length} plantilla{templates.length !== 1 ? 's' : ''}</p>
               </div>
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 dark:divide-white/[0.06]">
                 {templates.map(t => (
                   <div key={t.id} className="flex items-center gap-3 px-4 py-3.5">
                     <div className="flex-1 min-w-0">
                       <p className={`font-medium text-sm ${t.active ? 'text-slate-800' : 'text-slate-400 line-through'}`}>{t.name}</p>
-                      <p className="text-xs text-slate-500">{t.criteria_count} criterios · escala {t.scale_min}–{t.scale_max}</p>
+                      <p className="text-xs text-slate-500 dark:text-white/40">{t.criteria_count} criterios · escala {t.scale_min}–{t.scale_max}</p>
                     </div>
                     {isAdmin && (
                       <button onClick={() => toggleTemplate(t.id, t.active)}
@@ -686,7 +686,7 @@ export default function EvaluacionesPage() {
                   </div>
                 ))}
                 {templates.length === 0 && (
-                  <p className="text-center py-12 text-sm text-slate-400">Sin plantillas</p>
+                  <p className="text-center py-12 text-sm text-slate-400 dark:text-white/30">Sin plantillas</p>
                 )}
               </div>
             </div>
@@ -695,7 +695,7 @@ export default function EvaluacionesPage() {
 
         {/* Side panel */}
         {selectedId && (
-          <div className="w-full lg:w-[480px] shrink-0 bg-white rounded-2xl shadow border border-slate-100 p-5">
+          <div className="w-full lg:w-[480px] shrink-0 bg-white rounded-2xl shadow border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <AppraisalDetail
               id={selectedId}
               user={user}

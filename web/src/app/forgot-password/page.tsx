@@ -23,8 +23,8 @@ export default function ForgotPasswordPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900 p-4">
-      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md">
-        <Link href="/login" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 mb-4">
+      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md dark:bg-white/[0.04]">
+        <Link href="/login" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 mb-4 dark:text-white/40">
           <ArrowLeft size={14} /> Volver al login
         </Link>
 
@@ -32,8 +32,8 @@ export default function ForgotPasswordPage() {
           <div className="w-14 h-14 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
             <Mail size={24} className="text-blue-600" />
           </div>
-          <h1 className="text-xl font-bold text-slate-900">¿Olvidaste tu contraseña?</h1>
-          <p className="text-sm text-slate-500 mt-1">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">¿Olvidaste tu contraseña?</h1>
+          <p className="text-sm text-slate-500 mt-1 dark:text-white/40">
             Ingresá tu email y te enviaremos un enlace para restablecerla.
           </p>
         </div>
@@ -49,10 +49,10 @@ export default function ForgotPasswordPage() {
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="fp-email" className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+              <label htmlFor="fp-email" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Email</label>
               <input id="fp-email" type="email" required value={email} onChange={e => setEmail(e.target.value)}
                 aria-invalid={!!error}
-                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
                 placeholder="tu@email.com" autoFocus />
             </div>
 

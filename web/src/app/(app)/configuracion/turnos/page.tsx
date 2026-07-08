@@ -61,7 +61,7 @@ export default function TurnosPage() {
       <div className="flex items-center gap-3">
         <Link
           href="/configuracion"
-          className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
+          className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-white/40"
         >
           <ArrowLeft size={16} aria-hidden="true" /> Volver
         </Link>
@@ -73,8 +73,8 @@ export default function TurnosPage() {
             <Clock size={20} className="text-blue-600" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900">Turnos y horarios</h1>
-            <p className="text-sm text-slate-500">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white">Turnos y horarios</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">
               Gestión de turnos de trabajo. Cada empleado puede tener asignado un turno.
             </p>
           </div>
@@ -93,9 +93,9 @@ export default function TurnosPage() {
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden">
+      <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.08]">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-600">
+          <thead className="bg-slate-50 text-slate-600 dark:bg-white/[0.03] dark:text-white/60">
             <tr>
               <th className="text-left px-4 py-3 font-semibold">Nombre</th>
               <th className="text-left px-4 py-3 font-semibold">Entrada</th>
@@ -108,24 +108,24 @@ export default function TurnosPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={7} className="text-center py-8 text-slate-400">Cargando...</td></tr>
+              <tr><td colSpan={7} className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</td></tr>
             )}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={7} className="text-center py-8 text-slate-400">
+              <tr><td colSpan={7} className="text-center py-8 text-slate-400 dark:text-white/30">
                 No hay turnos creados. Creá el primero.
               </td></tr>
             )}
             {items.map(s => (
-              <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50">
-                <td className="px-4 py-3 font-medium text-slate-900">{s.name}</td>
-                <td className="px-4 py-3 font-mono text-slate-700">{s.check_in?.slice(0, 5)}</td>
-                <td className="px-4 py-3 font-mono text-slate-700">{s.check_out?.slice(0, 5)}</td>
-                <td className="px-4 py-3 text-slate-600">
+              <tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 dark:border-white/[0.06] dark:hover:bg-white/[0.04]">
+                <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{s.name}</td>
+                <td className="px-4 py-3 font-mono text-slate-700 dark:text-white/80">{s.check_in?.slice(0, 5)}</td>
+                <td className="px-4 py-3 font-mono text-slate-700 dark:text-white/80">{s.check_out?.slice(0, 5)}</td>
+                <td className="px-4 py-3 text-slate-600 dark:text-white/60">
                   +{s.tolerance_in}m / −{s.tolerance_out}m
                 </td>
-                <td className="px-4 py-3 text-xs text-slate-600">{daysToLabel(s.work_days)}</td>
+                <td className="px-4 py-3 text-xs text-slate-600 dark:text-white/60">{daysToLabel(s.work_days)}</td>
                 <td className="px-4 py-3">
-                  <span className="inline-flex items-center gap-1 text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded-full">
+                  <span className="inline-flex items-center gap-1 text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded-full dark:bg-white/[0.06] dark:text-white/80">
                     <Users size={12} aria-hidden="true" /> {s.employees_count}
                   </span>
                 </td>
@@ -215,17 +215,17 @@ function ScheduleModal({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6"
+        className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 dark:bg-white/[0.04]"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
-          <h2 id="schedule-modal-title" className="text-lg font-bold text-slate-900">
+          <h2 id="schedule-modal-title" className="text-lg font-bold text-slate-900 dark:text-white">
             {isEdit ? 'Editar turno' : 'Nuevo turno'}
           </h2>
           <button
             onClick={onClose}
             aria-label="Cerrar"
-            className="text-slate-400 hover:text-slate-600"
+            className="text-slate-400 hover:text-slate-600 dark:text-white/30"
           >
             <X size={20} aria-hidden="true" />
           </button>
@@ -233,46 +233,46 @@ function ScheduleModal({
 
         <form onSubmit={submit} className="space-y-4">
           <div>
-            <label htmlFor="sch-name" className="block text-sm font-medium text-slate-700 mb-1">Nombre</label>
+            <label htmlFor="sch-name" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Nombre</label>
             <input
               id="sch-name"
               type="text"
               required
               value={form.name}
               onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               placeholder="Administrativo, Operaciones, etc."
             />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="sch-in" className="block text-sm font-medium text-slate-700 mb-1">Entrada</label>
+              <label htmlFor="sch-in" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Entrada</label>
               <input
                 id="sch-in"
                 type="time"
                 required
                 value={form.check_in}
                 onChange={e => setForm(f => ({ ...f, check_in: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               />
             </div>
             <div>
-              <label htmlFor="sch-out" className="block text-sm font-medium text-slate-700 mb-1">Salida</label>
+              <label htmlFor="sch-out" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Salida</label>
               <input
                 id="sch-out"
                 type="time"
                 required
                 value={form.check_out}
                 onChange={e => setForm(f => ({ ...f, check_out: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label htmlFor="sch-tin" className="block text-sm font-medium text-slate-700 mb-1">Tolerancia entrada (min)</label>
+              <label htmlFor="sch-tin" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Tolerancia entrada (min)</label>
               <input
                 id="sch-tin"
                 type="number"
@@ -280,11 +280,11 @@ function ScheduleModal({
                 max={120}
                 value={form.tolerance_in}
                 onChange={e => setForm(f => ({ ...f, tolerance_in: Number(e.target.value) }))}
-                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               />
             </div>
             <div>
-              <label htmlFor="sch-tout" className="block text-sm font-medium text-slate-700 mb-1">Tolerancia salida (min)</label>
+              <label htmlFor="sch-tout" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Tolerancia salida (min)</label>
               <input
                 id="sch-tout"
                 type="number"
@@ -292,13 +292,13 @@ function ScheduleModal({
                 max={120}
                 value={form.tolerance_out}
                 onChange={e => setForm(f => ({ ...f, tolerance_out: Number(e.target.value) }))}
-                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               />
             </div>
           </div>
 
           <div>
-            <span className="block text-sm font-medium text-slate-700 mb-2">Días laborables</span>
+            <span className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/80">Días laborables</span>
             <div className="flex flex-wrap gap-2">
               {[1, 2, 3, 4, 5, 6, 7].map(d => (
                 <button
@@ -328,7 +328,7 @@ function ScheduleModal({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200"
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:text-white/80"
             >
               Cancelar
             </button>

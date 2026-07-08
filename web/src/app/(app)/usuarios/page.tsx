@@ -69,51 +69,51 @@ function UserModal({
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-6">
-        <h2 className="text-lg font-bold text-slate-900 mb-5 flex items-center gap-2">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-6 dark:bg-white/[0.04]">
+        <h2 className="text-lg font-bold text-slate-900 mb-5 flex items-center gap-2 dark:text-white">
           <User size={20} className="text-blue-500" />
           {isEdit ? 'Editar usuario' : 'Nuevo usuario'}
         </h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">Nombre completo</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Nombre completo</label>
               <input required value={form.full_name} onChange={e => set('full_name', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Usuario {!isEdit && <span className="text-red-500">*</span>}</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Usuario {!isEdit && <span className="text-red-500">*</span>}</label>
               <input required={!isEdit} disabled={isEdit} value={form.username}
                 onChange={e => set('username', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-50 dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Rol</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Rol</label>
               <select value={form.role} onChange={e => set('role', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
                 {Object.entries(ROLES).map(([v, { label }]) => (
                   <option key={v} value={v}>{label}</option>
                 ))}
               </select>
             </div>
             <div className="col-span-2">
-              <label className="block text-sm font-medium text-slate-700 mb-1">Email <span className="text-red-500">*</span></label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Email <span className="text-red-500">*</span></label>
               <input required type="email" value={form.email} onChange={e => set('email', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
             </div>
             {!isEdit && (
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-slate-700 mb-1">Contraseña <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Contraseña <span className="text-red-500">*</span></label>
                 <input required type="password" placeholder="Mín. 8 caracteres" value={form.password}
                   onChange={e => set('password', e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
               </div>
             )}
             {isEdit && (
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-slate-700 mb-1">Estado</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Estado</label>
                 <select value={form.active} onChange={e => set('active', e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
                   <option value="1">Activo</option>
                   <option value="0">Inactivo</option>
                 </select>
@@ -123,7 +123,7 @@ function UserModal({
           {error && <p className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose}
-              className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50">
+              className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               Cancelar
             </button>
             <button type="submit" disabled={saving}
@@ -157,8 +157,8 @@ function PasswordModal({ userId, onClose }: { userId: number; onClose: () => voi
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6">
-        <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 dark:bg-white/[0.04]">
+        <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 dark:text-white">
           <Key size={18} className="text-amber-500" /> Cambiar contraseña
         </h2>
         {done ? (
@@ -169,10 +169,10 @@ function PasswordModal({ userId, onClose }: { userId: number; onClose: () => voi
           <form onSubmit={handleSubmit} className="space-y-4">
             <input required type="password" placeholder="Nueva contraseña (mín. 8 caracteres)"
               value={pw} onChange={e => setPw(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
             <div className="flex gap-3">
               <button type="button" onClick={onClose}
-                className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium">
+                className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium dark:text-white/80 dark:border-white/[0.08]">
                 Cancelar
               </button>
               <button type="submit" disabled={saving || pw.length < 8}
@@ -217,8 +217,8 @@ export default function UsuariosPage() {
         <div className="flex items-center gap-3">
           <Shield className="text-blue-600" size={26} />
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Usuarios del sistema</h1>
-            <p className="text-sm text-slate-500">Accesos, roles y permisos</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Usuarios del sistema</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">Accesos, roles y permisos</p>
           </div>
         </div>
         <button onClick={() => setModal('new')}
@@ -244,45 +244,45 @@ export default function UsuariosPage() {
       </div>
 
       {/* Tabla */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {isLoading ? (
-          <div className="text-center py-16 text-slate-400">Cargando usuarios...</div>
+          <div className="text-center py-16 text-slate-400 dark:text-white/30">Cargando usuarios...</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
               <tr>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Usuario</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Email</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Rol</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Empleado vinculado</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium">Estado</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Último acceso</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Usuario</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Email</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Rol</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Empleado vinculado</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium dark:text-white/40">Estado</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Último acceso</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {users.map(u => {
                 const role = ROLES[u.role] || ROLES.employee
                 return (
-                  <tr key={u.id} className="hover:bg-slate-50">
+                  <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">
                           {u.full_name?.[0] || u.username?.[0]}
                         </div>
                         <div>
-                          <p className="font-medium text-slate-900">{u.full_name}</p>
-                          <p className="text-xs text-slate-400">@{u.username}</p>
+                          <p className="font-medium text-slate-900 dark:text-white">{u.full_name}</p>
+                          <p className="text-xs text-slate-400 dark:text-white/30">@{u.username}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{u.email}</td>
+                    <td className="px-4 py-3 text-slate-600 dark:text-white/60">{u.email}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${role.cls}`}>
                         {role.label}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{u.employee_name || '—'}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs dark:text-white/40">{u.employee_name || '—'}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
                         u.active ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-slate-500'
@@ -291,7 +291,7 @@ export default function UsuariosPage() {
                         {u.active ? 'Activo' : 'Inactivo'}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-400 text-xs">
+                    <td className="px-4 py-3 text-slate-400 text-xs dark:text-white/30">
                       {u.last_login ? new Date(u.last_login).toLocaleDateString('es', {
                         day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'
                       }) : 'Nunca'}
@@ -299,20 +299,20 @@ export default function UsuariosPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
                         <button onClick={() => setModal(u)}
-                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Editar">
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors dark:text-white/30" title="Editar">
                           <Edit2 size={14} />
                         </button>
                         <a href={`/usuarios/${u.id}/permisos`}
-                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors inline-block" title="Permisos granulares">
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors inline-block dark:text-white/30" title="Permisos granulares">
                           <Shield size={14} />
                         </a>
                         <button onClick={() => setPwModal(u.id)}
-                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Contraseña">
+                          className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors dark:text-white/30" title="Contraseña">
                           <Key size={14} />
                         </button>
                         {u.active ? (
                           <button onClick={() => deactivate(u)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Desactivar">
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors dark:text-white/30" title="Desactivar">
                             <Trash2 size={14} />
                           </button>
                         ) : null}
@@ -322,7 +322,7 @@ export default function UsuariosPage() {
                 )
               })}
               {users.length === 0 && (
-                <tr><td colSpan={7} className="text-center py-12 text-slate-400">Sin usuarios</td></tr>
+                <tr><td colSpan={7} className="text-center py-12 text-slate-400 dark:text-white/30">Sin usuarios</td></tr>
               )}
             </tbody>
           </table>

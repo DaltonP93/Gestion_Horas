@@ -103,16 +103,16 @@ function ManualCheckinModal({ onClose, onSaved }: { onClose: () => void; onSaved
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md dark:bg-white/[0.04]">
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-t-2xl px-6 py-4">
           <h2 className="text-lg font-bold text-white">Marcaje Manual</h2>
           <p className="text-blue-200 text-xs mt-0.5">Registrar entrada o salida manualmente</p>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Empleado <span className="text-red-500">*</span></label>
+            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Empleado <span className="text-red-500">*</span></label>
             <select required value={employeeId} onChange={e => setEmployeeId(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
               <option value="">Seleccionar...</option>
               {(data?.data || []).map((emp: any) => (
                 <option key={emp.id} value={emp.id}>[{emp.code}] {emp.full_name}</option>
@@ -121,7 +121,7 @@ function ManualCheckinModal({ onClose, onSaved }: { onClose: () => void; onSaved
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Tipo</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Tipo</label>
               <div className="flex gap-3 mt-2">
                 {(['in', 'out'] as const).map(t => (
                   <label key={t} className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${
@@ -135,10 +135,10 @@ function ManualCheckinModal({ onClose, onSaved }: { onClose: () => void; onSaved
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Fecha y hora</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Fecha y hora</label>
               <input type="datetime-local" required value={timestamp}
                 onChange={e => setTimestamp(e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
             </div>
           </div>
           {error && (
@@ -146,7 +146,7 @@ function ManualCheckinModal({ onClose, onSaved }: { onClose: () => void; onSaved
           )}
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose}
-              className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50">
+              className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               Cancelar
             </button>
             <button type="submit" disabled={saving}
@@ -228,20 +228,20 @@ export default function AsistenciaPage() {
             <Clock className="text-blue-600" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Asistencia</h1>
-            <p className="text-sm text-slate-500 capitalize">
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Asistencia</h1>
+            <p className="text-sm text-slate-500 capitalize dark:text-white/40">
               {format(new Date(date + 'T12:00'), "EEEE d 'de' MMMM yyyy", { locale: es })}
             </p>
           </div>
         </div>
         <div className="flex gap-2">
           <button onClick={() => refetch()}
-            className="p-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors" title="Actualizar">
+            className="p-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]" title="Actualizar">
             <RefreshCw size={15} />
           </button>
           <button onClick={() => exportCSV(filtered, date)}
             disabled={filtered.length === 0}
-            className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-40 transition-colors">
+            className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-40 transition-colors dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
             <Download size={15} /> Exportar CSV
           </button>
           <button onClick={() => setModal(true)}
@@ -261,13 +261,13 @@ export default function AsistenciaPage() {
           {liveTop.map((log, i) => (
             <div key={i} className="flex items-center gap-2 text-sm whitespace-nowrap">
               <span>{SOURCE_ICON[log.source] || '🖐️'}</span>
-              <span className="text-slate-700 font-medium">{log.employeeName}</span>
+              <span className="text-slate-700 font-medium dark:text-white/80">{log.employeeName}</span>
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                 log.type === 'in' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
               }`}>
                 {log.type === 'in' ? 'Entrada' : 'Salida'}
               </span>
-              <span className="text-slate-400 text-xs">{fmtTime(log.timestamp)}</span>
+              <span className="text-slate-400 text-xs dark:text-white/30">{fmtTime(log.timestamp)}</span>
             </div>
           ))}
         </div>
@@ -295,25 +295,25 @@ export default function AsistenciaPage() {
           <p className="text-xs font-medium text-purple-600 uppercase tracking-wide">Permisos</p>
           <p className="text-2xl font-bold text-purple-700">{perm}</p>
         </div>
-        <div className="bg-white border border-slate-100 rounded-2xl px-4 py-3">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Horas totales</p>
-          <p className="text-2xl font-bold text-slate-700">{minsToHM(totalWorked)}</p>
+        <div className="bg-white border border-slate-100 rounded-2xl px-4 py-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">Horas totales</p>
+          <p className="text-2xl font-bold text-slate-700 dark:text-white/80">{minsToHM(totalWorked)}</p>
         </div>
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3 items-center bg-white border border-slate-100 shadow-sm rounded-2xl px-5 py-4">
+      <div className="flex flex-wrap gap-3 items-center bg-white border border-slate-100 shadow-sm rounded-2xl px-5 py-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {/* Navegación de fecha */}
         <div className="flex items-center gap-1">
           <button onClick={() => changeDate(-1)}
-            className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors">
-            <ChevronLeft size={16} className="text-slate-500" />
+            className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors dark:hover:bg-white/[0.06]">
+            <ChevronLeft size={16} className="text-slate-500 dark:text-white/40" />
           </button>
           <input type="date" value={date} onChange={e => setDate(e.target.value)} max={today}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
           <button onClick={() => changeDate(1)} disabled={date >= today}
-            className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-30">
-            <ChevronRight size={16} className="text-slate-500" />
+            className="p-1.5 hover:bg-slate-100 rounded-lg transition-colors disabled:opacity-30 dark:hover:bg-white/[0.06]">
+            <ChevronRight size={16} className="text-slate-500 dark:text-white/40" />
           </button>
           {date !== today && (
             <button onClick={() => setDate(today)}
@@ -324,7 +324,7 @@ export default function AsistenciaPage() {
         </div>
 
         <select value={dept} onChange={e => setDept(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
           <option value="">Todos los departamentos</option>
           {(deptsData?.data || []).map((d: any) => (
             <option key={d.id} value={d.id}>{d.name}</option>
@@ -332,70 +332,70 @@ export default function AsistenciaPage() {
         </select>
 
         <div className="relative flex-1 min-w-[180px]">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-white/30" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Nombre o código..."
-            className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
         </div>
 
         {statusFilter && (
           <button onClick={() => setStatusFilter('')}
-            className="text-xs text-slate-500 px-3 py-1.5 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
+            className="text-xs text-slate-500 px-3 py-1.5 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors dark:bg-white/[0.06] dark:text-white/40">
             ✕ Limpiar filtro
           </button>
         )}
 
-        <p className="ml-auto text-xs text-slate-400">{filtered.length} empleados</p>
+        <p className="ml-auto text-xs text-slate-400 dark:text-white/30">{filtered.length} empleados</p>
       </div>
 
       {/* Tabla */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-x-auto dark:bg-white/[0.04] dark:border-white/[0.06]">
         {isLoading ? (
-          <div className="text-center py-16 text-slate-400">
+          <div className="text-center py-16 text-slate-400 dark:text-white/30">
             <RefreshCw size={28} className="mx-auto mb-3 animate-spin opacity-40" />
             Cargando marcaciones...
           </div>
         ) : (
           <table className="w-full text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
               <tr>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Empleado</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Depto.</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Estado</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Entrada</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Salida</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Trabajado</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Retardo</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">H. Extra</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide">Horario</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Empleado</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Depto.</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Estado</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Entrada</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Salida</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Trabajado</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Retardo</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">H. Extra</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium text-xs uppercase tracking-wide dark:text-white/40">Horario</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {filtered.map((row, i) => {
                 const cfg = STATUS_CFG[row.status] || STATUS_CFG.absent
                 return (
-                  <tr key={i} className="hover:bg-slate-50 transition-colors">
+                  <tr key={i} className="hover:bg-slate-50 transition-colors dark:hover:bg-white/[0.04]">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center text-blue-600 font-bold text-xs shrink-0">
                           {(row.employee_name || row.code || '?').split(' ').slice(0,2).map(n => n[0] || '').join('') || '?'}
                         </div>
                         <div>
-                          <p className="font-semibold text-slate-900 text-sm">{row.employee_name}</p>
-                          <p className="text-xs text-slate-400 font-mono">{row.code}</p>
+                          <p className="font-semibold text-slate-900 text-sm dark:text-white">{row.employee_name}</p>
+                          <p className="text-xs text-slate-400 font-mono dark:text-white/30">{row.code}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{row.department || '—'}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs dark:text-white/40">{row.department || '—'}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-semibold ${cfg.cls}`}>
                         {cfg.label}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-center font-mono text-sm text-slate-700 font-semibold">
+                    <td className="px-4 py-3 text-center font-mono text-sm text-slate-700 font-semibold dark:text-white/80">
                       {fmtTime(row.first_in)}
                     </td>
-                    <td className="px-4 py-3 text-center font-mono text-sm text-slate-700 font-semibold">
+                    <td className="px-4 py-3 text-center font-mono text-sm text-slate-700 font-semibold dark:text-white/80">
                       {fmtTime(row.last_out)}
                     </td>
                     <td className="px-4 py-3 text-center font-mono text-sm font-semibold text-blue-700">
@@ -415,7 +415,7 @@ export default function AsistenciaPage() {
                         </span>
                       ) : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="px-4 py-3 text-center text-slate-400 font-mono text-xs">
+                    <td className="px-4 py-3 text-center text-slate-400 font-mono text-xs dark:text-white/30">
                       {row.scheduled_in?.slice(0,5) && row.scheduled_out?.slice(0,5)
                         ? `${row.scheduled_in.slice(0,5)} – ${row.scheduled_out.slice(0,5)}`
                         : '—'}
@@ -425,7 +425,7 @@ export default function AsistenciaPage() {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="text-center py-14 text-slate-400">
+                  <td colSpan={9} className="text-center py-14 text-slate-400 dark:text-white/30">
                     <Clock size={36} className="mx-auto mb-3 opacity-30" />
                     <p className="font-medium">Sin registros para este día</p>
                     {dept && <p className="text-xs mt-1">Pruebe cambiando el departamento o la fecha</p>}

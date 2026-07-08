@@ -52,8 +52,8 @@ export default function CalendarioPage() {
           <Calendar className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">{t('calendar.title')}</h1>
-          <p className="text-sm text-slate-500">{t('calendar.subtitle')}</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">{t('calendar.title')}</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">{t('calendar.subtitle')}</p>
         </div>
       </div>
 
@@ -63,13 +63,13 @@ export default function CalendarioPage() {
           <h3 className="text-sm font-bold text-pink-900 mb-3">🎉 {t('calendar.today_celebrating')}</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {today?.birthdays?.map((p: any) => (
-              <div key={`b${p.id}`} className="bg-white rounded-xl p-3 flex items-center gap-3">
+              <div key={`b${p.id}`} className="bg-white rounded-xl p-3 flex items-center gap-3 dark:bg-white/[0.04]">
                 <div className="w-10 h-10 rounded-full bg-pink-100 flex items-center justify-center">
                   <Cake size={18} className="text-pink-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-900 truncate">{p.full_name}</p>
-                  <p className="text-xs text-slate-500 truncate">
+                  <p className="font-semibold text-slate-900 truncate dark:text-white">{p.full_name}</p>
+                  <p className="text-xs text-slate-500 truncate dark:text-white/40">
                     Cumple {p.turning_age} años · {p.department || '—'}
                   </p>
                 </div>
@@ -82,13 +82,13 @@ export default function CalendarioPage() {
               </div>
             ))}
             {today?.anniversaries?.map((p: any) => (
-              <div key={`a${p.id}`} className="bg-white rounded-xl p-3 flex items-center gap-3">
+              <div key={`a${p.id}`} className="bg-white rounded-xl p-3 flex items-center gap-3 dark:bg-white/[0.04]">
                 <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
                   <Award size={18} className="text-amber-600" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-900 truncate">{p.full_name}</p>
-                  <p className="text-xs text-slate-500 truncate">
+                  <p className="font-semibold text-slate-900 truncate dark:text-white">{p.full_name}</p>
+                  <p className="text-xs text-slate-500 truncate dark:text-white/40">
                     {ordinal(p.years)} aniversario · {p.department || '—'}
                   </p>
                 </div>
@@ -105,23 +105,23 @@ export default function CalendarioPage() {
       )}
 
       {/* Selector mes + tabs */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between gap-3">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between gap-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="flex items-center gap-2">
           <button onClick={() => setMonth(m => m === 1 ? 12 : m - 1)}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 dark:text-white/40 dark:hover:bg-white/[0.06]">
             <ChevronLeft size={18} />
           </button>
           <select value={month} onChange={e => setMonth(+e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold min-w-[140px]">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold min-w-[140px] dark:border-white/[0.08]">
             {MESES.map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
           </select>
           <button onClick={() => setMonth(m => m === 12 ? 1 : m + 1)}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 dark:text-white/40 dark:hover:bg-white/[0.06]">
             <ChevronRight size={18} />
           </button>
         </div>
 
-        <div className="flex bg-slate-100 rounded-xl p-1">
+        <div className="flex bg-slate-100 rounded-xl p-1 dark:bg-white/[0.06]">
           <button onClick={() => setTab('birthdays')}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               tab === 'birthdays' ? 'bg-white text-pink-600 shadow-sm' : 'text-slate-500'
@@ -141,9 +141,9 @@ export default function CalendarioPage() {
 
       {/* Lista por día */}
       {isLoading ? (
-        <div className="text-center py-12 text-slate-400">Cargando...</div>
+        <div className="text-center py-12 text-slate-400 dark:text-white/30">Cargando...</div>
       ) : items.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-400">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-400 dark:bg-white/[0.04] dark:text-white/30 dark:border-white/[0.06]">
           <Calendar size={36} className="mx-auto mb-3 opacity-30" />
           <p className="font-medium">
             Sin {tab === 'birthdays' ? 'cumpleaños' : 'aniversarios'} en {MESES[month - 1]}
@@ -155,21 +155,21 @@ export default function CalendarioPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {Object.entries(grouped).sort(([a], [b]) => +a - +b).map(([day, people]: any) => (
-            <div key={day} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            <div key={day} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
               <div className={`px-4 py-3 ${tab === 'birthdays' ? 'bg-pink-50' : 'bg-amber-50'}`}>
-                <p className="text-xs uppercase tracking-wide text-slate-500 font-medium">
+                <p className="text-xs uppercase tracking-wide text-slate-500 font-medium dark:text-white/40">
                   {MESES[month - 1]}
                 </p>
                 <p className={`text-2xl font-bold ${tab === 'birthdays' ? 'text-pink-700' : 'text-amber-700'}`}>
                   {String(day).padStart(2, '0')}
                 </p>
               </div>
-              <div className="divide-y divide-slate-50">
+              <div className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                 {people.map((p: any) => (
                   <div key={p.id} className="p-3 flex items-center gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-slate-800 text-sm truncate">{p.full_name}</p>
-                      <p className="text-xs text-slate-400 truncate">
+                      <p className="font-medium text-slate-800 text-sm truncate dark:text-white/90">{p.full_name}</p>
+                      <p className="text-xs text-slate-400 truncate dark:text-white/30">
                         {p.department || 'Sin depto'}
                         {tab === 'birthdays' && p.turning_age != null && ` · cumple ${p.turning_age}`}
                         {tab === 'anniversaries' && p.years != null && ` · ${ordinal(p.years)} año`}
@@ -177,7 +177,7 @@ export default function CalendarioPage() {
                     </div>
                     {p.email && (
                       <a href={`mailto:${p.email}`}
-                        className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg" title="Enviar email">
+                        className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-1.5 rounded-lg dark:text-white/30" title="Enviar email">
                         <Mail size={14} />
                       </a>
                     )}

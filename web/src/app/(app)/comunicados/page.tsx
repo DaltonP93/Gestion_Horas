@@ -90,8 +90,8 @@ export default function ComunicadosPage() {
             <Megaphone className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Comunicados</h1>
-            <p className="text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Comunicados</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">
               {items.length} comunicado{items.length !== 1 ? 's' : ''}
               {unreadCount > 0 && (
                 <span className="ml-2 bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full text-xs font-medium">
@@ -112,7 +112,7 @@ export default function ComunicadosPage() {
       {/* Lista */}
       <div className="space-y-3">
         {items.length === 0 && (
-          <div className="text-center py-12 text-slate-400 bg-white rounded-2xl border border-slate-100">
+          <div className="text-center py-12 text-slate-400 bg-white rounded-2xl border border-slate-100 dark:bg-white/[0.04] dark:text-white/30 dark:border-white/[0.06]">
             <Megaphone size={36} className="mx-auto mb-3 opacity-30" />
             <p className="font-medium">Sin comunicados activos</p>
           </div>
@@ -134,7 +134,7 @@ export default function ComunicadosPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       {a.pinned ? <Pin size={13} className="text-amber-600" /> : null}
-                      <h3 className="font-bold text-slate-900">{a.title}</h3>
+                      <h3 className="font-bold text-slate-900 dark:text-white">{a.title}</h3>
                       {!a.read_at && (
                         <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">Nuevo</span>
                       )}
@@ -144,8 +144,8 @@ export default function ComunicadosPage() {
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-slate-600 mt-1 line-clamp-2">{a.body}</p>
-                    <div className="flex items-center gap-3 mt-3 text-xs text-slate-400">
+                    <p className="text-sm text-slate-600 mt-1 line-clamp-2 dark:text-white/60">{a.body}</p>
+                    <div className="flex items-center gap-3 mt-3 text-xs text-slate-400 dark:text-white/30">
                       <span>{a.author_name || a.author_username}</span>
                       <span>·</span>
                       <span>{format(new Date(a.created_at), "d 'de' MMM yyyy", { locale: es })}</span>
@@ -170,24 +170,24 @@ export default function ComunicadosPage() {
       {selected && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
           onClick={() => setSelected(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col"
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col dark:bg-white/[0.04]"
             onClick={e => e.stopPropagation()}>
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
               <div className="flex items-center gap-2">
                 {selected.pinned && <Pin size={14} className="text-amber-600" />}
-                <h3 className="font-bold text-lg text-slate-900">{selected.title}</h3>
+                <h3 className="font-bold text-lg text-slate-900 dark:text-white">{selected.title}</h3>
               </div>
-              <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-slate-600 dark:text-white/30">
                 <X size={18} />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+              <div className="flex items-center gap-3 text-xs text-slate-500 flex-wrap dark:text-white/40">
                 <span>Por <strong>{selected.author_name || selected.author_username}</strong></span>
                 <span>·</span>
                 <span>{format(new Date(selected.created_at), "d 'de' MMMM 'de' yyyy 'a las' HH:mm", { locale: es })}</span>
               </div>
-              <div className="prose prose-sm max-w-none whitespace-pre-wrap text-slate-700">
+              <div className="prose prose-sm max-w-none whitespace-pre-wrap text-slate-700 dark:text-white/80">
                 {selected.body}
               </div>
               {isAdmin && (
@@ -205,44 +205,44 @@ export default function ComunicadosPage() {
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
           onClick={() => setShowForm(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col"
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col dark:bg-white/[0.04]"
             onClick={e => e.stopPropagation()}>
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
+              <h3 className="font-bold text-slate-900 flex items-center gap-2 dark:text-white">
                 <Megaphone size={18} className="text-orange-600" /> Nuevo comunicado
               </h3>
-              <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setShowForm(false)} className="text-slate-400 hover:text-slate-600 dark:text-white/30">
                 <X size={18} />
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Título *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Título *</label>
                 <input value={form.title} onChange={e => setForm((f: any) => ({ ...f, title: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]" />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Mensaje *</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Mensaje *</label>
                 <textarea value={form.body} rows={5}
                   onChange={e => setForm((f: any) => ({ ...f, body: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Prioridad</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Prioridad</label>
                   <select value={form.priority}
                     onChange={e => setForm((f: any) => ({ ...f, priority: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]">
                     <option value="info">Informativo</option>
                     <option value="important">Importante</option>
                     <option value="critical">Crítico</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Audiencia</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Audiencia</label>
                   <select value={form.audience}
                     onChange={e => setForm((f: any) => ({ ...f, audience: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]">
                     <option value="all">Todos los usuarios</option>
                     <option value="department">Departamento específico</option>
                     <option value="role">Por rol</option>
@@ -251,10 +251,10 @@ export default function ComunicadosPage() {
               </div>
               {form.audience === 'department' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Departamento</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Departamento</label>
                   <select value={form.audience_dept}
                     onChange={e => setForm((f: any) => ({ ...f, audience_dept: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]">
                     <option value="">Seleccionar...</option>
                     {(depts || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
                   </select>
@@ -262,10 +262,10 @@ export default function ComunicadosPage() {
               )}
               {form.audience === 'role' && (
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Rol</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Rol</label>
                   <select value={form.audience_role}
                     onChange={e => setForm((f: any) => ({ ...f, audience_role: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]">
                     <option value="">Seleccionar...</option>
                     <option value="employee">Empleados</option>
                     <option value="supervisor">Supervisores</option>
@@ -277,30 +277,30 @@ export default function ComunicadosPage() {
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Expira</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Expira</label>
                   <input type="datetime-local" value={form.expires_at}
                     onChange={e => setForm((f: any) => ({ ...f, expires_at: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm" />
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm dark:border-white/[0.08]" />
                 </div>
                 <div className="flex flex-col gap-2 pt-6">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={!!form.pinned}
                       onChange={e => setForm((f: any) => ({ ...f, pinned: e.target.checked ? 1 : 0 }))}
                       className="accent-amber-600 w-4 h-4" />
-                    <span className="text-sm text-slate-700">Fijar arriba</span>
+                    <span className="text-sm text-slate-700 dark:text-white/80">Fijar arriba</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={!!form.require_ack}
                       onChange={e => setForm((f: any) => ({ ...f, require_ack: e.target.checked ? 1 : 0 }))}
                       className="accent-emerald-600 w-4 h-4" />
-                    <span className="text-sm text-slate-700">Requiere confirmación</span>
+                    <span className="text-sm text-slate-700 dark:text-white/80">Requiere confirmación</span>
                   </label>
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-2 dark:border-white/[0.06]">
               <button onClick={() => setShowForm(false)}
-                className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm">Cancelar</button>
+                className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
               <button onClick={createAnnouncement}
                 className="flex items-center gap-2 bg-gradient-to-r from-orange-500 to-pink-500 hover:from-orange-600 hover:to-pink-600 text-white px-4 py-2 rounded-xl text-sm font-medium">
                 <Send size={14} /> Publicar

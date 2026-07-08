@@ -59,14 +59,14 @@ function EditField({
 
   return (
     <div className="flex items-center justify-between py-3 border-b border-slate-50 last:border-0">
-      <span className="text-sm text-slate-500 w-36 shrink-0">{label}</span>
+      <span className="text-sm text-slate-500 w-36 shrink-0 dark:text-white/40">{label}</span>
       {editing ? (
         <div className="flex items-center gap-2 flex-1">
           {options ? (
             <select
               value={val}
               onChange={e => setVal(e.target.value)}
-              className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
             >
               {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
@@ -75,7 +75,7 @@ function EditField({
               type={type}
               value={val}
               onChange={e => setVal(e.target.value)}
-              className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               autoFocus
             />
           )}
@@ -86,13 +86,13 @@ function EditField({
           >
             <Save size={16} />
           </button>
-          <button onClick={() => { setEditing(false); setVal(value || '') }} className="text-slate-400 hover:text-slate-600">
+          <button onClick={() => { setEditing(false); setVal(value || '') }} className="text-slate-400 hover:text-slate-600 dark:text-white/30">
             <X size={16} />
           </button>
         </div>
       ) : (
         <div className="flex items-center gap-2 flex-1 justify-between">
-          <span className="text-sm font-medium text-slate-900">{value || <span className="text-slate-400">—</span>}</span>
+          <span className="text-sm font-medium text-slate-900 dark:text-white">{value || <span className="text-slate-400 dark:text-white/30">—</span>}</span>
           <button onClick={() => setEditing(true)} className="text-slate-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity">
             <Edit2 size={14} />
           </button>
@@ -138,7 +138,7 @@ export default function EmpleadoDetallePage() {
     qc.invalidateQueries({ queryKey: ['employees'] })
   }
 
-  if (isLoading) return <div className="p-6 text-slate-400">Cargando...</div>
+  if (isLoading) return <div className="p-6 text-slate-400 dark:text-white/30">Cargando...</div>
   if (error || !emp) return <div className="p-6 text-red-500">Empleado no encontrado</div>
 
   const schedOpts = [{ value: '', label: 'Sin horario' },
@@ -153,23 +153,23 @@ export default function EmpleadoDetallePage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       {/* Back */}
-      <Link href="/empleados" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800">
+      <Link href="/empleados" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 dark:text-white/40">
         <ArrowLeft size={16} /> Volver a empleados
       </Link>
 
       {/* Header empleado */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex items-center gap-5">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex items-center gap-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-3xl font-bold shrink-0">
           {emp.first_name?.[0]}{emp.last_name?.[0]}
         </div>
         <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-slate-900">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
             {emp.first_name} {emp.last_name}
           </h1>
-          <div className="flex flex-wrap gap-3 mt-2 text-sm text-slate-500">
-            <span className="font-mono bg-slate-100 px-2 py-0.5 rounded">#{emp.code}</span>
+          <div className="flex flex-wrap gap-3 mt-2 text-sm text-slate-500 dark:text-white/40">
+            <span className="font-mono bg-slate-100 px-2 py-0.5 rounded dark:bg-white/[0.06]">#{emp.code}</span>
             {emp.employee_number && (
-              <span className="bg-slate-100 px-2 py-0.5 rounded">{emp.employee_number}</span>
+              <span className="bg-slate-100 px-2 py-0.5 rounded dark:bg-white/[0.06]">{emp.employee_number}</span>
             )}
             {emp.position && (
               <span className="flex items-center gap-1"><Briefcase size={13} /> {emp.position}</span>
@@ -187,8 +187,8 @@ export default function EmpleadoDetallePage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Info personal */}
-        <div className="lg:col-span-1 bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2">
+        <div className="lg:col-span-1 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
             <User size={16} className="text-blue-500" /> Información
           </h2>
           <div className="group">
@@ -238,39 +238,39 @@ export default function EmpleadoDetallePage() {
           </div>
 
           {/* Filtro de período */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold text-slate-700 flex items-center gap-2">
+              <h2 className="font-semibold text-slate-700 flex items-center gap-2 dark:text-white/80">
                 <Clock size={16} className="text-blue-500" /> Historial de asistencia
               </h2>
               <div className="flex gap-2 items-center text-sm">
                 <input type="date" value={histFrom} onChange={e => setHistFrom(e.target.value)}
-                  className="border border-slate-200 rounded-xl px-2 py-1 text-sm" />
-                <span className="text-slate-400">–</span>
+                  className="border border-slate-200 rounded-xl px-2 py-1 text-sm dark:border-white/[0.08]" />
+                <span className="text-slate-400 dark:text-white/30">–</span>
                 <input type="date" value={histTo} onChange={e => setHistTo(e.target.value)}
                   max={format(new Date(), 'yyyy-MM-dd')}
-                  className="border border-slate-200 rounded-xl px-2 py-1 text-sm" />
+                  className="border border-slate-200 rounded-xl px-2 py-1 text-sm dark:border-white/[0.08]" />
               </div>
             </div>
 
-            <div className="overflow-y-auto max-h-80 space-y-0 divide-y divide-slate-50">
+            <div className="overflow-y-auto max-h-80 space-y-0 divide-y divide-slate-50 dark:divide-white/[0.05]">
               {histRows.length === 0 && (
-                <p className="text-center py-8 text-slate-400 text-sm">Sin registros en este período</p>
+                <p className="text-center py-8 text-slate-400 text-sm dark:text-white/30">Sin registros en este período</p>
               )}
               {histRows.map((row: any, i: number) => {
                 const cfg = STATUS_ROW[row.status] || STATUS_ROW.absent
                 return (
                   <div key={i} className="flex items-center gap-3 py-2.5 text-sm">
-                    <span className="text-slate-400 font-mono text-xs w-24 shrink-0">
+                    <span className="text-slate-400 font-mono text-xs w-24 shrink-0 dark:text-white/30">
                       {row.date ? format(new Date(row.date + 'T12:00'), 'EEE dd/MM', { locale: es }) : ''}
                     </span>
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.cls}`}>
                       {cfg.icon} {cfg.label}
                     </span>
-                    <span className="font-mono text-slate-600 text-xs">{fmtTime(row.first_in)}</span>
+                    <span className="font-mono text-slate-600 text-xs dark:text-white/60">{fmtTime(row.first_in)}</span>
                     <span className="text-slate-300 text-xs">–</span>
-                    <span className="font-mono text-slate-600 text-xs">{fmtTime(row.last_out)}</span>
-                    <span className="ml-auto font-mono text-slate-500 text-xs">{minsToHM(row.worked_minutes)}</span>
+                    <span className="font-mono text-slate-600 text-xs dark:text-white/60">{fmtTime(row.last_out)}</span>
+                    <span className="ml-auto font-mono text-slate-500 text-xs dark:text-white/40">{minsToHM(row.worked_minutes)}</span>
                     {row.late_minutes > 0 && (
                       <span className="text-amber-500 text-xs">+{row.late_minutes}min</span>
                     )}

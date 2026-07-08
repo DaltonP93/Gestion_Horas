@@ -183,10 +183,14 @@ app.get('/health', (req, res) => {
 
 // ─── Manejo de errores ──────────────────────────────────────────
 app.use((err, req, res, next) => {
-  logger.error(`${err.status || 500} - ${err.message} - ${req.originalUrl}`);
-  res.status(err.status || 500).json({
-    error: err.message || 'Error interno del servidor'
-  });
+  const status = err.status || 500;
+  // Log completo (con stack) solo del lado servidor.
+  logger.error(`${status} ${req.method} ${req.originalUrl} - ${err.message}`, { stack: err.stack });
+  // No filtrar detalles internos (mensajes SQL, columnas) en respuestas 5xx.
+  // Los 4xx sí devuelven el mensaje porque son de validación/cliente.
+  const body = { error: status < 500 ? (err.message || 'Solicitud inválida') : 'Error interno del servidor' };
+  if (err.code) body.code = err.code;
+  res.status(status).json(body);
 });
 
 // 404
@@ -240,5 +244,17 @@ async function start() {
 }
 
 start();
+
+// ─── Red de seguridad de proceso ────────────────────────────────
+// Evita que una promesa rechazada o un error no capturado terminen el
+// proceso de forma silenciosa: se registran para diagnóstico. Un proceso
+// vivo con un error logueado es preferible a una caída sin rastro; PM2
+// reiniciará si el estado queda realmente corrupto.
+process.on('unhandledRejection', (reason) => {
+  logger.error('unhandledRejection:', reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  logger.error('uncaughtException:', err.stack || err.message);
+});
 
 module.exports = { app, server };

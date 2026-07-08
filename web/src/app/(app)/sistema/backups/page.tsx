@@ -47,25 +47,25 @@ function OffsiteConfig() {
   const set = (k: string) => (v: string) => setCfg((p: any) => ({ ...p, [k]: v }))
   const inp = (k: string, label: string, type = 'text', ph = '') => (
     <div key={k}>
-      <label className="text-xs text-slate-500 mb-1 block">{label}</label>
+      <label className="text-xs text-slate-500 mb-1 block dark:text-white/40">{label}</label>
       <input type={type} value={cfg[k]} onChange={e => set(k)(e.target.value)} placeholder={ph}
-        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono" />
+        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono dark:border-white/[0.08]" />
     </div>
   )
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
       <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-5 py-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-2xl transition-colors">
+        className="w-full flex items-center justify-between px-5 py-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 rounded-2xl transition-colors dark:text-white/80 dark:hover:bg-white/[0.04]">
         <div className="flex items-center gap-2"><Cloud size={16} className="text-blue-500" /> Backup off-site (S3 / MinIO / SFTP)</div>
-        <span className="text-xs text-slate-400">{open ? '▲' : '▼'}</span>
+        <span className="text-xs text-slate-400 dark:text-white/30">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div className="px-5 pb-5 space-y-4 border-t border-slate-100 pt-4">
+        <div className="px-5 pb-5 space-y-4 border-t border-slate-100 pt-4 dark:border-white/[0.06]">
           <div>
-            <label className="text-xs text-slate-500 mb-1 block">Proveedor</label>
+            <label className="text-xs text-slate-500 mb-1 block dark:text-white/40">Proveedor</label>
             <select value={cfg.provider} onChange={e => set('provider')(e.target.value)}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               <option value="">Deshabilitado</option>
               <option value="s3">S3 / MinIO</option>
               <option value="sftp">SFTP</option>
@@ -98,7 +98,7 @@ function OffsiteConfig() {
             </button>
             {cfg.provider && (
               <button onClick={testUpload} disabled={testing}
-                className="flex items-center gap-2 border border-slate-200 text-slate-700 rounded-xl px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-60">
+                className="flex items-center gap-2 border border-slate-200 text-slate-700 rounded-xl px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-60 dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                 <TestTube size={13} /> {testing ? 'Probando...' : 'Test upload'}
               </button>
             )}
@@ -171,8 +171,8 @@ export default function BackupsPage() {
             <Archive className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Backups de Base de Datos</h1>
-            <p className="text-sm text-slate-500">
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Backups de Base de Datos</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">
               Backups comprimidos (gzip) de MySQL.
               {' '}Retención: {data?.retention_days || 14} días.
             </p>
@@ -180,7 +180,7 @@ export default function BackupsPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => refetch()}
-            className="flex items-center gap-2 border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-sm hover:bg-slate-50 transition-colors">
+            className="flex items-center gap-2 border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-sm hover:bg-slate-50 transition-colors dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
             <RefreshCw size={14} /> Actualizar
           </button>
           <button onClick={handleCreate} disabled={creating || createMut.isPending}
@@ -205,17 +205,17 @@ export default function BackupsPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <p className="text-xs text-slate-500 uppercase font-medium mb-1">Total backups</p>
-          <p className="text-3xl font-bold text-slate-900">{backups.length}</p>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <p className="text-xs text-slate-500 uppercase font-medium mb-1 dark:text-white/40">Total backups</p>
+          <p className="text-3xl font-bold text-slate-900 dark:text-white">{backups.length}</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <p className="text-xs text-slate-500 uppercase font-medium mb-1">Espacio usado</p>
-          <p className="text-3xl font-bold text-slate-900">{bytesToHuman(totalSize)}</p>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <p className="text-xs text-slate-500 uppercase font-medium mb-1 dark:text-white/40">Espacio usado</p>
+          <p className="text-3xl font-bold text-slate-900 dark:text-white">{bytesToHuman(totalSize)}</p>
         </div>
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
-          <p className="text-xs text-slate-500 uppercase font-medium mb-1">Último backup</p>
-          <p className="text-sm font-bold text-slate-900">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <p className="text-xs text-slate-500 uppercase font-medium mb-1 dark:text-white/40">Último backup</p>
+          <p className="text-sm font-bold text-slate-900 dark:text-white">
             {backups[0] ? format(new Date(backups[0].created_at), "d 'de' MMM 'a las' HH:mm", { locale: es }) : '—'}
           </p>
         </div>
@@ -225,15 +225,15 @@ export default function BackupsPage() {
       <OffsiteConfig />
 
       {/* Lista */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {isLoading && (
-          <div className="text-center py-12 text-slate-400">
+          <div className="text-center py-12 text-slate-400 dark:text-white/30">
             <RefreshCw size={20} className="mx-auto mb-2 animate-spin opacity-40" />
             Cargando backups...
           </div>
         )}
         {!isLoading && backups.length === 0 && (
-          <div className="text-center py-12 text-slate-400">
+          <div className="text-center py-12 text-slate-400 dark:text-white/30">
             <HardDrive size={36} className="mx-auto mb-3 opacity-30" />
             <p className="font-medium">Sin backups disponibles</p>
             <p className="text-xs mt-1">Genera el primero con el botón "Backup manual"</p>
@@ -241,22 +241,22 @@ export default function BackupsPage() {
         )}
         {!isLoading && backups.length > 0 && (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
               <tr>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Archivo</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs">Generado</th>
-                <th className="text-right px-4 py-3 text-slate-500 font-medium text-xs">Tamaño</th>
-                <th className="text-right px-4 py-3 text-slate-500 font-medium text-xs w-44">Acciones</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs dark:text-white/40">Archivo</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium text-xs dark:text-white/40">Generado</th>
+                <th className="text-right px-4 py-3 text-slate-500 font-medium text-xs dark:text-white/40">Tamaño</th>
+                <th className="text-right px-4 py-3 text-slate-500 font-medium text-xs w-44 dark:text-white/40">Acciones</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {backups.map((b: any) => (
-                <tr key={b.filename} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-700">{b.filename}</td>
-                  <td className="px-4 py-3 text-slate-600">
+                <tr key={b.filename} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                  <td className="px-4 py-3 font-mono text-xs text-slate-700 dark:text-white/80">{b.filename}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-white/60">
                     {format(new Date(b.created_at), "d MMM yyyy HH:mm:ss", { locale: es })}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono text-slate-600">{bytesToHuman(b.size)}</td>
+                  <td className="px-4 py-3 text-right font-mono text-slate-600 dark:text-white/60">{bytesToHuman(b.size)}</td>
                   <td className="px-4 py-3 text-right">
                     <a href={downloadUrl(`/api/backups/${encodeURIComponent(b.filename)}`)} download
                       className="inline-flex items-center gap-1 text-blue-600 hover:bg-blue-50 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors">

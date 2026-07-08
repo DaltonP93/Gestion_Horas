@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
+const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM } = require('../services/scheduler');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
@@ -7,7 +8,7 @@ const { sendMail, buildReportEmailHtml } = require('../services/emailService');
 router.use(authenticate);
 
 // GET /api/reports/monthly?year=&month=&dept=
-router.get('/monthly', async (req, res) => {
+router.get('/monthly', asyncHandler(async (req, res) => {
   const { year = new Date().getFullYear(), month = new Date().getMonth() + 1, dept } = req.query;
   const dateFrom = `${year}-${String(month).padStart(2,'0')}-01`;
   const dateTo   = new Date(year, month, 0).toISOString().split('T')[0];
@@ -35,10 +36,10 @@ router.get('/monthly', async (req, res) => {
   `, { replacements: params });
 
   res.json({ data: rows, period: { year, month, from: dateFrom, to: dateTo } });
-});
+}));
 
 // GET /api/reports/weekly?week=&year=
-router.get('/weekly', async (req, res) => {
+router.get('/weekly', asyncHandler(async (req, res) => {
   const now = new Date();
   const { year = now.getFullYear(), week } = req.query;
 
@@ -60,7 +61,7 @@ router.get('/weekly', async (req, res) => {
   `, { replacements: [from.toISOString().split('T')[0], to.toISOString().split('T')[0]] });
 
   res.json({ data: rows, week: weekNum, from, to });
-});
+}));
 
 // ─── GET /api/reports/marcadas ─────────────────────────────────────
 // Reporte detallado por empleado: múltiples entradas/salidas por día

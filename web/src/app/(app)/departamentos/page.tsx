@@ -46,8 +46,8 @@ export default function DepartamentosPage() {
             <Building2 className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Departamentos</h1>
-            <p className="text-slate-500 text-sm">Asignar coordinador (nivel 1) y gerente (nivel 2) para el flujo de aprobación de permisos.</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Departamentos</h1>
+            <p className="text-slate-500 text-sm dark:text-white/40">Asignar coordinador (nivel 1) y gerente (nivel 2) para el flujo de aprobación de permisos.</p>
           </div>
         </div>
         <button onClick={() => setCreating(true)}
@@ -56,9 +56,9 @@ export default function DepartamentosPage() {
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide">
+          <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide dark:bg-white/[0.03] dark:text-white/40">
             <tr>
               <th className="px-4 py-3">Departamento</th>
               <th className="px-4 py-3">Código</th>
@@ -68,26 +68,26 @@ export default function DepartamentosPage() {
               <th className="px-4 py-3 w-32"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
             {loading && (
-              <tr><td colSpan={6} className="p-8 text-center text-slate-400">Cargando...</td></tr>
+              <tr><td colSpan={6} className="p-8 text-center text-slate-400 dark:text-white/30">Cargando...</td></tr>
             )}
             {!loading && depts.length === 0 && (
-              <tr><td colSpan={6} className="p-8 text-center text-slate-400">Sin departamentos</td></tr>
+              <tr><td colSpan={6} className="p-8 text-center text-slate-400 dark:text-white/30">Sin departamentos</td></tr>
             )}
             {depts.map(d => (
               <tr key={d.id} className={d.active ? '' : 'opacity-50'}>
-                <td className="px-4 py-3 font-medium text-slate-900">{d.name}</td>
-                <td className="px-4 py-3 text-slate-500">{d.code || '—'}</td>
-                <td className="px-4 py-3"><span className="inline-flex items-center gap-1 text-slate-600"><Users size={14} />{d.employees_count}</span></td>
+                <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{d.name}</td>
+                <td className="px-4 py-3 text-slate-500 dark:text-white/40">{d.code || '—'}</td>
+                <td className="px-4 py-3"><span className="inline-flex items-center gap-1 text-slate-600 dark:text-white/60"><Users size={14} />{d.employees_count}</span></td>
                 <td className="px-4 py-3">
                   {d.coordinator_name
-                    ? <span className="inline-flex items-center gap-1 text-slate-700"><UserCog size={14} className="text-emerald-500" />{d.coordinator_name}</span>
+                    ? <span className="inline-flex items-center gap-1 text-slate-700 dark:text-white/80"><UserCog size={14} className="text-emerald-500" />{d.coordinator_name}</span>
                     : <span className="text-amber-600 text-xs">Sin asignar</span>}
                 </td>
                 <td className="px-4 py-3">
                   {d.manager_name
-                    ? <span className="inline-flex items-center gap-1 text-slate-700"><UserCog size={14} className="text-blue-500" />{d.manager_name}</span>
+                    ? <span className="inline-flex items-center gap-1 text-slate-700 dark:text-white/80"><UserCog size={14} className="text-blue-500" />{d.manager_name}</span>
                     : <span className="text-amber-600 text-xs">Sin asignar</span>}
                 </td>
                 <td className="px-4 py-3 text-right">
@@ -147,29 +147,29 @@ function DeptFormModal({ dept, creating, coordinatorCandidates, managerCandidate
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4 dark:bg-white/[0.04]">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-900">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">
             {creating ? 'Nuevo departamento' : `Editar: ${dept?.name}`}
           </h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X size={18} /></button>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Nombre *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Nombre *</label>
             <input value={name} onChange={e => setName(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08]" />
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Código</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Código</label>
             <input value={code} onChange={e => setCode(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08]" />
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Coordinador (Nivel 1)</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Coordinador (Nivel 1)</label>
             <select value={coordinatorId} onChange={e => setCoordinatorId(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08]">
               <option value="">— Sin asignar —</option>
               {coordinatorCandidates.map(u => (
                 <option key={u.id} value={u.id}>{u.full_name || u.username} ({u.role})</option>
@@ -177,9 +177,9 @@ function DeptFormModal({ dept, creating, coordinatorCandidates, managerCandidate
             </select>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Gerente (Nivel 2)</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Gerente (Nivel 2)</label>
             <select value={managerId} onChange={e => setManagerId(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08]">
               <option value="">— Sin asignar —</option>
               {managerCandidates.map(u => (
                 <option key={u.id} value={u.id}>{u.full_name || u.username} ({u.role})</option>
@@ -191,7 +191,7 @@ function DeptFormModal({ dept, creating, coordinatorCandidates, managerCandidate
         {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">{error}</div>}
 
         <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100">Cancelar</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
           <button onClick={handleSave} disabled={saving || !name}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-indigo-500 hover:bg-indigo-600 text-white disabled:opacity-60">
             <Save size={16} /> {saving ? 'Guardando...' : 'Guardar'}

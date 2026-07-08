@@ -7,11 +7,77 @@
   --foreground: #0f172a;
 }
 
+/* Tema Futurista "Onyx & Glow" (oscuro) */
+html.dark {
+  --background: #050505;
+  --foreground: #f8fafc;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   /* Evita scroll horizontal en móvil */
   overflow-x: hidden;
+  transition: background 0.4s ease, color 0.4s ease;
+}
+
+/* ─── Tema Futurista: fondo con orbes ambientales ───────────── */
+.bg-orbs::before {
+  content: '';
+  position: fixed;
+  top: -20%; left: 30%;
+  width: 600px; height: 600px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(37, 99, 235, 0.05), transparent 65%);
+  pointer-events: none;
+  z-index: 0;
+}
+.bg-orbs::after {
+  content: '';
+  position: fixed;
+  bottom: -30%; right: -10%;
+  width: 700px; height: 700px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.05), transparent 65%);
+  pointer-events: none;
+  z-index: 0;
+}
+html.dark .bg-orbs::before { background: radial-gradient(circle, rgba(34, 211, 238, 0.06), transparent 65%); }
+html.dark .bg-orbs::after  { background: radial-gradient(circle, rgba(99, 102, 241, 0.05), transparent 65%); }
+
+/* Entrada de tarjetas bento / feed */
+@keyframes bentoIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.bento-enter { animation: bentoIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@keyframes feedIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.feed-enter { animation: feedIn 0.4s ease-out both; }
+
+@keyframes barGrow { from { width: 0 !important; } }
+.bar-grow { animation: barGrow 1s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+@keyframes successPop {
+  0% { opacity: 0; transform: scale(0.8); }
+  60% { transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.success-pop { animation: successPop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+.clock-glow { text-shadow: 0 0 30px rgba(34, 211, 238, 0.15); }
+html.dark .clock-glow { text-shadow: 0 0 40px rgba(34, 211, 238, 0.35); }
+
+* { -webkit-tap-highlight-color: transparent; }
+
+/* Títulos de página con la fuente display Futurista (Space Grotesk), cohesivo
+   en toda la app sin tener que editar cada encabezado. */
+h1 {
+  font-family: var(--font-space-grotesk), 'Space Grotesk', var(--font-inter), Inter, system-ui, sans-serif;
+  letter-spacing: -0.01em;
 }
 
 /* iOS: texto de formularios no hace zoom automático en input focus */
@@ -31,6 +97,7 @@ body {
 ::-webkit-scrollbar-track   { background: transparent; }
 ::-webkit-scrollbar-thumb   { background: #cbd5e1; border-radius: 9px; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+html.dark ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); }
 
 /* Animación para marcajes en tiempo real */
 @keyframes slideIn {
@@ -88,6 +155,7 @@ a:focus-visible {
 
 /* Respetar preferencia de reducir movimiento */
 @media (prefers-reduced-motion: reduce) {
-  .slide-in, .pulse-live { animation: none !important; }
+  .slide-in, .pulse-live,
+  .bento-enter, .feed-enter, .bar-grow, .success-pop { animation: none !important; }
   * { transition-duration: 0.01ms !important; }
 }

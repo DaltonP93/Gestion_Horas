@@ -4,12 +4,13 @@ FastAPI + Pandas para reportes complejos y exportación
 """
 
 import os
+import secrets
 from datetime import date, timedelta
 from typing import Optional
 from io import BytesIO
 
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import create_engine, text
@@ -41,12 +42,26 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
-API_KEY = os.getenv("API_KEY", "analytics_secret_key")
+# Sin default inseguro: si API_KEY no está configurada, el servicio rechaza
+# todas las peticiones autenticadas (fail-closed) en vez de aceptar una clave
+# conocida por defecto.
+API_KEY = os.getenv("API_KEY")
+if not API_KEY:
+    import logging
+    logging.getLogger("uvicorn.error").warning(
+        "API_KEY no configurada: los endpoints protegidos rechazarán todas las peticiones."
+    )
 
-def verify_key(x_api_key: str = Query(..., alias="api_key")):
-    if x_api_key != API_KEY:
+def verify_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    api_key: Optional[str] = Query(None),
+):
+    # Preferir el header; el query string se mantiene por compatibilidad pero
+    # queda registrado en logs de acceso, por lo que debe migrarse al header.
+    provided = x_api_key or api_key
+    if not API_KEY or not provided or not secrets.compare_digest(provided, API_KEY):
         raise HTTPException(status_code=401, detail="Clave inválida")
-    return x_api_key
+    return provided
 
 
 # ─── Helpers ──────────────────────────────────────────────────────

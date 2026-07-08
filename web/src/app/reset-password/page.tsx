@@ -34,13 +34,13 @@ function ResetInner() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900 p-4">
-      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md">
+      <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md dark:bg-white/[0.04]">
         <div className="text-center mb-6">
           <div className="w-14 h-14 bg-blue-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
             <Lock size={24} className="text-blue-600" />
           </div>
-          <h1 className="text-xl font-bold text-slate-900">Nueva contraseña</h1>
-          <p className="text-sm text-slate-500 mt-1">Elegí una nueva contraseña para tu cuenta.</p>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Nueva contraseña</h1>
+          <p className="text-sm text-slate-500 mt-1 dark:text-white/40">Elegí una nueva contraseña para tu cuenta.</p>
         </div>
 
         {!token && (
@@ -59,18 +59,18 @@ function ResetInner() {
         ) : token && (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="rp-pwd" className="block text-sm font-medium text-slate-700 mb-1">Nueva contraseña</label>
+              <label htmlFor="rp-pwd" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Nueva contraseña</label>
               <input id="rp-pwd" type="password" required value={pwd} onChange={e => setPwd(e.target.value)}
                 aria-describedby="rp-pwd-hint" aria-invalid={!!error}
-                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
                 placeholder="••••••••" autoFocus />
-              <p id="rp-pwd-hint" className="text-xs text-slate-500 mt-1">Mínimo 8 caracteres, con letras y números.</p>
+              <p id="rp-pwd-hint" className="text-xs text-slate-500 mt-1 dark:text-white/40">Mínimo 8 caracteres, con letras y números.</p>
             </div>
             <div>
-              <label htmlFor="rp-confirm" className="block text-sm font-medium text-slate-700 mb-1">Confirmar contraseña</label>
+              <label htmlFor="rp-confirm" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Confirmar contraseña</label>
               <input id="rp-confirm" type="password" required value={confirm} onChange={e => setConfirm(e.target.value)}
                 aria-invalid={!!error}
-                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
                 placeholder="••••••••" />
             </div>
 
@@ -87,7 +87,7 @@ function ResetInner() {
         )}
 
         <div className="text-center mt-6">
-          <Link href="/login" className="text-xs text-slate-500 hover:text-slate-700 hover:underline">
+          <Link href="/login" className="text-xs text-slate-500 hover:text-slate-700 hover:underline dark:text-white/40">
             Volver al login
           </Link>
         </div>
@@ -98,7 +98,7 @@ function ResetInner() {
 
 export default function ResetPasswordPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-slate-400">Cargando...</div>}>
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-slate-400 dark:text-white/30">Cargando...</div>}>
       <ResetInner />
     </Suspense>
   )

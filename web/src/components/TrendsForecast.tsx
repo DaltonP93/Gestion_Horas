@@ -49,16 +49,16 @@ export default function TrendsForecast({ months = 12, forecast = 3, deptId = nul
   const config = SERIES.find(s => s.key === selected)!
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5">
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <h3 className="font-semibold text-slate-700 flex items-center gap-2 text-sm">
+        <h3 className="font-semibold text-slate-700 flex items-center gap-2 text-sm dark:text-white/80">
           <TrendingUp size={15} className="text-blue-600" />
           Tendencia + proyección ({months} meses históricos · {forecast} meses forecast)
           <span className="ml-1 inline-flex items-center gap-0.5 text-xs text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded-full">
             <Sparkles size={10} /> regresión lineal
           </span>
         </h3>
-        <div className="flex bg-slate-100 rounded-xl p-1">
+        <div className="flex bg-slate-100 rounded-xl p-1 dark:bg-white/[0.06]">
           {SERIES.map(s => (
             <button key={s.key} onClick={() => setSelected(s.key as any)}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
@@ -71,7 +71,7 @@ export default function TrendsForecast({ months = 12, forecast = 3, deptId = nul
         </div>
       </div>
 
-      {isLoading && <div className="h-64 flex items-center justify-center text-slate-400 text-sm">Cargando...</div>}
+      {isLoading && <div className="h-64 flex items-center justify-center text-slate-400 text-sm dark:text-white/30">Cargando...</div>}
       {!isLoading && (
         <ResponsiveContainer width="100%" height={260}>
           <ComposedChart data={points}>
@@ -92,7 +92,7 @@ export default function TrendsForecast({ months = 12, forecast = 3, deptId = nul
           </ComposedChart>
         </ResponsiveContainer>
       )}
-      <p className="text-[11px] text-slate-400 mt-2">
+      <p className="text-[11px] text-slate-400 mt-2 dark:text-white/30">
         Forecast calculado por regresión lineal sobre {data?.history_months || 0} meses de historia.
         Las proyecciones son estimaciones — solo válidas si la tendencia se mantiene.
       </p>

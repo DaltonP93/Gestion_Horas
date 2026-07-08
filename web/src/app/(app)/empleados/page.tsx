@@ -110,22 +110,22 @@ function ExportDropdown({ employees }: { employees: any[] }) {
   return (
     <div className="relative">
       <button onClick={() => setOpen(!open)} disabled={employees.length === 0}
-        className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-40 transition-colors">
+        className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-40 transition-colors dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
         <Download size={15} /> Exportar <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden min-w-[160px]">
+          <div className="absolute right-0 top-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden min-w-[160px] dark:bg-white/[0.04] dark:border-white/[0.08]">
             <button onClick={() => { exportData(employees, 'csv'); setOpen(false) }}
-              className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+              className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 border-b border-slate-100 flex items-center gap-2 dark:border-white/[0.06] dark:hover:bg-white/[0.04]">
               <span className="text-green-600 font-bold text-xs w-8">CSV</span>
-              <span className="text-slate-700">Exportar CSV</span>
+              <span className="text-slate-700 dark:text-white/80">Exportar CSV</span>
             </button>
             <button onClick={() => { exportData(employees, 'txt'); setOpen(false) }}
-              className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-2">
-              <span className="text-slate-600 font-bold text-xs w-8">TXT</span>
-              <span className="text-slate-700">Exportar TXT</span>
+              className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-2 dark:hover:bg-white/[0.04]">
+              <span className="text-slate-600 font-bold text-xs w-8 dark:text-white/60">TXT</span>
+              <span className="text-slate-700 dark:text-white/80">Exportar TXT</span>
             </button>
           </div>
         </>
@@ -225,7 +225,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col dark:bg-white/[0.04]">
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-t-2xl px-6 py-4 flex items-center justify-between shrink-0">
           <div>
@@ -236,7 +236,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
         </div>
 
         {/* Steps indicator */}
-        <div className="flex border-b border-slate-100 px-6 py-3 gap-4 shrink-0">
+        <div className="flex border-b border-slate-100 px-6 py-3 gap-4 shrink-0 dark:border-white/[0.06]">
           {[
             { id: 'upload',  label: '1. Archivo' },
             { id: 'map',     label: '2. Columnas' },
@@ -270,17 +270,17 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
                   dragOver ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-slate-50'
                 }`}>
                 <Upload size={36} className="mx-auto mb-3 text-slate-300" />
-                <p className="font-semibold text-slate-600">Arrastra el archivo aquí o haz click para seleccionar</p>
-                <p className="text-xs text-slate-400 mt-1">Soporta CSV, TXT (separado por ; o ,) y Excel (.xlsx)</p>
+                <p className="font-semibold text-slate-600 dark:text-white/60">Arrastra el archivo aquí o haz click para seleccionar</p>
+                <p className="text-xs text-slate-400 mt-1 dark:text-white/30">Soporta CSV, TXT (separado por ; o ,) y Excel (.xlsx)</p>
                 <input ref={fileRef} type="file" accept=".csv,.txt,.xlsx,.xls"
                   className="hidden" onChange={e => { if (e.target.files?.[0]) handleFile(e.target.files[0]) }} />
               </div>
 
               {/* Plantilla */}
-              <div className="bg-slate-50 rounded-xl px-4 py-3 flex items-center justify-between">
+              <div className="bg-slate-50 rounded-xl px-4 py-3 flex items-center justify-between dark:bg-white/[0.03]">
                 <div>
-                  <p className="text-sm font-medium text-slate-700">¿Primera vez importando?</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Descargue la plantilla CSV con el formato correcto</p>
+                  <p className="text-sm font-medium text-slate-700 dark:text-white/80">¿Primera vez importando?</p>
+                  <p className="text-xs text-slate-400 mt-0.5 dark:text-white/30">Descargue la plantilla CSV con el formato correcto</p>
                 </div>
                 <button onClick={downloadTemplate}
                   className="flex items-center gap-2 text-blue-600 text-sm font-medium hover:underline">
@@ -295,9 +295,9 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
                   { ext: 'TXT', desc: 'Separado por tab, pipe (|), coma o punto y coma.' },
                   { ext: 'XLSX', desc: 'Excel Microsoft. Primera hoja, primera fila = cabeceras.' },
                 ].map(f => (
-                  <div key={f.ext} className="border border-slate-100 rounded-xl p-3">
+                  <div key={f.ext} className="border border-slate-100 rounded-xl p-3 dark:border-white/[0.06]">
                     <p className="font-bold text-blue-600 mb-1">.{f.ext}</p>
-                    <p className="text-slate-500">{f.desc}</p>
+                    <p className="text-slate-500 dark:text-white/40">{f.desc}</p>
                   </div>
                 ))}
               </div>
@@ -315,11 +315,11 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
               <div className="grid grid-cols-2 gap-3">
                 {parsed.headers.map(h => (
                   <div key={h} className="flex items-center gap-2">
-                    <span className="text-xs font-mono bg-slate-100 px-2 py-1 rounded-lg text-slate-600 truncate flex-1 min-w-0">{h}</span>
-                    <span className="text-slate-400 text-xs">→</span>
+                    <span className="text-xs font-mono bg-slate-100 px-2 py-1 rounded-lg text-slate-600 truncate flex-1 min-w-0 dark:bg-white/[0.06] dark:text-white/60">{h}</span>
+                    <span className="text-slate-400 text-xs dark:text-white/30">→</span>
                     <select value={colMap[h] || ''}
                       onChange={e => setColMap(p => ({ ...p, [h]: e.target.value }))}
-                      className="border border-slate-200 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[120px]">
+                      className="border border-slate-200 rounded-xl px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[120px] dark:border-white/[0.08]">
                       <option value="">(ignorar)</option>
                       {Object.entries(FIELD_LABELS).map(([f, l]) => (
                         <option key={f} value={f}>{l}</option>
@@ -332,7 +332,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input type="checkbox" checked={updateExisting} onChange={e => setUpdateExisting(e.target.checked)}
                   className="accent-blue-600 w-4 h-4" />
-                <span className="text-sm text-slate-700">Actualizar empleados existentes (mismo código)</span>
+                <span className="text-sm text-slate-700 dark:text-white/80">Actualizar empleados existentes (mismo código)</span>
               </label>
 
               <button onClick={buildPreview}
@@ -350,22 +350,22 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
                 Verifique que los datos sean correctos antes de importar.
               </div>
 
-              <div className="overflow-x-auto border border-slate-100 rounded-xl">
+              <div className="overflow-x-auto border border-slate-100 rounded-xl dark:border-white/[0.06]">
                 <table className="w-full text-xs">
-                  <thead className="bg-slate-50">
+                  <thead className="bg-slate-50 dark:bg-white/[0.03]">
                     <tr>
                       {Object.entries(colMap).filter(([,v]) => v).map(([h]) => (
-                        <th key={h} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap">
+                        <th key={h} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap dark:text-white/40">
                           {FIELD_LABELS[colMap[h]] || colMap[h]}
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50">
+                  <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                     {preview.map((row, i) => (
-                      <tr key={i} className="hover:bg-slate-50">
+                      <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
                         {Object.entries(colMap).filter(([,v]) => v).map(([h]) => (
-                          <td key={h} className="px-3 py-2 text-slate-700 whitespace-nowrap">
+                          <td key={h} className="px-3 py-2 text-slate-700 whitespace-nowrap dark:text-white/80">
                             {row[colMap[h]] || <span className="text-slate-300">—</span>}
                           </td>
                         ))}
@@ -377,7 +377,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
 
               <div className="flex gap-3">
                 <button onClick={() => setStep('map')}
-                  className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50">
+                  className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                   ← Volver
                 </button>
                 <button onClick={doImport} disabled={importing}
@@ -402,10 +402,10 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
                   <p className="text-3xl font-bold text-blue-700">{result.updated || 0}</p>
                   <p className="text-xs text-blue-600 font-medium mt-1">Actualizados</p>
                 </div>
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-5">
-                  <AlertCircle size={24} className="mx-auto text-slate-400 mb-2" />
-                  <p className="text-3xl font-bold text-slate-500">{result.skipped}</p>
-                  <p className="text-xs text-slate-500 font-medium mt-1">Omitidos</p>
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl px-4 py-5 dark:bg-white/[0.03] dark:border-white/[0.08]">
+                  <AlertCircle size={24} className="mx-auto text-slate-400 mb-2 dark:text-white/30" />
+                  <p className="text-3xl font-bold text-slate-500 dark:text-white/40">{result.skipped}</p>
+                  <p className="text-xs text-slate-500 font-medium mt-1 dark:text-white/40">Omitidos</p>
                 </div>
               </div>
 
@@ -463,7 +463,7 @@ function InlineEdit({
         onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setV(value || ''); setEditing(false) } }}
         onBlur={commit} disabled={busy}
         className="border border-blue-300 rounded px-1.5 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-[140px]" />
-      {busy && <span className="text-xs text-slate-400">…</span>}
+      {busy && <span className="text-xs text-slate-400 dark:text-white/30">…</span>}
     </span>
   )
 }
@@ -502,7 +502,7 @@ function BulkActionsBar({
 
       {field === 'department_id' && (
         <select value={value} onChange={e => setValue(e.target.value)}
-          className="bg-white text-slate-800 border border-blue-400 rounded-lg px-2 py-1 text-sm">
+          className="bg-white text-slate-800 border border-blue-400 rounded-lg px-2 py-1 text-sm dark:bg-white/[0.04] dark:text-white/90">
           <option value="">(seleccionar)</option>
           {departments.map((d: any) => (
             <option key={d.id} value={d.id}>{d.name}</option>
@@ -511,7 +511,7 @@ function BulkActionsBar({
       )}
       {field === 'status' && (
         <select value={value} onChange={e => setValue(e.target.value)}
-          className="bg-white text-slate-800 border border-blue-400 rounded-lg px-2 py-1 text-sm">
+          className="bg-white text-slate-800 border border-blue-400 rounded-lg px-2 py-1 text-sm dark:bg-white/[0.04] dark:text-white/90">
           <option value="">(seleccionar)</option>
           <option value="active">Activo</option>
           <option value="inactive">Inactivo</option>
@@ -520,11 +520,11 @@ function BulkActionsBar({
       )}
       {field === 'position' && (
         <input value={value} onChange={e => setValue(e.target.value)} placeholder="Cargo"
-          className="bg-white text-slate-800 border border-blue-400 rounded-lg px-2 py-1 text-sm" />
+          className="bg-white text-slate-800 border border-blue-400 rounded-lg px-2 py-1 text-sm dark:bg-white/[0.04] dark:text-white/90" />
       )}
 
       <button onClick={apply} disabled={busy}
-        className="bg-white text-blue-700 px-3 py-1 rounded-lg text-sm font-semibold hover:bg-blue-50 disabled:opacity-60">
+        className="bg-white text-blue-700 px-3 py-1 rounded-lg text-sm font-semibold hover:bg-blue-50 disabled:opacity-60 dark:bg-white/[0.04]">
         {busy ? 'Aplicando...' : 'Aplicar'}
       </button>
       <button onClick={onClear} className="text-blue-200 hover:text-white text-sm">
@@ -576,12 +576,12 @@ export default function EmpleadosPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-            <Users className="text-blue-600" size={22} />
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-[0_8px_24px_-6px_rgba(34,211,238,0.5)]">
+            <Users size={20} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">{t('nav.employees')}</h1>
-            <p className="text-sm text-slate-500">{data?.total || 0} · {active} {t('common.active').toLowerCase()}</p>
+            <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-white tracking-tight">{t('nav.employees')}</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">{data?.total || 0} · {active} {t('common.active').toLowerCase()}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -599,37 +599,37 @@ export default function EmpleadosPage() {
 
       {/* Stats rápidas */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{t('common.all')}</p>
-          <p className="text-3xl font-bold text-slate-700 mt-1">{data?.total || 0}</p>
+        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">{t('common.all')}</p>
+          <p className="text-3xl font-bold text-slate-700 mt-1 dark:text-white/80">{data?.total || 0}</p>
         </div>
         <div className="bg-green-50 border border-green-100 rounded-2xl px-5 py-4">
           <p className="text-xs font-medium text-green-600 uppercase tracking-wide">{t('common.active')}</p>
           <p className="text-3xl font-bold text-green-700 mt-1">{active}</p>
         </div>
-        <div className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{t('common.inactive')}</p>
-          <p className="text-3xl font-bold text-slate-500 mt-1">{inactive}</p>
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 dark:bg-white/[0.03] dark:border-white/[0.08]">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">{t('common.inactive')}</p>
+          <p className="text-3xl font-bold text-slate-500 mt-1 dark:text-white/40">{inactive}</p>
         </div>
       </div>
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3 items-center bg-white border border-slate-100 shadow-sm rounded-2xl px-5 py-4">
+      <div className="flex flex-wrap gap-3 items-center bg-white border border-slate-100 shadow-sm rounded-2xl px-5 py-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="relative flex-1 min-w-[200px]">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-white/30" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder={t('employees.search_placeholder')}
-            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
         </div>
         <select value={dept} onChange={e => setDept(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
           <option value="">{t('common.all')} {t('employees.department').toLowerCase()}</option>
           {(deptsData || []).map((d: any) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
         </select>
         <select value={status} onChange={e => setStatus(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
           <option value="">{t('common.all')}</option>
           <option value="active">{t('common.active')}</option>
           <option value="inactive">{t('common.inactive')}</option>
@@ -642,15 +642,15 @@ export default function EmpleadosPage() {
         departments={deptsData || []} />
 
       {/* Tabla */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {isLoading ? (
-          <div className="text-center py-16 text-slate-400">
+          <div className="text-center py-16 text-slate-400 dark:text-white/30">
             <Users size={32} className="mx-auto mb-3 opacity-40 animate-pulse" />
             Cargando empleados...
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
               <tr>
                 <th className="px-3 py-3 w-10">
                   <input type="checkbox"
@@ -659,17 +659,17 @@ export default function EmpleadosPage() {
                     onChange={e => setSelected(e.target.checked ? employees.map((e: any) => e.id) : [])}
                     className="w-4 h-4 accent-blue-600 cursor-pointer" />
                 </th>
-                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase">Código</th>
-                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase">Nombre</th>
-                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase">Legajo</th>
-                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase">Departamento</th>
-                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase">Cargo</th>
-                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase">Horario</th>
-                <th className="text-center px-4 py-3 text-slate-600 font-medium text-xs uppercase">Estado</th>
-                <th className="px-4 py-3 text-right text-slate-600 font-medium text-xs uppercase">Acciones</th>
+                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Código</th>
+                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Nombre</th>
+                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Legajo</th>
+                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Departamento</th>
+                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Cargo</th>
+                <th className="text-left px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Horario</th>
+                <th className="text-center px-4 py-3 text-slate-600 font-medium text-xs uppercase dark:text-white/60">Estado</th>
+                <th className="px-4 py-3 text-right text-slate-600 font-medium text-xs uppercase dark:text-white/60">Acciones</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {employees.map((emp: any) => {
                 const isSel = selected.includes(emp.id)
                 return (
@@ -679,7 +679,7 @@ export default function EmpleadosPage() {
                         onChange={e => setSelected(prev => e.target.checked ? [...prev, emp.id] : prev.filter(x => x !== emp.id))}
                         className="w-4 h-4 accent-blue-600 cursor-pointer" />
                     </td>
-                    <td className="px-4 py-3 font-mono text-slate-400 text-xs">{emp.code}</td>
+                    <td className="px-4 py-3 font-mono text-slate-400 text-xs dark:text-white/30">{emp.code}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center text-blue-600 font-bold text-sm shrink-0">
@@ -687,30 +687,30 @@ export default function EmpleadosPage() {
                         </div>
                         <div>
                           {displayMode === 'code_only' ? (
-                            <p className="font-mono font-semibold text-slate-900">{emp.code}</p>
+                            <p className="font-mono font-semibold text-slate-900 dark:text-white">{emp.code}</p>
                           ) : (
-                            <p className="font-semibold text-slate-900 flex items-center gap-1">
-                              {displayMode === 'code_name' && <span className="font-mono text-xs text-slate-400">[{emp.code}]</span>}
+                            <p className="font-semibold text-slate-900 flex items-center gap-1 dark:text-white">
+                              {displayMode === 'code_name' && <span className="font-mono text-xs text-slate-400 dark:text-white/30">[{emp.code}]</span>}
                               <InlineEdit value={emp.first_name || ''} placeholder="Nombre"
                                 onSave={v => quickUpdate(emp.id, 'first_name', v)} />
                               <InlineEdit value={emp.last_name || ''} placeholder="Apellido"
                                 onSave={v => quickUpdate(emp.id, 'last_name', v)} />
                             </p>
                           )}
-                          {emp.email && <p className="text-xs text-slate-400">{emp.email}</p>}
+                          {emp.email && <p className="text-xs text-slate-400 dark:text-white/30">{emp.email}</p>}
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-500 font-mono text-xs">
+                    <td className="px-4 py-3 text-slate-500 font-mono text-xs dark:text-white/40">
                       <InlineEdit value={emp.employee_number || ''} placeholder="—"
                         onSave={v => quickUpdate(emp.id, 'employee_number', v)} />
                     </td>
-                    <td className="px-4 py-3 text-slate-600 text-sm">{emp.department || '—'}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">
+                    <td className="px-4 py-3 text-slate-600 text-sm dark:text-white/60">{emp.department || '—'}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs dark:text-white/40">
                       <InlineEdit value={emp.position || ''} placeholder="—"
                         onSave={v => quickUpdate(emp.id, 'position', v)} />
                     </td>
-                    <td className="px-4 py-3 text-slate-500 font-mono text-xs">
+                    <td className="px-4 py-3 text-slate-500 font-mono text-xs dark:text-white/40">
                       {emp.check_in && emp.check_out
                         ? `${emp.check_in.slice(0,5)} – ${emp.check_out.slice(0,5)}`
                         : '—'}
@@ -742,7 +742,7 @@ export default function EmpleadosPage() {
               })}
               {employees.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="text-center py-14 text-slate-400">
+                  <td colSpan={9} className="text-center py-14 text-slate-400 dark:text-white/30">
                     <Users size={36} className="mx-auto mb-3 opacity-30" />
                     <p className="font-medium">Sin resultados</p>
                     <p className="text-xs mt-1">Ajuste los filtros o importe empleados</p>
@@ -754,7 +754,7 @@ export default function EmpleadosPage() {
         )}
       </div>
 
-      <p className="text-xs text-slate-400">{employees.length} empleados mostrados</p>
+      <p className="text-xs text-slate-400 dark:text-white/30">{employees.length} empleados mostrados</p>
 
       {showImport && (
         <ImportModal

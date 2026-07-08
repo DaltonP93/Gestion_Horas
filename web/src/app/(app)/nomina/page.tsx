@@ -53,16 +53,16 @@ export default function NominaPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Exportar nómina — formato SAA</h1>
-          <p className="text-sm text-slate-500">Resumen mensual para el sistema contable.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Exportar nómina — formato SAA</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">Resumen mensual para el sistema contable.</p>
         </div>
         <div className="flex items-center gap-2">
           <select value={year} onChange={e => setYear(+e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
             {[year - 1, year, year + 1].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
           <select value={month} onChange={e => setMonth(+e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
             {Array.from({ length: 12 }).map((_, i) => (
               <option key={i + 1} value={i + 1}>
                 {new Date(2000, i).toLocaleString('es', { month: 'long' })}
@@ -70,11 +70,11 @@ export default function NominaPage() {
             ))}
           </select>
           <select value={branchId} onChange={e => setBranchId(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
             <option value="">Todas las sedes</option>
             {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
           </select>
-          <button onClick={load} className="bg-slate-100 hover:bg-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-1">
+          <button onClick={load} className="bg-slate-100 hover:bg-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-1 dark:bg-white/[0.06]">
             <RefreshCw size={14} /> Actualizar
           </button>
         </div>
@@ -93,9 +93,9 @@ export default function NominaPage() {
 
       {error && <div role="alert" className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">{error}</div>}
 
-      <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-x-auto">
+      <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-x-auto dark:bg-white/[0.04] dark:border-white/[0.06]">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase dark:bg-white/[0.03] dark:text-white/60">
             <tr>
               <th className="px-3 py-2 text-left">Código</th>
               <th className="px-3 py-2 text-left">Nombre</th>
@@ -111,13 +111,13 @@ export default function NominaPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={11} className="text-center py-8 text-slate-400">Cargando...</td></tr>}
-            {!loading && rows.length === 0 && <tr><td colSpan={11} className="text-center py-8 text-slate-400">Sin datos</td></tr>}
+            {loading && <tr><td colSpan={11} className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={11} className="text-center py-8 text-slate-400 dark:text-white/30">Sin datos</td></tr>}
             {rows.map((r, i) => (
-              <tr key={i} className="border-t border-slate-100 hover:bg-slate-50">
+              <tr key={i} className="border-t border-slate-100 hover:bg-slate-50 dark:border-white/[0.06] dark:hover:bg-white/[0.04]">
                 <td className="px-3 py-2 font-mono">{r.codigo}</td>
                 <td className="px-3 py-2">{r.nombre}</td>
-                <td className="px-3 py-2 text-slate-500">{r.sede}</td>
+                <td className="px-3 py-2 text-slate-500 dark:text-white/40">{r.sede}</td>
                 <td className="px-3 py-2 text-right">{r.dias_trab || 0}</td>
                 <td className="px-3 py-2 text-right">{Number(r.hs_trab || 0).toFixed(2)}</td>
                 <td className="px-3 py-2 text-right">{Number(r.hs_extra || 0).toFixed(2)}</td>

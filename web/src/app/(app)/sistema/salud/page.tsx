@@ -57,11 +57,11 @@ export default function HealthPage() {
           <Activity className="text-white" size={22} />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-slate-900">Salud del sistema</h1>
-          <p className="text-sm text-slate-500">Estado de dependencias y métricas del proceso API</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Salud del sistema</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">Estado de dependencias y métricas del proceso API</p>
         </div>
         <button onClick={load} disabled={loading}
-          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm text-slate-700 disabled:opacity-50">
+          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm text-slate-700 disabled:opacity-50 dark:bg-white/[0.06] dark:text-white/80">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
         </button>
       </div>
@@ -80,11 +80,11 @@ export default function HealthPage() {
                 <div className="font-semibold">
                   Sistema {data.status === 'ok' ? 'operativo' : 'degradado'}
                 </div>
-                <div className="text-xs text-slate-600">
+                <div className="text-xs text-slate-600 dark:text-white/60">
                   uptime {fmtUptime(data.uptime_sec)} · {data.host} · node {data.node} · v{data.version}
                 </div>
               </div>
-              <div className="text-xs text-slate-500">
+              <div className="text-xs text-slate-500 dark:text-white/40">
                 {new Date(data.timestamp).toLocaleString()}
               </div>
             </div>
@@ -95,12 +95,12 @@ export default function HealthPage() {
               const meta = LABELS[k]
               const Icon = meta.icon
               return (
-                <div key={k} className="bg-white rounded-2xl border border-slate-100 shadow p-4">
+                <div key={k} className="bg-white rounded-2xl border border-slate-100 shadow p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
                   <div className="flex items-center gap-3">
-                    <Icon className="text-slate-500" size={20} />
+                    <Icon className="text-slate-500 dark:text-white/40" size={20} />
                     <div className="flex-1">
-                      <div className="font-semibold text-slate-900">{meta.label}</div>
-                      <div className="text-xs text-slate-500">
+                      <div className="font-semibold text-slate-900 dark:text-white">{meta.label}</div>
+                      <div className="text-xs text-slate-500 dark:text-white/40">
                         {c.latency_ms != null && <>latencia {c.latency_ms}ms</>}
                         {c.status != null && <> · status {c.status}</>}
                       </div>
@@ -115,17 +115,17 @@ export default function HealthPage() {
             })}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow p-4 grid md:grid-cols-3 gap-4 text-sm">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow p-4 grid md:grid-cols-3 gap-4 text-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
             <div>
-              <div className="text-xs text-slate-500 uppercase">RSS</div>
+              <div className="text-xs text-slate-500 uppercase dark:text-white/40">RSS</div>
               <div className="text-2xl font-bold">{data.memory.rss_mb} MB</div>
             </div>
             <div>
-              <div className="text-xs text-slate-500 uppercase">Heap</div>
+              <div className="text-xs text-slate-500 uppercase dark:text-white/40">Heap</div>
               <div className="text-2xl font-bold">{data.memory.heap_used_mb} / {data.memory.heap_total_mb} MB</div>
             </div>
             <div>
-              <div className="text-xs text-slate-500 uppercase">Load avg (1/5/15m)</div>
+              <div className="text-xs text-slate-500 uppercase dark:text-white/40">Load avg (1/5/15m)</div>
               <div className="text-2xl font-bold">
                 {data.loadavg.map(n => n.toFixed(2)).join(' · ')}
               </div>

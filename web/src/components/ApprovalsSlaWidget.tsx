@@ -20,11 +20,11 @@ export default function ApprovalsSlaWidget() {
   const overdueList: any[] = overdue?.data || []
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity size={18} className="text-blue-600" />
-          <h3 className="font-semibold text-slate-800">Métricas de SLA — últimos 30 días</h3>
+          <h3 className="font-semibold text-slate-800 dark:text-white/90">Métricas de SLA — últimos 30 días</h3>
         </div>
       </div>
 

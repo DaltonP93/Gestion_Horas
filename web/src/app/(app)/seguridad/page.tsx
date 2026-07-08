@@ -64,8 +64,8 @@ export default function SeguridadPage() {
           <Shield className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Seguridad</h1>
-          <p className="text-slate-500 text-sm">Autenticación en dos pasos y contraseña.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Seguridad</h1>
+          <p className="text-slate-500 text-sm dark:text-white/40">Autenticación en dos pasos y contraseña.</p>
         </div>
       </div>
 
@@ -115,12 +115,12 @@ function ChangePasswordCard({ onDone, setError }: { onDone: () => void; setError
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
       <div className="flex items-center gap-2">
-        <Lock size={18} className="text-slate-600" />
-        <h2 className="font-semibold text-slate-900">Cambiar contraseña</h2>
+        <Lock size={18} className="text-slate-600 dark:text-white/60" />
+        <h2 className="font-semibold text-slate-900 dark:text-white">Cambiar contraseña</h2>
       </div>
-      <p className="text-sm text-slate-500">Se cerrarán todas las sesiones abiertas en otros dispositivos.</p>
+      <p className="text-sm text-slate-500 dark:text-white/40">Se cerrarán todas las sesiones abiertas en otros dispositivos.</p>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <PwdInput label="Contraseña actual" value={form.currentPassword}
           onChange={v => setForm(f => ({ ...f, currentPassword: v }))} />
@@ -141,9 +141,9 @@ function ChangePasswordCard({ onDone, setError }: { onDone: () => void; setError
 function PwdInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
     <div>
-      <label className="text-xs font-medium text-slate-600 block mb-1">{label}</label>
+      <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">{label}</label>
       <input type="password" value={value} onChange={e => onChange(e.target.value)}
-        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
         autoComplete="new-password" />
     </div>
   )
@@ -160,22 +160,22 @@ function TwoFaCard({ status, reload, setError, setMsg }: {
   const [disableOpen, setDisableOpen] = useState(false)
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <Smartphone size={18} className="text-slate-600" />
-          <h2 className="font-semibold text-slate-900">Autenticación en dos pasos (2FA)</h2>
+          <Smartphone size={18} className="text-slate-600 dark:text-white/60" />
+          <h2 className="font-semibold text-slate-900 dark:text-white">Autenticación en dos pasos (2FA)</h2>
         </div>
         {status?.enabled
           ? <span className="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-medium">Habilitado</span>
-          : <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-medium">Deshabilitado</span>}
+          : <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-medium dark:bg-white/[0.06] dark:text-white/60">Deshabilitado</span>}
       </div>
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-slate-500 dark:text-white/40">
         Agrega una capa extra de seguridad pidiendo un código de 6 dígitos generado por una app
         (Google Authenticator, Authy, Microsoft Authenticator, 1Password).
       </p>
       {status?.enabled && status.enabledAt && (
-        <p className="text-xs text-slate-400">Habilitado el {new Date(status.enabledAt).toLocaleString()}</p>
+        <p className="text-xs text-slate-400 dark:text-white/30">Habilitado el {new Date(status.enabledAt).toLocaleString()}</p>
       )}
       <div className="flex gap-2">
         {!status?.enabled
@@ -237,43 +237,43 @@ function Setup2faModal({ onClose, onDone, setError }: { onClose: () => void; onD
       aria-labelledby="setup2fa-title"
       className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
     >
-      <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+      <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4 dark:bg-white/[0.04]">
         <div className="flex items-center justify-between">
-          <h3 id="setup2fa-title" className="font-bold text-slate-900">Habilitar 2FA {step === 'verify' && '(paso 2/2)'}</h3>
-          <button aria-label="Cerrar" onClick={onClose} className="p-1 rounded hover:bg-slate-100">
+          <h3 id="setup2fa-title" className="font-bold text-slate-900 dark:text-white">Habilitar 2FA {step === 'verify' && '(paso 2/2)'}</h3>
+          <button aria-label="Cerrar" onClick={onClose} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]">
             <X size={18} aria-hidden="true" />
           </button>
         </div>
 
         {step === 'qr' && (
           <>
-            <ol className="text-sm text-slate-600 space-y-1 list-decimal pl-5">
+            <ol className="text-sm text-slate-600 space-y-1 list-decimal pl-5 dark:text-white/60">
               <li>Instalá una app como Google Authenticator o Authy.</li>
               <li>Escaneá el QR o ingresá la clave manualmente.</li>
               <li>Ingresá el código de 6 dígitos que aparece en la app.</li>
             </ol>
 
             <div role="img" aria-label="Código QR de configuración 2FA. Escanealo con tu app autenticadora."
-                 className="flex justify-center bg-slate-50 rounded-xl p-4">
+                 className="flex justify-center bg-slate-50 rounded-xl p-4 dark:bg-white/[0.03]">
               {QRCodeComp && url
                 ? <QRCodeComp value={url} size={180} level="M" />
-                : <div className="text-xs text-slate-500">
+                : <div className="text-xs text-slate-500 dark:text-white/40">
                     <p className="mb-2">Pegá esta URL en tu app:</p>
                     <textarea readOnly value={url} rows={4}
                       aria-label="URL de configuración 2FA"
-                      className="w-full bg-white border border-slate-200 rounded p-2 font-mono text-[10px]" />
+                      className="w-full bg-white border border-slate-200 rounded p-2 font-mono text-[10px] dark:bg-white/[0.04] dark:border-white/[0.08]" />
                   </div>
               }
             </div>
 
             {secret && (
               <div>
-                <label className="text-xs font-medium text-slate-600 block mb-1">Clave manual</label>
+                <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Clave manual</label>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono tracking-widest">{secret}</code>
+                  <code className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono tracking-widest dark:bg-white/[0.03] dark:border-white/[0.08]">{secret}</code>
                   <button onClick={() => {
                     navigator.clipboard.writeText(secret); setCopied(true); setTimeout(() => setCopied(false), 1500)
-                  }} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600">
+                  }} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-white/[0.06] dark:text-white/60">
                     {copied ? <CheckCircle size={14} className="text-emerald-600" /> : <Copy size={14} />}
                   </button>
                 </div>
@@ -289,13 +289,13 @@ function Setup2faModal({ onClose, onDone, setError }: { onClose: () => void; onD
 
         {step === 'verify' && (
           <>
-            <label className="text-sm text-slate-700">Ingresá el código de 6 dígitos:</label>
+            <label className="text-sm text-slate-700 dark:text-white/80">Ingresá el código de 6 dígitos:</label>
             <input type="text" value={otp}
               onChange={e => setOtp(e.target.value.replace(/\D/g,'').slice(0,6))}
-              className="w-full border border-slate-200 rounded-xl px-4 py-3 text-2xl tracking-[0.4em] text-center font-mono"
+              className="w-full border border-slate-200 rounded-xl px-4 py-3 text-2xl tracking-[0.4em] text-center font-mono dark:border-white/[0.08]"
               placeholder="000000" inputMode="numeric" autoFocus />
             <div className="flex gap-2">
-              <button onClick={() => setStep('qr')} className="flex-1 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm">
+              <button onClick={() => setStep('qr')} className="flex-1 px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm dark:bg-white/[0.06]">
                 Atrás
               </button>
               <button onClick={verify} disabled={loading || otp.length !== 6}
@@ -334,27 +334,27 @@ function Disable2faModal({ onClose, onDone, setError }: { onClose: () => void; o
       aria-labelledby="disable2fa-title"
       className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
     >
-      <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4">
+      <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4 dark:bg-white/[0.04]">
         <div className="flex items-center justify-between">
-          <h3 id="disable2fa-title" className="font-bold text-slate-900">Deshabilitar 2FA</h3>
-          <button aria-label="Cerrar" onClick={onClose} className="p-1 rounded hover:bg-slate-100">
+          <h3 id="disable2fa-title" className="font-bold text-slate-900 dark:text-white">Deshabilitar 2FA</h3>
+          <button aria-label="Cerrar" onClick={onClose} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]">
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <p className="text-sm text-slate-500">Ingresá tu contraseña y el código 2FA actual para confirmar.</p>
+        <p className="text-sm text-slate-500 dark:text-white/40">Ingresá tu contraseña y el código 2FA actual para confirmar.</p>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Contraseña</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Contraseña</label>
           <input type="password" value={pwd} onChange={e => setPwd(e.target.value)}
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" autoFocus />
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" autoFocus />
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Código 2FA</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Código 2FA</label>
           <input type="text" value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g,'').slice(0,6))}
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-center tracking-widest font-mono"
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-center tracking-widest font-mono dark:border-white/[0.08]"
             placeholder="000000" inputMode="numeric" />
         </div>
         <div className="flex gap-2 justify-end">
-          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100">Cancelar</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
           <button onClick={disable} disabled={loading || !pwd || otp.length !== 6}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium disabled:opacity-60">
             <KeyRound size={14} /> {loading ? 'Verificando...' : 'Deshabilitar'}

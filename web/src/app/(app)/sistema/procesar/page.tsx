@@ -90,30 +90,30 @@ export default function ProcesarHorasPage() {
   return (
     <div className="p-6 max-w-4xl space-y-6">
       <div className="flex items-center gap-3">
-        <Link href="/sistema" className="p-2 rounded-xl hover:bg-slate-100 text-slate-500">
+        <Link href="/sistema" className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 dark:text-white/40 dark:hover:bg-white/[0.06]">
           <ArrowLeft size={20} />
         </Link>
         <div className="w-11 h-11 rounded-xl bg-emerald-500 flex items-center justify-center">
           <Calculator className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Procesar Horas</h1>
-          <p className="text-slate-500 text-sm">Recalcula el resumen diario para un rango de fechas.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Procesar Horas</h1>
+          <p className="text-slate-500 text-sm dark:text-white/40">Recalcula el resumen diario para un rango de fechas.</p>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4">
-        <h2 className="font-semibold text-slate-900">Rango de fechas</h2>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h2 className="font-semibold text-slate-900 dark:text-white">Rango de fechas</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Desde</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Desde</label>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:border-white/[0.08]" />
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Hasta</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Hasta</label>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:border-white/[0.08]" />
           </div>
         </div>
 
@@ -121,14 +121,14 @@ export default function ProcesarHorasPage() {
           {([[0,0,'Hoy'],[1,1,'Ayer'],[7,0,'Últimos 7d'],[30,0,'Últimos 30d']] as const).map(([a,b,label]) => (
             <button key={label}
               onClick={() => { setDateFrom(daysAgo(a)); setDateTo(daysAgo(b)) }}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-white/[0.06] dark:text-white/80"
             >{label}</button>
           ))}
         </div>
 
         <div className="flex gap-2 pt-2">
           <button onClick={loadPreview} disabled={loadingPreview || running}
-            className="px-4 py-2 rounded-xl text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50">
+            className="px-4 py-2 rounded-xl text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50 dark:bg-white/[0.06] dark:text-white/80">
             {loadingPreview ? 'Calculando...' : 'Vista previa'}
           </button>
           <button onClick={startProcessing} disabled={running}
@@ -140,35 +140,35 @@ export default function ProcesarHorasPage() {
       </div>
 
       {preview && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
-          <h3 className="font-semibold text-slate-900 mb-3">Vista previa</h3>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h3 className="font-semibold text-slate-900 mb-3 dark:text-white">Vista previa</h3>
           <div className="grid grid-cols-3 gap-4">
             <Stat label="Marcajes" value={preview.logs} />
             <Stat label="Empleados" value={preview.employees} />
             <Stat label="Pares (emp × día)" value={preview.pairs} />
           </div>
-          <p className="text-xs text-slate-500 mt-4">
+          <p className="text-xs text-slate-500 mt-4 dark:text-white/40">
             Se recalcularán <b>{preview.pairs}</b> filas de <code>daily_summary</code>.
           </p>
         </div>
       )}
 
       {(running || progress) && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-3">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
           <div className="flex justify-between text-sm">
-            <span className="font-medium text-slate-900">
+            <span className="font-medium text-slate-900 dark:text-white">
               {progress?.stage === 'done' ? 'Completado' : 'Procesando...'}
             </span>
-            <span className="text-slate-500">
+            <span className="text-slate-500 dark:text-white/40">
               {progress?.done ?? 0} / {progress?.total ?? '?'} ({pct}%)
             </span>
           </div>
-          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden dark:bg-white/[0.06]">
             <div className="h-full bg-emerald-500 transition-all"
                  style={{ width: `${pct}%` }} />
           </div>
           {progress?.date && (
-            <p className="text-xs text-slate-500">Último día procesado: {progress.date}</p>
+            <p className="text-xs text-slate-500 dark:text-white/40">Último día procesado: {progress.date}</p>
           )}
         </div>
       )}
@@ -194,9 +194,9 @@ export default function ProcesarHorasPage() {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="bg-slate-50 rounded-xl p-4">
-      <p className="text-xs text-slate-500 uppercase tracking-wide">{label}</p>
-      <p className="text-2xl font-bold text-slate-900 mt-1">{value.toLocaleString()}</p>
+    <div className="bg-slate-50 rounded-xl p-4 dark:bg-white/[0.03]">
+      <p className="text-xs text-slate-500 uppercase tracking-wide dark:text-white/40">{label}</p>
+      <p className="text-2xl font-bold text-slate-900 mt-1 dark:text-white">{value.toLocaleString()}</p>
     </div>
   )
 }

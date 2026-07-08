@@ -38,7 +38,7 @@ function Field({
 }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 mb-1">
+      <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">
         {label}{required && <span className="text-red-500 ml-0.5">*</span>}
       </label>
       <input
@@ -47,7 +47,7 @@ function Field({
         value={value}
         onChange={e => onChange(name, e.target.value)}
         required={required}
-        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-300"
+        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-slate-300 dark:border-white/[0.08]"
       />
     </div>
   )
@@ -100,7 +100,7 @@ export default function NuevoEmpleadoPage() {
 
   return (
     <div className="p-6 max-w-2xl space-y-6">
-      <Link href="/empleados" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800">
+      <Link href="/empleados" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 dark:text-white/40">
         <ArrowLeft size={16} /> Volver a empleados
       </Link>
 
@@ -108,13 +108,13 @@ export default function NuevoEmpleadoPage() {
         <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
           <UserPlus size={20} className="text-blue-600" />
         </div>
-        <h1 className="text-2xl font-bold text-slate-900">Nuevo empleado</h1>
+        <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Nuevo empleado</h1>
       </div>
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-5">
+      <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {/* Identificación */}
         <div>
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Identificación</p>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 dark:text-white/30">Identificación</p>
           <div className="grid grid-cols-2 gap-4">
             <Field
               label="Código ZKTeco (USERID)"
@@ -136,14 +136,14 @@ export default function NuevoEmpleadoPage() {
               onChange={set}
             />
           </div>
-          <p className="text-xs text-slate-400 mt-1.5">
+          <p className="text-xs text-slate-400 mt-1.5 dark:text-white/30">
             El código debe coincidir con el USERID del reloj biométrico. La cédula se usa en exportación de nómina SAA.
           </p>
         </div>
 
         {/* Datos personales */}
         <div>
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Datos personales</p>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 dark:text-white/30">Datos personales</p>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Nombre"   name="first_name" value={form.first_name} onChange={set} required />
             <Field label="Apellido" name="last_name"  value={form.last_name}  onChange={set} required />
@@ -154,18 +154,18 @@ export default function NuevoEmpleadoPage() {
 
         {/* Datos laborales */}
         <div>
-          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Datos laborales</p>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 dark:text-white/30">Datos laborales</p>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Cargo / Puesto" name="position"  value={form.position}  onChange={set} />
             <Field label="Fecha de ingreso" name="hire_date" value={form.hire_date} onChange={set} type="date" />
 
             {/* Departamento */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Departamento</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Departamento</label>
               <select
                 value={form.department_id}
                 onChange={e => set('department_id', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               >
                 <option value="">Sin asignar</option>
                 {(deptsData?.data || []).map((d: any) => (
@@ -176,11 +176,11 @@ export default function NuevoEmpleadoPage() {
 
             {/* Horario */}
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Horario / Turno</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Horario / Turno</label>
               <select
                 value={form.schedule_id}
                 onChange={e => set('schedule_id', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               >
                 <option value="">Sin asignar</option>
                 {(schedules || []).map((s: any) => (
@@ -204,7 +204,7 @@ export default function NuevoEmpleadoPage() {
         <div className="flex gap-3 pt-2">
           <Link
             href="/empleados"
-            className="flex-1 text-center border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50"
+            className="flex-1 text-center border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]"
           >
             Cancelar
           </Link>

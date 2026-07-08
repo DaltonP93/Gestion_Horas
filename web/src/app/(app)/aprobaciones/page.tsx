@@ -91,8 +91,8 @@ export default function AprobacionesPage() {
           <CheckSquare className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Aprobaciones</h1>
-          <p className="text-slate-500 text-sm">{roleLabel}. Solo ves solicitudes que te corresponde aprobar.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Aprobaciones</h1>
+          <p className="text-slate-500 text-sm dark:text-white/40">{roleLabel}. Solo ves solicitudes que te corresponde aprobar.</p>
         </div>
       </div>
 
@@ -105,17 +105,17 @@ export default function AprobacionesPage() {
 
       <ApprovalsSlaWidget />
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {loading ? (
-          <div className="p-8 text-center text-slate-400">Cargando...</div>
+          <div className="p-8 text-center text-slate-400 dark:text-white/30">Cargando...</div>
         ) : list.length === 0 ? (
-          <div className="p-10 text-center text-slate-400 space-y-2">
+          <div className="p-10 text-center text-slate-400 space-y-2 dark:text-white/30">
             <CheckSquare className="mx-auto text-slate-300" size={40} />
             <p>No hay solicitudes pendientes para ti. ¡Al día!</p>
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide dark:bg-white/[0.03] dark:text-white/40">
               <tr>
                 <th className="px-4 py-3">Empleado</th>
                 <th className="px-4 py-3">Depto.</th>
@@ -126,29 +126,29 @@ export default function AprobacionesPage() {
                 <th className="px-4 py-3 w-40"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
               {list.map(p => (
                 <tr key={p.id}>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      <UserCircle2 size={18} className="text-slate-400" />
+                      <UserCircle2 size={18} className="text-slate-400 dark:text-white/30" />
                       <div>
-                        <p className="font-medium text-slate-900">{p.employee_name}</p>
-                        <p className="text-xs text-slate-400">{p.employee_code}</p>
+                        <p className="font-medium text-slate-900 dark:text-white">{p.employee_name}</p>
+                        <p className="text-xs text-slate-400 dark:text-white/30">{p.employee_code}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-600">{p.department || '—'}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-white/60">{p.department || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className="inline-block px-2 py-0.5 text-xs rounded-md bg-slate-100 text-slate-700">
+                    <span className="inline-block px-2 py-0.5 text-xs rounded-md bg-slate-100 text-slate-700 dark:bg-white/[0.06] dark:text-white/80">
                       {TYPE_LABEL[p.type] || p.type}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-600">
+                  <td className="px-4 py-3 text-xs text-slate-600 dark:text-white/60">
                     <div className="flex items-center gap-1"><Calendar size={12} /> {p.date_from}</div>
-                    <div className="flex items-center gap-1 text-slate-400"><span className="w-3" /> al {p.date_to}</div>
+                    <div className="flex items-center gap-1 text-slate-400 dark:text-white/30"><span className="w-3" /> al {p.date_to}</div>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-600 max-w-xs">
+                  <td className="px-4 py-3 text-xs text-slate-600 max-w-xs dark:text-white/60">
                     <p className="line-clamp-2">{p.reason || <em className="text-slate-300">sin motivo</em>}</p>
                   </td>
                   <td className="px-4 py-3">
