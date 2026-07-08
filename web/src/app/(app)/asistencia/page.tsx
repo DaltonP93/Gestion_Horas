@@ -224,8 +224,8 @@ export default function AsistenciaPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-            <Clock className="text-blue-600" size={22} />
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-[0_8px_24px_-6px_rgba(34,211,238,0.5)]">
+            <Clock size={20} />
           </div>
           <div>
             <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Asistencia</h1>
