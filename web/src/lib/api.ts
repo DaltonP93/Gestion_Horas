@@ -106,22 +106,26 @@ export const attendanceApi = {
   registerManual: (data: object) => api.post('/api/attendance/manual', data).then(r => r.data),
 }
 
-// ─── Reportes (Analytics Service) ────────────────────────────────
+// ─── Reportes (Analytics vía BFF proxy del core) ─────────────────
+// El navegador consume /api/analytics/* del core (con JWT); el core añade
+// la API key de Analytics del lado servidor. La clave ya NO viaja al browser.
 export const reportsApi = {
   monthly: (year: number, month: number, deptId?: number) =>
-    analyticsApi.get('/reports/monthly', {
-      params: { year, month, dept_id: deptId, api_key: 'analytics_secret_key' }
+    api.get('/api/analytics/reports/monthly', {
+      params: { year, month, dept_id: deptId }
     }).then(r => r.data),
   daily: (date?: string, deptId?: number) =>
-    analyticsApi.get('/reports/daily', {
-      params: { report_date: date, dept_id: deptId, api_key: 'analytics_secret_key' }
+    api.get('/api/analytics/reports/daily', {
+      params: { report_date: date, dept_id: deptId }
     }).then(r => r.data),
   kpis: () =>
-    analyticsApi.get('/reports/dashboard-kpis', {
-      params: { api_key: 'analytics_secret_key' }
-    }).then(r => r.data),
+    api.get('/api/analytics/reports/dashboard-kpis').then(r => r.data),
   exportExcel: (type: string, year: number, month: number) => {
-    const url = `${ANALYTICS_URL}/reports/export/excel?report_type=${type}&year=${year}&month=${month}&api_key=analytics_secret_key`
+    // Descarga vía el proxy del core con el JWT en query (flujo window.open)
+    const token = typeof window !== 'undefined'
+      ? (localStorage.getItem('access_token') || localStorage.getItem('token'))
+      : null
+    const url = apiUrl(`/api/analytics/reports/export/excel?report_type=${type}&year=${year}&month=${month}&access_token=${token || ''}`)
     window.open(url, '_blank')
   }
 }

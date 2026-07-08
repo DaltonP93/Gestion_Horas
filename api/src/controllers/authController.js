@@ -6,7 +6,7 @@ const logger = require('../config/logger');
 const audit = require('../services/audit');
 const totp = require('../services/totp');
 
-const SALT_ROUNDS = 10;
+const SALT_ROUNDS = 12;
 
 function generateTokens(user) {
   const payload = {

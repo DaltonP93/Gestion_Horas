@@ -11,7 +11,7 @@ const crypto = require('crypto');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
 const logger = require('../config/logger');
-const SALT_ROUNDS = 10;
+const SALT_ROUNDS = 12;
 
 // Intento de enviar mail. Si no hay SMTP configurado, loggea el link.
 async function sendResetEmail({ to, fullName, link }) {
