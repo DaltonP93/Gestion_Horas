@@ -73,6 +73,13 @@ html.dark .clock-glow { text-shadow: 0 0 40px rgba(34, 211, 238, 0.35); }
 
 * { -webkit-tap-highlight-color: transparent; }
 
+/* Títulos de página con la fuente display Futurista (Space Grotesk), cohesivo
+   en toda la app sin tener que editar cada encabezado. */
+h1 {
+  font-family: var(--font-space-grotesk), 'Space Grotesk', var(--font-inter), Inter, system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}
+
 /* iOS: texto de formularios no hace zoom automático en input focus */
 @media (max-width: 768px) {
   input, select, textarea {
