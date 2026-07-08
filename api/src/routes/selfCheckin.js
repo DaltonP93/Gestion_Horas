@@ -138,8 +138,10 @@ router.post('/mark', async (req, res) => {
     }
 
     const ua = (req.headers['user-agent'] || '').slice(0, 255);
+    // Geolocalización canónica en latitude/longitude (mismas columnas que el
+    // marcaje móvil), para que reportes y exports lean un único par.
     await sequelize.query(`
-      INSERT INTO attendance_logs (employee_id, timestamp, type, source, selfie_url, lat, lng, user_agent, raw_data)
+      INSERT INTO attendance_logs (employee_id, timestamp, type, source, selfie_url, latitude, longitude, user_agent, raw_data)
       VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?)
     `, { replacements: [
       emp.id, type, source, selfieUrl,
