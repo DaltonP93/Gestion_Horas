@@ -142,13 +142,29 @@ function startBridgeApi(devices) {
   const app = express();
   app.use(express.json());
 
-  // Health check
+  // Health check (sin autenticación — solo expone conteo de relojes)
   app.get('/health', (req, res) => {
     res.json({
       status:    'ok',
       devices:   devices.length,
       timestamp: new Date().toISOString()
     });
+  });
+
+  // ── Autenticación de la API del bridge ──────────────────────────
+  // La API del bridge controla hardware y escanea la LAN; debe estar
+  // protegida. Se exige la cabecera `x-api-key` == BRIDGE_API_KEY en
+  // todas las rutas salvo /health. Si la clave no está configurada, se
+  // registra una advertencia y se deniega (fail-closed) para no exponer
+  // el control de relojes ni el escaneo de subred.
+  const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+  if (!BRIDGE_API_KEY) {
+    logger.error('⚠️  BRIDGE_API_KEY no configurada: la API del bridge rechazará todas las peticiones (excepto /health).');
+  }
+  app.use((req, res, next) => {
+    const provided = req.get('x-api-key');
+    if (BRIDGE_API_KEY && provided && provided === BRIDGE_API_KEY) return next();
+    return res.status(401).json({ error: 'No autorizado' });
   });
 
   // Estado de los relojes
@@ -256,8 +272,12 @@ function startBridgeApi(devices) {
     res.json({ device: device.name, users, total: users.length });
   });
 
-  const PORT = process.env.PORT || 8080;
-  app.listen(PORT, () => logger.info(`🌐 Bridge API en puerto ${PORT}`));
+  // Puerto 8081 para la API del bridge (8080 es el servidor PUSH de los relojes).
+  // Bind a loopback por defecto: la API la consume el core en el mismo host.
+  // Configurable con BRIDGE_API_PORT / BRIDGE_BIND para topologías distintas.
+  const PORT = parseInt(process.env.BRIDGE_API_PORT || '8081', 10);
+  const BIND = process.env.BRIDGE_BIND || '127.0.0.1';
+  app.listen(PORT, BIND, () => logger.info(`🌐 Bridge API en ${BIND}:${PORT}`));
 }
 
 // ─── Main ────────────────────────────────────────────────────────

@@ -75,12 +75,14 @@ router.get('/pending-approvals', async (req, res) => {
     const placeholders = deptIds.map(() => '?').join(',');
 
     const [rows] = await sequelize.query(`
-      SELECT p.id, p.type, p.start_date, p.end_date, p.reason, p.status, p.created_at,
+      SELECT p.id, p.type,
+             p.date_from AS start_date, p.date_to AS end_date,
+             p.reason, p.status, p.approval_state, p.created_at,
              e.code, CONCAT(e.first_name,' ',e.last_name) AS full_name, d.name AS department_name
       FROM permissions p
       JOIN employees e   ON e.id = p.employee_id
       LEFT JOIN departments d ON d.id = e.department_id
-      WHERE p.status IN ('pending', 'coordinator_approved')
+      WHERE p.approval_state IN ('pending', 'level1_ok', 'level2_ok')
         AND e.department_id IN (${placeholders})
       ORDER BY p.created_at DESC
       LIMIT 100

@@ -234,55 +234,70 @@ async function syncEmployees() {
 }
 
 // Importar marcajes históricos (CHECKINOUT → attendance_logs)
+// Optimizado: en vez de 3 queries por marcaje (empleado + device + insert),
+// se precargan los mapas code→id y sensor_id→device_id (2 queries) y se
+// insertan los marcajes en lotes multi-fila. Reduce de ~3·N a ~2 + N/500
+// round-trips (de decenas de miles a cientos en un fullSync).
 async function syncAttendance({ dateFrom, dateTo, limit = 10000 } = {}) {
   const records = await fetchCheckInOut({ dateFrom, dateTo, limit });
   let imported = 0, skipped = 0, notFound = 0;
 
+  if (records.length === 0) {
+    logger.info('Sync asistencia: sin registros');
+    return { imported, skipped, notFound, total: 0 };
+  }
+
+  // Mapas en memoria (2 queries) ─────────────────────────────────
+  const [emps] = await sequelize.query('SELECT id, code FROM employees');
+  const empByCode = new Map(emps.map(e => [String(e.code), e.id]));
+
+  const [devs] = await sequelize.query('SELECT id, sensor_id FROM devices');
+  const deviceBySensor = new Map();
+  const deviceById = new Map();
+  for (const d of devs) {
+    if (d.sensor_id != null) deviceBySensor.set(Number(d.sensor_id), d.id);
+    deviceById.set(Number(d.id), d.id);
+  }
+
+  const mapType = (ct) => (ct === 'I' || ct === 'i') ? 'in'
+                        : (ct === 'O' || ct === 'o') ? 'out' : 'unknown';
+
+  // Construir filas válidas ───────────────────────────────────────
+  const rows = [];
   for (const r of records) {
+    const empId = empByCode.get(String(r.USERID));
+    if (!empId) { notFound++; continue; }
+    const sid = Number(r.SENSORID || 0);
+    const deviceId = deviceBySensor.get(sid) ?? deviceById.get(sid) ?? null;
+    rows.push([
+      empId,
+      deviceId,
+      new Date(r.CHECKTIME),
+      mapType(r.CHECKTYPE),
+      'device',
+      JSON.stringify({ userid: r.USERID, checktype: r.CHECKTYPE, verifycode: r.VERIFYCODE, sensorid: r.SENSORID }),
+    ]);
+  }
+
+  // Inserción por lotes con INSERT IGNORE (mantiene la idempotencia por la
+  // clave única uq_attendance_punch) ─────────────────────────────
+  const CHUNK = 500;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    const values = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
     try {
-      // Buscar empleado en el nuevo sistema por código USERID
-      const [[emp]] = await sequelize.query(
-        'SELECT id FROM employees WHERE code = ?',
-        { replacements: [String(r.USERID)] }
+      const [result] = await sequelize.query(
+        `INSERT IGNORE INTO attendance_logs
+           (employee_id, device_id, timestamp, type, source, raw_data)
+         VALUES ${values}`,
+        { replacements: chunk.flat() }
       );
-
-      if (!emp) { notFound++; continue; }
-
-      // Mapear CHECKTYPE: 'I'=entrada, 'O'=salida, null=detectar por orden
-      let type = 'unknown';
-      if (r.CHECKTYPE === 'I' || r.CHECKTYPE === 'i') type = 'in';
-      else if (r.CHECKTYPE === 'O' || r.CHECKTYPE === 'o') type = 'out';
-
-      // Buscar dispositivo por sensor_id (MachineNo en att2000) con fallback al id MySQL
-      const sid = r.SENSORID || 0;
-      const [[device]] = await sequelize.query(
-        'SELECT id FROM devices WHERE sensor_id = ? OR id = ? ORDER BY (sensor_id = ?) DESC LIMIT 1',
-        { replacements: [sid, sid, sid] }
-      ).catch(() => [[]]);
-
-      const [result] = await sequelize.query(`
-        INSERT IGNORE INTO attendance_logs
-          (employee_id, device_id, timestamp, type, source, raw_data)
-        VALUES (?, ?, ?, ?, 'device', ?)
-      `, { replacements: [
-        emp.id,
-        device?.id || null,
-        new Date(r.CHECKTIME),
-        type,
-        JSON.stringify({
-          userid: r.USERID,
-          checktype: r.CHECKTYPE,
-          verifycode: r.VERIFYCODE,
-          sensorid: r.SENSORID
-        })
-      ]});
-
-      if (result.affectedRows > 0) imported++;
-      else skipped++;
-
+      const affected = result?.affectedRows ?? 0;
+      imported += affected;
+      skipped  += chunk.length - affected;
     } catch (err) {
-      logger.error(`Error importando marcaje ${r.USERID} ${r.CHECKTIME}:`, err.message);
-      skipped++;
+      logger.error(`Error importando lote de marcajes (${i}-${i + chunk.length}):`, err.message);
+      skipped += chunk.length;
     }
   }
 

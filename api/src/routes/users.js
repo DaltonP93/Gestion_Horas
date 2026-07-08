@@ -75,7 +75,7 @@ router.post('/', authorize('admin'), requirePermission('usuarios', 'create'), as
   }
 
   try {
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, 12);
     const [result] = await sequelize.query(
       `INSERT INTO users (username, email, password_hash, full_name, role, employee_id)
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -138,7 +138,7 @@ router.put('/:id/password', async (req, res) => {
       if (!valid) return res.status(401).json({ error: 'Contraseña actual incorrecta' });
     }
 
-    const hash = await bcrypt.hash(newPassword, 10);
+    const hash = await bcrypt.hash(newPassword, 12);
     await sequelize.query(
       'UPDATE users SET password_hash = ? WHERE id = ?',
       { replacements: [hash, req.params.id] }

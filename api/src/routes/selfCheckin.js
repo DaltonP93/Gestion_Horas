@@ -139,7 +139,7 @@ router.post('/mark', async (req, res) => {
 
     const ua = (req.headers['user-agent'] || '').slice(0, 255);
     await sequelize.query(`
-      INSERT INTO attendance_logs (employee_id, timestamp, type, source, selfie_url, lat, lng, user_agent, raw)
+      INSERT INTO attendance_logs (employee_id, timestamp, type, source, selfie_url, lat, lng, user_agent, raw_data)
       VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?)
     `, { replacements: [
       emp.id, type, source, selfieUrl,
