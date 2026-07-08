@@ -1,23 +1,41 @@
 const router = require('express').Router();
+const Joi = require('joi');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
+const { validate } = require('../middleware/validate');
+const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const {
   getAll, getById, create, update, deactivate, getAttendanceHistory
 } = require('../controllers/employeeController');
 
+// DTO de alta de empleado: campos requeridos + formatos válidos.
+const createEmployeeSchema = Joi.object({
+  code:            Joi.string().trim().max(20).required(),
+  first_name:      Joi.string().trim().max(80).required(),
+  last_name:       Joi.string().trim().max(80).required(),
+  email:           Joi.string().email().allow(null, ''),
+  phone:           Joi.string().max(30).allow(null, ''),
+  employee_number: Joi.string().max(40).allow(null, ''),
+  department_id:   Joi.number().integer().positive().allow(null),
+  schedule_id:     Joi.number().integer().positive().allow(null),
+  position:        Joi.string().max(120).allow(null, ''),
+  hire_date:       Joi.date().iso().allow(null, ''),
+  status:          Joi.string().valid('active', 'inactive').default('active'),
+}).unknown(true);
+
 router.use(authenticate);
 
 // Listado de departamentos activos (para selectores en formularios)
-router.get('/departments', async (req, res) => {
+router.get('/departments', asyncHandler(async (req, res) => {
   const [rows] = await sequelize.query(
     'SELECT id, name, code FROM departments WHERE active = 1 ORDER BY name'
   );
   res.json(rows);
-});
+}));
 
 router.get('/',                    requirePermission('empleados', 'view'), getAll);
 router.get('/:id',                 requirePermission('empleados', 'view'), getById);
-router.post('/',                   authorize('admin','hr'), requirePermission('empleados', 'create'), create);
+router.post('/',                   authorize('admin','hr'), requirePermission('empleados', 'create'), validate(createEmployeeSchema), create);
 router.put('/:id',                 authorize('admin','hr'), requirePermission('empleados', 'update'), update);
 router.delete('/:id',              authorize('admin'), requirePermission('empleados', 'delete'), deactivate);
 router.get('/:id/attendance',      requirePermission('empleados', 'view'), getAttendanceHistory);
