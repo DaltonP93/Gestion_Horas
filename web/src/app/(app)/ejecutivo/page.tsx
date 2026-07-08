@@ -60,9 +60,14 @@ export default function EjecutivoPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard Ejecutivo</h1>
-          <p className="text-sm text-slate-500 dark:text-white/40">KPIs globales, ranking de departamentos y tendencias.</p>
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-[0_8px_24px_-6px_rgba(34,211,238,0.5)]">
+            <TrendingUp size={20} />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Dashboard Ejecutivo</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">KPIs globales, ranking de departamentos y tendencias.</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <select value={year} onChange={e => setYear(+e.target.value)}
