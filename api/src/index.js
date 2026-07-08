@@ -1,4 +1,7 @@
 require('dotenv').config();
+// Validar la configuración del entorno antes de cualquier otra cosa: si falta
+// un secreto crítico en producción, el proceso falla acá con un mensaje claro.
+require('./config/env');
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
