@@ -51,11 +51,31 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         TZ: 'America/Asuncion',
+        BRIDGE_API_PORT: 8081,   // API del bridge (8080 es el PUSH de los relojes)
+        BRIDGE_BIND: '127.0.0.1',
       },
       error_file: '../logs/bridge-error.log',
       out_file:   '../logs/bridge-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       max_memory_restart: '256M',
+    },
+    {
+      // Analytics (FastAPI). Requiere el entorno virtual local: analytics/.venv
+      name: 'sishoras-analytics',
+      cwd: './analytics',
+      script: '.venv/bin/uvicorn',
+      args: 'main:app --host 127.0.0.1 --port 5000',
+      interpreter: '.venv/bin/python',
+      instances: 1,
+      exec_mode: 'fork',
+      watch: false,
+      env: {
+        TZ: 'America/Asuncion',
+      },
+      error_file: '../logs/analytics-error.log',
+      out_file:   '../logs/analytics-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      max_memory_restart: '512M',
     },
   ],
 }

@@ -581,7 +581,11 @@ function bridgeRequest(method, path, body, res) {
     port:     parseInt(bridgeUrl.port || '8081'),
     path,
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      // Autenticación con la API del bridge
+      ...(process.env.BRIDGE_API_KEY ? { 'x-api-key': process.env.BRIDGE_API_KEY } : {}),
+    },
     timeout: 45000,
   };
   const req2 = http.request(opts, r2 => {
