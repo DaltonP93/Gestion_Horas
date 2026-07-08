@@ -138,16 +138,16 @@ export default function GlobalSearch() {
     <>
       <button
         onClick={() => setOpen(true)}
-        className="hidden md:flex items-center gap-2 text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors rounded-lg px-3 py-1.5 text-xs"
+        className="hidden md:flex items-center gap-2 text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors rounded-lg px-3 py-1.5 text-xs dark:bg-white/[0.06] dark:text-white/40"
         aria-label="Búsqueda global"
       >
         <Search size={14} />
         <span>Buscar...</span>
-        <kbd className="ml-2 bg-white text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono">⌘K</kbd>
+        <kbd className="ml-2 bg-white text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono dark:bg-white/[0.04] dark:text-white/30 dark:border-white/[0.08]">⌘K</kbd>
       </button>
       <button
         onClick={() => setOpen(true)}
-        className="md:hidden p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg"
+        className="md:hidden p-1.5 text-slate-500 hover:bg-slate-100 rounded-lg dark:text-white/40 dark:hover:bg-white/[0.06]"
         aria-label="Búsqueda global"
       >
         <Search size={18} />
@@ -159,11 +159,11 @@ export default function GlobalSearch() {
           onClick={() => setOpen(false)}
         >
           <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col max-h-[70vh] overflow-hidden"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-xl flex flex-col max-h-[70vh] overflow-hidden dark:bg-white/[0.04]"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
-              <Search size={18} className="text-slate-400" />
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-white/[0.06]">
+              <Search size={18} className="text-slate-400 dark:text-white/30" />
               <input
                 ref={inputRef}
                 value={q}
@@ -172,14 +172,14 @@ export default function GlobalSearch() {
                 placeholder="Buscar empleados, páginas..."
                 className="flex-1 bg-transparent outline-none text-sm"
               />
-              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setOpen(false)} className="text-slate-400 hover:text-slate-600 dark:text-white/30">
                 <X size={18} />
               </button>
             </div>
 
             <div className="overflow-y-auto flex-1">
               {results.length === 0 ? (
-                <div className="text-center py-8 text-slate-400 text-sm">
+                <div className="text-center py-8 text-slate-400 text-sm dark:text-white/30">
                   {q.length < 2 ? 'Escribí al menos 2 caracteres' : 'Sin resultados'}
                 </div>
               ) : (
@@ -199,10 +199,10 @@ export default function GlobalSearch() {
                           <Icon size={15} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-slate-800 truncate">{r.title}</p>
-                          {r.subtitle && <p className="text-xs text-slate-500 truncate">{r.subtitle}</p>}
+                          <p className="text-sm font-medium text-slate-800 truncate dark:text-white/90">{r.title}</p>
+                          {r.subtitle && <p className="text-xs text-slate-500 truncate dark:text-white/40">{r.subtitle}</p>}
                         </div>
-                        <span className="text-xs text-slate-400 capitalize">
+                        <span className="text-xs text-slate-400 capitalize dark:text-white/30">
                           {r.type === 'employee' ? 'Empleado' : 'Página'}
                         </span>
                       </button>
@@ -212,7 +212,7 @@ export default function GlobalSearch() {
               )}
             </div>
 
-            <div className="border-t border-slate-100 bg-slate-50 px-4 py-2 flex items-center gap-3 text-xs text-slate-400">
+            <div className="border-t border-slate-100 bg-slate-50 px-4 py-2 flex items-center gap-3 text-xs text-slate-400 dark:bg-white/[0.03] dark:text-white/30 dark:border-white/[0.06]">
               <span>↑↓ navegar</span>
               <span>↵ ir</span>
               <span>esc cerrar</span>

@@ -91,12 +91,12 @@ export default function AparienciaPage() {
     }
   }
 
-  if (loading || !s) return <div className="p-10 text-center text-slate-400">Cargando...</div>
+  if (loading || !s) return <div className="p-10 text-center text-slate-400 dark:text-white/30">Cargando...</div>
 
   return (
     <div className="p-6 space-y-6 max-w-5xl">
       <div className="flex items-center gap-3">
-        <a href="/configuracion" className="text-slate-500 hover:text-slate-700 flex items-center gap-1 text-sm">
+        <a href="/configuracion" className="text-slate-500 hover:text-slate-700 flex items-center gap-1 text-sm dark:text-white/40">
           <ArrowLeft size={16} /> Volver
         </a>
       </div>
@@ -107,13 +107,13 @@ export default function AparienciaPage() {
             <Palette className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Apariencia</h1>
-            <p className="text-sm text-slate-500">Branding, tema, sidebar y pantalla de login.</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Apariencia</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">Branding, tema, sidebar y pantalla de login.</p>
           </div>
         </div>
         <div className="flex gap-2">
           <button onClick={reset} disabled={saving}
-            className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-sm flex items-center gap-1 disabled:opacity-50">
+            className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-sm flex items-center gap-1 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
             <RefreshCw size={14} /> Restaurar
           </button>
           <button onClick={save} disabled={saving}
@@ -129,12 +129,12 @@ export default function AparienciaPage() {
       <Section title="Marca e identidad">
         <Row label="Logo">
           <div className="flex items-center gap-3">
-            {s.system_logo_url && <img src={s.system_logo_url} alt="logo" className="h-12 rounded bg-slate-100 p-1" />}
+            {s.system_logo_url && <img src={s.system_logo_url} alt="logo" className="h-12 rounded bg-slate-100 p-1 dark:bg-white/[0.06]" />}
             <input value={s.system_logo_url} onChange={e => set('system_logo_url', e.target.value)}
               placeholder="URL del logo o sube archivo →"
-              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             <button onClick={() => logoRef.current?.click()}
-              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm flex items-center gap-1">
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm flex items-center gap-1 dark:bg-white/[0.06]">
               <Upload size={14} /> Subir
             </button>
             <input ref={logoRef} type="file" accept="image/*" className="hidden"
@@ -143,12 +143,12 @@ export default function AparienciaPage() {
         </Row>
         <Row label="Favicon">
           <div className="flex items-center gap-3">
-            {s.system_favicon_url && <img src={s.system_favicon_url} alt="favicon" className="w-8 h-8 rounded bg-slate-100 p-1" />}
+            {s.system_favicon_url && <img src={s.system_favicon_url} alt="favicon" className="w-8 h-8 rounded bg-slate-100 p-1 dark:bg-white/[0.06]" />}
             <input value={s.system_favicon_url} onChange={e => set('system_favicon_url', e.target.value)}
               placeholder="URL del favicon .ico / .png"
-              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             <button onClick={() => favRef.current?.click()}
-              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm flex items-center gap-1">
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm flex items-center gap-1 dark:bg-white/[0.06]">
               <Upload size={14} /> Subir
             </button>
             <input ref={favRef} type="file" accept="image/x-icon,image/png,image/svg+xml" className="hidden"
@@ -157,23 +157,23 @@ export default function AparienciaPage() {
         </Row>
         <Row label="Ícono PWA (app móvil)">
           <div className="space-y-2">
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 dark:text-white/30">
               Este ícono aparece cuando el usuario instala SisHoras como app desde Chrome/Safari.
               Se recomienda PNG cuadrado 512×512 px o SVG.
             </p>
             <div className="flex items-center gap-3">
               {s.system_pwa_icon_url ? (
                 <img src={s.system_pwa_icon_url} alt="pwa icon"
-                  className="w-12 h-12 rounded-xl bg-slate-100 p-1 object-contain" />
+                  className="w-12 h-12 rounded-xl bg-slate-100 p-1 object-contain dark:bg-white/[0.06]" />
               ) : (
-                <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300 text-xs border border-dashed border-slate-300">
+                <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300 text-xs border border-dashed border-slate-300 dark:bg-white/[0.06]">
                   SVG
                 </div>
               )}
               <input value={s.system_pwa_icon_url}
                 onChange={e => set('system_pwa_icon_url', e.target.value)}
                 placeholder="URL del ícono o sube archivo →"
-                className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
               <button onClick={() => pwaRef.current?.click()}
                 className="px-3 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-sm flex items-center gap-1">
                 <Upload size={14} /> Subir
@@ -201,7 +201,7 @@ export default function AparienciaPage() {
         </div>
         <div className="grid md:grid-cols-3 gap-4">
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Modo</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Modo</label>
             <div className="flex gap-2">
               {([['light', Sun, 'Claro'], ['dark', Moon, 'Oscuro'], ['auto', Monitor, 'Auto']] as const).map(([k, Icon, label]) => (
                 <button key={k} onClick={() => set('system_theme_mode', k)}
@@ -212,14 +212,14 @@ export default function AparienciaPage() {
             </div>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Tipografía</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Tipografía</label>
             <select value={s.system_font_family} onChange={e => set('system_font_family', e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" style={{ fontFamily: s.system_font_family }}>
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" style={{ fontFamily: s.system_font_family }}>
               {FONTS.map(f => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
             </select>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Radio de bordes</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Radio de bordes</label>
             <div className="flex gap-2">
               {Object.keys(RADII).map(r => (
                 <button key={r} onClick={() => set('system_border_radius', r)}
@@ -234,16 +234,16 @@ export default function AparienciaPage() {
       <Section title="Pantalla de login">
         <Row label="Título">
           <input value={s.system_login_title} onChange={e => set('system_login_title', e.target.value)}
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
         </Row>
         <Row label="Subtítulo">
           <input value={s.system_login_subtitle} onChange={e => set('system_login_subtitle', e.target.value)}
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
         </Row>
         <Row label="Pie de página">
           <input value={s.system_login_footer} onChange={e => set('system_login_footer', e.target.value)}
             placeholder="© 2026 Mi Empresa"
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
         </Row>
         <Row label="Layout">
           <div className="flex gap-2 flex-wrap">
@@ -260,9 +260,9 @@ export default function AparienciaPage() {
             {s.system_login_bg_image && <img src={s.system_login_bg_image} alt="bg" className="h-16 w-28 object-cover rounded" />}
             <input value={s.system_login_bg_image} onChange={e => set('system_login_bg_image', e.target.value)}
               placeholder="URL o sube archivo →"
-              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             <button onClick={() => bgRef.current?.click()}
-              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm flex items-center gap-1">
+              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm flex items-center gap-1 dark:bg-white/[0.06]">
               <Upload size={14} /> Subir
             </button>
             <input ref={bgRef} type="file" accept="image/*" className="hidden"
@@ -276,7 +276,7 @@ export default function AparienciaPage() {
       </Section>
 
       <Section title="Vista previa">
-        <div className="rounded-2xl overflow-hidden border border-slate-200 grid grid-cols-[240px_1fr]" style={{ fontFamily: s.system_font_family }}>
+        <div className="rounded-2xl overflow-hidden border border-slate-200 grid grid-cols-[240px_1fr] dark:border-white/[0.08]" style={{ fontFamily: s.system_font_family }}>
           <div className="p-4 flex flex-col gap-2" style={{ backgroundColor: s.system_sidebar_bg, color: s.system_sidebar_text }}>
             <div className="flex items-center gap-2 mb-2">
               {s.system_logo_url
@@ -288,13 +288,13 @@ export default function AparienciaPage() {
             <div className="px-3 py-2 text-sm">Empleados</div>
             <div className="px-3 py-2 text-sm">Asistencia</div>
           </div>
-          <div className="p-6 bg-white">
+          <div className="p-6 bg-white dark:bg-white/[0.04]">
             <div className="flex gap-2 mb-4">
               <button className="px-4 py-2 text-white text-sm" style={{ backgroundColor: s.system_primary_color, borderRadius: RADII[s.system_border_radius] }}>Primario</button>
               <button className="px-4 py-2 text-white text-sm" style={{ backgroundColor: s.system_secondary_color, borderRadius: RADII[s.system_border_radius] }}>Secundario</button>
               <button className="px-4 py-2 text-white text-sm" style={{ backgroundColor: s.system_accent_color, borderRadius: RADII[s.system_border_radius] }}>Acento</button>
             </div>
-            <div className="text-slate-600 text-sm">Ejemplo de contenido con la tipografía y radio seleccionados.</div>
+            <div className="text-slate-600 text-sm dark:text-white/60">Ejemplo de contenido con la tipografía y radio seleccionados.</div>
           </div>
         </div>
       </Section>
@@ -304,8 +304,8 @@ export default function AparienciaPage() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4">
-      <h2 className="font-semibold text-slate-900">{title}</h2>
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <h2 className="font-semibold text-slate-900 dark:text-white">{title}</h2>
       {children}
     </div>
   )
@@ -313,7 +313,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="text-xs font-medium text-slate-600 block mb-1">{label}</label>
+      <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">{label}</label>
       {children}
     </div>
   )
@@ -321,12 +321,12 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 function Color({ label, v, onChange }: { label: string; v: string; onChange: (v: string) => void }) {
   return (
     <div>
-      <label className="text-xs font-medium text-slate-600 block mb-1">{label}</label>
+      <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">{label}</label>
       <div className="flex items-center gap-2">
         <input type="color" value={v || '#000000'} onChange={e => onChange(e.target.value)}
-          className="w-10 h-10 rounded border border-slate-200 cursor-pointer" />
+          className="w-10 h-10 rounded border border-slate-200 cursor-pointer dark:border-white/[0.08]" />
         <input value={v} onChange={e => onChange(e.target.value)}
-          className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono" />
+          className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono dark:border-white/[0.08]" />
       </div>
     </div>
   )
@@ -335,7 +335,7 @@ function Check({ label, checked, onChange }: { label: string; checked: boolean; 
   return (
     <label className="flex items-center gap-2 cursor-pointer">
       <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="w-4 h-4" />
-      <span className="text-sm text-slate-700">{label}</span>
+      <span className="text-sm text-slate-700 dark:text-white/80">{label}</span>
     </label>
   )
 }

@@ -58,17 +58,17 @@ export default function QRAsistenciaPage() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
-      <a href="/configuracion" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+      <a href="/configuracion" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-white/40">
         <ArrowLeft size={16} /> Volver
       </a>
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">QR de marcación</h1>
-        <p className="text-sm text-slate-500">Genera y muestra el código QR rotativo para que los empleados marquen en esta sede.</p>
+        <h1 className="text-2xl font-bold text-slate-900 dark:text-white">QR de marcación</h1>
+        <p className="text-sm text-slate-500 dark:text-white/40">Genera y muestra el código QR rotativo para que los empleados marquen en esta sede.</p>
       </div>
 
       <div className="flex items-center gap-2">
         <select value={branchId} onChange={e => setBranchId(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex-1">
+          className="border border-slate-200 rounded-xl px-3 py-2 text-sm flex-1 dark:border-white/[0.08]">
           <option value="">Selecciona sede...</option>
           {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
@@ -78,18 +78,18 @@ export default function QRAsistenciaPage() {
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl shadow border border-slate-100 p-6 flex flex-col items-center gap-4">
+      <div className="bg-white rounded-2xl shadow border border-slate-100 p-6 flex flex-col items-center gap-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {qrDataUrl ? (
           <img src={qrDataUrl} alt="QR de marcación" className="w-80 h-80" />
         ) : (
-          <div className="w-80 h-80 bg-slate-100 rounded-xl flex items-center justify-center text-slate-400">
+          <div className="w-80 h-80 bg-slate-100 rounded-xl flex items-center justify-center text-slate-400 dark:bg-white/[0.06] dark:text-white/30">
             <QrCode size={64} />
           </div>
         )}
         {token && (
           <>
-            <div className="text-xs text-slate-500 font-mono break-all text-center">{token}</div>
-            <div className="text-sm text-slate-600">
+            <div className="text-xs text-slate-500 font-mono break-all text-center dark:text-white/40">{token}</div>
+            <div className="text-sm text-slate-600 dark:text-white/60">
               Expira en: <strong>{Math.floor((timeLeft - tick % 60) / 60)}:{String(Math.max(0, timeLeft - tick) % 60).padStart(2, '0')}</strong>
             </div>
           </>

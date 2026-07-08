@@ -72,16 +72,16 @@ function SolicitarModal({ onClose, onCreated, isAdmin }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">Solicitar ausencia / vacaciones</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md dark:bg-white/[0.04]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Solicitar ausencia / vacaciones</h2>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
         {ok ? (
           <div className="px-6 py-10 text-center space-y-3">
             <CheckCircle2 size={48} className="text-emerald-500 mx-auto" />
-            <p className="font-semibold text-slate-800">Solicitud enviada</p>
-            <p className="text-sm text-slate-500">Queda pendiente de aprobación por RRHH o tu supervisor.</p>
+            <p className="font-semibold text-slate-800 dark:text-white/90">Solicitud enviada</p>
+            <p className="text-sm text-slate-500 dark:text-white/40">Queda pendiente de aprobación por RRHH o tu supervisor.</p>
             <button onClick={onClose} className="mt-2 px-6 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700">Cerrar</button>
           </div>
         ) : (
@@ -89,44 +89,44 @@ function SolicitarModal({ onClose, onCreated, isAdmin }: {
             <div className="px-6 py-4 space-y-3">
               {isAdmin && (
                 <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Empleado (dejar vacío = tu propia solicitud)</label>
+                  <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Empleado (dejar vacío = tu propia solicitud)</label>
                   <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
                     <option value="">Mi propia solicitud</option>
                     {(emps || []).map((e: any) => <option key={e.id} value={e.id}>{e.full_name} ({e.code})</option>)}
                   </select>
                 </div>
               )}
               <div>
-                <label className="text-xs font-medium text-slate-600 block mb-1">Tipo *</label>
+                <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Tipo *</label>
                 <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
                   {PERM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Desde *</label>
+                  <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Desde *</label>
                   <input type="date" value={form.date_from} onChange={e => setForm(f => ({ ...f, date_from: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-slate-600 block mb-1">Hasta *</label>
+                  <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Hasta *</label>
                   <input type="date" value={form.date_to} onChange={e => setForm(f => ({ ...f, date_to: e.target.value }))}
                     min={form.date_from}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
                 </div>
               </div>
               <div>
-                <label className="text-xs font-medium text-slate-600 block mb-1">Motivo</label>
+                <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Motivo</label>
                 <textarea rows={2} value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))}
                   placeholder="Opcional…"
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none" />
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none dark:border-white/[0.08]" />
               </div>
               {err && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
             </div>
-            <div className="px-6 py-4 border-t border-slate-100 flex gap-2">
-              <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancelar</button>
+            <div className="px-6 py-4 border-t border-slate-100 flex gap-2 dark:border-white/[0.06]">
+              <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
               <button onClick={submit} disabled={saving}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium">
                 {saving ? 'Enviando…' : 'Solicitar'}
@@ -202,8 +202,8 @@ export default function VacacionesPage() {
             <Plane className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Plan de Vacaciones</h1>
-            <p className="text-sm text-slate-500">Vista mensual de permisos y vacaciones aprobados/pendientes</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Plan de Vacaciones</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">Vista mensual de permisos y vacaciones aprobados/pendientes</p>
           </div>
         </div>
         <button onClick={() => setShowSolicitar(true)}
@@ -220,28 +220,28 @@ export default function VacacionesPage() {
       )}
 
       {/* Controles */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 flex-wrap">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 flex-wrap dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="flex items-center gap-1">
           <button onClick={() => changeMonth(-1)}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 dark:text-white/40 dark:hover:bg-white/[0.06]">
             <ChevronLeft size={18} />
           </button>
           <select value={month} onChange={e => setMonth(+e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold min-w-[140px]">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold min-w-[140px] dark:border-white/[0.08]">
             {MESES_ES.map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
           </select>
           <select value={year} onChange={e => setYear(+e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold dark:border-white/[0.08]">
             {[2024,2025,2026,2027].map(y => <option key={y} value={y}>{y}</option>)}
           </select>
           <button onClick={() => changeMonth(1)}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500">
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 dark:text-white/40 dark:hover:bg-white/[0.06]">
             <ChevronRight size={18} />
           </button>
         </div>
-        <div className="border-l border-slate-200 pl-3">
+        <div className="border-l border-slate-200 pl-3 dark:border-white/[0.08]">
           <select value={deptId} onChange={e => setDeptId(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
             <option value="">{t('common.all')} {t('employees.department').toLowerCase()}</option>
             {(deptsData || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
@@ -250,7 +250,7 @@ export default function VacacionesPage() {
           {Object.entries(TYPE_COLORS).map(([type, cls]) => (
             <div key={type} className="flex items-center gap-1.5">
               <span className={`w-3 h-3 rounded ${cls}`} />
-              <span className="text-slate-600 capitalize">{type === 'vacation' ? 'Vacación' : type === 'sick' ? 'Enferm.' : type === 'personal' ? 'Personal' : type === 'maternity' ? 'Mater.' : type === 'paternity' ? 'Pater.' : 'Otro'}</span>
+              <span className="text-slate-600 capitalize dark:text-white/60">{type === 'vacation' ? 'Vacación' : type === 'sick' ? 'Enferm.' : type === 'personal' ? 'Personal' : type === 'maternity' ? 'Mater.' : type === 'paternity' ? 'Pater.' : 'Otro'}</span>
             </div>
           ))}
         </div>
@@ -258,18 +258,18 @@ export default function VacacionesPage() {
 
       {/* Calendario tipo Gantt */}
       {isLoading ? (
-        <div className="text-center py-12 text-slate-400">Cargando...</div>
+        <div className="text-center py-12 text-slate-400 dark:text-white/30">Cargando...</div>
       ) : employees.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-400">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-400 dark:bg-white/[0.04] dark:text-white/30 dark:border-white/[0.06]">
           <Calendar size={36} className="mx-auto mb-3 opacity-30" />
           <p className="font-medium">Sin permisos en {MESES_ES[month - 1]} {year}</p>
         </div>
       ) : (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto dark:bg-white/[0.04] dark:border-white/[0.06]">
           <table className="w-full text-xs whitespace-nowrap">
-            <thead className="border-b border-slate-100">
+            <thead className="border-b border-slate-100 dark:border-white/[0.06]">
               <tr>
-                <th className="text-left px-4 py-2.5 font-medium text-slate-500 sticky left-0 bg-white z-10 min-w-[200px]">
+                <th className="text-left px-4 py-2.5 font-medium text-slate-500 sticky left-0 bg-white z-10 min-w-[200px] dark:bg-white/[0.04] dark:text-white/40">
                   Empleado
                 </th>
                 {days.map(d => {
@@ -294,12 +294,12 @@ export default function VacacionesPage() {
                 })}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {employees.map((emp: any) => (
-                <tr key={emp.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-2 sticky left-0 bg-white border-r border-slate-100">
-                    <p className="font-medium text-slate-800 text-sm">{emp.employee_name}</p>
-                    <p className="text-[11px] text-slate-400">[{emp.code}] {emp.department || '—'}</p>
+                <tr key={emp.id} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                  <td className="px-4 py-2 sticky left-0 bg-white border-r border-slate-100 dark:bg-white/[0.04] dark:border-white/[0.06]">
+                    <p className="font-medium text-slate-800 text-sm dark:text-white/90">{emp.employee_name}</p>
+                    <p className="text-[11px] text-slate-400 dark:text-white/30">[{emp.code}] {emp.department || '—'}</p>
                   </td>
                   {days.map(d => {
                     const dateStr = `${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`

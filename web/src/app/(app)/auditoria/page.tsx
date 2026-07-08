@@ -101,8 +101,8 @@ export default function AuditoriaPage() {
             <FileText className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Auditoría</h1>
-            <p className="text-slate-500 text-sm">Registro de eventos del sistema. {total.toLocaleString()} evento(s) en el filtro actual.</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Auditoría</h1>
+            <p className="text-slate-500 text-sm dark:text-white/40">Registro de eventos del sistema. {total.toLocaleString()} evento(s) en el filtro actual.</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -130,58 +130,58 @@ export default function AuditoriaPage() {
               <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${meta.color}`}>
                 <meta.icon size={12} /> {meta.label}
               </div>
-              <p className="text-2xl font-bold text-slate-900 mt-2">{a.total.toLocaleString()}</p>
+              <p className="text-2xl font-bold text-slate-900 mt-2 dark:text-white">{a.total.toLocaleString()}</p>
             </button>
           )
         })}
       </div>
 
       {/* Filtros */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-wrap items-end gap-3">
-        <div className="flex items-center gap-2 text-slate-500 text-sm">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex flex-wrap items-end gap-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="flex items-center gap-2 text-slate-500 text-sm dark:text-white/40">
           <Filter size={16} /> Filtros
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Acción</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Acción</label>
           <select value={filter.action} onChange={e => { setFilter(f => ({ ...f, action: e.target.value })); setPage(0) }}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm min-w-[180px]">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm min-w-[180px] dark:border-white/[0.08]">
             <option value="">— Todas —</option>
             {actions.map(a => <option key={a.action} value={a.action}>{a.action} ({a.total})</option>)}
           </select>
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Entidad</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Entidad</label>
           <select value={filter.entity} onChange={e => { setFilter(f => ({ ...f, entity: e.target.value })); setPage(0) }}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm min-w-[160px]">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm min-w-[160px] dark:border-white/[0.08]">
             <option value="">— Todas —</option>
             {entities.map(a => <option key={a.entity} value={a.entity}>{a.entity} ({a.total})</option>)}
           </select>
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Buscar (LIKE)</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Buscar (LIKE)</label>
           <input value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value, fulltext: '' }))}
             onKeyDown={e => { if (e.key === 'Enter') { setPage(0); load() } }}
             placeholder="admin, error, 192.168..."
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1 flex items-center gap-1">
+          <label className="text-xs font-medium text-slate-600 block mb-1 flex items-center gap-1 dark:text-white/60">
             <Search size={10} /> Búsqueda FULLTEXT
           </label>
           <input value={filter.fulltext} onChange={e => setFilter(f => ({ ...f, fulltext: e.target.value, q: '' }))}
             onKeyDown={e => { if (e.key === 'Enter') { setPage(0); load() } }}
             placeholder='+login -fail  (boolean mode)'
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono" />
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono dark:border-white/[0.08]" />
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Desde</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Desde</label>
           <input type="date" value={filter.from} onChange={e => { setFilter(f => ({ ...f, from: e.target.value })); setPage(0) }}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Hasta</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Hasta</label>
           <input type="date" value={filter.to} onChange={e => { setFilter(f => ({ ...f, to: e.target.value })); setPage(0) }}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
         </div>
         <button onClick={() => { setPage(0); load() }}
           className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-sm">
@@ -197,17 +197,17 @@ export default function AuditoriaPage() {
       )}
 
       {/* Tabla */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {loading ? (
-          <div className="p-8 text-center text-slate-400">Cargando...</div>
+          <div className="p-8 text-center text-slate-400 dark:text-white/30">Cargando...</div>
         ) : events.length === 0 ? (
-          <div className="p-10 text-center text-slate-400 space-y-2">
+          <div className="p-10 text-center text-slate-400 space-y-2 dark:text-white/30">
             <FileText className="mx-auto text-slate-300" size={40} />
             <p>Sin eventos en el rango.</p>
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide dark:bg-white/[0.03] dark:text-white/40">
               <tr>
                 <th className="px-4 py-3">Cuándo</th>
                 <th className="px-4 py-3">Usuario</th>
@@ -218,21 +218,21 @@ export default function AuditoriaPage() {
                 <th className="px-4 py-3 w-12"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
               {events.map(e => {
                 const meta = ACTION_META[e.action] || { color: 'bg-slate-100 text-slate-700', icon: Shield, label: e.action }
                 const Icon = meta.icon
                 return (
-                  <tr key={e.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap">
+                  <tr key={e.id} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                    <td className="px-4 py-2.5 text-xs text-slate-500 whitespace-nowrap dark:text-white/40">
                       <div className="flex items-center gap-1"><Clock size={12} /> {new Date(e.created_at).toLocaleString()}</div>
                     </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2">
-                        <UserIcon size={14} className="text-slate-400" />
+                        <UserIcon size={14} className="text-slate-400 dark:text-white/30" />
                         <div>
-                          <p className="text-slate-900 font-medium text-xs">{e.actor_name || e.username || '—'}</p>
-                          {e.actor_role && <p className="text-[10px] text-slate-400 capitalize">{e.actor_role.replace('_',' ')}</p>}
+                          <p className="text-slate-900 font-medium text-xs dark:text-white">{e.actor_name || e.username || '—'}</p>
+                          {e.actor_role && <p className="text-[10px] text-slate-400 capitalize dark:text-white/30">{e.actor_role.replace('_',' ')}</p>}
                         </div>
                       </div>
                     </td>
@@ -241,19 +241,19 @@ export default function AuditoriaPage() {
                         <Icon size={12} /> {meta.label}
                       </span>
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-600">
+                    <td className="px-4 py-2.5 text-xs text-slate-600 dark:text-white/60">
                       {e.entity ? <span>{e.entity}{e.entity_id ? ` #${e.entity_id}` : ''}</span> : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-500 font-mono">
+                    <td className="px-4 py-2.5 text-xs text-slate-500 font-mono dark:text-white/40">
                       <div className="flex items-center gap-1">
                         <Globe size={12} /> {e.ip || '—'}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-500 max-w-xs">
+                    <td className="px-4 py-2.5 text-xs text-slate-500 max-w-xs dark:text-white/40">
                       {e.details ? <pre className="truncate text-[10px] font-mono">{e.details}</pre> : <span className="text-slate-300">—</span>}
                     </td>
                     <td className="px-4 py-2.5">
-                      <button onClick={() => setDetail(e)} className="p-1 rounded hover:bg-slate-100 text-slate-500">
+                      <button onClick={() => setDetail(e)} className="p-1 rounded hover:bg-slate-100 text-slate-500 dark:text-white/40 dark:hover:bg-white/[0.06]">
                         <Eye size={14} />
                       </button>
                     </td>
@@ -265,15 +265,15 @@ export default function AuditoriaPage() {
         )}
         {/* Paginación */}
         {total > PAGE_SIZE && (
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 text-sm text-slate-500">
+          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 text-sm text-slate-500 dark:text-white/40 dark:border-white/[0.06]">
             <span>Página {page + 1} de {totalPages}</span>
             <div className="flex gap-2">
               <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
-                className="px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1">
+                className="px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                 <ChevronLeft size={14} /> Anterior
               </button>
               <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
-                className="px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1">
+                className="px-3 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                 Siguiente <ChevronRight size={14} />
               </button>
             </div>
@@ -284,10 +284,10 @@ export default function AuditoriaPage() {
       {/* Modal detalle */}
       {detail && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={() => setDetail(null)}>
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <h3 className="font-semibold text-slate-900">Evento #{detail.id}</h3>
-              <button onClick={() => setDetail(null)} className="p-1 rounded hover:bg-slate-100"><X size={18} /></button>
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[85vh] overflow-auto dark:bg-white/[0.04]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+              <h3 className="font-semibold text-slate-900 dark:text-white">Evento #{detail.id}</h3>
+              <button onClick={() => setDetail(null)} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"><X size={18} /></button>
             </div>
             <div className="p-6 space-y-3 text-sm">
               <Row k="Fecha" v={new Date(detail.created_at).toLocaleString()} />
@@ -297,8 +297,8 @@ export default function AuditoriaPage() {
               <Row k="IP" v={detail.ip || '—'} />
               <Row k="User-Agent" v={detail.user_agent || '—'} />
               <div>
-                <div className="text-xs text-slate-500 mb-1">Detalles (JSON)</div>
-                <pre className="bg-slate-50 rounded-lg p-3 text-xs overflow-auto max-h-72 font-mono">
+                <div className="text-xs text-slate-500 mb-1 dark:text-white/40">Detalles (JSON)</div>
+                <pre className="bg-slate-50 rounded-lg p-3 text-xs overflow-auto max-h-72 font-mono dark:bg-white/[0.03]">
                   {(() => { try { return JSON.stringify(JSON.parse(detail.details || '{}'), null, 2) } catch { return detail.details || '—' } })()}
                 </pre>
               </div>
@@ -313,8 +313,8 @@ export default function AuditoriaPage() {
 function Row({ k, v }: { k: string; v: string }) {
   return (
     <div className="grid grid-cols-[120px_1fr] gap-2">
-      <div className="text-slate-500 text-xs">{k}</div>
-      <div className="text-slate-900 text-sm break-all">{v}</div>
+      <div className="text-slate-500 text-xs dark:text-white/40">{k}</div>
+      <div className="text-slate-900 text-sm break-all dark:text-white">{v}</div>
     </div>
   )
 }

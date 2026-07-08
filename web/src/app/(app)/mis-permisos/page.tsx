@@ -80,8 +80,8 @@ export default function MisPermisosPage() {
             <Calendar className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Mis permisos</h1>
-            <p className="text-slate-500 text-sm">Tus solicitudes de ausencia y su estado de aprobación.</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Mis permisos</h1>
+            <p className="text-slate-500 text-sm dark:text-white/40">Tus solicitudes de ausencia y su estado de aprobación.</p>
           </div>
         </div>
         <button onClick={() => setCreating(true)}
@@ -97,17 +97,17 @@ export default function MisPermisosPage() {
         </div>
       )}
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {loading ? (
-          <div className="p-8 text-center text-slate-400">Cargando...</div>
+          <div className="p-8 text-center text-slate-400 dark:text-white/30">Cargando...</div>
         ) : list.length === 0 ? (
-          <div className="p-10 text-center text-slate-400 space-y-2">
+          <div className="p-10 text-center text-slate-400 space-y-2 dark:text-white/30">
             <Calendar className="mx-auto text-slate-300" size={40} />
             <p>No tenés solicitudes todavía.</p>
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide dark:bg-white/[0.03] dark:text-white/40">
               <tr>
                 <th className="px-4 py-3">Tipo</th>
                 <th className="px-4 py-3">Desde</th>
@@ -118,17 +118,17 @@ export default function MisPermisosPage() {
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
               {list.map(p => (
                 <tr key={p.id}>
                   <td className="px-4 py-3">
-                    <span className="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700">
+                    <span className="inline-block px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-700 dark:bg-white/[0.06] dark:text-white/80">
                       {TYPE_LABEL[p.type] || p.type}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-700">{p.date_from}</td>
-                  <td className="px-4 py-3 text-slate-700">{p.date_to}</td>
-                  <td className="px-4 py-3 text-xs text-slate-500 max-w-xs">
+                  <td className="px-4 py-3 text-slate-700 dark:text-white/80">{p.date_from}</td>
+                  <td className="px-4 py-3 text-slate-700 dark:text-white/80">{p.date_to}</td>
+                  <td className="px-4 py-3 text-xs text-slate-500 max-w-xs dark:text-white/40">
                     <p className="line-clamp-2">{p.reason || <em className="text-slate-300">—</em>}</p>
                     {p.rejection_reason && (
                       <p className="mt-1 text-red-600"><b>Rechazo:</b> {p.rejection_reason}</p>
@@ -139,7 +139,7 @@ export default function MisPermisosPage() {
                       {STATE_LABEL[p.approval_state]}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-500">
+                  <td className="px-4 py-3 text-xs text-slate-500 dark:text-white/40">
                     {new Date(p.created_at).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-3 text-right">
@@ -180,46 +180,46 @@ function CreateModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4 dark:bg-white/[0.04]">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-slate-900">Nueva solicitud de permiso</h2>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100"><X size={18} /></button>
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nueva solicitud de permiso</h2>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
 
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Tipo de permiso *</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Tipo de permiso *</label>
           <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
             {TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
           </select>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Desde *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Desde *</label>
             <input type="date" value={form.date_from}
               onChange={e => setForm({ ...form, date_from: e.target.value })}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Hasta *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Hasta *</label>
             <input type="date" value={form.date_to}
               onChange={e => setForm({ ...form, date_to: e.target.value })}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           </div>
         </div>
 
         <div>
-          <label className="text-xs font-medium text-slate-600 block mb-1">Motivo</label>
+          <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Motivo</label>
           <textarea value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })}
-            rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm"
+            rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]"
             placeholder="Explicá brevemente el motivo..." />
         </div>
 
         {err && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">{err}</div>}
 
         <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100">Cancelar</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
           <button onClick={save} disabled={saving}
             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium bg-purple-500 hover:bg-purple-600 text-white disabled:opacity-60">
             <Check size={16} /> {saving ? 'Guardando...' : 'Enviar solicitud'}

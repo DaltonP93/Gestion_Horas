@@ -154,9 +154,9 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
   useEffect(() => () => stopCamera(), [stopCamera])
 
   return (
-    <div className="border border-slate-200 rounded-2xl p-4 space-y-3 bg-white">
+    <div className="border border-slate-200 rounded-2xl p-4 space-y-3 bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-sm text-slate-700 flex items-center gap-2">
+        <h3 className="font-semibold text-sm text-slate-700 flex items-center gap-2 dark:text-white/80">
           <Camera size={15} className="text-blue-500" />
           Reconocimiento Facial
         </h3>
@@ -205,7 +205,7 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
             </button>
           )}
           {status === 'loading_models' && (
-            <div className="flex-1 flex items-center justify-center gap-2 text-slate-500 text-sm">
+            <div className="flex-1 flex items-center justify-center gap-2 text-slate-500 text-sm dark:text-white/40">
               <Loader2 size={14} className="animate-spin" /> Cargando modelos...
             </div>
           )}
@@ -216,13 +216,13 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
                 Capturar
               </button>
               <button onClick={() => { stopCamera(); setStatus('idle'); setMsg('') }}
-                className="px-4 text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl text-sm">
+                className="px-4 text-slate-500 hover:text-slate-700 border border-slate-200 rounded-xl text-sm dark:text-white/40 dark:border-white/[0.08]">
                 Cancelar
               </button>
             </>
           )}
           {status === 'processing' && (
-            <div className="flex-1 flex items-center justify-center gap-2 text-slate-500 text-sm">
+            <div className="flex-1 flex items-center justify-center gap-2 text-slate-500 text-sm dark:text-white/40">
               <Loader2 size={14} className="animate-spin" /> Procesando...
             </div>
           )}

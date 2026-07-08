@@ -65,25 +65,25 @@ export default function DiscoveryPage() {
           <Radar className="text-white" size={20} />
         </div>
         <div>
-          <h1 className="text-xl font-bold text-slate-900">Descubrimiento de Relojes</h1>
-          <p className="text-sm text-slate-500">Escanea la LAN buscando relojes ZKTeco (puerto {port})</p>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Descubrimiento de Relojes</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">Escanea la LAN buscando relojes ZKTeco (puerto {port})</p>
         </div>
       </div>
 
       {/* Scan config */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-        <h2 className="font-semibold text-slate-800 text-sm">Escaneo de subred</h2>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h2 className="font-semibold text-slate-800 text-sm dark:text-white/90">Escaneo de subred</h2>
         <div className="flex gap-3 flex-wrap">
           <div className="flex-1 min-w-[160px]">
-            <label className="text-xs text-slate-500 mb-1 block">Subred (X.X.X)</label>
+            <label className="text-xs text-slate-500 mb-1 block dark:text-white/40">Subred (X.X.X)</label>
             <input value={subnet} onChange={e => setSubnet(e.target.value)}
               placeholder="192.168.1"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           </div>
           <div className="w-24">
-            <label className="text-xs text-slate-500 mb-1 block">Puerto</label>
+            <label className="text-xs text-slate-500 mb-1 block dark:text-white/40">Puerto</label>
             <input type="number" value={port} onChange={e => setPort(+e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           </div>
           <div className="flex items-end">
             <button onClick={scan} disabled={scanning}
@@ -93,7 +93,7 @@ export default function DiscoveryPage() {
             </button>
           </div>
         </div>
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-400 dark:text-white/30">
           Escanea {subnet}.1 — {subnet}.254 (254 hosts). Puede tardar 15–30 segundos.
         </p>
 
@@ -110,12 +110,12 @@ export default function DiscoveryPage() {
         {found.length > 0 && (
           <div className="space-y-2">
             {found.map(d => (
-              <div key={d.ip} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-200">
+              <div key={d.ip} className="flex items-center justify-between bg-slate-50 rounded-xl px-4 py-3 border border-slate-200 dark:bg-white/[0.03] dark:border-white/[0.08]">
                 <div className="flex items-center gap-3">
                   <Wifi size={16} className="text-emerald-500" />
                   <div>
-                    <span className="font-mono font-semibold text-slate-800 text-sm">{d.ip}:{d.port}</span>
-                    <span className="text-xs text-slate-400 ml-2">{d.latency_ms}ms</span>
+                    <span className="font-mono font-semibold text-slate-800 text-sm dark:text-white/90">{d.ip}:{d.port}</span>
+                    <span className="text-xs text-slate-400 ml-2 dark:text-white/30">{d.latency_ms}ms</span>
                   </div>
                 </div>
                 <button onClick={() => addDevice(d.ip)}
@@ -129,12 +129,12 @@ export default function DiscoveryPage() {
       </div>
 
       {/* Probe puntual */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
-        <h2 className="font-semibold text-slate-800 text-sm">Probar IP puntual</h2>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h2 className="font-semibold text-slate-800 text-sm dark:text-white/90">Probar IP puntual</h2>
         <div className="flex gap-3">
           <input value={probeIp} onChange={e => setProbeIp(e.target.value)}
             placeholder="172.16.20.160"
-            className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono" />
+            className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono dark:border-white/[0.08]" />
           <button onClick={probe} disabled={probing || !probeIp}
             className="bg-slate-700 text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-slate-800 disabled:opacity-60 flex items-center gap-2">
             {probing ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
@@ -150,7 +150,7 @@ export default function DiscoveryPage() {
         )}
       </div>
 
-      <p className="text-xs text-slate-400 text-center">
+      <p className="text-xs text-slate-400 text-center dark:text-white/30">
         El escaneo se ejecuta en el servicio Bridge (puerto 8081). El bridge debe estar activo y en la misma red que los relojes.
       </p>
     </div>

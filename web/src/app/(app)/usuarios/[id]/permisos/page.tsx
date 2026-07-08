@@ -69,7 +69,7 @@ export default function UserPermissionsPage() {
 
   return (
     <div className="p-6 max-w-5xl space-y-5">
-      <button onClick={() => router.back()} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
+      <button onClick={() => router.back()} className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 dark:text-white/40">
         <ArrowLeft size={16} /> Volver
       </button>
 
@@ -78,15 +78,15 @@ export default function UserPermissionsPage() {
           <Shield className="text-white" size={22} />
         </div>
         <div className="flex-1">
-          <h1 className="text-2xl font-bold text-slate-900">Permisos granulares</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Permisos granulares</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">
             {user ? <>Usuario <strong>{user.username || `#${user.id}`}</strong> · rol <strong>{user.role}</strong></> : 'Cargando usuario...'}
             {hasOverrides && <span className="ml-2 inline-block px-2 py-0.5 rounded text-[10px] bg-amber-100 text-amber-800">con overrides</span>}
           </p>
         </div>
         <div className="flex gap-2">
           <button onClick={reset} disabled={saving || !hasOverrides}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm text-slate-700 disabled:opacity-50">
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-sm text-slate-700 disabled:opacity-50 dark:bg-white/[0.06] dark:text-white/80">
             <RotateCcw size={14} /> Restaurar del rol
           </button>
           <button onClick={save} disabled={saving || loading}
@@ -105,15 +105,15 @@ export default function UserPermissionsPage() {
         </div>
       )}
 
-      {loading && <div className="text-center py-12 text-slate-400">Cargando...</div>}
+      {loading && <div className="text-center py-12 text-slate-400 dark:text-white/30">Cargando...</div>}
 
       {!loading && Object.entries(bySection).map(([section, mods]) => (
-        <div key={section} className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden">
-          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
-            <h2 className="font-semibold text-slate-900 text-sm">{SECTION_LABEL[section]}</h2>
+        <div key={section} className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 dark:bg-white/[0.03] dark:border-white/[0.06]">
+            <h2 className="font-semibold text-slate-900 text-sm dark:text-white">{SECTION_LABEL[section]}</h2>
           </div>
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+            <thead className="bg-slate-50 text-slate-500 text-xs uppercase dark:bg-white/[0.03] dark:text-white/40">
               <tr>
                 <th className="px-4 py-2 text-left">Módulo</th>
                 <th className="px-4 py-2 text-center w-20">Ver</th>
@@ -127,8 +127,8 @@ export default function UserPermissionsPage() {
               {mods.map(m => {
                 const f = effective[m.key] || { can_view: 0, can_create: 0, can_update: 0, can_delete: 0 }
                 return (
-                  <tr key={m.key} className="border-t border-slate-100">
-                    <td className="px-4 py-2 font-medium text-slate-900">{m.label}</td>
+                  <tr key={m.key} className="border-t border-slate-100 dark:border-white/[0.06]">
+                    <td className="px-4 py-2 font-medium text-slate-900 dark:text-white">{m.label}</td>
                     {(['can_view','can_create','can_update','can_delete'] as (keyof Flags)[]).map(k => (
                       <td key={k} className="px-4 py-2 text-center">
                         <input type="checkbox" checked={!!f[k]} onChange={() => toggle(m.key, k)}
@@ -137,7 +137,7 @@ export default function UserPermissionsPage() {
                     ))}
                     <td className="px-4 py-2 text-right">
                       <button onClick={() => setRow(m.key, true)} className="text-xs text-emerald-600 hover:underline mr-2">todo</button>
-                      <button onClick={() => setRow(m.key, false)} className="text-xs text-slate-500 hover:underline">nada</button>
+                      <button onClick={() => setRow(m.key, false)} className="text-xs text-slate-500 hover:underline dark:text-white/40">nada</button>
                     </td>
                   </tr>
                 )

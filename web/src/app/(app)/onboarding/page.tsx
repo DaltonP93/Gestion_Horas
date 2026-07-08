@@ -74,7 +74,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
   }
 
   if (loading || !data) return (
-    <div className="flex items-center justify-center h-48 text-slate-400 text-sm">Cargando…</div>
+    <div className="flex items-center justify-center h-48 text-slate-400 text-sm dark:text-white/30">Cargando…</div>
   )
 
   const progress = data.total_tasks > 0 ? Math.round((data.done_tasks / data.total_tasks) * 100) : 0
@@ -88,23 +88,23 @@ function ProcessDetail({ id, onClose, onUpdated }: {
         <div>
           <div className="flex items-center gap-2 mb-0.5">
             {typeIcon}
-            <h2 className="text-lg font-bold text-slate-900">{data.employee_name}</h2>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">{data.employee_name}</h2>
           </div>
-          <p className="text-sm text-slate-500">{typeLabel} · {data.template_name}</p>
-          <p className="text-xs text-slate-400 mt-0.5">Inicio: {data.start_date} · {data.department_name}</p>
+          <p className="text-sm text-slate-500 dark:text-white/40">{typeLabel} · {data.template_name}</p>
+          <p className="text-xs text-slate-400 mt-0.5 dark:text-white/30">Inicio: {data.start_date} · {data.department_name}</p>
         </div>
-        <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg shrink-0">
-          <X size={18} className="text-slate-400" />
+        <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg shrink-0 dark:hover:bg-white/[0.06]">
+          <X size={18} className="text-slate-400 dark:text-white/30" />
         </button>
       </div>
 
       {/* Progress bar */}
       <div>
-        <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+        <div className="flex items-center justify-between text-xs text-slate-500 mb-1 dark:text-white/40">
           <span>{data.done_tasks}/{data.total_tasks} tareas completadas</span>
           <span className="font-semibold">{progress}%</span>
         </div>
-        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+        <div className="h-2 bg-slate-100 rounded-full overflow-hidden dark:bg-white/[0.06]">
           <div className="h-full bg-emerald-500 rounded-full transition-all duration-500"
                style={{ width: `${progress}%` }} />
         </div>
@@ -130,7 +130,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                   <p className={`text-sm font-medium ${task.status === 'done' ? 'line-through text-slate-400' : 'text-slate-800'}`}>
                     {task.title}
                   </p>
-                  {task.description && <p className="text-xs text-slate-500 mt-0.5">{task.description}</p>}
+                  {task.description && <p className="text-xs text-slate-500 mt-0.5 dark:text-white/40">{task.description}</p>}
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${si.color}`}>
                       {si.icon} {si.label}
@@ -141,7 +141,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                       </span>
                     )}
                     {task.assignee_name && (
-                      <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <span className="text-[10px] text-slate-400 flex items-center gap-1 dark:text-white/30">
                         <User size={10} /> {task.assignee_name}
                       </span>
                     )}
@@ -167,7 +167,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                     <button onClick={() => updateTask(task.id, { status: 'skipped' })}
                       disabled={saving === task.id}
                       title="Omitir"
-                      className="p-1.5 hover:bg-slate-50 text-slate-400 rounded-lg disabled:opacity-40">
+                      className="p-1.5 hover:bg-slate-50 text-slate-400 rounded-lg disabled:opacity-40 dark:text-white/30 dark:hover:bg-white/[0.04]">
                       <X size={14} />
                     </button>
                   </div>
@@ -178,7 +178,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                 <select
                   value={task.assignee_id || ''}
                   onChange={e => updateTask(task.id, { assignee_id: e.target.value || null })}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-600">
+                  className="w-full border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-600 dark:text-white/60 dark:border-white/[0.08]">
                   <option value="">Sin responsable asignado</option>
                   {users.map((u: any) => (
                     <option key={u.id} value={u.id}>{u.full_name || u.username}</option>
@@ -192,13 +192,13 @@ function ProcessDetail({ id, onClose, onUpdated }: {
 
       {/* Process actions */}
       {data.status === 'active' && (
-        <div className="flex gap-2 pt-2 border-t border-slate-100">
+        <div className="flex gap-2 pt-2 border-t border-slate-100 dark:border-white/[0.06]">
           <button onClick={() => closeProcess('complete')}
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl py-2 text-sm font-medium flex items-center justify-center gap-1.5">
             <CheckCircle2 size={15} /> Cerrar proceso
           </button>
           <button onClick={() => closeProcess('cancel')}
-            className="flex-1 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl py-2 text-sm font-medium flex items-center justify-center gap-1.5">
+            className="flex-1 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl py-2 text-sm font-medium flex items-center justify-center gap-1.5 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
             <X size={15} /> Cancelar
           </button>
         </div>
@@ -236,48 +236,48 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">Nuevo template de checklist</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col dark:bg-white/[0.04]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nuevo template de checklist</h2>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="text-xs font-medium text-slate-600 block mb-1">Nombre *</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Nombre *</label>
               <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="Ej: Onboarding estándar"
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Tipo</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Tipo</label>
               <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value as any }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
                 <option value="onboarding">Onboarding</option>
                 <option value="offboarding">Offboarding</option>
               </select>
             </div>
             <div>
-              <label className="text-xs font-medium text-slate-600 block mb-1">Descripción</label>
+              <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Descripción</label>
               <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Tareas del checklist</p>
+              <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide dark:text-white/60">Tareas del checklist</p>
               <button onClick={addTask} className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1">
                 <Plus size={13} /> Agregar tarea
               </button>
             </div>
             <div className="space-y-2">
               {tasks.map((task, i) => (
-                <div key={i} className="bg-slate-50 rounded-xl p-3 space-y-2">
+                <div key={i} className="bg-slate-50 rounded-xl p-3 space-y-2 dark:bg-white/[0.03]">
                   <div className="flex items-center gap-2">
                     <input value={task.title} onChange={e => updateTask(i, 'title', e.target.value)}
                       placeholder={`Tarea ${i + 1} *`}
-                      className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-white" />
+                      className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]" />
                     {tasks.length > 1 && (
                       <button onClick={() => removeTask(i)} className="p-1 hover:bg-red-50 text-red-400 rounded-lg">
                         <X size={14} />
@@ -287,13 +287,13 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
                   <div className="grid grid-cols-2 gap-2">
                     <input value={task.default_assignee_role} onChange={e => updateTask(i, 'default_assignee_role', e.target.value)}
                       placeholder="Rol responsable (IT, HR…)"
-                      className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white" />
+                      className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white dark:bg-white/[0.04] dark:border-white/[0.08]" />
                     <div className="flex items-center gap-1">
-                      <span className="text-xs text-slate-500 shrink-0">Vence en</span>
+                      <span className="text-xs text-slate-500 shrink-0 dark:text-white/40">Vence en</span>
                       <input type="number" min={1} value={task.due_days}
                         onChange={e => updateTask(i, 'due_days', parseInt(e.target.value))}
-                        className="w-14 border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white text-center" />
-                      <span className="text-xs text-slate-500 shrink-0">días</span>
+                        className="w-14 border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white text-center dark:bg-white/[0.04] dark:border-white/[0.08]" />
+                      <span className="text-xs text-slate-500 shrink-0 dark:text-white/40">días</span>
                     </div>
                   </div>
                 </div>
@@ -307,8 +307,8 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
             </div>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-slate-100 flex gap-2">
-          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancelar</button>
+        <div className="px-6 py-4 border-t border-slate-100 flex gap-2 dark:border-white/[0.06]">
+          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
           <button onClick={submit} disabled={saving}
             className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium flex items-center justify-center gap-2">
             <Save size={14} /> {saving ? 'Guardando…' : 'Crear template'}
@@ -352,16 +352,16 @@ function NewProcessModal({ onClose, onCreated }: { onClose: () => void; onCreate
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="text-lg font-bold text-slate-900">Iniciar proceso</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md dark:bg-white/[0.04]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h2 className="text-lg font-bold text-slate-900 dark:text-white">Iniciar proceso</h2>
+          <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-lg dark:hover:bg-white/[0.06]"><X size={18} /></button>
         </div>
         <div className="px-6 py-4 space-y-3">
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Template *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Template *</label>
             <select value={form.template_id} onChange={e => setForm(f => ({ ...f, template_id: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               <option value="">Seleccionar…</option>
               <optgroup label="Onboarding">
                 {templates.filter(t => t.type === 'onboarding').map(t => (
@@ -376,9 +376,9 @@ function NewProcessModal({ onClose, onCreated }: { onClose: () => void; onCreate
             </select>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Empleado *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Empleado *</label>
             <select value={form.employee_id} onChange={e => setForm(f => ({ ...f, employee_id: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               <option value="">Seleccionar empleado…</option>
               {employees.map((e: any) => (
                 <option key={e.id} value={e.id}>{e.full_name} ({e.code})</option>
@@ -386,9 +386,9 @@ function NewProcessModal({ onClose, onCreated }: { onClose: () => void; onCreate
             </select>
           </div>
           <div>
-            <label className="text-xs font-medium text-slate-600 block mb-1">Fecha de inicio *</label>
+            <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Fecha de inicio *</label>
             <input type="date" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           </div>
           {err && (
             <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2 text-sm flex items-center gap-2">
@@ -396,8 +396,8 @@ function NewProcessModal({ onClose, onCreated }: { onClose: () => void; onCreate
             </div>
           )}
         </div>
-        <div className="px-6 py-4 border-t border-slate-100 flex gap-2">
-          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancelar</button>
+        <div className="px-6 py-4 border-t border-slate-100 flex gap-2 dark:border-white/[0.06]">
+          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
           <button onClick={submit} disabled={saving}
             className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl py-2.5 text-sm font-medium flex items-center justify-center gap-2">
             <Plus size={14} /> {saving ? 'Iniciando…' : 'Iniciar proceso'}
@@ -464,8 +464,8 @@ export default function OnboardingPage() {
           ${p.type === 'onboarding' ? 'border-emerald-100 bg-emerald-50/50' : 'border-rose-100 bg-rose-50/50'}`}>
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
-            <p className="font-semibold text-slate-800 text-sm">{p.employee_name}</p>
-            <p className="text-xs text-slate-500">{p.template_name}</p>
+            <p className="font-semibold text-slate-800 text-sm dark:text-white/90">{p.employee_name}</p>
+            <p className="text-xs text-slate-500 dark:text-white/40">{p.template_name}</p>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
             <span className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium
@@ -481,7 +481,7 @@ export default function OnboardingPage() {
           </div>
         </div>
         <div className="space-y-1">
-          <div className="flex items-center justify-between text-[10px] text-slate-500">
+          <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-white/40">
             <span>{p.done_tasks}/{p.total_tasks} tareas</span>
             <span className="font-semibold">{pct}%</span>
           </div>
@@ -490,7 +490,7 @@ export default function OnboardingPage() {
                  style={{ width: `${pct}%` }} />
           </div>
         </div>
-        <p className="text-[10px] text-slate-400 mt-1.5">Inicio: {p.start_date} · {p.department_name}</p>
+        <p className="text-[10px] text-slate-400 mt-1.5 dark:text-white/30">Inicio: {p.start_date} · {p.department_name}</p>
       </button>
     )
   }
@@ -500,15 +500,15 @@ export default function OnboardingPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2 dark:text-white">
             <UserCheck className="text-blue-600" size={24} /> Onboarding & Offboarding
           </h1>
-          <p className="text-sm text-slate-500 mt-0.5">Checklists de incorporación y baja de empleados.</p>
+          <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Checklists de incorporación y baja de empleados.</p>
         </div>
         {isAdmin && (
           <div className="flex gap-2">
             <button onClick={() => setShowNewTemplate(true)}
-              className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium">
+              className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <FileText size={16} /> Nuevo template
             </button>
             <button onClick={() => setShowNewProcess(true)}
@@ -531,7 +531,7 @@ export default function OnboardingPage() {
         </div>
         <div className={`rounded-xl p-3 border ${totalOverdue > 0 ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
           <p className={`text-2xl font-bold ${totalOverdue > 0 ? 'text-red-600' : 'text-slate-700'}`}>{totalOverdue}</p>
-          <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5"><AlertCircle size={11} /> Tareas vencidas</p>
+          <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5 dark:text-white/40"><AlertCircle size={11} /> Tareas vencidas</p>
         </div>
         <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
           <p className="text-2xl font-bold text-blue-700">{templates.length}</p>
@@ -541,7 +541,7 @@ export default function OnboardingPage() {
 
       {/* Tabs + filter */}
       <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl">
+        <div className="flex gap-1 bg-slate-100 p-1 rounded-xl dark:bg-white/[0.06]">
           {(['active', 'completed', 'templates'] as const).map(t => (
             <button key={t} onClick={() => { setTab(t); setSelectedId(null) }}
               className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors capitalize
@@ -569,11 +569,11 @@ export default function OnboardingPage() {
       <div className="flex gap-5 items-start">
         <div className={`flex-1 min-w-0 ${selectedId ? 'hidden lg:block' : ''}`}>
           {tab === 'templates' ? (
-            <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-100">
-                <p className="text-sm font-semibold text-slate-700">{templates.length} templates</p>
+            <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+              <div className="px-4 py-3 border-b border-slate-100 dark:border-white/[0.06]">
+                <p className="text-sm font-semibold text-slate-700 dark:text-white/80">{templates.length} templates</p>
               </div>
-              <div className="divide-y divide-slate-100">
+              <div className="divide-y divide-slate-100 dark:divide-white/[0.06]">
                 {templates.map(t => (
                   <div key={t.id} className="flex items-center gap-3 px-4 py-3.5">
                     <span className={`p-1.5 rounded-lg ${t.type === 'onboarding' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-500'}`}>
@@ -581,7 +581,7 @@ export default function OnboardingPage() {
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className={`font-medium text-sm ${t.active ? 'text-slate-800' : 'text-slate-400 line-through'}`}>{t.name}</p>
-                      <p className="text-xs text-slate-500">{t.task_count} tareas · {t.type === 'onboarding' ? 'Onboarding' : 'Offboarding'}</p>
+                      <p className="text-xs text-slate-500 dark:text-white/40">{t.task_count} tareas · {t.type === 'onboarding' ? 'Onboarding' : 'Offboarding'}</p>
                     </div>
                     {isAdmin && (
                       <button onClick={() => toggleTemplate(t.id, t.active)}
@@ -593,14 +593,14 @@ export default function OnboardingPage() {
                   </div>
                 ))}
                 {templates.length === 0 && (
-                  <p className="text-center py-12 text-sm text-slate-400">Sin templates</p>
+                  <p className="text-center py-12 text-sm text-slate-400 dark:text-white/30">Sin templates</p>
                 )}
               </div>
             </div>
           ) : loading ? (
-            <div className="text-center py-12 text-slate-400 text-sm">Cargando…</div>
+            <div className="text-center py-12 text-slate-400 text-sm dark:text-white/30">Cargando…</div>
           ) : processes.length === 0 ? (
-            <div className="text-center py-12 text-slate-400 text-sm">
+            <div className="text-center py-12 text-slate-400 text-sm dark:text-white/30">
               Sin procesos {tab === 'active' ? 'activos' : 'completados'}
             </div>
           ) : (
@@ -612,7 +612,7 @@ export default function OnboardingPage() {
 
         {/* Detail panel */}
         {selectedId && (
-          <div className="w-full lg:w-[480px] shrink-0 bg-white rounded-2xl shadow border border-slate-100 p-5">
+          <div className="w-full lg:w-[480px] shrink-0 bg-white rounded-2xl shadow border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <ProcessDetail
               id={selectedId}
               onClose={() => setSelectedId(null)}

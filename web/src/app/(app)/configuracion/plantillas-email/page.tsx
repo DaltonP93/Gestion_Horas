@@ -108,8 +108,8 @@ export default function PlantillasEmailPage() {
           <Mail className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Plantillas de email</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Plantillas de email</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">
             Customizá el HTML y asunto que se envía con cada tipo de notificación.
             Las variables se reemplazan automáticamente con los datos del evento.
           </p>
@@ -118,19 +118,19 @@ export default function PlantillasEmailPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {/* Lista */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700 dark:text-white/80 dark:border-white/[0.06]">
             Plantillas ({list?.data?.length || 0})
           </div>
-          <div className="divide-y divide-slate-50 max-h-[70vh] overflow-y-auto">
+          <div className="divide-y divide-slate-50 max-h-[70vh] overflow-y-auto dark:divide-white/[0.05]">
             {(list?.data || []).map((t: any) => (
               <button key={t.code} onClick={() => setSelected(t.code)}
                 className={`w-full text-left px-4 py-3 transition-colors ${
                   selected === t.code ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-slate-50'
                 }`}>
-                <p className="text-sm font-medium text-slate-800">{t.name}</p>
-                <p className="text-xs text-slate-500 mt-0.5">{t.description}</p>
-                <p className="text-[11px] font-mono text-slate-400 mt-1">{t.code}</p>
+                <p className="text-sm font-medium text-slate-800 dark:text-white/90">{t.name}</p>
+                <p className="text-xs text-slate-500 mt-0.5 dark:text-white/40">{t.description}</p>
+                <p className="text-[11px] font-mono text-slate-400 mt-1 dark:text-white/30">{t.code}</p>
               </button>
             ))}
           </div>
@@ -139,30 +139,30 @@ export default function PlantillasEmailPage() {
         {/* Editor */}
         <div className="md:col-span-2 space-y-4">
           {!selected ? (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-400">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center text-slate-400 dark:bg-white/[0.04] dark:text-white/30 dark:border-white/[0.06]">
               <Mail size={36} className="mx-auto mb-3 opacity-30" />
               <p className="font-medium">Seleccioná una plantilla para editarla</p>
             </div>
           ) : (
             <>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Nombre</label>
+                  <label className="block text-xs font-medium text-slate-500 mb-1 dark:text-white/40">Nombre</label>
                   <input value={draft.name}
                     onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Asunto</label>
+                  <label className="block text-xs font-medium text-slate-500 mb-1 dark:text-white/40">Asunto</label>
                   <input value={draft.subject}
                     onChange={e => setDraft(d => ({ ...d, subject: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono" />
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono dark:border-white/[0.08]" />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">HTML del cuerpo</label>
+                  <label className="block text-xs font-medium text-slate-500 mb-1 dark:text-white/40">HTML del cuerpo</label>
                   <textarea value={draft.body_html} rows={12}
                     onChange={e => setDraft(d => ({ ...d, body_html: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono" />
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono dark:border-white/[0.08]" />
                 </div>
                 {variables.length > 0 && (
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-3">
@@ -171,7 +171,7 @@ export default function PlantillasEmailPage() {
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {variables.map(v => (
-                        <code key={v} className="bg-white border border-blue-200 text-blue-700 px-2 py-0.5 rounded text-xs">
+                        <code key={v} className="bg-white border border-blue-200 text-blue-700 px-2 py-0.5 rounded text-xs dark:bg-white/[0.04]">
                           {`{{${v}}}`}
                         </code>
                       ))}
@@ -184,7 +184,7 @@ export default function PlantillasEmailPage() {
                     <Save size={14} /> {saving ? 'Guardando...' : 'Guardar cambios'}
                   </button>
                   <button onClick={doPreview}
-                    className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium">
+                    className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                     <Eye size={14} /> Vista previa
                   </button>
                 </div>
@@ -192,27 +192,27 @@ export default function PlantillasEmailPage() {
 
               {/* Variables editables para preview/test */}
               {variables.length > 0 && (
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3">
-                  <h3 className="font-semibold text-slate-700 text-sm flex items-center gap-2">
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
+                  <h3 className="font-semibold text-slate-700 text-sm flex items-center gap-2 dark:text-white/80">
                     <RefreshCw size={14} /> Datos de prueba
                   </h3>
-                  <p className="text-xs text-slate-500">
+                  <p className="text-xs text-slate-500 dark:text-white/40">
                     Estos valores se usan para la vista previa y el envío de prueba.
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {variables.map(v => (
                       <div key={v}>
-                        <label className="block text-xs text-slate-500 mb-0.5 font-mono">{v}</label>
+                        <label className="block text-xs text-slate-500 mb-0.5 font-mono dark:text-white/40">{v}</label>
                         <input value={vars[v] || ''}
                           onChange={e => setVars(p => ({ ...p, [v]: e.target.value }))}
-                          className="w-full border border-slate-200 rounded-lg px-2 py-1 text-xs" />
+                          className="w-full border border-slate-200 rounded-lg px-2 py-1 text-xs dark:border-white/[0.08]" />
                       </div>
                     ))}
                   </div>
-                  <div className="border-t border-slate-100 pt-3 flex gap-2">
+                  <div className="border-t border-slate-100 pt-3 flex gap-2 dark:border-white/[0.06]">
                     <input type="email" value={testEmail} onChange={e => setTestEmail(e.target.value)}
                       placeholder="email@destino.com"
-                      className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+                      className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
                     <button onClick={sendTest} disabled={testing || !testEmail}
                       className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-xl text-sm font-medium">
                       <Send size={14} /> {testing ? 'Enviando...' : 'Enviar prueba'}
@@ -228,19 +228,19 @@ export default function PlantillasEmailPage() {
       {/* Modal preview */}
       {showPreview && preview && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowPreview(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col dark:bg-white/[0.04]" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
               <h3 className="font-bold flex items-center gap-2"><Eye size={18} /> Vista previa</h3>
-              <button onClick={() => setShowPreview(false)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+              <button onClick={() => setShowPreview(false)} className="text-slate-400 hover:text-slate-600 dark:text-white/30"><X size={18} /></button>
             </div>
-            <div className="px-6 py-3 border-b border-slate-100 bg-slate-50">
-              <p className="text-xs text-slate-500 mb-1">Asunto:</p>
-              <p className="font-semibold text-slate-800">{preview.subject}</p>
+            <div className="px-6 py-3 border-b border-slate-100 bg-slate-50 dark:bg-white/[0.03] dark:border-white/[0.06]">
+              <p className="text-xs text-slate-500 mb-1 dark:text-white/40">Asunto:</p>
+              <p className="font-semibold text-slate-800 dark:text-white/90">{preview.subject}</p>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               <iframe srcDoc={preview.html} title="Email preview"
                 sandbox=""
-                className="w-full h-[400px] border border-slate-200 rounded-xl bg-white" />
+                className="w-full h-[400px] border border-slate-200 rounded-xl bg-white dark:bg-white/[0.04] dark:border-white/[0.08]" />
             </div>
           </div>
         </div>

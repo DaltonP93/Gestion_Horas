@@ -205,8 +205,8 @@ export default function MarcarPage() {
 
         {/* ── Header ──────────────────────────────────────────── */}
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Marcar asistencia</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Marcar asistencia</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">
             {user?.fullName ? `Hola, ${user.fullName.split(' ')[0]}.` : ''} Tu marcaje requiere GPS y selfie.
           </p>
         </div>
@@ -252,18 +252,18 @@ export default function MarcarPage() {
 
         {/* ── Última posición + sede ──────────────────────────── */}
         {geo.coords && (
-          <div className="rounded-2xl border border-slate-100 bg-white p-4 text-xs text-slate-600 space-y-1.5">
+          <div className="rounded-2xl border border-slate-100 bg-white p-4 text-xs text-slate-600 space-y-1.5 dark:bg-white/[0.04] dark:text-white/60 dark:border-white/[0.06]">
             <div className="flex items-center gap-2">
               <MapPin size={14} className="text-blue-600" />
-              <span className="font-medium text-slate-700">Última ubicación detectada:</span>
+              <span className="font-medium text-slate-700 dark:text-white/80">Última ubicación detectada:</span>
               <span className="font-mono">
                 {geo.coords.latitude.toFixed(5)}, {geo.coords.longitude.toFixed(5)} (±{Math.round(geo.coords.accuracy)}m)
               </span>
             </div>
             {user?.fullName && (
               <div className="flex items-center gap-2">
-                <Building2 size={14} className="text-slate-400" />
-                <span className="text-slate-500">El servidor valida que estés dentro del radio de tu sede.</span>
+                <Building2 size={14} className="text-slate-400 dark:text-white/30" />
+                <span className="text-slate-500 dark:text-white/40">El servidor valida que estés dentro del radio de tu sede.</span>
               </div>
             )}
           </div>
@@ -302,7 +302,7 @@ export default function MarcarPage() {
               value={qrToken}
               onChange={e => setQrToken(e.target.value)}
               placeholder="…o pegá el token del QR aquí"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono dark:border-white/[0.08]" />
 
             <div className="grid grid-cols-2 gap-2">
               <button onClick={() => markByQr('in')} disabled={loading || !qrToken.trim()}
@@ -370,7 +370,7 @@ function FaceVerificationSection() {
 
   return (
     <div className="space-y-3 text-sm">
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-slate-500 dark:text-white/40">
         Esta verificación es opcional y no reemplaza la selfie del marcaje.
         Solo confirma que sos la misma persona que se registró.
       </p>
@@ -407,19 +407,19 @@ function Collapsible({
   children: React.ReactNode
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
       <button onClick={onToggle}
         aria-expanded={open}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors dark:hover:bg-white/[0.04]">
         {icon}
         <div className="flex-1 text-left">
-          <p className="font-semibold text-sm text-slate-900">{title}</p>
-          <p className="text-xs text-slate-500">{subtitle}</p>
+          <p className="font-semibold text-sm text-slate-900 dark:text-white">{title}</p>
+          <p className="text-xs text-slate-500 dark:text-white/40">{subtitle}</p>
         </div>
         <ChevronDown size={18} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="px-4 pb-4 pt-1 border-t border-slate-100">
+        <div className="px-4 pb-4 pt-1 border-t border-slate-100 dark:border-white/[0.06]">
           {children}
         </div>
       )}

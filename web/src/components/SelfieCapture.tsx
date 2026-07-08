@@ -81,7 +81,7 @@ export default function SelfieCapture({ onCapture, required = false, width = 320
 
   return (
     <div className="space-y-3">
-      <div className="relative rounded-2xl overflow-hidden bg-slate-900 border-2 border-slate-200"
+      <div className="relative rounded-2xl overflow-hidden bg-slate-900 border-2 border-slate-200 dark:border-white/[0.08]"
         style={{ width, height }}>
         {error && (
           <div className="absolute inset-0 flex items-center justify-center text-rose-300 text-sm p-4 text-center">
@@ -92,7 +92,7 @@ export default function SelfieCapture({ onCapture, required = false, width = 320
           </div>
         )}
         {!active && !shot && !error && (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-400">
+          <div className="absolute inset-0 flex items-center justify-center text-slate-400 dark:text-white/30">
             <div className="text-center">
               <Camera size={36} className="mx-auto mb-2 opacity-40" />
               <p className="text-sm">{required ? 'Selfie requerido' : 'Tomar selfie (opcional)'}</p>
@@ -123,14 +123,14 @@ export default function SelfieCapture({ onCapture, required = false, width = 320
               <Check size={14} /> Capturar
             </button>
             <button type="button" onClick={stop}
-              className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors">
+              className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <X size={14} /> Cancelar
             </button>
           </>
         )}
         {shot && (
           <button type="button" onClick={retake}
-            className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors">
+            className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
             <RotateCcw size={14} /> Repetir
           </button>
         )}

@@ -94,8 +94,8 @@ export default function ReportePersonalizadoPage() {
           <Wrench className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Constructor de reportes</h1>
-          <p className="text-sm text-slate-500">Combina campos, filtros y agrupaciones para generar reportes a medida</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Constructor de reportes</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">Combina campos, filtros y agrupaciones para generar reportes a medida</p>
         </div>
       </div>
 
@@ -103,12 +103,12 @@ export default function ReportePersonalizadoPage() {
         {/* Panel de configuración */}
         <div className="lg:col-span-1 space-y-4">
           {/* Fuente */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+            <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm dark:text-white/80">
               <Layers size={15} /> Fuente de datos
             </h3>
             <select value={source} onChange={e => { setSource(e.target.value); setGroupBy(''); setOrderBy('') }}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
               {Object.entries(SOURCES_LABELS).map(([k, l]) => (
                 <option key={k} value={k}>{l}</option>
               ))}
@@ -116,48 +116,48 @@ export default function ReportePersonalizadoPage() {
           </div>
 
           {/* Campos */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+            <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 text-sm dark:text-white/80">
               <Sliders size={15} /> Campos a mostrar
             </h3>
             <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
               {Object.entries(sourceFields).map(([key, label]: any) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 px-2 py-1 rounded">
+                <label key={key} className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 px-2 py-1 rounded dark:hover:bg-white/[0.04]">
                   <input type="checkbox" checked={selectedFields.includes(key)} onChange={() => toggleField(key)}
                     className="accent-blue-600 w-4 h-4" />
-                  <span className="text-sm text-slate-700 flex-1">{label}</span>
-                  <span className="text-xs text-slate-400 font-mono">{key}</span>
+                  <span className="text-sm text-slate-700 flex-1 dark:text-white/80">{label}</span>
+                  <span className="text-xs text-slate-400 font-mono dark:text-white/30">{key}</span>
                 </label>
               ))}
             </div>
           </div>
 
           {/* Filtros */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-            <h3 className="font-semibold text-slate-700 mb-1 flex items-center gap-2 text-sm">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
+            <h3 className="font-semibold text-slate-700 mb-1 flex items-center gap-2 text-sm dark:text-white/80">
               <Filter size={15} /> Filtros
             </h3>
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Desde</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Desde</label>
                 <input type="date" value={filters.date_from || ''}
                   onChange={e => setFilters((f: any) => ({ ...f, date_from: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]" />
               </div>
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Hasta</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Hasta</label>
                 <input type="date" value={filters.date_to || ''}
                   onChange={e => setFilters((f: any) => ({ ...f, date_to: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]" />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs text-slate-500 mb-1">Departamento</label>
+              <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Departamento</label>
               <select value={filters.dept_id || ''}
                 onChange={e => setFilters((f: any) => ({ ...f, dept_id: e.target.value }))}
-                className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs">
+                className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]">
                 <option value="">Todos</option>
                 {(deptsData || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
@@ -165,42 +165,42 @@ export default function ReportePersonalizadoPage() {
 
             {Object.keys(sourceFields).includes('status') && (
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Estado</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Estado</label>
                 <input type="text" value={filters.status || ''} placeholder="present, late, absent..."
                   onChange={e => setFilters((f: any) => ({ ...f, status: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]" />
               </div>
             )}
 
             {Object.keys(sourceFields).includes('type') && (
               <div>
-                <label className="block text-xs text-slate-500 mb-1">Tipo</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-white/40">Tipo</label>
                 <input type="text" value={filters.type || ''} placeholder="in, out, vacation..."
                   onChange={e => setFilters((f: any) => ({ ...f, type: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs" />
+                  className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]" />
               </div>
             )}
           </div>
 
           {/* Agrupación / orden */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Agrupar por</label>
+              <label className="block text-xs font-medium text-slate-600 mb-1 dark:text-white/60">Agrupar por</label>
               <select value={groupBy} onChange={e => setGroupBy(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs">
+                className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]">
                 <option value="">(sin agrupación)</option>
                 {selectedFields.map(f => (
                   <option key={f} value={f}>{sourceFields[f]}</option>
                 ))}
               </select>
-              <p className="text-[11px] text-slate-400 mt-0.5">
+              <p className="text-[11px] text-slate-400 mt-0.5 dark:text-white/30">
                 Si se agrupa: campos numéricos se suman, otros toman el último valor.
               </p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Ordenar por</label>
+              <label className="block text-xs font-medium text-slate-600 mb-1 dark:text-white/60">Ordenar por</label>
               <select value={orderBy} onChange={e => setOrderBy(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs">
+                className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08]">
                 <option value="">(default)</option>
                 {selectedFields.map(f => (
                   <option key={f} value={f}>{sourceFields[f]}</option>
@@ -225,47 +225,47 @@ export default function ReportePersonalizadoPage() {
                   <FileSpreadsheet size={14} /> Excel
                 </button>
                 <button onClick={() => exportFile('csv')}
-                  className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors">
+                  className="flex items-center gap-2 border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-xl text-sm font-medium transition-colors dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                   <Download size={14} /> CSV
                 </button>
-                <span className="ml-auto text-xs text-slate-500">
+                <span className="ml-auto text-xs text-slate-500 dark:text-white/40">
                   {previewData.count} fila{previewData.count !== 1 ? 's' : ''}
                 </span>
               </>
             )}
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
             {!previewData && !loading && (
-              <div className="text-center py-16 text-slate-400">
+              <div className="text-center py-16 text-slate-400 dark:text-white/30">
                 <Wrench size={36} className="mx-auto mb-3 opacity-30" />
                 <p className="font-medium">Configurá los campos y filtros, luego "Generar reporte"</p>
               </div>
             )}
             {loading && (
-              <div className="text-center py-16 text-slate-400">
+              <div className="text-center py-16 text-slate-400 dark:text-white/30">
                 <RefreshCw size={24} className="mx-auto mb-3 animate-spin opacity-40" />
                 Ejecutando consulta...
               </div>
             )}
             {previewData && previewData.count === 0 && (
-              <div className="text-center py-16 text-slate-400">Sin resultados con esos filtros</div>
+              <div className="text-center py-16 text-slate-400 dark:text-white/30">Sin resultados con esos filtros</div>
             )}
             {previewData && previewData.count > 0 && (
               <div className="overflow-x-auto">
                 <table className="w-full text-xs whitespace-nowrap">
-                  <thead className="bg-slate-50 border-b border-slate-100">
+                  <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
                     <tr>
                       {previewData.headers.map((h: string) => (
-                        <th key={h} className="text-left px-3 py-2.5 text-slate-500 font-medium">{h}</th>
+                        <th key={h} className="text-left px-3 py-2.5 text-slate-500 font-medium dark:text-white/40">{h}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50">
+                  <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
                     {previewData.rows.slice(0, 200).map((row: any, i: number) => (
-                      <tr key={i} className="hover:bg-slate-50">
+                      <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
                         {previewData.fields.map((f: string) => (
-                          <td key={f} className="px-3 py-2 text-slate-700">
+                          <td key={f} className="px-3 py-2 text-slate-700 dark:text-white/80">
                             {row[f] != null && typeof row[f] === 'object' ? JSON.stringify(row[f]) : String(row[f] ?? '—')}
                           </td>
                         ))}

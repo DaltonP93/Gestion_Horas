@@ -66,16 +66,16 @@ export default function KioskPage({ params }: { params: { branchId: string } }) 
       </div>
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-8 px-10 pb-10">
-        <div className="bg-white rounded-3xl p-8 flex flex-col items-center justify-center text-slate-900 shadow-2xl">
-          <div className="flex items-center gap-2 text-slate-500 text-sm mb-4">
+        <div className="bg-white rounded-3xl p-8 flex flex-col items-center justify-center text-slate-900 shadow-2xl dark:bg-white/[0.04] dark:text-white">
+          <div className="flex items-center gap-2 text-slate-500 text-sm mb-4 dark:text-white/40">
             <Clock size={16} /> Código rota en {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}
           </div>
           {qrSrc ? (
             <img src={qrSrc} alt="QR" className="w-[420px] h-[420px]" />
           ) : (
-            <div className="w-[420px] h-[420px] bg-slate-100 rounded-2xl animate-pulse" />
+            <div className="w-[420px] h-[420px] bg-slate-100 rounded-2xl animate-pulse dark:bg-white/[0.06]" />
           )}
-          <p className="mt-6 text-slate-600 text-sm text-center max-w-md">
+          <p className="mt-6 text-slate-600 text-sm text-center max-w-md dark:text-white/60">
             Escanea con la app SisHoras en tu celular para marcar entrada o salida.
           </p>
         </div>

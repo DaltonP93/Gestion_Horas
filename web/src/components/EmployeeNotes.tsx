@@ -75,12 +75,12 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm">
-      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
         <div className="flex items-center gap-2">
           <MessageSquare size={18} className="text-blue-600" />
-          <h3 className="font-semibold text-slate-800">Notas y observaciones</h3>
-          <span className="text-xs text-slate-400">({notes.length})</span>
+          <h3 className="font-semibold text-slate-800 dark:text-white/90">Notas y observaciones</h3>
+          <span className="text-xs text-slate-400 dark:text-white/30">({notes.length})</span>
         </div>
         {isManager && (
           <button onClick={() => setShowForm(s => !s)}
@@ -91,14 +91,14 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
       </div>
 
       {showForm && (
-        <div className="p-5 space-y-3 border-b border-slate-100 bg-blue-50/30">
+        <div className="p-5 space-y-3 border-b border-slate-100 bg-blue-50/30 dark:border-white/[0.06]">
           <div className="grid grid-cols-2 gap-2">
             <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white">
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
               {TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
             <select value={form.visibility} onChange={e => setForm(f => ({ ...f, visibility: e.target.value }))}
-              className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white">
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
               <option value="hr_only">Solo RRHH</option>
               <option value="managers">Supervisores</option>
               <option value="employee">Visible al empleado</option>
@@ -106,33 +106,33 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
           </div>
           <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
             placeholder="Título"
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           <textarea value={form.body} onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
             rows={4} placeholder="Detalle (opcional)"
-            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none" />
-          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700">
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none dark:border-white/[0.08]" />
+          <label className="flex items-center gap-2 cursor-pointer text-sm text-slate-700 dark:text-white/80">
             <input type="checkbox" checked={form.pinned} onChange={e => setForm(f => ({ ...f, pinned: e.target.checked }))}
               className="accent-blue-600 w-4 h-4" />
             <Pin size={13} /> Fijar al inicio
           </label>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowForm(false)}
-              className="border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-xl text-sm">Cancelar</button>
+              className="border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
             <button onClick={create}
               className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl text-sm font-medium">Guardar</button>
           </div>
         </div>
       )}
 
-      {isLoading && <div className="text-center py-8 text-slate-400 text-sm">Cargando...</div>}
+      {isLoading && <div className="text-center py-8 text-slate-400 text-sm dark:text-white/30">Cargando...</div>}
       {!isLoading && notes.length === 0 && (
-        <div className="text-center py-12 text-slate-400">
+        <div className="text-center py-12 text-slate-400 dark:text-white/30">
           <MessageSquare size={28} className="mx-auto mb-2 opacity-30" />
           <p className="text-sm">Sin notas registradas</p>
         </div>
       )}
 
-      <div className="divide-y divide-slate-50">
+      <div className="divide-y divide-slate-50 dark:divide-white/[0.05]">
         {notes.map(n => {
           const typeMeta = TYPES.find(t => t.value === n.type) || TYPES[0]
           const Icon = typeMeta.icon
@@ -147,16 +147,16 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     {n.pinned && <Pin size={12} className="text-amber-500 fill-amber-500" />}
-                    <p className="font-semibold text-slate-800 text-sm">{n.title}</p>
+                    <p className="font-semibold text-slate-800 text-sm dark:text-white/90">{n.title}</p>
                     <span className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${typeMeta.color}`}>
                       {typeMeta.label}
                     </span>
-                    <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <span className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-white/30">
                       <VisIcon size={10} /> {VISIBILITY_LABELS[n.visibility]?.label}
                     </span>
                   </div>
-                  {n.body && <p className="text-sm text-slate-600 mt-1 whitespace-pre-wrap">{n.body}</p>}
-                  <div className="flex items-center gap-3 mt-2 text-xs text-slate-400">
+                  {n.body && <p className="text-sm text-slate-600 mt-1 whitespace-pre-wrap dark:text-white/60">{n.body}</p>}
+                  <div className="flex items-center gap-3 mt-2 text-xs text-slate-400 dark:text-white/30">
                     <span className="flex items-center gap-1">
                       <User size={10} /> {n.author_name || n.author_username || '—'}
                     </span>
@@ -170,7 +170,7 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
                       <Pin size={13} />
                     </button>
                     <button onClick={() => deleteNote(n.id)} title="Eliminar"
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50">
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:text-white/30">
                       <Trash2 size={13} />
                     </button>
                   </div>

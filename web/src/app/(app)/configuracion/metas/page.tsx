@@ -63,8 +63,8 @@ export default function MetasPage() {
           <Target className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Metas y objetivos KPI</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Metas y objetivos KPI</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">
             Definí los umbrales que el sistema usa para evaluar el desempeño mensual.
           </p>
         </div>
@@ -78,7 +78,7 @@ export default function MetasPage() {
         </div>
       </div>
 
-      {isLoading && <div className="text-center py-8 text-slate-400">Cargando...</div>}
+      {isLoading && <div className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</div>}
 
       <div className="space-y-3">
         {goals.map((g: any) => {
@@ -86,7 +86,7 @@ export default function MetasPage() {
           const direction = e.direction ?? g.direction
           const isLowerBetter = direction === 'lower_is_better'
           return (
-            <div key={g.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+            <div key={g.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
@@ -95,8 +95,8 @@ export default function MetasPage() {
                     {isLowerBetter ? <TrendingDown size={18} /> : <TrendingUp size={18} />}
                   </div>
                   <div>
-                    <p className="font-semibold text-slate-800">{METRIC_LABELS[g.metric] || g.metric}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="font-semibold text-slate-800 dark:text-white/90">{METRIC_LABELS[g.metric] || g.metric}</p>
+                    <p className="text-xs text-slate-500 dark:text-white/40">
                       {g.scope === 'global' ? 'Global' : `Departamento: ${g.department_name || '—'}`} ·
                       {' '}{g.period_type === 'monthly' ? 'Mensual' : g.period_type === 'weekly' ? 'Semanal' : 'Diario'} ·
                       {' '}{METRIC_DESC[g.metric] || ''}
@@ -112,7 +112,7 @@ export default function MetasPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium flex items-center gap-1">
+                  <label className="block text-xs text-slate-500 mb-1 font-medium flex items-center gap-1 dark:text-white/40">
                     <CheckCircle size={11} className="text-emerald-500" /> Meta ({g.unit})
                   </label>
                   <input type="number" step="0.01"
@@ -121,7 +121,7 @@ export default function MetasPage() {
                     className="w-full border border-emerald-200 rounded-xl px-3 py-2 text-sm font-semibold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium flex items-center gap-1">
+                  <label className="block text-xs text-slate-500 mb-1 font-medium flex items-center gap-1 dark:text-white/40">
                     <AlertTriangle size={11} className="text-amber-500" /> Advertencia ({g.unit})
                   </label>
                   <input type="number" step="0.01"
@@ -130,7 +130,7 @@ export default function MetasPage() {
                     className="w-full border border-amber-200 rounded-xl px-3 py-2 text-sm font-semibold text-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium flex items-center gap-1">
+                  <label className="block text-xs text-slate-500 mb-1 font-medium flex items-center gap-1 dark:text-white/40">
                     <AlertTriangle size={11} className="text-rose-500" /> Crítico ({g.unit})
                   </label>
                   <input type="number" step="0.01"
@@ -139,10 +139,10 @@ export default function MetasPage() {
                     className="w-full border border-rose-200 rounded-xl px-3 py-2 text-sm font-semibold text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500" />
                 </div>
                 <div>
-                  <label className="block text-xs text-slate-500 mb-1 font-medium">Activa</label>
+                  <label className="block text-xs text-slate-500 mb-1 font-medium dark:text-white/40">Activa</label>
                   <select value={e.active ?? g.active}
                     onChange={ev => setField(g.id, 'active', parseInt(ev.target.value, 10))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]">
                     <option value={1}>Sí</option>
                     <option value={0}>No</option>
                   </select>

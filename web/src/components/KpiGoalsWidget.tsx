@@ -37,26 +37,26 @@ export default function KpiGoalsWidget({ year, month, deptId }: { year: number; 
   const goals: any[] = data?.goals || []
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
             <Target size={16} className="text-emerald-600" />
           </div>
           <div>
-            <h3 className="font-semibold text-slate-800 text-sm">Metas y objetivos</h3>
-            <p className="text-xs text-slate-400">Avance del mes vs umbrales configurados</p>
+            <h3 className="font-semibold text-slate-800 text-sm dark:text-white/90">Metas y objetivos</h3>
+            <p className="text-xs text-slate-400 dark:text-white/30">Avance del mes vs umbrales configurados</p>
           </div>
         </div>
         <Link href="/configuracion/metas"
-          className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1">
+          className="text-xs text-slate-400 hover:text-slate-600 flex items-center gap-1 dark:text-white/30">
           <Settings size={12} /> Configurar
         </Link>
       </div>
 
-      {isLoading && <div className="text-center py-4 text-slate-400 text-sm">Cargando...</div>}
+      {isLoading && <div className="text-center py-4 text-slate-400 text-sm dark:text-white/30">Cargando...</div>}
       {!isLoading && goals.length === 0 && (
-        <div className="text-center py-6 text-slate-400 text-sm">
+        <div className="text-center py-6 text-slate-400 text-sm dark:text-white/30">
           <Target size={28} className="mx-auto mb-2 opacity-30" />
           Sin metas activas — <Link href="/configuracion/metas" className="text-blue-600 hover:underline">configurá las metas</Link>
         </div>
@@ -79,7 +79,7 @@ export default function KpiGoalsWidget({ year, month, deptId }: { year: number; 
                   <span className="font-bold">
                     {g.current != null ? `${g.current}${g.unit}` : '—'}
                   </span>
-                  <span className="text-slate-500"> / {g.target}{g.unit}</span>
+                  <span className="text-slate-500 dark:text-white/40"> / {g.target}{g.unit}</span>
                 </div>
               </div>
               <div className="w-full h-1.5 bg-white/60 rounded-full overflow-hidden">

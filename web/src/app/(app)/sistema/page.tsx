@@ -83,8 +83,8 @@ export default function SistemaPage() {
           <Server className="text-white" size={22} />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Módulo Sistema</h1>
-          <p className="text-slate-500 text-sm">Operaciones técnicas — solo super_admin.</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Módulo Sistema</h1>
+          <p className="text-slate-500 text-sm dark:text-white/40">Operaciones técnicas — solo super_admin.</p>
         </div>
       </div>
 
@@ -99,13 +99,13 @@ export default function SistemaPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {cards.map(({ href, icon: Icon, title, desc, color }) => (
           <Link key={href} href={href}
-            className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-slate-200 transition-all p-5 flex flex-col"
+            className="group bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-slate-200 transition-all p-5 flex flex-col dark:bg-white/[0.04] dark:border-white/[0.06]"
           >
             <div className={`w-11 h-11 rounded-xl ${color} flex items-center justify-center mb-4 group-hover:scale-105 transition-transform`}>
               <Icon className="text-white" size={22} />
             </div>
-            <h3 className="font-semibold text-slate-900 mb-1">{title}</h3>
-            <p className="text-sm text-slate-500 leading-relaxed">{desc}</p>
+            <h3 className="font-semibold text-slate-900 mb-1 dark:text-white">{title}</h3>
+            <p className="text-sm text-slate-500 leading-relaxed dark:text-white/40">{desc}</p>
           </Link>
         ))}
       </div>

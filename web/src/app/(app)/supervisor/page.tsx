@@ -55,15 +55,15 @@ export default function SupervisorPage() {
             <Users className="text-white" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Mi equipo</h1>
-            <p className="text-sm text-slate-500">Estado de asistencia y aprobaciones pendientes.</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Mi equipo</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">Estado de asistencia y aprobaciones pendientes.</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <input type="date" value={date} onChange={e => setDate(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm" />
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
           <button onClick={load}
-            className="bg-slate-100 hover:bg-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-1">
+            className="bg-slate-100 hover:bg-slate-200 rounded-xl px-3 py-2 text-sm flex items-center gap-1 dark:bg-white/[0.06]">
             <RefreshCw size={14} /> Actualizar
           </button>
         </div>
@@ -81,9 +81,9 @@ export default function SupervisorPage() {
 
       {/* Aprobaciones pendientes */}
       {pending.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-slate-900 flex items-center gap-2">
+            <h2 className="font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
               <Calendar size={18} className="text-indigo-600" />
               Aprobaciones pendientes ({pending.length})
             </h2>
@@ -91,11 +91,11 @@ export default function SupervisorPage() {
           </div>
           <div className="space-y-2">
             {pending.slice(0, 5).map(p => (
-              <div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 text-sm">
+              <div key={p.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 text-sm dark:bg-white/[0.03] dark:border-white/[0.06]">
                 <div>
-                  <span className="font-medium text-slate-900">{p.full_name}</span>
-                  <span className="text-slate-400 ml-2">·</span>
-                  <span className="text-slate-500 ml-2">{p.type} · {p.start_date}{p.end_date !== p.start_date && ` → ${p.end_date}`}</span>
+                  <span className="font-medium text-slate-900 dark:text-white">{p.full_name}</span>
+                  <span className="text-slate-400 ml-2 dark:text-white/30">·</span>
+                  <span className="text-slate-500 ml-2 dark:text-white/40">{p.type} · {p.start_date}{p.end_date !== p.start_date && ` → ${p.end_date}`}</span>
                 </div>
                 <span className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded">{p.status === 'pending' ? 'Pendiente' : 'Esp. aprobación final'}</span>
               </div>
@@ -105,9 +105,9 @@ export default function SupervisorPage() {
       )}
 
       {/* Lista del equipo */}
-      <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-x-auto">
+      <div className="bg-white rounded-2xl shadow border border-slate-100 overflow-x-auto dark:bg-white/[0.04] dark:border-white/[0.06]">
         <table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase dark:bg-white/[0.03] dark:text-white/60">
             <tr>
               <th className="px-3 py-2 text-left">Empleado</th>
               <th className="px-3 py-2 text-left">Departamento</th>
@@ -118,27 +118,27 @@ export default function SupervisorPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={6} className="text-center py-8 text-slate-400">Cargando...</td></tr>}
+            {loading && <tr><td colSpan={6} className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</td></tr>}
             {!loading && team.length === 0 && (
-              <tr><td colSpan={6} className="text-center py-8 text-slate-400">
+              <tr><td colSpan={6} className="text-center py-8 text-slate-400 dark:text-white/30">
                 No tienes equipo asignado. Pide al admin que te designe como manager/coordinador de un departamento.
               </td></tr>
             )}
             {team.map(t => {
               const m = STATUS_META[t.status || ''] || { color: 'bg-slate-100 text-slate-600', label: t.status || '—' }
               return (
-                <tr key={t.id} className="border-t border-slate-100 hover:bg-slate-50">
+                <tr key={t.id} className="border-t border-slate-100 hover:bg-slate-50 dark:border-white/[0.06] dark:hover:bg-white/[0.04]">
                   <td className="px-3 py-2">
-                    <div className="font-medium text-slate-900">{t.full_name}</div>
-                    <div className="text-xs text-slate-400 font-mono">{t.code}</div>
+                    <div className="font-medium text-slate-900 dark:text-white">{t.full_name}</div>
+                    <div className="text-xs text-slate-400 font-mono dark:text-white/30">{t.code}</div>
                   </td>
-                  <td className="px-3 py-2 text-slate-500">{t.department_name || '—'}</td>
+                  <td className="px-3 py-2 text-slate-500 dark:text-white/40">{t.department_name || '—'}</td>
                   <td className="px-3 py-2">
                     <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${m.color}`}>{m.label}</span>
                   </td>
                   <td className="px-3 py-2 text-right">{t.late_minutes ?? 0}</td>
                   <td className="px-3 py-2 text-right">{t.worked_minutes ? (t.worked_minutes / 60).toFixed(1) : '—'}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500">{t.last_mark ? new Date(t.last_mark).toLocaleTimeString() : '—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 dark:text-white/40">{t.last_mark ? new Date(t.last_mark).toLocaleTimeString() : '—'}</td>
                 </tr>
               )
             })}
@@ -157,13 +157,13 @@ function Kpi({ label, value, pct, icon, color }: any) {
     red: 'bg-red-100 text-red-600',
   }
   return (
-    <div className="bg-white rounded-2xl shadow border border-slate-100 p-4">
+    <div className="bg-white rounded-2xl shadow border border-slate-100 p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
       <div className="flex items-center justify-between mb-2">
         <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${colors[color]}`}>{icon}</div>
-        {pct != null && <span className="text-xs text-slate-400">{pct}%</span>}
+        {pct != null && <span className="text-xs text-slate-400 dark:text-white/30">{pct}%</span>}
       </div>
-      <div className="text-2xl font-bold text-slate-900">{value}</div>
-      <div className="text-xs text-slate-500 mt-0.5">{label}</div>
+      <div className="text-2xl font-bold text-slate-900 dark:text-white">{value}</div>
+      <div className="text-xs text-slate-500 mt-0.5 dark:text-white/40">{label}</div>
     </div>
   )
 }

@@ -121,7 +121,7 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg dark:bg-white/[0.04]">
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-t-2xl px-6 py-4">
           <h2 className="text-lg font-bold text-white">Nuevo Permiso / Ausencia</h2>
@@ -132,9 +132,9 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
           {/* Filtro de departamento para el selector */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Filtrar por departamento</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1 dark:text-white/40">Filtrar por departamento</label>
               <select value={filterDept} onChange={e => { setFilterDept(e.target.value); set('employee_id', '') }}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50">
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 dark:bg-white/[0.03] dark:border-white/[0.08]">
                 <option value="">Todos los departamentos</option>
                 {(deptsData || []).map((d: any) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
@@ -142,9 +142,9 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Empleado <span className="text-red-500">*</span></label>
+              <label className="block text-xs font-medium text-slate-700 mb-1 dark:text-white/80">Empleado <span className="text-red-500">*</span></label>
               <select required value={form.employee_id} onChange={e => set('employee_id', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
                 <option value="">Seleccionar empleado...</option>
                 {filteredEmps.map((emp: any) => (
                   <option key={emp.id} value={emp.id}>[{emp.code}] {emp.full_name}</option>
@@ -154,7 +154,7 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Tipo de permiso</label>
+            <label className="block text-xs font-medium text-slate-700 mb-1 dark:text-white/80">Tipo de permiso</label>
             <div className="grid grid-cols-4 gap-2">
               {Object.entries(TYPE_LABELS).map(([v, l]) => (
                 <button key={v} type="button"
@@ -172,16 +172,16 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Desde</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1 dark:text-white/80">Desde</label>
               <input type="date" required value={form.date_from}
                 onChange={e => { set('date_from', e.target.value); if (e.target.value > form.date_to) set('date_to', e.target.value) }}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Hasta</label>
+              <label className="block text-xs font-medium text-slate-700 mb-1 dark:text-white/80">Hasta</label>
               <input type="date" required value={form.date_to} min={form.date_from}
                 onChange={e => set('date_to', e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]" />
             </div>
           </div>
 
@@ -192,10 +192,10 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
           )}
 
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Motivo / Descripción</label>
+            <label className="block text-xs font-medium text-slate-700 mb-1 dark:text-white/80">Motivo / Descripción</label>
             <textarea value={form.reason} onChange={e => set('reason', e.target.value)}
               rows={3} placeholder="Describa el motivo del permiso o ausencia..."
-              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none dark:border-white/[0.08]" />
           </div>
 
           {error && (
@@ -206,7 +206,7 @@ function NuevoPermisoModal({ onClose }: { onClose: () => void }) {
 
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose}
-              className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50">
+              className="flex-1 border border-slate-200 text-slate-700 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               Cancelar
             </button>
             <button type="submit" disabled={saving}
@@ -274,15 +274,15 @@ export default function PermisosPage() {
             <Calendar className="text-blue-600" size={22} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Permisos y Ausencias</h1>
-            <p className="text-sm text-slate-500">Gestión de permisos, vacaciones y ausencias del personal</p>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Permisos y Ausencias</h1>
+            <p className="text-sm text-slate-500 dark:text-white/40">Gestión de permisos, vacaciones y ausencias del personal</p>
           </div>
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => exportCSV(rows)}
             disabled={rows.length === 0}
-            className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-40"
+            className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-slate-50 disabled:opacity-40 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]"
           >
             <Download size={15} /> Exportar CSV
           </button>
@@ -297,9 +297,9 @@ export default function PermisosPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Total</p>
-          <p className="text-3xl font-bold text-slate-700">{allRows.length}</p>
+        <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1 dark:text-white/40">Total</p>
+          <p className="text-3xl font-bold text-slate-700 dark:text-white/80">{allRows.length}</p>
         </div>
         <div className="bg-amber-50 border border-amber-100 rounded-2xl px-5 py-4 cursor-pointer hover:shadow-sm transition-shadow"
           onClick={() => setFilter(filter === 'pending' ? 'all' : 'pending')}>
@@ -342,9 +342,9 @@ export default function PermisosPage() {
         </div>
 
         <div className="flex items-center gap-2 ml-auto">
-          <Filter size={15} className="text-slate-400" />
+          <Filter size={15} className="text-slate-400 dark:text-white/30" />
           <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
             <option value="">Todos los departamentos</option>
             {(deptsData || []).map((d: any) => (
               <option key={d.id} value={d.id}>{d.name}</option>
@@ -354,57 +354,57 @@ export default function PermisosPage() {
       </div>
 
       {/* Tabla */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         {isLoading ? (
-          <div className="text-center py-16 text-slate-400">
+          <div className="text-center py-16 text-slate-400 dark:text-white/30">
             <Clock size={32} className="mx-auto mb-3 opacity-40" />
             Cargando permisos...
           </div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 border-b border-slate-100">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
               <tr>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Empleado</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Departamento</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Tipo</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium">Período</th>
-                <th className="text-left px-4 py-3 text-slate-500 font-medium max-w-[180px]">Motivo</th>
-                <th className="text-center px-4 py-3 text-slate-500 font-medium">Estado</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Empleado</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Departamento</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Tipo</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Período</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium max-w-[180px] dark:text-white/40">Motivo</th>
+                <th className="text-center px-4 py-3 text-slate-500 font-medium dark:text-white/40">Estado</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {rows.map(row => {
                 const cfg = STATUS_CFG[row.status]
                 const days = Math.max(1,
                   Math.round((new Date(row.date_to).getTime() - new Date(row.date_from).getTime()) / 86400000) + 1
                 )
                 return (
-                  <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={row.id} className="hover:bg-slate-50 transition-colors dark:hover:bg-white/[0.04]">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-semibold text-xs shrink-0">
                           {(row.employee_name || '?').split(' ').slice(0,2).map((n: string) => n[0] || '').join('') || '?'}
                         </div>
-                        <span className="font-medium text-slate-900">{row.employee_name}</span>
+                        <span className="font-medium text-slate-900 dark:text-white">{row.employee_name}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-500 text-xs">{row.department || '—'}</td>
+                    <td className="px-4 py-3 text-slate-500 text-xs dark:text-white/40">{row.department || '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${TYPE_COLORS[row.type] || 'bg-slate-100 text-slate-600'}`}>
                         {TYPE_LABELS[row.type] || row.type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-600 text-xs">
-                      <div className="font-medium text-slate-800">
+                    <td className="px-4 py-3 text-slate-600 text-xs dark:text-white/60">
+                      <div className="font-medium text-slate-800 dark:text-white/90">
                         {format(new Date(row.date_from + 'T12:00'), 'dd/MM/yyyy')}
                         {row.date_from !== row.date_to && (
                           <> – {format(new Date(row.date_to + 'T12:00'), 'dd/MM/yyyy')}</>
                         )}
                       </div>
-                      <div className="text-slate-400 mt-0.5">{days} día{days > 1 ? 's' : ''}</div>
+                      <div className="text-slate-400 mt-0.5 dark:text-white/30">{days} día{days > 1 ? 's' : ''}</div>
                     </td>
-                    <td className="px-4 py-3 text-slate-500 text-xs max-w-[180px]">
+                    <td className="px-4 py-3 text-slate-500 text-xs max-w-[180px] dark:text-white/40">
                       <p className="truncate">{row.reason || '—'}</p>
                       {row.rejection_reason && (
                         <p className="text-red-500 truncate mt-0.5">↩ {row.rejection_reason}</p>
@@ -434,7 +434,7 @@ export default function PermisosPage() {
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-center py-16 text-slate-400">
+                  <td colSpan={7} className="text-center py-16 text-slate-400 dark:text-white/30">
                     <Calendar size={36} className="mx-auto mb-3 opacity-30" />
                     <p className="font-medium">Sin permisos registrados</p>
                     <p className="text-xs mt-1">Use el botón "Nuevo permiso" para agregar uno</p>
@@ -447,7 +447,7 @@ export default function PermisosPage() {
       </div>
 
       {rows.length > 0 && (
-        <p className="text-xs text-slate-400">{rows.length} permiso{rows.length !== 1 ? 's' : ''} mostrado{rows.length !== 1 ? 's' : ''}</p>
+        <p className="text-xs text-slate-400 dark:text-white/30">{rows.length} permiso{rows.length !== 1 ? 's' : ''} mostrado{rows.length !== 1 ? 's' : ''}</p>
       )}
 
       {showModal && <NuevoPermisoModal onClose={() => setModal(false)} />}
