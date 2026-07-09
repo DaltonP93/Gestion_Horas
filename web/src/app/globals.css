@@ -69,115 +69,173 @@ html.dark .bg-orbs::after  { background: radial-gradient(circle, rgba(99, 102, 2
 .success-pop { animation: successPop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
 /* ═══════════════════════════════════════════════════════════════
-   LIQUID GLASS — capa de diseño premium (glassmorphism + clay + 3D)
-   Superficies de vidrio líquido con reflejo, profundidad y micro-
-   interacciones. Se activa con las clases utilitarias .glass / .clay.
+   SISTEMA DE ESTILOS PERSONALIZABLE (design tokens)
+   El estilo global se elige desde Configuración → Apariencia y se
+   aplica con [data-ui-style] en <html>. Cada estilo redefine los
+   tokens de superficie; las clases (.glass/.clay/.lift…) los consumen,
+   así toda la app cambia de estilo al instante. Los colores se derivan
+   de --paper/--ink que voltean con el tema claro/oscuro.
+   Estilos: liquidglass (default) · glassmorphism · maximalismo ·
+            minimalismo · spatial · claymorphism · brutalismo
    ═══════════════════════════════════════════════════════════════ */
 
-/* Vidrio líquido: fondo translúcido, blur saturado, borde luminoso y
-   reflejo especular en el borde superior (efecto "vidrio real"). */
+:root {
+  --paper: #ffffff;         /* superficie base (claro) */
+  --paper-2: #eef2f8;
+  --ink: #0f172a;           /* tinta base */
+  --accent: #22d3ee;        /* acento (sobreescribible por el usuario) */
+  --accent-2: #3b82f6;
+
+  /* Tokens de superficie — valores por defecto = Liquid Glass */
+  --ui-radius: 1.9rem;
+  --ui-radius-sm: 1rem;
+  --ui-blur: 22px;
+  --ui-saturate: 165%;
+  --ui-surface: color-mix(in srgb, var(--paper) 58%, transparent);
+  --ui-border-w: 1px;
+  --ui-border: color-mix(in srgb, var(--paper) 70%, transparent);
+  --ui-shadow: 0 12px 40px -14px color-mix(in srgb, var(--ink) 18%, transparent), inset 0 1px 0 0 color-mix(in srgb, var(--paper) 75%, transparent);
+  --ui-reflect: 0.9;        /* opacidad del reflejo especular del vidrio */
+  --ui-lift-y: -4px;
+  --ui-lift-shadow: 0 26px 64px -18px color-mix(in srgb, var(--accent-2) 30%, transparent);
+  --ui-clay-shadow: 6px 6px 16px color-mix(in srgb, var(--ink) 12%, transparent), -6px -6px 16px color-mix(in srgb, var(--paper) 90%, transparent), inset 1px 1px 2px color-mix(in srgb, var(--paper) 70%, transparent);
+  --ui-density: 1;          /* multiplicador de espaciado (density) */
+  --ui-heading-weight: 700;
+}
+html.dark {
+  --paper: #0e1117;
+  --paper-2: #0b0d12;
+  --ink: #f1f5f9;
+  --ui-surface: color-mix(in srgb, var(--paper) 40%, transparent);
+  --ui-border: color-mix(in srgb, #ffffff 10%, transparent);
+  --ui-shadow: 0 12px 40px -14px rgba(0,0,0,0.6), inset 0 1px 0 0 rgba(255,255,255,0.08);
+  --ui-clay-shadow: 6px 6px 18px rgba(0,0,0,0.5), -4px -4px 14px rgba(255,255,255,0.04), inset 1px 1px 2px rgba(255,255,255,0.06);
+}
+
+/* ── Superficie de vidrio (consume tokens) ─────────────────────── */
 .glass {
   position: relative;
-  background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  box-shadow:
-    0 8px 32px -8px rgba(15, 23, 42, 0.18),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.7);
+  background: var(--ui-surface);
+  backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturate));
+  -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturate));
+  border: var(--ui-border-w) solid var(--ui-border);
+  box-shadow: var(--ui-shadow);
 }
-html.dark .glass {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow:
-    0 8px 32px -8px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
-}
-/* Reflejo/sheen que recorre la superficie de vidrio en el borde superior. */
 .glass::before {
   content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.55), transparent 40%, transparent 60%, rgba(34,211,238,0.25));
+  position: absolute; inset: 0;
+  border-radius: inherit; padding: 1px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--paper) 55%, transparent), transparent 42%, transparent 60%, color-mix(in srgb, var(--accent) 30%, transparent));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask-composite: exclude;
+  -webkit-mask-composite: xor; mask-composite: exclude;
   pointer-events: none;
-  opacity: 0.9;
+  opacity: var(--ui-reflect);
 }
 
-/* Claymorphism: superficie inflada con doble sombra (luz arriba, sombra
-   abajo) — sensación táctil "de plastilina". Ideal para botones e íconos. */
+/* ── Claymorphism (íconos/acciones infladas) ───────────────────── */
 .clay {
-  background: linear-gradient(145deg, rgba(255,255,255,0.9), rgba(241,245,249,0.85));
-  box-shadow:
-    6px 6px 16px rgba(15, 23, 42, 0.12),
-    -6px -6px 16px rgba(255, 255, 255, 0.9),
-    inset 1px 1px 2px rgba(255, 255, 255, 0.6);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--paper) 92%, transparent), color-mix(in srgb, var(--paper-2) 88%, transparent));
+  box-shadow: var(--ui-clay-shadow);
   border: none;
 }
-html.dark .clay {
-  background: linear-gradient(145deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
-  box-shadow:
-    6px 6px 18px rgba(0, 0, 0, 0.5),
-    -4px -4px 14px rgba(255, 255, 255, 0.04),
-    inset 1px 1px 2px rgba(255, 255, 255, 0.06);
-}
-
-/* Botón/ícono claymórfico interactivo (hunde al presionar). */
 .clay-btn { transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), box-shadow 0.18s ease; }
 .clay-btn:hover  { transform: translateY(-2px); }
-.clay-btn:active {
-  transform: translateY(1px) scale(0.98);
-  box-shadow:
-    inset 4px 4px 10px rgba(15, 23, 42, 0.15),
-    inset -4px -4px 10px rgba(255, 255, 255, 0.8);
-}
+.clay-btn:active { transform: translateY(1px) scale(0.98); box-shadow: inset 4px 4px 10px color-mix(in srgb, var(--ink) 15%, transparent), inset -4px -4px 10px color-mix(in srgb, var(--paper) 80%, transparent); }
 
-/* Elevación premium al pasar el mouse: leve subida + sombra de color. */
+/* ── Elevación al hover (consume token de sombra) ──────────────── */
 .lift { transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), box-shadow 0.35s ease; }
-.lift:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 24px 60px -18px rgba(37, 99, 235, 0.28);
-}
-html.dark .lift:hover {
-  box-shadow: 0 0 44px -10px rgba(34, 211, 238, 0.22);
-}
+.lift:hover { transform: translateY(var(--ui-lift-y)); box-shadow: var(--ui-lift-shadow); }
 
-/* Sheen animado (barrido de brillo) para tarjetas destacadas/CTA. */
-@keyframes sheenSweep {
-  0%   { transform: translateX(-120%) skewX(-18deg); opacity: 0; }
-  40%  { opacity: 0.55; }
-  100% { transform: translateX(220%) skewX(-18deg); opacity: 0; }
-}
+/* ── Sheen (barrido de brillo) ─────────────────────────────────── */
+@keyframes sheenSweep { 0%{transform:translateX(-120%) skewX(-18deg);opacity:0} 40%{opacity:.55} 100%{transform:translateX(220%) skewX(-18deg);opacity:0} }
 .sheen { position: relative; overflow: hidden; }
-.sheen::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0;
-  width: 40%; height: 100%;
-  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent);
-  transform: translateX(-120%) skewX(-18deg);
-  pointer-events: none;
-}
+.sheen::after { content:''; position:absolute; top:0; left:0; width:40%; height:100%; background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent); transform: translateX(-120%) skewX(-18deg); pointer-events:none; }
 .sheen:hover::after { animation: sheenSweep 0.9s cubic-bezier(0.16,1,0.3,1); }
 
-/* Texto con gradiente líquido (títulos hero). */
-.text-liquid {
-  background: linear-gradient(120deg, #22d3ee, #3b82f6 55%, #6366f1);
-  -webkit-background-clip: text;
-          background-clip: text;
-  color: transparent;
+.text-liquid { background: linear-gradient(120deg, var(--accent), var(--accent-2) 60%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+@keyframes floatY { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-18px)} }
+.float-slow { animation: floatY 8s ease-in-out infinite; }
+
+/* Radios utilitarios ligados al token (bento usa rounded-bento en Tailwind,
+   pero estas clases permiten que el estilo controle el radio global). */
+.ui-radius   { border-radius: var(--ui-radius); }
+.ui-radius-sm{ border-radius: var(--ui-radius-sm); }
+
+/* ═══ VARIANTES DE ESTILO — cada bloque redefine los tokens ═════ */
+
+/* GLASSMORPHISM — vidrio esmerilado más ligero, menos reflejo. */
+:root[data-ui-style="glassmorphism"] {
+  --ui-radius: 1.5rem; --ui-blur: 16px; --ui-saturate: 140%;
+  --ui-surface: color-mix(in srgb, var(--paper) 45%, transparent);
+  --ui-reflect: 0.4;
+  --ui-lift-shadow: 0 20px 48px -18px color-mix(in srgb, var(--ink) 22%, transparent);
 }
 
-/* Orbe flotante lento (profundidad ambiental extra). */
-@keyframes floatY {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-18px); }
+/* MINIMALISMO — superficies planas, hairline, sin blur ni brillo. */
+:root[data-ui-style="minimalismo"] {
+  --ui-radius: 0.9rem; --ui-radius-sm: 0.6rem; --ui-blur: 0px; --ui-saturate: 100%;
+  --ui-surface: var(--paper);
+  --ui-border: color-mix(in srgb, var(--ink) 12%, transparent);
+  --ui-shadow: none; --ui-reflect: 0;
+  --ui-lift-y: -2px;
+  --ui-lift-shadow: 0 8px 24px -14px color-mix(in srgb, var(--ink) 22%, transparent);
+  --ui-clay-shadow: none;
 }
-.float-slow { animation: floatY 8s ease-in-out infinite; }
+:root[data-ui-style="minimalismo"] .clay { background: color-mix(in srgb, var(--ink) 6%, transparent); border: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); }
+:root[data-ui-style="minimalismo"] .sheen::after { display: none; }
+
+/* SPATIAL — profundidad y flotación, sombras marcadas en capas. */
+:root[data-ui-style="spatial"] {
+  --ui-radius: 1.6rem; --ui-blur: 10px; --ui-saturate: 130%;
+  --ui-surface: color-mix(in srgb, var(--paper) 82%, transparent);
+  --ui-border: color-mix(in srgb, var(--paper) 60%, transparent);
+  --ui-shadow: 0 2px 6px -2px color-mix(in srgb, var(--ink) 12%, transparent), 0 18px 40px -14px color-mix(in srgb, var(--ink) 22%, transparent), 0 40px 80px -30px color-mix(in srgb, var(--accent-2) 28%, transparent);
+  --ui-reflect: 0.35; --ui-lift-y: -8px;
+  --ui-lift-shadow: 0 40px 90px -24px color-mix(in srgb, var(--accent-2) 40%, transparent);
+}
+
+/* CLAYMORPHISM — todo inflado y suave, radios grandes, sin blur. */
+:root[data-ui-style="claymorphism"] {
+  --ui-radius: 2.4rem; --ui-radius-sm: 1.4rem; --ui-blur: 0px; --ui-saturate: 100%;
+  --ui-surface: color-mix(in srgb, var(--paper) 96%, var(--paper-2));
+  --ui-border-w: 0px; --ui-border: transparent;
+  --ui-shadow: 10px 10px 26px color-mix(in srgb, var(--ink) 13%, transparent), -10px -10px 24px color-mix(in srgb, var(--paper) 92%, transparent), inset 1px 1px 2px color-mix(in srgb, var(--paper) 70%, transparent);
+  --ui-reflect: 0;
+  --ui-lift-shadow: 12px 12px 30px color-mix(in srgb, var(--ink) 16%, transparent), -12px -12px 28px color-mix(in srgb, var(--paper) 92%, transparent);
+}
+:root[data-ui-style="claymorphism"] .sheen::after { display: none; }
+
+/* MAXIMALISMO — colores y capas sin miedo: superficie con tinte del acento. */
+:root[data-ui-style="maximalismo"] {
+  --ui-radius: 1.7rem; --ui-blur: 8px; --ui-saturate: 180%;
+  --ui-surface: color-mix(in srgb, var(--paper) 78%, var(--accent) 10%);
+  --ui-border-w: 2px;
+  --ui-border: color-mix(in srgb, var(--accent) 45%, transparent);
+  --ui-shadow: 0 10px 0 -2px color-mix(in srgb, var(--accent-2) 30%, transparent), 0 20px 50px -16px color-mix(in srgb, var(--accent) 40%, transparent);
+  --ui-reflect: 0.5; --ui-heading-weight: 800;
+  --ui-lift-shadow: 0 16px 0 -2px color-mix(in srgb, var(--accent) 45%, transparent), 0 28px 60px -16px color-mix(in srgb, var(--accent-2) 50%, transparent);
+}
+
+/* BRUTALISMO — sin adornos: bordes duros, sombra sólida offset, alto contraste. */
+:root[data-ui-style="brutalismo"] {
+  --ui-radius: 0px; --ui-radius-sm: 0px; --ui-blur: 0px; --ui-saturate: 100%;
+  --ui-surface: var(--paper);
+  --ui-border-w: 2.5px; --ui-border: var(--ink);
+  --ui-shadow: 6px 6px 0 0 var(--ink);
+  --ui-reflect: 0; --ui-heading-weight: 900;
+  --ui-lift-y: -2px;
+  --ui-lift-shadow: 9px 9px 0 0 var(--ink);
+  --ui-clay-shadow: 4px 4px 0 0 var(--ink);
+}
+:root[data-ui-style="brutalismo"] .clay { border: 2.5px solid var(--ink); background: var(--paper); }
+:root[data-ui-style="brutalismo"] .sheen::after { display: none; }
+:root[data-ui-style="brutalismo"] h1, :root[data-ui-style="brutalismo"] h2 { letter-spacing: -0.04em; text-transform: uppercase; }
+
+/* ── DENSIDAD (compact / comfortable / spacious) ───────────────── */
+:root[data-ui-density="compact"]    { --ui-density: 0.85; }
+:root[data-ui-density="spacious"]   { --ui-density: 1.18; }
+h1 { font-weight: var(--ui-heading-weight); }
 
 .clock-glow { text-shadow: 0 0 30px rgba(34, 211, 238, 0.15); }
 html.dark .clock-glow { text-shadow: 0 0 40px rgba(34, 211, 238, 0.35); }
@@ -272,3 +330,15 @@ a:focus-visible {
   .lift:hover, .clay-btn:hover { transform: none !important; }
   * { transition-duration: 0.01ms !important; }
 }
+
+/* Animaciones desactivadas por el usuario (Apariencia → Animaciones: off) */
+:root[data-ui-motion="0"] .slide-in,
+:root[data-ui-motion="0"] .pulse-live,
+:root[data-ui-motion="0"] .bento-enter,
+:root[data-ui-motion="0"] .feed-enter,
+:root[data-ui-motion="0"] .bar-grow,
+:root[data-ui-motion="0"] .success-pop,
+:root[data-ui-motion="0"] .float-slow,
+:root[data-ui-motion="0"] .sheen::after { animation: none !important; }
+:root[data-ui-motion="0"] .lift:hover,
+:root[data-ui-motion="0"] .clay-btn:hover { transform: none !important; }
