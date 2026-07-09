@@ -1,13 +1,13 @@
 'use client'
 /**
- * Sistema de diseño "Futurista" — componentes atómicos.
- * Portado del prototipo de Claude Design (base.jsx) a React + TypeScript.
- * Estilo: bento glassmorphism, acentos cyan/blue, tema claro/oscuro.
+ * Sistema de diseño "Futurista · Liquid Glass" — componentes atómicos.
+ * Estilo: vidrio líquido (glassmorphism refinado) + toques claymórficos +
+ * profundidad y micro-interacciones. Tema claro/oscuro.
  */
 import { useEffect, useMemo, useState } from 'react'
 import clsx from 'clsx'
 
-// ─── Bento: la unidad visual base ──────────────────────────────
+// ─── Bento: la unidad visual base (ahora vidrio líquido) ───────
 export function Bento({
   children,
   className = '',
@@ -28,13 +28,9 @@ export function Bento({
       onClick={onClick}
       style={{ animationDelay: `${delay}ms` }}
       className={clsx(
-        'bento-enter relative overflow-hidden rounded-bento md:rounded-bento-lg',
-        'bg-white dark:bg-white/[0.04]',
-        'border border-slate-200/80 dark:border-white/[0.08]',
-        'shadow-[0_8px_40px_-12px_rgba(15,23,42,0.12)] dark:shadow-none',
-        'backdrop-blur-2xl transition-all duration-300 ease-out',
-        hover &&
-          'hover:-translate-y-1 hover:shadow-[0_20px_60px_-15px_rgba(37,99,235,0.25)] dark:hover:border-cyan-400/30 dark:hover:shadow-[0_0_40px_-10px_rgba(34,211,238,0.15)]',
+        'bento-enter glass relative overflow-hidden rounded-bento md:rounded-bento-lg',
+        'transition-all duration-300 ease-out',
+        hover && 'lift',
         onClick && 'cursor-pointer',
         span,
         className,
@@ -42,6 +38,82 @@ export function Bento({
     >
       {children}
     </div>
+  )
+}
+
+// ─── ClayTile: contenedor claymórfico para íconos/acciones ─────
+export function ClayTile({
+  children,
+  className = '',
+  tone = 'cyan',
+  size = 40,
+  interactive = false,
+  onClick,
+}: {
+  children: React.ReactNode
+  className?: string
+  tone?: 'cyan' | 'amber' | 'rose' | 'violet' | 'emerald' | 'neutral'
+  size?: number
+  interactive?: boolean
+  onClick?: () => void
+}) {
+  const tones: Record<string, string> = {
+    cyan: 'text-cyan-500 dark:text-cyan-400',
+    amber: 'text-amber-500 dark:text-amber-400',
+    rose: 'text-rose-500 dark:text-rose-400',
+    violet: 'text-violet-500 dark:text-violet-400',
+    emerald: 'text-emerald-500 dark:text-emerald-400',
+    neutral: 'text-slate-500 dark:text-white/60',
+  }
+  return (
+    <div
+      onClick={onClick}
+      style={{ width: size, height: size }}
+      className={clsx(
+        'clay rounded-2xl flex items-center justify-center shrink-0',
+        tones[tone],
+        interactive && 'clay-btn cursor-pointer',
+        className,
+      )}
+    >
+      {children}
+    </div>
+  )
+}
+
+// ─── GlassButton: botón de vidrio líquido con sheen ────────────
+export function GlassButton({
+  children,
+  onClick,
+  className = '',
+  primary = false,
+  type = 'button',
+  disabled = false,
+}: {
+  children: React.ReactNode
+  onClick?: () => void
+  className?: string
+  primary?: boolean
+  type?: 'button' | 'submit'
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={clsx(
+        'sheen relative inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-2.5',
+        'text-[13px] font-bold tracking-tight transition-all duration-300',
+        primary
+          ? 'text-white bg-gradient-to-br from-cyan-400 to-blue-600 shadow-[0_10px_28px_-8px_rgba(34,211,238,0.5)] hover:-translate-y-0.5 hover:shadow-[0_16px_36px_-8px_rgba(34,211,238,0.7)] active:translate-y-0'
+          : 'glass text-slate-700 dark:text-white/80 hover:-translate-y-0.5',
+        disabled && 'opacity-50 cursor-not-allowed hover:translate-y-0',
+        className,
+      )}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -195,16 +267,9 @@ export function StatCard({
   span?: string
   className?: string
 }) {
-  const tones: Record<string, string> = {
-    cyan: 'bg-cyan-50 dark:bg-cyan-400/10 text-cyan-500 dark:text-cyan-400',
-    amber: 'bg-amber-50 dark:bg-amber-400/10 text-amber-500 dark:text-amber-400',
-    rose: 'bg-rose-50 dark:bg-rose-400/10 text-rose-500 dark:text-rose-400',
-    violet: 'bg-violet-50 dark:bg-violet-400/10 text-violet-500 dark:text-violet-400',
-    emerald: 'bg-emerald-50 dark:bg-emerald-400/10 text-emerald-500 dark:text-emerald-400',
-  }
   return (
     <Bento delay={delay} span={span} className={clsx('p-4 md:p-5 flex flex-col justify-between gap-6', className)}>
-      <div className={clsx('w-8 h-8 rounded-xl flex items-center justify-center', tones[tone])}>{icon}</div>
+      <ClayTile tone={tone} size={36} className="rounded-xl">{icon}</ClayTile>
       <div>
         <div className="text-2xl md:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white tabular-nums">{value}</div>
         <div className="text-[11px] font-medium text-slate-400 dark:text-white/40">{label}</div>

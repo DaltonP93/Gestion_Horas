@@ -68,6 +68,117 @@ html.dark .bg-orbs::after  { background: radial-gradient(circle, rgba(99, 102, 2
 }
 .success-pop { animation: successPop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
+/* ═══════════════════════════════════════════════════════════════
+   LIQUID GLASS — capa de diseño premium (glassmorphism + clay + 3D)
+   Superficies de vidrio líquido con reflejo, profundidad y micro-
+   interacciones. Se activa con las clases utilitarias .glass / .clay.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Vidrio líquido: fondo translúcido, blur saturado, borde luminoso y
+   reflejo especular en el borde superior (efecto "vidrio real"). */
+.glass {
+  position: relative;
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow:
+    0 8px 32px -8px rgba(15, 23, 42, 0.18),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.7);
+}
+html.dark .glass {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 8px 32px -8px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+}
+/* Reflejo/sheen que recorre la superficie de vidrio en el borde superior. */
+.glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.55), transparent 40%, transparent 60%, rgba(34,211,238,0.25));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+/* Claymorphism: superficie inflada con doble sombra (luz arriba, sombra
+   abajo) — sensación táctil "de plastilina". Ideal para botones e íconos. */
+.clay {
+  background: linear-gradient(145deg, rgba(255,255,255,0.9), rgba(241,245,249,0.85));
+  box-shadow:
+    6px 6px 16px rgba(15, 23, 42, 0.12),
+    -6px -6px 16px rgba(255, 255, 255, 0.9),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.6);
+  border: none;
+}
+html.dark .clay {
+  background: linear-gradient(145deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+  box-shadow:
+    6px 6px 18px rgba(0, 0, 0, 0.5),
+    -4px -4px 14px rgba(255, 255, 255, 0.04),
+    inset 1px 1px 2px rgba(255, 255, 255, 0.06);
+}
+
+/* Botón/ícono claymórfico interactivo (hunde al presionar). */
+.clay-btn { transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), box-shadow 0.18s ease; }
+.clay-btn:hover  { transform: translateY(-2px); }
+.clay-btn:active {
+  transform: translateY(1px) scale(0.98);
+  box-shadow:
+    inset 4px 4px 10px rgba(15, 23, 42, 0.15),
+    inset -4px -4px 10px rgba(255, 255, 255, 0.8);
+}
+
+/* Elevación premium al pasar el mouse: leve subida + sombra de color. */
+.lift { transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), box-shadow 0.35s ease; }
+.lift:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 24px 60px -18px rgba(37, 99, 235, 0.28);
+}
+html.dark .lift:hover {
+  box-shadow: 0 0 44px -10px rgba(34, 211, 238, 0.22);
+}
+
+/* Sheen animado (barrido de brillo) para tarjetas destacadas/CTA. */
+@keyframes sheenSweep {
+  0%   { transform: translateX(-120%) skewX(-18deg); opacity: 0; }
+  40%  { opacity: 0.55; }
+  100% { transform: translateX(220%) skewX(-18deg); opacity: 0; }
+}
+.sheen { position: relative; overflow: hidden; }
+.sheen::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 40%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent);
+  transform: translateX(-120%) skewX(-18deg);
+  pointer-events: none;
+}
+.sheen:hover::after { animation: sheenSweep 0.9s cubic-bezier(0.16,1,0.3,1); }
+
+/* Texto con gradiente líquido (títulos hero). */
+.text-liquid {
+  background: linear-gradient(120deg, #22d3ee, #3b82f6 55%, #6366f1);
+  -webkit-background-clip: text;
+          background-clip: text;
+  color: transparent;
+}
+
+/* Orbe flotante lento (profundidad ambiental extra). */
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-18px); }
+}
+.float-slow { animation: floatY 8s ease-in-out infinite; }
+
 .clock-glow { text-shadow: 0 0 30px rgba(34, 211, 238, 0.15); }
 html.dark .clock-glow { text-shadow: 0 0 40px rgba(34, 211, 238, 0.35); }
 
@@ -156,6 +267,8 @@ a:focus-visible {
 /* Respetar preferencia de reducir movimiento */
 @media (prefers-reduced-motion: reduce) {
   .slide-in, .pulse-live,
-  .bento-enter, .feed-enter, .bar-grow, .success-pop { animation: none !important; }
+  .bento-enter, .feed-enter, .bar-grow, .success-pop,
+  .float-slow, .sheen::after { animation: none !important; }
+  .lift:hover, .clay-btn:hover { transform: none !important; }
   * { transition-duration: 0.01ms !important; }
 }
