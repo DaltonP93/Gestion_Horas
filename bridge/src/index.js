@@ -63,9 +63,20 @@ async function initRedis() {
 }
 
 // ─── Publicar evento de asistencia en tiempo real ───────────────
+// Escribe SIEMPRE al stream durable (log capado, replayable ante caídas del
+// core) y publica al canal pub/sub (consumo clásico en tiempo real). El core
+// decide cuál consumir según ATTENDANCE_STREAM_ENABLED; el bridge alimenta
+// ambos para que el cambio de modo no requiera tocar el bridge.
 async function publishAttendance(event) {
   if (!redis?.isReady) return;
-  await redis.publish('attendance:new', JSON.stringify(event));
+  const payload = JSON.stringify(event);
+  try {
+    // MAXLEN aproximado (~10k) para acotar memoria del stream.
+    await redis.xAdd('stream:attendance', '*', { payload }, { TRIM: { strategy: 'MAXLEN', strategyModifier: '~', threshold: 10000 } });
+  } catch (err) {
+    logger.error('No se pudo escribir en stream:attendance: ' + err.message);
+  }
+  await redis.publish('attendance:new', payload);
   logger.info(`📡 Marcaje: ${event.deviceName || event.deviceIp} | Empleado: ${event.employeeCode} | ${event.timestamp}`);
 }
 
