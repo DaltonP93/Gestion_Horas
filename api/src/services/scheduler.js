@@ -303,7 +303,7 @@ async function bulkRecalcDailySummary(date) {
   // late_minutes se calcula comparando primer IN con el horario del empleado.
   await sequelize.query(`
     INSERT INTO daily_summary
-      (employee_id, date, first_in, last_out, worked_minutes, late_minutes, status)
+      (employee_id, date, first_in, last_out, worked_minutes, late_minutes, overtime_minutes, status)
     SELECT
       al.employee_id,
       ? AS date,
@@ -328,6 +328,21 @@ async function bulkRecalcDailySummary(date) {
           MIN(CASE WHEN al.type = 'in' THEN al.timestamp END)
         ), 0
       )) AS late_minutes,
+      -- Horas extra: minutos que la última SALIDA excede el fin de horario más
+      -- su tolerancia (simétrico al cálculo de late_minutes sobre la entrada).
+      GREATEST(0, COALESCE(
+        TIMESTAMPDIFF(MINUTE,
+          CONCAT(?, ' ', (
+            SELECT TIME_FORMAT(
+              ADDTIME(s2.check_out, SEC_TO_TIME(COALESCE(s2.tolerance_out,0)*60)),
+              '%H:%i:%s')
+            FROM employees e2
+            LEFT JOIN schedules s2 ON e2.schedule_id = s2.id
+            WHERE e2.id = al.employee_id LIMIT 1
+          )),
+          MAX(CASE WHEN al.type = 'out' THEN al.timestamp END)
+        ), 0
+      )) AS overtime_minutes,
       CASE
         WHEN MIN(CASE WHEN al.type = 'in' THEN al.timestamp END) IS NOT NULL THEN
           CASE WHEN
@@ -351,17 +366,39 @@ async function bulkRecalcDailySummary(date) {
     WHERE DATE(al.timestamp) = ?
     GROUP BY al.employee_id
     ON DUPLICATE KEY UPDATE
-      first_in       = COALESCE(VALUES(first_in),       first_in),
-      last_out       = COALESCE(VALUES(last_out),        last_out),
-      worked_minutes = VALUES(worked_minutes),
-      late_minutes   = VALUES(late_minutes),
-      status         = CASE
+      first_in         = COALESCE(VALUES(first_in),       first_in),
+      last_out         = COALESCE(VALUES(last_out),        last_out),
+      worked_minutes   = VALUES(worked_minutes),
+      late_minutes     = VALUES(late_minutes),
+      overtime_minutes = VALUES(overtime_minutes),
+      status           = CASE
         WHEN status IN ('holiday','weekend','permission') THEN status
         ELSE VALUES(status)
       END
-  `, { replacements: [date, date, date, date] });
+  `, { replacements: [date, date, date, date, date] });
 
   logger.info(`♻️  daily_summary recalculado para ${date}`);
+}
+
+// Materializar ausentes: inserta filas 'absent' para empleados activos que,
+// según su horario (schedules.work_days, convención DAYOFWEEK-1: 0=Dom..6=Sáb),
+// debían trabajar ese día, no es feriado, y no tienen ya una fila. No pisa
+// filas existentes. Empleados sin horario asignado se omiten.
+async function materializeAbsents(date) {
+  const [res] = await sequelize.query(`
+    INSERT INTO daily_summary (employee_id, date, status)
+    SELECT e.id, ?, 'absent'
+    FROM employees e
+    JOIN schedules s ON e.schedule_id = s.id
+    WHERE e.status = 'active'
+      AND FIND_IN_SET(DAYOFWEEK(?) - 1, REPLACE(s.work_days, ' ', ''))
+      AND NOT EXISTS (SELECT 1 FROM daily_summary ds WHERE ds.employee_id = e.id AND ds.date = ?)
+      AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.date = ?)
+    ON DUPLICATE KEY UPDATE status = status
+  `, { replacements: [date, date, date, date] });
+  const n = res?.affectedRows ?? 0;
+  if (n > 0) logger.info(`🚫 ${n} ausente(s) materializado(s) para ${date}`);
+  return n;
 }
 
 // ─── Cron respaldo: pull att2000 → MySQL ─────────────────────────
@@ -386,6 +423,7 @@ function startAtt2000PullCron() {
         for (const date of [today, yesterday]) {
           try {
             await bulkRecalcDailySummary(date);
+            await materializeAbsents(date);
           } catch (e) {
             logger.warn(`bulkRecalc ${date}: ${e.message}`);
           }
@@ -531,6 +569,7 @@ module.exports = {
   minsToHM,
   fmtTime,
   bulkRecalcDailySummary,
+  materializeAbsents,
   pyDateStr,
   startAtt2000PullCron,
   startDailyAlertsCron,

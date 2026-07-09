@@ -9,6 +9,7 @@ const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
 const { authenticate } = require('../middleware/auth');
+const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const wf = require('../services/permissionWorkflow');
 
@@ -142,7 +143,7 @@ router.post('/photo', photoUpload.single('photo'), async (req, res) => {
 
 // ─── GET /api/me/attendance?from=&to= ───────────────────────────
 // Marcajes del empleado logueado.
-router.get('/attendance', async (req, res) => {
+router.get('/attendance', asyncHandler(async (req, res) => {
   const employeeId = await getEmployeeId(req);
   if (!employeeId) return res.json([]);
 
@@ -160,11 +161,11 @@ router.get('/attendance', async (req, res) => {
     LIMIT 500
   `, { replacements: params });
   res.json(rows);
-});
+}));
 
 // ─── GET /api/me/summary?from=&to= ──────────────────────────────
 // Resumen diario (worked_minutes, late_minutes, status).
-router.get('/summary', async (req, res) => {
+router.get('/summary', asyncHandler(async (req, res) => {
   const employeeId = await getEmployeeId(req);
   if (!employeeId) return res.json([]);
 
@@ -182,11 +183,11 @@ router.get('/summary', async (req, res) => {
     LIMIT 200
   `, { replacements: params });
   res.json(rows);
-});
+}));
 
 // ─── GET /api/me/permissions ────────────────────────────────────
 // Mis solicitudes de permiso.
-router.get('/permissions', async (req, res) => {
+router.get('/permissions', asyncHandler(async (req, res) => {
   const employeeId = await getEmployeeId(req);
   if (!employeeId) return res.json([]);
 
@@ -201,7 +202,7 @@ router.get('/permissions', async (req, res) => {
     LIMIT 200
   `, { replacements: [employeeId] });
   res.json(rows);
-});
+}));
 
 // ─── POST /api/me/permissions ───────────────────────────────────
 // Solicitar permiso (self-service).

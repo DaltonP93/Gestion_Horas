@@ -11,7 +11,7 @@
 
 const { sequelize } = require('../config/database');
 const { recalcDailySummary } = require('../controllers/attendanceController');
-const { bulkRecalcDailySummary } = require('./scheduler');
+const { bulkRecalcDailySummary, materializeAbsents } = require('./scheduler');
 const logger = require('../config/logger');
 
 function daysInRange(dateFrom, dateTo) {
@@ -55,6 +55,7 @@ async function recomputeRange({ dateFrom, dateTo, employeeIds = null, jobId, io 
     for (const d of days) {
       try {
         await bulkRecalcDailySummary(d);
+        await materializeAbsents(d);
       } catch (err) {
         errors++;
         if (errList.length < 20) errList.push({ date: d, error: err.message });

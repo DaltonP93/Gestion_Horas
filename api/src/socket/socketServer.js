@@ -61,4 +61,23 @@ function getIO() {
   return io;
 }
 
-module.exports = { initSocket, getIO, get io() { return io; } };
+// Roles que pueden ver el feed en vivo de marcajes (dashboard/asistencia).
+// Los empleados NO lo reciben: verían marcajes de otros compañeros.
+const ATTENDANCE_ROLES = [
+  'super_admin', 'admin', 'gth', 'hr',
+  'coordinator', 'manager', 'gestor', 'supervisor',
+];
+
+/**
+ * Emite un evento de marcaje solo a las salas de roles de gestión (y, si se
+ * indica, a la sala personal del usuario dueño del marcaje), en vez de a
+ * TODOS los sockets. Evita la fuga de datos de asistencia entre empleados.
+ */
+function emitAttendance(event, ownerUserId = null) {
+  if (!io) return;
+  let target = io.to(ATTENDANCE_ROLES.map(r => `role:${r}`));
+  if (ownerUserId) target = target.to(`user:${ownerUserId}`);
+  target.emit('attendance:new', event);
+}
+
+module.exports = { initSocket, getIO, emitAttendance, get io() { return io; } };

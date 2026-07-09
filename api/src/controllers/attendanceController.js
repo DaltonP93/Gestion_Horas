@@ -1,5 +1,5 @@
 const { sequelize } = require('../config/database');
-const { getIO } = require('../socket/socketServer');
+const { getIO, emitAttendance } = require('../socket/socketServer');
 const logger = require('../config/logger');
 let fireWebhooks;
 try { ({ fireWebhooks } = require('../routes/webhooks')); } catch {}
@@ -66,7 +66,7 @@ async function processAttendanceEvent(data) {
       deviceId
     };
 
-    io.emit('attendance:new', event);
+    emitAttendance(event);
 
     // Disparar webhooks a sistemas externos (Oracle APEX, ERP, etc.)
     if (fireWebhooks) {
@@ -310,13 +310,12 @@ async function registerManual(req, res) {
     );
     await recalcDailySummary(employeeId, ts);
 
-    const io = getIO();
     const [[emp]] = await sequelize.query(
       'SELECT first_name, last_name FROM employees WHERE id = ?',
       { replacements: [employeeId] }
     );
 
-    io.emit('attendance:new', {
+    emitAttendance({
       employeeId, employeeName: `${emp.first_name} ${emp.last_name}`,
       timestamp: ts.toISOString(), type, source: 'manual'
     });
@@ -348,13 +347,12 @@ async function registerMobile(req, res) {
 
     await recalcDailySummary(employeeId, ts);
 
-    const io = getIO();
     const [[emp]] = await sequelize.query(
       'SELECT first_name, last_name FROM employees WHERE id = ?',
       { replacements: [employeeId] }
     );
 
-    io.emit('attendance:new', {
+    emitAttendance({
       employeeId, employeeName: `${emp.first_name} ${emp.last_name}`,
       timestamp: ts.toISOString(), type, source: 'mobile', latitude, longitude
     });

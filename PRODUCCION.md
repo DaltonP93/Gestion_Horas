@@ -40,10 +40,13 @@ SMTP_USER=tu@gmail.com
 SMTP_PASS=app_password_gmail
 SMTP_FROM=Sistema RH <tu@gmail.com>
 
-# Claves internas
+# Redis (obligatorio: docker-compose exige contraseña)
+REDIS_PASSWORD=cadena_larga_aleatoria_redis
+
+# Claves internas (en producción se exigen; usar valores largos y únicos)
 BRIDGE_API_KEY=clave_puente_segura
 INTEGRATION_API_KEY=clave_integracion_apex
-ANALYTICS_API_KEY=analytics_secret_key
+ANALYTICS_API_KEY=cadena_larga_aleatoria_analytics
 
 # URLs
 FRONTEND_URL=http://localhost:3000
@@ -59,12 +62,25 @@ NEXT_PUBLIC_ANALYTICS_URL=http://localhost:5000
 CREATE DATABASE asistencia CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
-Ejecutar los scripts en orden:
+Cargar el esquema base y aplicar las migraciones con el runner (registra el
+estado en `schema_migrations`, idempotente):
 
 ```bash
 mysql -u root -p asistencia < database/init.sql
-mysql -u root -p asistencia < database/migrations/002_notifications_schedules.sql
+
+# Runner de migraciones (aplica database/migrations/*.sql pendientes)
+cd api
+npm run migrate            # aplica pendientes
+npm run migrate:status     # lista estado sin aplicar
 ```
+
+> **BD existente** que ya tenía las migraciones aplicadas a mano: adoptá el
+> runner sin reejecutarlas con `node scripts/migrate.js --baseline`, y a partir
+> de ahí usá `npm run migrate` normalmente.
+
+> **Validación de entorno:** en `NODE_ENV=production` la API valida al arrancar
+> que estén definidos `JWT_SECRET` (≥32 chars), los secretos de BD y las claves
+> de servicios; si falta alguno, no arranca e indica cuál. Ver `.env.example`.
 
 ---
 
@@ -160,14 +176,18 @@ Esto levanta: MySQL, Redis, API, Web, Analytics, Bridge, Nginx.
 
 ## Arquitectura de puertos
 
-| Servicio    | Puerto | URL                          |
-|-------------|--------|------------------------------|
-| Web         | 3000   | http://localhost:3000        |
-| API         | 4000   | http://localhost:4000        |
-| Analytics   | 5000   | http://localhost:5000        |
-| Bridge ZK   | 8080   | http://localhost:8080        |
-| MySQL       | 3306   | —                            |
-| Redis       | 6379   | —                            |
+| Servicio         | Puerto | Notas                                          |
+|------------------|--------|------------------------------------------------|
+| Web              | 3000   | http://localhost:3000                          |
+| API              | 4000   | http://localhost:4000                          |
+| Analytics        | 5000   | solo loopback; se consume vía la API (BFF)     |
+| Bridge — PUSH ZK | 8080   | recibe marcajes PUSH de los relojes            |
+| Bridge — API     | 8081   | loopback + `x-api-key` (BRIDGE_API_KEY)        |
+| MySQL            | 3306   | loopback                                        |
+| Redis            | 6379   | loopback + contraseña (REDIS_PASSWORD)         |
+
+> La API del bridge (8081) exige la cabecera `x-api-key`; el core la envía
+> automáticamente. Analytics, MySQL y Redis se publican solo en `127.0.0.1`.
 
 ## Páginas disponibles
 
