@@ -76,6 +76,25 @@ router.post('/import', authorize('admin','hr'), requirePermission('empleados', '
   let created = 0, updated = 0, skipped = 0;
   const errors = [];
 
+  // ── Precarga para evitar N+1 (2 queries en vez de 2·N lecturas) ──
+  // Mapa de departamentos por nombre y código (case-insensitive).
+  const [allDepts] = await sequelize.query('SELECT id, name, code FROM departments');
+  const deptMap = new Map();
+  for (const d of allDepts) {
+    if (d.name) deptMap.set(String(d.name).toLowerCase().trim(), d.id);
+    if (d.code) deptMap.set(String(d.code).toLowerCase().trim(), d.id);
+  }
+  // Set de códigos de empleado ya existentes (solo los del lote).
+  const loteCodes = [...new Set(employees.map(e => String(e.code || '').trim()).filter(Boolean))];
+  const existingCodes = new Set();
+  if (loteCodes.length) {
+    const [rows] = await sequelize.query(
+      `SELECT code FROM employees WHERE code IN (${loteCodes.map(() => '?').join(',')})`,
+      { replacements: loteCodes }
+    );
+    for (const r of rows) existingCodes.add(String(r.code));
+  }
+
   for (const emp of employees) {
     const code       = String(emp.code || '').trim();
     const firstName  = String(emp.first_name || emp.nombre || emp.Nombre || '').trim();
@@ -97,12 +116,9 @@ router.post('/import', authorize('admin','hr'), requirePermission('empleados', '
       let deptId = emp.department_id || null;
       if (!deptId && (emp.department || emp.departamento)) {
         const deptName = String(emp.department || emp.departamento).trim();
-        const [[dept]] = await sequelize.query(
-          'SELECT id FROM departments WHERE name=? OR code=? LIMIT 1',
-          { replacements: [deptName, deptName] }
-        );
-        if (dept) {
-          deptId = dept.id;
+        const key = deptName.toLowerCase();
+        if (deptMap.has(key)) {
+          deptId = deptMap.get(key);
         } else if (deptName) {
           // Auto-crear el departamento si no existe (facilita imports desde HR externo)
           const [ins] = await sequelize.query(
@@ -110,12 +126,11 @@ router.post('/import', authorize('admin','hr'), requirePermission('empleados', '
             { replacements: [deptName] }
           );
           deptId = ins; // insertId
+          deptMap.set(key, deptId); // cachear para las siguientes filas del lote
         }
       }
 
-      const [[existing]] = await sequelize.query(
-        'SELECT id FROM employees WHERE code=?', { replacements: [code] }
-      );
+      const existing = existingCodes.has(code);
 
       if (existing) {
         if (emp._update) {
@@ -146,6 +161,7 @@ router.post('/import', authorize('admin','hr'), requirePermission('empleados', '
         VALUES (?,?,?,?,?,?,?,?,?,?)`,
         { replacements: [code, empNumber, firstName, lastName, email, phone, position, deptId, hireDate, status] }
       );
+      existingCodes.add(code); // evita reinsertar si el código se repite en el lote
       created++;
     } catch (e) {
       errors.push({ code, error: e.message });
