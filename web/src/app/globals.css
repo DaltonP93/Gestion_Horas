@@ -68,6 +68,257 @@ html.dark .bg-orbs::after  { background: radial-gradient(circle, rgba(99, 102, 2
 }
 .success-pop { animation: successPop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; }
 
+/* ═══════════════════════════════════════════════════════════════
+   SISTEMA DE ESTILOS PERSONALIZABLE (design tokens)
+   El estilo global se elige desde Configuración → Apariencia y se
+   aplica con [data-ui-style] en <html>. Cada estilo redefine los
+   tokens de superficie; las clases (.glass/.clay/.lift…) los consumen,
+   así toda la app cambia de estilo al instante. Los colores se derivan
+   de --paper/--ink que voltean con el tema claro/oscuro.
+   Estilos: liquidglass (default) · glassmorphism · maximalismo ·
+            minimalismo · spatial · claymorphism · brutalismo
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --paper: #ffffff;         /* superficie base (claro) */
+  --paper-2: #eef2f8;
+  --ink: #0f172a;           /* tinta base */
+  --accent: #22d3ee;        /* acento (sobreescribible por el usuario) */
+  --accent-2: #3b82f6;
+
+  /* Tokens de superficie — valores por defecto = Liquid Glass */
+  --ui-radius: 1.9rem;
+  --ui-radius-sm: 1rem;
+  --ui-blur: 22px;
+  --ui-saturate: 165%;
+  --ui-surface: color-mix(in srgb, var(--paper) 58%, transparent);
+  --ui-border-w: 1px;
+  --ui-border: color-mix(in srgb, var(--paper) 70%, transparent);
+  --ui-shadow: 0 12px 40px -14px color-mix(in srgb, var(--ink) 18%, transparent), inset 0 1px 0 0 color-mix(in srgb, var(--paper) 75%, transparent);
+  --ui-reflect: 0.9;        /* opacidad del reflejo especular del vidrio */
+  --ui-lift-y: -4px;
+  --ui-lift-shadow: 0 26px 64px -18px color-mix(in srgb, var(--accent-2) 30%, transparent);
+  --ui-clay-shadow: 6px 6px 16px color-mix(in srgb, var(--ink) 12%, transparent), -6px -6px 16px color-mix(in srgb, var(--paper) 90%, transparent), inset 1px 1px 2px color-mix(in srgb, var(--paper) 70%, transparent);
+  --ui-density: 1;          /* multiplicador de espaciado (density) */
+  --ui-heading-weight: 700;
+}
+html.dark {
+  --paper: #0e1117;
+  --paper-2: #0b0d12;
+  --ink: #f1f5f9;
+  --ui-surface: color-mix(in srgb, var(--paper) 40%, transparent);
+  --ui-border: color-mix(in srgb, #ffffff 10%, transparent);
+  --ui-shadow: 0 12px 40px -14px rgba(0,0,0,0.6), inset 0 1px 0 0 rgba(255,255,255,0.08);
+  --ui-clay-shadow: 6px 6px 18px rgba(0,0,0,0.5), -4px -4px 14px rgba(255,255,255,0.04), inset 1px 1px 2px rgba(255,255,255,0.06);
+}
+
+/* ── Superficie de vidrio (consume tokens) ─────────────────────── */
+.glass {
+  position: relative;
+  background: var(--ui-surface);
+  backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturate));
+  -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturate));
+  border: var(--ui-border-w) solid var(--ui-border);
+  box-shadow: var(--ui-shadow);
+}
+.glass::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: inherit; padding: 1px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--paper) 55%, transparent), transparent 42%, transparent 60%, color-mix(in srgb, var(--accent) 30%, transparent));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none;
+  opacity: var(--ui-reflect);
+}
+
+/* ── Claymorphism (íconos/acciones infladas) ───────────────────── */
+.clay {
+  background: linear-gradient(145deg, color-mix(in srgb, var(--paper) 92%, transparent), color-mix(in srgb, var(--paper-2) 88%, transparent));
+  box-shadow: var(--ui-clay-shadow);
+  border: none;
+}
+.clay-btn { transition: transform 0.18s cubic-bezier(0.16,1,0.3,1), box-shadow 0.18s ease; }
+.clay-btn:hover  { transform: translateY(-2px); }
+.clay-btn:active { transform: translateY(1px) scale(0.98); box-shadow: inset 4px 4px 10px color-mix(in srgb, var(--ink) 15%, transparent), inset -4px -4px 10px color-mix(in srgb, var(--paper) 80%, transparent); }
+
+/* ── Elevación al hover (consume token de sombra) ──────────────── */
+.lift { transition: transform 0.35s cubic-bezier(0.16,1,0.3,1), box-shadow 0.35s ease; }
+.lift:hover { transform: translateY(var(--ui-lift-y)); box-shadow: var(--ui-lift-shadow); }
+
+/* ── Sheen (barrido de brillo) ─────────────────────────────────── */
+@keyframes sheenSweep { 0%{transform:translateX(-120%) skewX(-18deg);opacity:0} 40%{opacity:.55} 100%{transform:translateX(220%) skewX(-18deg);opacity:0} }
+.sheen { position: relative; overflow: hidden; }
+.sheen::after { content:''; position:absolute; top:0; left:0; width:40%; height:100%; background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent); transform: translateX(-120%) skewX(-18deg); pointer-events:none; }
+.sheen:hover::after { animation: sheenSweep 0.9s cubic-bezier(0.16,1,0.3,1); }
+
+.text-liquid { background: linear-gradient(120deg, var(--accent), var(--accent-2) 60%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+@keyframes floatY { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-18px)} }
+.float-slow { animation: floatY 8s ease-in-out infinite; }
+
+/* Radios utilitarios ligados al token (bento usa rounded-bento en Tailwind,
+   pero estas clases permiten que el estilo controle el radio global). */
+.ui-radius   { border-radius: var(--ui-radius); }
+.ui-radius-sm{ border-radius: var(--ui-radius-sm); }
+
+/* ═══ VARIANTES DE ESTILO — cada bloque redefine los tokens ═════ */
+
+/* GLASSMORPHISM — vidrio esmerilado más ligero, menos reflejo. */
+:root[data-ui-style="glassmorphism"] {
+  --ui-radius: 1.5rem; --ui-blur: 16px; --ui-saturate: 140%;
+  --ui-surface: color-mix(in srgb, var(--paper) 45%, transparent);
+  --ui-reflect: 0.4;
+  --ui-lift-shadow: 0 20px 48px -18px color-mix(in srgb, var(--ink) 22%, transparent);
+}
+
+/* MINIMALISMO — superficies planas, hairline, sin blur ni brillo. */
+:root[data-ui-style="minimalismo"] {
+  --ui-radius: 0.9rem; --ui-radius-sm: 0.6rem; --ui-blur: 0px; --ui-saturate: 100%;
+  --ui-surface: var(--paper);
+  --ui-border: color-mix(in srgb, var(--ink) 12%, transparent);
+  --ui-shadow: none; --ui-reflect: 0;
+  --ui-lift-y: -2px;
+  --ui-lift-shadow: 0 8px 24px -14px color-mix(in srgb, var(--ink) 22%, transparent);
+  --ui-clay-shadow: none;
+}
+:root[data-ui-style="minimalismo"] .clay { background: color-mix(in srgb, var(--ink) 6%, transparent); border: 1px solid color-mix(in srgb, var(--ink) 8%, transparent); }
+:root[data-ui-style="minimalismo"] .sheen::after { display: none; }
+
+/* SPATIAL — profundidad y flotación, sombras marcadas en capas. */
+:root[data-ui-style="spatial"] {
+  --ui-radius: 1.6rem; --ui-blur: 10px; --ui-saturate: 130%;
+  --ui-surface: color-mix(in srgb, var(--paper) 82%, transparent);
+  --ui-border: color-mix(in srgb, var(--paper) 60%, transparent);
+  --ui-shadow: 0 2px 6px -2px color-mix(in srgb, var(--ink) 12%, transparent), 0 18px 40px -14px color-mix(in srgb, var(--ink) 22%, transparent), 0 40px 80px -30px color-mix(in srgb, var(--accent-2) 28%, transparent);
+  --ui-reflect: 0.35; --ui-lift-y: -8px;
+  --ui-lift-shadow: 0 40px 90px -24px color-mix(in srgb, var(--accent-2) 40%, transparent);
+}
+
+/* CLAYMORPHISM — todo inflado y suave, radios grandes, sin blur. */
+:root[data-ui-style="claymorphism"] {
+  --ui-radius: 2.4rem; --ui-radius-sm: 1.4rem; --ui-blur: 0px; --ui-saturate: 100%;
+  --ui-surface: color-mix(in srgb, var(--paper) 96%, var(--paper-2));
+  --ui-border-w: 0px; --ui-border: transparent;
+  --ui-shadow: 10px 10px 26px color-mix(in srgb, var(--ink) 13%, transparent), -10px -10px 24px color-mix(in srgb, var(--paper) 92%, transparent), inset 1px 1px 2px color-mix(in srgb, var(--paper) 70%, transparent);
+  --ui-reflect: 0;
+  --ui-lift-shadow: 12px 12px 30px color-mix(in srgb, var(--ink) 16%, transparent), -12px -12px 28px color-mix(in srgb, var(--paper) 92%, transparent);
+}
+:root[data-ui-style="claymorphism"] .sheen::after { display: none; }
+
+/* MAXIMALISMO — colores y capas sin miedo: superficie con tinte del acento. */
+:root[data-ui-style="maximalismo"] {
+  --ui-radius: 1.7rem; --ui-blur: 8px; --ui-saturate: 180%;
+  --ui-surface: color-mix(in srgb, var(--paper) 78%, var(--accent) 10%);
+  --ui-border-w: 2px;
+  --ui-border: color-mix(in srgb, var(--accent) 45%, transparent);
+  --ui-shadow: 0 10px 0 -2px color-mix(in srgb, var(--accent-2) 30%, transparent), 0 20px 50px -16px color-mix(in srgb, var(--accent) 40%, transparent);
+  --ui-reflect: 0.5; --ui-heading-weight: 800;
+  --ui-lift-shadow: 0 16px 0 -2px color-mix(in srgb, var(--accent) 45%, transparent), 0 28px 60px -16px color-mix(in srgb, var(--accent-2) 50%, transparent);
+}
+
+/* BRUTALISMO — sin adornos: bordes duros, sombra sólida offset, alto contraste. */
+:root[data-ui-style="brutalismo"] {
+  --ui-radius: 0px; --ui-radius-sm: 0px; --ui-blur: 0px; --ui-saturate: 100%;
+  --ui-surface: var(--paper);
+  --ui-border-w: 2.5px; --ui-border: var(--ink);
+  --ui-shadow: 6px 6px 0 0 var(--ink);
+  --ui-reflect: 0; --ui-heading-weight: 900;
+  --ui-lift-y: -2px;
+  --ui-lift-shadow: 9px 9px 0 0 var(--ink);
+  --ui-clay-shadow: 4px 4px 0 0 var(--ink);
+}
+:root[data-ui-style="brutalismo"] .clay { border: 2.5px solid var(--ink); background: var(--paper); }
+:root[data-ui-style="brutalismo"] .sheen::after { display: none; }
+:root[data-ui-style="brutalismo"] h1, :root[data-ui-style="brutalismo"] h2 { letter-spacing: -0.04em; text-transform: uppercase; }
+
+/* ── DENSIDAD (compact / comfortable / spacious) ───────────────── */
+/* Se aplica escalando el font-size raíz: como el espaciado de Tailwind es
+   rem, toda la UI se compacta/expande de forma proporcional y consistente. */
+:root[data-ui-density="compact"]    { font-size: 15px; }
+:root[data-ui-density="comfortable"]{ font-size: 16px; }
+:root[data-ui-density="spacious"]   { font-size: 17.5px; }
+h1 { font-weight: var(--ui-heading-weight); }
+
+/* MINIMALISMO — títulos con serif editorial (fiel a la referencia NYT). */
+:root[data-ui-style="minimalismo"] h1,
+:root[data-ui-style="minimalismo"] h2 {
+  font-family: Georgia, 'Times New Roman', 'Iowan Old Style', serif;
+  font-weight: 700; letter-spacing: -0.01em; text-transform: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   APLICACIÓN GLOBAL POR ESTILO
+   El estilo no solo cambia las tarjetas bento: reescribe las
+   superficies comunes de TODA la app (tarjetas, radios, sombras,
+   botones e inputs) para que el sistema entero adopte el estilo,
+   fiel a la referencia de cada uno. Se apunta a las utilidades de
+   Tailwind más usadas con la especificidad del selector [data-ui-style].
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Radio de las superficies (tarjetas, inputs, botones), NO de los
+   indicadores circulares (rounded-full se preserva). */
+:root[data-ui-style] :is(.rounded-lg,.rounded-xl,.rounded-2xl,.rounded-3xl,.rounded-bento) {
+  border-radius: var(--ui-radius);
+}
+:root[data-ui-style] :is(.rounded,.rounded-md) { border-radius: var(--ui-radius-sm); }
+
+/* Superficie de tarjeta común (bg-white …). Se vuelve la superficie del
+   estilo, con su borde y sombra. Aplica en claro; en oscuro las páginas ya
+   usan dark:bg-white/[0.04], que el token respeta vía --ui-surface-solid. */
+:root[data-ui-style="minimalismo"] .bg-white,
+:root[data-ui-style="brutalismo"]  .bg-white,
+:root[data-ui-style="maximalismo"] .bg-white,
+:root[data-ui-style="claymorphism"] .bg-white {
+  background-color: var(--paper);
+}
+
+/* Sombras globales según el estilo (brutalismo: dura y offset;
+   minimalismo: ninguna; clay/spatial: suave/profunda). */
+:root[data-ui-style="minimalismo"] :is(.shadow-sm,.shadow,.shadow-md,.shadow-lg,.shadow-xl,.shadow-2xl) { box-shadow: none !important; }
+:root[data-ui-style="brutalismo"]  :is(.shadow-sm,.shadow,.shadow-md,.shadow-lg,.shadow-xl,.shadow-2xl) { box-shadow: 5px 5px 0 0 var(--ink) !important; }
+:root[data-ui-style="claymorphism"] :is(.shadow-sm,.shadow,.shadow-md) { box-shadow: var(--ui-clay-shadow) !important; }
+
+/* Bordes: brutalismo agrega borde negro grueso a toda tarjeta con borde. */
+:root[data-ui-style="brutalismo"] :is(.border,.border-slate-100,.border-slate-200) {
+  border-width: 2.5px !important;
+  border-color: var(--ink) !important;
+}
+:root[data-ui-style="minimalismo"] :is(.border-slate-100,.border-slate-200) {
+  border-color: color-mix(in srgb, var(--ink) 12%, transparent) !important;
+}
+
+/* Botón primario (bg-blue-600) → acento del estilo. */
+:root[data-ui-style] .bg-blue-600 { background-color: var(--accent-2) !important; }
+:root[data-ui-style] .hover\:bg-blue-700:hover { background-color: color-mix(in srgb, var(--accent-2) 85%, #000) !important; }
+:root[data-ui-style="brutalismo"] .bg-blue-600 {
+  background-color: var(--accent) !important; color: #04141a !important;
+  border: 2.5px solid var(--ink) !important; box-shadow: 4px 4px 0 0 var(--ink) !important;
+}
+:root[data-ui-style="minimalismo"] .bg-blue-600 { background-color: var(--ink) !important; }
+
+/* MINIMALISMO — despoja el color: acento a escala de grises, sin glows. */
+:root[data-ui-style="minimalismo"] {
+  --accent: #111827; --accent-2: #1f2937;
+}
+html.dark:root[data-ui-style="minimalismo"],
+:root[data-ui-style="minimalismo"].dark { --accent: #e5e7eb; --accent-2: #cbd5e1; }
+:root[data-ui-style="minimalismo"] .bg-orbs::before,
+:root[data-ui-style="minimalismo"] .bg-orbs::after { display: none; }
+
+/* MAXIMALISMO — sube la energía: bordes y fondos con más presencia. */
+:root[data-ui-style="maximalismo"] :is(.border,.border-slate-100,.border-slate-200) {
+  border-width: 2px !important; border-color: color-mix(in srgb, var(--accent) 40%, transparent) !important;
+}
+
+/* BRUTALISMO — inputs cuadrados con borde negro. */
+:root[data-ui-style="brutalismo"] :is(input,select,textarea) {
+  border: 2.5px solid var(--ink) !important; border-radius: 0 !important;
+}
+
+/* CLAYMORPHISM — inputs y botones inflados y muy redondeados. */
+:root[data-ui-style="claymorphism"] :is(input,select) { border-radius: var(--ui-radius-sm) !important; }
+
 .clock-glow { text-shadow: 0 0 30px rgba(34, 211, 238, 0.15); }
 html.dark .clock-glow { text-shadow: 0 0 40px rgba(34, 211, 238, 0.35); }
 
@@ -156,6 +407,20 @@ a:focus-visible {
 /* Respetar preferencia de reducir movimiento */
 @media (prefers-reduced-motion: reduce) {
   .slide-in, .pulse-live,
-  .bento-enter, .feed-enter, .bar-grow, .success-pop { animation: none !important; }
+  .bento-enter, .feed-enter, .bar-grow, .success-pop,
+  .float-slow, .sheen::after { animation: none !important; }
+  .lift:hover, .clay-btn:hover { transform: none !important; }
   * { transition-duration: 0.01ms !important; }
 }
+
+/* Animaciones desactivadas por el usuario (Apariencia → Animaciones: off) */
+:root[data-ui-motion="0"] .slide-in,
+:root[data-ui-motion="0"] .pulse-live,
+:root[data-ui-motion="0"] .bento-enter,
+:root[data-ui-motion="0"] .feed-enter,
+:root[data-ui-motion="0"] .bar-grow,
+:root[data-ui-motion="0"] .success-pop,
+:root[data-ui-motion="0"] .float-slow,
+:root[data-ui-motion="0"] .sheen::after { animation: none !important; }
+:root[data-ui-motion="0"] .lift:hover,
+:root[data-ui-motion="0"] .clay-btn:hover { transform: none !important; }

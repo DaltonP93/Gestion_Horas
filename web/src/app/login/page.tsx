@@ -125,8 +125,9 @@ export default function LoginPage() {
         : apiUrl(settings.system_login_bg_image))
     : ''
 
+  // Vidrio líquido cuando el admin activa "glass"; opaco si lo desactiva.
   const cardClass = glass
-    ? 'bg-white/85 backdrop-blur-xl border border-white/40'
+    ? 'glass lift'
     : 'bg-white'
 
   // Layout

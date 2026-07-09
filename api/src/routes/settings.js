@@ -34,6 +34,11 @@ const THEME_KEYS = [
   'system_theme_mode',               // 'light' | 'dark' | 'auto'
   'system_font_family',              // 'Inter' | 'Roboto' | 'Poppins'
   'system_border_radius',            // 'sm' | 'md' | 'lg' | 'xl'
+  // ─── Estilo global de interfaz (personalización de UI) ───────
+  'system_ui_style',                 // 'liquidglass'|'glassmorphism'|'maximalismo'|'minimalismo'|'spatial'|'claymorphism'|'brutalismo'
+  'system_ui_accent',                // hex del acento principal (ej. #22d3ee)
+  'system_ui_density',               // 'compact' | 'comfortable' | 'spacious'
+  'system_ui_motion',                // '1' | '0' — animaciones/micro-interacciones
 ];
 
 // Layout / UX login
