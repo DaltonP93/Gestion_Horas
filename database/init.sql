@@ -4,7 +4,10 @@
 -- =============================================================
 
 SET NAMES utf8mb4;
-SET time_zone = '-06:00'; -- Tiempo Centro (México/Guatemala/El Salvador)
+SET time_zone = '-03:00'; -- Paraguay (America/Asuncion) — coincide con api/config/database.js
+-- IMPORTANTE: fijar también la zona por defecto del servidor MySQL para que
+-- consultas fuera de la app (cron/CLI) usen la misma base horaria:
+--   [mysqld] default-time-zone = '-03:00'   (my.cnf)  ó  SET GLOBAL time_zone='-03:00';
 
 -- -------------------------------------------------------------
 -- Departamentos
