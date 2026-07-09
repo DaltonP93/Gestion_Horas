@@ -28,9 +28,15 @@ async function runStreamConsumer(url) {
   streamConsumer.on('error', err => logger.error('Redis stream consumer error:', err));
   await streamConsumer.connect();
 
-  // Crear el grupo si no existe (MKSTREAM crea el stream vacío).
+  // Crear el grupo si no existe, empezando en '$' (solo mensajes NUEVOS a
+  // partir de ahora). Así, al activar streams por primera vez, no se
+  // reprocesa el backlog retenido en el stream (que el bridge ya venía
+  // escribiendo en modo pub/sub) evitando recalcular resúmenes y reemitir
+  // socket/webhook/alertas de marcajes viejos. La durabilidad ante caídas se
+  // mantiene: una vez creado el grupo, los mensajes posteriores no ackeados se
+  // recuperan con XAUTOCLAIM / XREADGROUP '>'.
   try {
-    await streamConsumer.xGroupCreate(STREAM_KEY, STREAM_GROUP, '0', { MKSTREAM: true });
+    await streamConsumer.xGroupCreate(STREAM_KEY, STREAM_GROUP, '$', { MKSTREAM: true });
   } catch (err) {
     if (!String(err.message).includes('BUSYGROUP')) throw err;
   }

@@ -64,6 +64,13 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET requerido}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET requerido}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Claves de servicios internos: la validación de entorno (config/env.js)
+      # las exige en producción, y la API las usa para hablar con el bridge y
+      # para el proxy BFF de Analytics.
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY:?BRIDGE_API_KEY requerido}
+      ANALYTICS_API_KEY: ${ANALYTICS_API_KEY:?ANALYTICS_API_KEY requerido}
+      ANALYTICS_URL: ${ANALYTICS_URL:-http://analytics:5000}
+      BRIDGE_URL: ${BRIDGE_URL:-http://localhost:8081}
     ports:
       - "127.0.0.1:4000:4000"
     networks:

@@ -12,11 +12,14 @@
  * el control de estado se lleva con mysql2.
  *
  * Uso:
- *   node api/scripts/migrate.js            # aplica pendientes
- *   node api/scripts/migrate.js --status   # solo lista estado, no aplica
- *   node api/scripts/migrate.js --baseline # marca TODAS como aplicadas sin
- *                                          # ejecutarlas (adopción del runner
- *                                          # en una BD que ya las tiene)
+ *   node api/scripts/migrate.js                    # aplica pendientes
+ *   node api/scripts/migrate.js --status           # lista estado, no aplica
+ *   node api/scripts/migrate.js --baseline=<archivo>
+ *          # marca como aplicadas (sin ejecutar) las migraciones HASTA e
+ *          # incluyendo <archivo>, para adoptar el runner en una BD que ya
+ *          # las tiene aplicadas a mano. Las migraciones MÁS NUEVAS que
+ *          # <archivo> quedan pendientes y se ejecutan con `migrate`.
+ *          # Ej: --baseline=039_fix_attendance_source_selfcheckin.sql
  *
  * Requiere: cliente `mysql` en el PATH y las variables DB_* del entorno.
  */
@@ -74,11 +77,31 @@ async function main() {
       pending.forEach(f => console.log(`  pendiente: ${f}`));
       return;
     }
-    if (process.argv.includes('--baseline')) {
-      for (const file of pending) {
+    const baselineArg = process.argv.find(a => a === '--baseline' || a.startsWith('--baseline='));
+    if (baselineArg) {
+      const target = baselineArg.includes('=') ? baselineArg.split('=')[1].trim() : '';
+      if (!target) {
+        console.error('❌ --baseline requiere un archivo objetivo, p. ej.:');
+        console.error('   node scripts/migrate.js --baseline=039_fix_attendance_source_selfcheckin.sql');
+        console.error('   (marca como aplicadas SOLO las migraciones hasta e incluyendo ese archivo).');
+        process.exit(1);
+      }
+      if (!files.includes(target)) {
+        console.error(`❌ El archivo de baseline "${target}" no existe en database/migrations/.`);
+        process.exit(1);
+      }
+      // Marcar como aplicadas solo las pendientes con nombre <= target (orden
+      // lexicográfico = orden por prefijo numérico). Las nuevas quedan fuera.
+      const toBaseline = pending.filter(f => f <= target);
+      const skipped = pending.filter(f => f > target);
+      for (const file of toBaseline) {
         await conn.query('INSERT IGNORE INTO schema_migrations (filename) VALUES (?)', [file]);
       }
-      console.log(`✅ Baseline: ${pending.length} migración(es) marcada(s) como aplicada(s) sin ejecutar.`);
+      console.log(`✅ Baseline hasta ${target}: ${toBaseline.length} marcada(s) como aplicada(s) sin ejecutar.`);
+      if (skipped.length) {
+        console.log(`   ${skipped.length} migración(es) más nueva(s) quedan PENDIENTES (ejecutá "npm run migrate"):`);
+        skipped.forEach(f => console.log(`     - ${f}`));
+      }
       return;
     }
     if (pending.length === 0) { console.log('✅ Nada por aplicar.'); return; }
