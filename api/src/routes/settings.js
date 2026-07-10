@@ -82,6 +82,8 @@ const EMPLOYER_KEYS = [
   'ips_rate_obrero',                 // % aporte obrero IPS (default 9)
   'ips_rate_patronal',               // % aporte patronal IPS (default 16.5)
   'salario_minimo',                  // salario mínimo legal vigente (referencia)
+  'mtess_dias_base_mensual',         // base de días para mensualizados (default 30)
+  'mtess_dias_descuento_tipos',      // tipos de ausencia que descuentan días (lista)
 ];
 
 const SETTING_KEYS = [

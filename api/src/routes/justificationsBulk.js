@@ -49,7 +49,13 @@ router.get('/template', async (_req, res) => {
 router.post('/bulk', authorize('admin', 'hr', 'gth'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Archivo .xlsx requerido (campo "file")' });
   const dryRun = req.query.dry_run === '1' || req.body.dry_run === '1';
-  const validTypes = new Set(['permiso', 'vacaciones', 'enfermedad', 'otro']);
+  // Tipos válidos. Los que descuentan días para mensualizados en la planilla
+  // MTESS: vacaciones, enfermedad, reposo, licencia_especial, sin_goce,
+  // injustificada. 'permiso' (con goce) y 'otro' NO descuentan por defecto.
+  const validTypes = new Set([
+    'permiso', 'vacaciones', 'enfermedad', 'reposo',
+    'licencia_especial', 'sin_goce', 'injustificada', 'otro',
+  ]);
 
   try {
     const wb = new ExcelJS.Workbook();

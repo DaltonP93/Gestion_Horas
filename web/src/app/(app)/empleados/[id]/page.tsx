@@ -218,6 +218,38 @@ export default function EmpleadoDetallePage() {
               onSave={onSaveField}
             />
           </div>
+
+          {/* Datos legales MTESS / IPS */}
+          <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
+            <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+              <Briefcase size={15} className="text-cyan-500" /> Datos legales (MTESS / IPS)
+            </h3>
+            <EditField label="C.I."         value={emp.document_number || ''} name="document_number" onSave={onSaveField} />
+            <EditField label="N° IPS"       value={emp.ips_number || ''}      name="ips_number"      onSave={onSaveField} />
+            <EditField label="Salario base" value={emp.salary_base != null ? String(emp.salary_base) : ''} name="salary_base" type="number" onSave={onSaveField} />
+            <EditField
+              label="Tipo de pago"
+              value={emp.pay_type || 'mensualizado'}
+              name="pay_type"
+              options={[
+                { value: 'mensualizado', label: 'Mensualizado' },
+                { value: 'jornalero',    label: 'Jornalero' },
+              ]}
+              onSave={onSaveField}
+            />
+            <EditField
+              label="Género"
+              value={emp.gender || ''}
+              name="gender"
+              options={[
+                { value: '',  label: '—' },
+                { value: 'M', label: 'Masculino' },
+                { value: 'F', label: 'Femenino' },
+                { value: 'O', label: 'Otro' },
+              ]}
+              onSave={onSaveField}
+            />
+          </div>
         </div>
 
         {/* Historial */}

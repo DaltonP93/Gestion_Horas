@@ -55,9 +55,10 @@ async function getMonthlyGrid(year, month, dept) {
   const [rows] = await sequelize.query(`
     SELECT
       e.id, e.code, e.document_number, e.ips_number, e.position,
+      e.salary_base, e.pay_type,
       CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
       d.name AS department,
-      ds.date, ds.status, ds.first_in, ds.last_out,
+      ds.date, ds.status, ds.first_in, ds.last_out, ds.justification_type,
       ds.worked_minutes, ds.overtime_minutes
     FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
@@ -73,19 +74,68 @@ async function getMonthlyGrid(year, month, dept) {
       byEmp.set(r.id, {
         id: r.id, code: r.code, ci: r.document_number || '', ips: r.ips_number || '',
         position: r.position || '', name: r.employee_name, department: r.department || '',
+        salary_base: Number(r.salary_base) || 0, pay_type: r.pay_type || 'mensualizado',
         days: {}, workedMin: 0, otMin: 0, presentDays: 0,
       });
     }
     if (r.date) {
       const day = new Date(r.date).getDate();
       const emp = byEmp.get(r.id);
-      emp.days[day] = { in: hhmm(r.first_in), out: hhmm(r.last_out), status: r.status };
+      emp.days[day] = {
+        in: hhmm(r.first_in), out: hhmm(r.last_out),
+        status: r.status, jtype: (r.justification_type || '').toLowerCase().trim(),
+      };
       emp.workedMin += r.worked_minutes || 0;
       emp.otMin += r.overtime_minutes || 0;
       if (r.status === 'present' || r.status === 'late') emp.presentDays++;
     }
   }
   return Array.from(byEmp.values());
+}
+
+// Tipos de justificación que DESCUENTAN días para un mensualizado, según la
+// regla del MTESS: reposo, ausencia injustificada, licencia especial, días sin
+// goce de salario y vacaciones. Los francos/libres normales NO descuentan.
+// Configurable en settings (mtess_dias_descuento_tipos, lista separada por
+// comas). Se compara por coincidencia parcial y sin acentos para tolerar
+// variantes ("sin_goce", "sin goce de salario", "lic. especial", …).
+const DEFAULT_DISCOUNT_TYPES = ['vacacion', 'enfermedad', 'reposo', 'licencia_especial', 'licencia especial', 'sin_goce', 'sin goce', 'injustific'];
+
+function normalize(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+async function getMtessDaysConfig() {
+  const [rows] = await sequelize.query(
+    "SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN ('mtess_dias_base_mensual','mtess_dias_descuento_tipos')"
+  );
+  const m = Object.fromEntries(rows.map(r => [r.setting_key, r.setting_value]));
+  const base = parseInt(m.mtess_dias_base_mensual, 10);
+  const list = (m.mtess_dias_descuento_tipos || '').split(',').map(x => normalize(x)).filter(Boolean);
+  return {
+    base: Number.isFinite(base) && base > 0 ? base : 30,
+    discountTypes: list.length ? list : DEFAULT_DISCOUNT_TYPES.map(normalize),
+  };
+}
+
+// Calcula los "días trabajados" a informar y el desglose de descuentos.
+function computeDiasTrabajados(emp, cfg) {
+  if (emp.pay_type === 'jornalero') {
+    // Jornalero: cantidad exacta de días efectivamente trabajados.
+    return { dias: emp.presentDays, base: emp.presentDays, descuentos: 0, detalle: {} };
+  }
+  // Mensualizado: base (30) menos días con justificación descontable.
+  const detalle = {};
+  let descuentos = 0;
+  for (const info of Object.values(emp.days)) {
+    const jt = normalize(info.jtype);
+    if (!jt) continue; // sin justificación → franco/libre: no descuenta
+    if (cfg.discountTypes.some(t => jt.includes(t) || t.includes(jt))) {
+      descuentos++;
+      detalle[info.jtype] = (detalle[info.jtype] || 0) + 1;
+    }
+  }
+  return { dias: Math.max(0, cfg.base - descuentos), base: cfg.base, descuentos, detalle };
 }
 
 // ─── Planilla MTESS (PDF) ────────────────────────────────────────
@@ -243,6 +293,114 @@ router.get('/ips-jornales', asyncHandler(async (req, res) => {
     period: { year, month, label: `${MESES[month]} ${year}` },
     total: data.length,
     data,
+  });
+}));
+
+// ─── Planilla de Comunicación MTESS (formato de carga) ───────────
+// Columnas EXACTAS del archivo que se sube al MTESS (ver ejemplo oficial).
+const MTESS_HEADERS = [
+  'numero_patronal', 'nro_ci', 'periodo_pago_desde', 'periodo_pago_hasta', 'forma_de_pago',
+  'canti_dias_trabajados', 'canti_piezas_tareas', 'horas_ordinarias', 'horas_extraordinarias',
+  'Salario Básico', 'Comisiones', 'Horas extras diurnas(50%)', 'Recargo horario Nocturno',
+  'Horas extras nocturnas(100%)', 'Premios', 'Salario en especie (Max 30%)', 'Regalias',
+  'Gratificaciones', 'Grado Académico', 'Feriados', 'Dietas', 'Complemento Salarial',
+  'Bonificacion Familiar', 'Antigüedad', 'Anticipos de salario', 'Aporte Seg. Social',
+  'Descuentos 1', 'Concepto descuentos 1', 'Descuentos 2', 'Concepto descuentos 2',
+  'Descuentos 3', 'Concepto descuentos 3', 'Asignación por guardería',
+  'Asignación por trabajo insalubre o riesgoso', 'Otras asignaciones 1', 'Concepto otras asignaciones 1',
+  'Otras asignaciones 2', 'Concepto otras asignaciones 2', 'Otras asignaciones 3', 'Concepto otras asignaciones 3',
+];
+
+async function getObreroRate() {
+  const [rows] = await sequelize.query(
+    "SELECT setting_value FROM notification_settings WHERE setting_key = 'ips_rate_obrero' LIMIT 1"
+  );
+  const n = parseFloat(String(rows[0]?.setting_value ?? '').replace(',', '.'));
+  return Number.isFinite(n) ? n : 9;
+}
+
+router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
+  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
+  const dept = req.query.dept || null;
+  const format = (req.query.format || 'json').toLowerCase();
+
+  const [employer, employees, cfg, obreroRate] = await Promise.all([
+    getEmployerData(), getMonthlyGrid(year, month, dept), getMtessDaysConfig(), getObreroRate(),
+  ]);
+
+  const desde = new Date(Date.UTC(year, month - 1, 1, 12));
+  const hasta = new Date(Date.UTC(year, month, 0, 12));
+  const patronal = employer.employer_ips_patronal || '';
+
+  const rows = employees.map(e => {
+    const d = computeDiasTrabajados(e, cfg);
+    const forma = e.pay_type === 'jornalero' ? 1 : 3; // 1=Jornal, 3=Mensual
+    const basico = e.pay_type === 'jornalero'
+      ? Math.round(e.salary_base * d.dias)
+      : Math.round(e.salary_base);
+    const aporteObrero = Math.round((basico * obreroRate) / 100);
+    return {
+      // Campos con datos que el sistema conoce
+      numero_patronal: patronal,
+      nro_ci: e.ci,
+      periodo_pago_desde: desde,
+      periodo_pago_hasta: hasta,
+      forma_de_pago: forma,
+      canti_dias_trabajados: d.dias,
+      horas_ordinarias: Math.round(e.workedMin / 60),
+      horas_extraordinarias: Math.round(e.otMin / 60),
+      salario_basico: basico,
+      aporte_seg_social: aporteObrero,
+      // metadatos para la vista previa (no van al Excel de carga)
+      _meta: {
+        code: e.code, name: e.name, pay_type: e.pay_type,
+        base: d.base, descuentos: d.descuentos, detalle: d.detalle,
+      },
+    };
+  });
+
+  if (format === 'xlsx') {
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Comunicacion');
+    ws.addRow(MTESS_HEADERS);
+    ws.getRow(1).font = { bold: true };
+    for (const r of rows) {
+      const row = new Array(MTESS_HEADERS.length).fill(null);
+      row[0] = r.numero_patronal;
+      row[1] = r.nro_ci;
+      row[2] = r.periodo_pago_desde;
+      row[3] = r.periodo_pago_hasta;
+      row[4] = r.forma_de_pago;
+      row[5] = r.canti_dias_trabajados;
+      row[6] = null;                       // canti_piezas_tareas
+      row[7] = r.horas_ordinarias;
+      row[8] = r.horas_extraordinarias;
+      row[9] = r.salario_basico;           // Salario Básico
+      row[25] = r.aporte_seg_social;       // Aporte Seg. Social
+      const added = ws.addRow(row);
+      added.getCell(3).numFmt = 'dd/mm/yyyy';
+      added.getCell(4).numFmt = 'dd/mm/yyyy';
+    }
+    ws.getColumn(1).width = 14; ws.getColumn(2).width = 12; ws.getColumn(3).width = 13;
+    ws.getColumn(4).width = 13; ws.getColumn(10).width = 14; ws.getColumn(26).width = 14;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="planilla_comunicacion_mtess_${year}_${String(month).padStart(2, '0')}.xlsx"`);
+    await wb.xlsx.write(res);
+    return res.end();
+  }
+
+  res.json({
+    period: { year, month, label: `${MESES[month]} ${year}` },
+    config: { base_mensual: cfg.base, tipos_descuento: cfg.discountTypes, ips_rate_obrero: obreroRate },
+    total: rows.length,
+    data: rows.map(({ _meta, periodo_pago_desde, periodo_pago_hasta, ...rest }) => ({
+      ...rest,
+      periodo_pago_desde: periodo_pago_desde.toISOString().slice(0, 10),
+      periodo_pago_hasta: periodo_pago_hasta.toISOString().slice(0, 10),
+      ..._meta,
+    })),
   });
 }));
 

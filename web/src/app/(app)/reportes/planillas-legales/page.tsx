@@ -17,6 +17,8 @@ const EMPLOYER_FIELDS: { key: string; label: string; ph?: string }[] = [
   { key: 'employer_representante', label: 'Representante legal' },
   { key: 'ips_rate_obrero',       label: 'Tasa IPS obrero (%)', ph: '9' },
   { key: 'ips_rate_patronal',     label: 'Tasa IPS patronal (%)', ph: '16.5' },
+  { key: 'mtess_dias_base_mensual', label: 'MTESS · base días (mensual)', ph: '30' },
+  { key: 'mtess_dias_descuento_tipos', label: 'MTESS · tipos que descuentan', ph: 'vacaciones, reposo, injustificada, sin_goce, licencia_especial' },
 ]
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -25,6 +27,11 @@ const gs = (n: number) => new Intl.NumberFormat('es-PY').format(Math.round(n || 
 interface Dept { id: number; name: string }
 interface IpsRow { code: string; name: string; ci: string; ips: string; position: string; dias_trabajados: number; horas_trabajadas: number; horas_extra: number }
 interface AporteRow { codigo: string; nombre: string; cedula: string; ips: string; dias_trab: number; salario_base: number; aporte_obrero: number; aporte_patronal: number; total_aporte: number }
+interface ComunRow {
+  code: string; name: string; pay_type: string; nro_ci: string; forma_de_pago: number
+  canti_dias_trabajados: number; base: number; descuentos: number; detalle: Record<string, number>
+  horas_ordinarias: number; horas_extraordinarias: number; salario_basico: number; aporte_seg_social: number
+}
 
 export default function PlanillasLegalesPage() {
   const now = new Date()
@@ -39,6 +46,8 @@ export default function PlanillasLegalesPage() {
   const [loadingIps, setLoadingIps] = useState(false)
   const [aportes, setAportes] = useState<{ data: AporteRow[]; totals: any; rates: any } | null>(null)
   const [loadingAp, setLoadingAp] = useState(false)
+  const [comun, setComun] = useState<{ data: ComunRow[]; config: any } | null>(null)
+  const [loadingComun, setLoadingComun] = useState(false)
 
   useEffect(() => {
     api.get('/api/settings').then(r => {
@@ -75,6 +84,16 @@ export default function PlanillasLegalesPage() {
       const r = await api.get(`/api/legal/ips-jornales`, { params: { year, month, dept: dept || undefined } })
       setIps(r.data?.data || [])
     } catch { setIps([]) } finally { setLoadingIps(false) }
+  }
+
+  // Planilla de comunicación MTESS (formato de carga oficial).
+  function downloadComunicacion() { window.open(apiUrl(`/api/legal/planilla-comunicacion?format=xlsx&${q()}`), '_blank') }
+  async function previewComunicacion() {
+    setLoadingComun(true); setComun(null)
+    try {
+      const r = await api.get(`/api/legal/planilla-comunicacion`, { params: { year, month, dept: dept || undefined } })
+      setComun({ data: r.data?.data || [], config: r.data?.config || {} })
+    } catch { setComun({ data: [], config: {} }) } finally { setLoadingComun(false) }
   }
 
   // Los aportes IPS se calculan para toda la empresa (planilla patronal completa).
@@ -184,6 +203,25 @@ export default function PlanillasLegalesPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100 dark:border-white/[0.06]">
+          <button onClick={downloadComunicacion}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-blue-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-blue-400/30">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center dark:bg-blue-400/10 dark:text-blue-400"><FileSpreadsheet size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Planilla de comunicación MTESS (Excel)</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Formato de carga oficial · días trabajados por tipo de pago</div>
+            </div>
+          </button>
+          <button onClick={previewComunicacion}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-slate-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-white/[0.16]">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center dark:bg-white/[0.06] dark:text-white/50"><FileText size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Vista previa comunicación</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Verificar días trabajados y descuentos</div>
+            </div>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
           <button onClick={downloadAportesExcel}
             className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-violet-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-violet-400/30">
             <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center dark:bg-violet-400/10 dark:text-violet-400"><FileSpreadsheet size={18} /></div>
@@ -202,6 +240,60 @@ export default function PlanillasLegalesPage() {
           </button>
         </div>
       </section>
+
+      {/* Vista previa planilla de comunicación MTESS */}
+      {(loadingComun || comun) && (
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-bold text-slate-900 dark:text-white mb-1">Planilla de comunicación — {MESES[month - 1]} {year}</h2>
+          {comun?.config && (
+            <p className="text-xs text-slate-400 dark:text-white/30 mb-3">
+              Mensualizados: base {comun.config.base_mensual ?? 30} días, menos reposo / injustificada / licencia especial / sin goce / vacaciones ·
+              Jornaleros: días efectivamente trabajados. Los francos/libres no descuentan.
+            </p>
+          )}
+          {loadingComun ? (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Cargando...</p>
+          ) : comun && comun.data.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+                  <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                    <th className="px-3 py-2">Empleado</th><th className="px-3 py-2">C.I.</th>
+                    <th className="px-3 py-2">Tipo</th><th className="px-3 py-2 text-right">Base</th>
+                    <th className="px-3 py-2 text-right">Descuentos</th><th className="px-3 py-2 text-right">Días a informar</th>
+                    <th className="px-3 py-2 text-right">Hs ord.</th><th className="px-3 py-2 text-right">Hs extra</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+                  {comun.data.map((r, i) => (
+                    <tr key={i} className="text-slate-700 dark:text-white/70">
+                      <td className="px-3 py-2">{r.name}</td>
+                      <td className="px-3 py-2 tabular-nums">{r.nro_ci || '—'}</td>
+                      <td className="px-3 py-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full ${r.pay_type === 'jornalero' ? 'bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300' : 'bg-cyan-100 text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300'}`}>
+                          {r.pay_type === 'jornalero' ? 'Jornalero' : 'Mensual'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-400">{r.pay_type === 'jornalero' ? '—' : r.base}</td>
+                      <td className="px-3 py-2 text-right tabular-nums" title={Object.entries(r.detalle || {}).map(([k, v]) => `${k}: ${v}`).join(', ')}>
+                        {r.descuentos ? <span className="text-rose-600 dark:text-rose-400">−{r.descuentos}</span> : <span className="text-slate-300">0</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-bold text-slate-900 dark:text-white">{r.canti_dias_trabajados}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.horas_ordinarias}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.horas_extraordinarias}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-[11px] text-slate-400 dark:text-white/30 mt-3">
+                Pasá el cursor sobre &quot;Descuentos&quot; para ver el detalle por tipo. El tipo de pago (mensual/jornalero) se define en cada empleado.
+              </p>
+            </div>
+          ) : (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Sin datos para el período.</p>
+          )}
+        </section>
+      )}
 
       {/* Vista previa aportes IPS */}
       {(loadingAp || aportes) && (
