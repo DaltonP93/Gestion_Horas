@@ -79,6 +79,9 @@ const EMPLOYER_KEYS = [
   'employer_ciudad',                 // Ciudad
   'employer_telefono',               // Teléfono
   'employer_representante',          // Representante legal
+  'ips_rate_obrero',                 // % aporte obrero IPS (default 9)
+  'ips_rate_patronal',               // % aporte patronal IPS (default 16.5)
+  'salario_minimo',                  // salario mínimo legal vigente (referencia)
 ];
 
 const SETTING_KEYS = [

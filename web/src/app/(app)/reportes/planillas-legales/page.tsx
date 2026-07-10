@@ -15,12 +15,16 @@ const EMPLOYER_FIELDS: { key: string; label: string; ph?: string }[] = [
   { key: 'employer_ciudad',       label: 'Ciudad' },
   { key: 'employer_telefono',     label: 'Teléfono' },
   { key: 'employer_representante', label: 'Representante legal' },
+  { key: 'ips_rate_obrero',       label: 'Tasa IPS obrero (%)', ph: '9' },
+  { key: 'ips_rate_patronal',     label: 'Tasa IPS patronal (%)', ph: '16.5' },
 ]
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+const gs = (n: number) => new Intl.NumberFormat('es-PY').format(Math.round(n || 0))
 
 interface Dept { id: number; name: string }
 interface IpsRow { code: string; name: string; ci: string; ips: string; position: string; dias_trabajados: number; horas_trabajadas: number; horas_extra: number }
+interface AporteRow { codigo: string; nombre: string; cedula: string; ips: string; dias_trab: number; salario_base: number; aporte_obrero: number; aporte_patronal: number; total_aporte: number }
 
 export default function PlanillasLegalesPage() {
   const now = new Date()
@@ -33,6 +37,8 @@ export default function PlanillasLegalesPage() {
   const [msg, setMsg] = useState('')
   const [ips, setIps] = useState<IpsRow[] | null>(null)
   const [loadingIps, setLoadingIps] = useState(false)
+  const [aportes, setAportes] = useState<{ data: AporteRow[]; totals: any; rates: any } | null>(null)
+  const [loadingAp, setLoadingAp] = useState(false)
 
   useEffect(() => {
     api.get('/api/settings').then(r => {
@@ -69,6 +75,16 @@ export default function PlanillasLegalesPage() {
       const r = await api.get(`/api/legal/ips-jornales`, { params: { year, month, dept: dept || undefined } })
       setIps(r.data?.data || [])
     } catch { setIps([]) } finally { setLoadingIps(false) }
+  }
+
+  // Los aportes IPS se calculan para toda la empresa (planilla patronal completa).
+  function downloadAportesExcel() { window.open(apiUrl(`/api/payroll/ips-aportes?format=xlsx&year=${year}&month=${month}&${tokenParam()}`), '_blank') }
+  async function previewAportes() {
+    setLoadingAp(true); setAportes(null)
+    try {
+      const r = await api.get(`/api/payroll/ips-aportes`, { params: { year, month } })
+      setAportes({ data: r.data?.data || [], totals: r.data?.totals || {}, rates: r.data?.rates || {} })
+    } catch { setAportes({ data: [], totals: {}, rates: {} }) } finally { setLoadingAp(false) }
   }
 
   return (
@@ -166,7 +182,73 @@ export default function PlanillasLegalesPage() {
             </div>
           </button>
         </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 pt-3 border-t border-slate-100 dark:border-white/[0.06]">
+          <button onClick={downloadAportesExcel}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-violet-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-violet-400/30">
+            <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center dark:bg-violet-400/10 dark:text-violet-400"><FileSpreadsheet size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Aportes IPS con montos (Excel)</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Salario base + obrero 9% + patronal 16,5%</div>
+            </div>
+          </button>
+          <button onClick={previewAportes}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-slate-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-white/[0.16]">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center dark:bg-white/[0.06] dark:text-white/50"><FileText size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Vista previa de aportes</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Requiere salario base cargado por empleado</div>
+            </div>
+          </button>
+        </div>
       </section>
+
+      {/* Vista previa aportes IPS */}
+      {(loadingAp || aportes) && (
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-bold text-slate-900 dark:text-white mb-1">Aportes IPS — {MESES[month - 1]} {year}</h2>
+          {aportes?.rates && <p className="text-xs text-slate-400 dark:text-white/30 mb-3">Tasas: obrero {aportes.rates.obrero ?? 9}% · patronal {aportes.rates.patronal ?? 16.5}%</p>}
+          {loadingAp ? (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Cargando...</p>
+          ) : aportes && aportes.data.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+                  <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                    <th className="px-3 py-2">Empleado</th><th className="px-3 py-2">C.I.</th><th className="px-3 py-2">N° IPS</th>
+                    <th className="px-3 py-2 text-right">Salario base</th><th className="px-3 py-2 text-right">Obrero</th>
+                    <th className="px-3 py-2 text-right">Patronal</th><th className="px-3 py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+                  {aportes.data.map((r, i) => (
+                    <tr key={i} className="text-slate-700 dark:text-white/70">
+                      <td className="px-3 py-2">{r.nombre}</td>
+                      <td className="px-3 py-2 tabular-nums">{r.cedula || '—'}</td>
+                      <td className="px-3 py-2 tabular-nums">{r.ips || '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">₲ {gs(r.salario_base)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">₲ {gs(r.aporte_obrero)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">₲ {gs(r.aporte_patronal)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold">₲ {gs(r.total_aporte)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-200 dark:border-white/[0.1] font-bold text-slate-900 dark:text-white">
+                    <td className="px-3 py-2" colSpan={3}>TOTALES</td>
+                    <td className="px-3 py-2 text-right tabular-nums">₲ {gs(aportes.totals.salario_base)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">₲ {gs(aportes.totals.aporte_obrero)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">₲ {gs(aportes.totals.aporte_patronal)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">₲ {gs(aportes.totals.total_aporte)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ) : (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Sin datos. Cargá el salario base de los empleados para calcular aportes.</p>
+          )}
+        </section>
+      )}
 
       {/* Vista previa IPS */}
       {(loadingIps || ips) && (
