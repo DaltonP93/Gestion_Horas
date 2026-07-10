@@ -40,6 +40,7 @@ const NAV: NavItem[] = [
   { href: '/aprobaciones',  icon: CheckSquare,     i18nKey: 'nav.approvals',    section: 'gestion', roles: ['admin','gth','hr','coordinator','manager'], module: 'aprobaciones' },
   { href: '/supervisor',    icon: Users,           i18nKey: 'nav.my_team',      section: 'gestion', roles: ['coordinator','manager','supervisor','gestor'], module: 'supervisor' },
   { href: '/reportes',      icon: BarChart2,       i18nKey: 'nav.reports',      section: 'gestion', roles: ['admin','gth','hr','manager','gestor'], module: 'reportes' },
+  { href: '/reportes/planillas-legales', icon: FileText, i18nKey: 'nav.legal_sheets', section: 'gestion', roles: ['admin','gth','hr'], module: 'reportes' },
   { href: '/ejecutivo',     icon: TrendingUp,      i18nKey: 'nav.executive',    section: 'gestion', roles: ['admin','gth','hr','manager'], module: 'ejecutivo' },
   { href: '/nomina',        icon: DollarSign,      i18nKey: 'nav.payroll',      section: 'gestion', roles: ['admin','gth','hr'], module: 'nomina' },
   { href: '/calendario',    icon: Cake,            i18nKey: 'nav.calendar',     section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'calendario' },

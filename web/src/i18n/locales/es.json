@@ -76,7 +76,8 @@
     "logout": "Cerrar sesión",
     "section_portal": "Portal",
     "section_management": "Gestión",
-    "section_admin": "Administración"
+    "section_admin": "Administración",
+    "legal_sheets": "Planillas legales"
   },
   "dashboard": {
     "title": "Panel principal",

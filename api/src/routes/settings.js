@@ -68,12 +68,26 @@ const DISPLAY_KEYS = [
   'system_locale',                   // 'es-PY' | 'es-ES' | 'en-US'
 ];
 
+// Datos del empleador — para el encabezado de las planillas legales (MTESS/IPS)
+const EMPLOYER_KEYS = [
+  'employer_razon_social',           // Razón social / nombre de la empresa
+  'employer_ruc',                    // RUC
+  'employer_ips_patronal',           // N° patronal IPS
+  'employer_mtess_registro',         // N° de registro patronal en el MTESS
+  'employer_actividad',              // Actividad económica
+  'employer_domicilio',              // Domicilio
+  'employer_ciudad',                 // Ciudad
+  'employer_telefono',               // Teléfono
+  'employer_representante',          // Representante legal
+];
+
 const SETTING_KEYS = [
   ...BRANDING_KEYS,
   ...THEME_KEYS,
   ...LOGIN_KEYS,
   ...DISPLAY_KEYS,
   ...SIGNATURE_KEYS,
+  ...EMPLOYER_KEYS,
 ];
 
 // ─── Defaults ───────────────────────────────────────────────────

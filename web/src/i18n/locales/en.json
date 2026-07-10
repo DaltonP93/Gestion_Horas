@@ -76,7 +76,8 @@
     "logout": "Log out",
     "section_portal": "Portal",
     "section_management": "Management",
-    "section_admin": "Administration"
+    "section_admin": "Administration",
+    "legal_sheets": "Legal Sheets"
   },
   "dashboard": {
     "title": "Main dashboard",
