@@ -122,12 +122,15 @@ export default function TurneraPage() {
     setCells(prev => {
       const key = cellKey(empId, date)
       const old = prev[key] || []
-      // Marcar ids existentes que ya no están para eliminarlos al guardar.
-      const keptIds = new Set(segs.map(s => s.id).filter(Boolean) as number[])
-      const toRemove = old.filter(o => o.id && !keptIds.has(o.id)).map(o => o.id as number)
+      // Al reescribir la celda eliminamos TODAS las filas previas por id y
+      // reinsertamos los tramos nuevos sin id. Como el backend hace upsert por
+      // (schedule, employee, date, segment), reutilizar ids al renumerar
+      // tramos dejaría filas huérfanas (p. ej. un segment 2 que quedó viejo).
+      const toRemove = old.map(o => o.id).filter(Boolean) as number[]
       if (toRemove.length) setRemoved(r => [...r, ...toRemove])
+      const fresh = segs.map(s => ({ ...s, id: undefined }))
       const next = { ...prev }
-      if (segs.length) next[key] = segs; else delete next[key]
+      if (fresh.length) next[key] = fresh; else delete next[key]
       return next
     })
     setDirty(true)
@@ -147,9 +150,20 @@ export default function TurneraPage() {
     finally { setSaving(false) }
   }
 
-  // Minutos de una celda (suma de tramos work).
+  // Descanso por plantilla (para descontarlo igual que el backend).
+  const breakOf = useMemo(
+    () => Object.fromEntries(templates.map(t => [t.id, t.break_minutes || 0])) as Record<number, number>,
+    [templates]
+  )
+
+  // Minutos de una celda (suma de tramos work, descontando el break de la
+  // plantilla para que el control de 48 hs coincida con lo guardado/exportado).
   const cellMinutes = (empId: number, date: string) =>
-    (cells[cellKey(empId, date)] || []).reduce((s, a) => s + (a.kind === 'work' ? segMinutes(a.start_time, a.end_time) : 0), 0)
+    (cells[cellKey(empId, date)] || []).reduce((s, a) => {
+      if (a.kind !== 'work') return s
+      const brk = a.template_id ? (breakOf[a.template_id] || 0) : 0
+      return s + Math.max(0, segMinutes(a.start_time, a.end_time) - brk)
+    }, 0)
 
   // Total semanal por empleado (para la columna de control 48h).
   const weekMinutes = (empId: number, week: CalWeek) =>

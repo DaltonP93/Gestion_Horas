@@ -26,7 +26,10 @@ const { authenticate, authorize, requirePermission } = require('../middleware/au
 const { sequelize } = require('../config/database');
 
 router.use(authenticate);
-router.use(authorize('admin', 'super_admin', 'gth', 'hr', 'manager', 'coordinator', 'supervisor'));
+// Incluye 'gestor': el módulo 'turnera' es de sección gestión, así que
+// defaultsForRole('gestor') le da can_view; si no estuviera acá, el allowlist
+// del router respondería 403 antes de que requirePermission aplique la flag.
+router.use(authorize('admin', 'super_admin', 'gth', 'hr', 'manager', 'coordinator', 'supervisor', 'gestor'));
 
 const MODULE = 'turnera';
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -117,7 +120,7 @@ router.post('/templates', requirePermission(MODULE, 'create'), async (req, res, 
       'INSERT INTO shift_templates (name, start_time, end_time, break_minutes, color) VALUES (?,?,?,?,?)',
       { replacements: [name, start_time || null, end_time || null, +(break_minutes || 0), color || '#0ea5e9'] }
     );
-    res.status(201).json({ id: r });
+    res.status(201).json({ id: r.insertId });
   } catch (e) { next(e); }
 });
 
@@ -173,7 +176,7 @@ router.post('/schedules', requirePermission(MODULE, 'create'), async (req, res, 
        VALUES (?,?,?,?,?,?,?,?)`,
       { replacements: [finalName, branch_id || null, department_id || null, year, month, weekly, notes || null, req.user?.id || null] }
     );
-    res.status(201).json({ id: r });
+    res.status(201).json({ id: r.insertId });
   } catch (e) { next(e); }
 });
 
