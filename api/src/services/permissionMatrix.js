@@ -17,6 +17,7 @@ const MODULES = [
   { key: 'aprobaciones',   label: 'Aprobaciones',         section: 'gestion' },
   { key: 'supervisor',     label: 'Mi equipo',            section: 'gestion' },
   { key: 'reportes',       label: 'Reportes',             section: 'gestion' },
+  { key: 'turnera',        label: 'Turnera (turnos)',     section: 'gestion' },
   { key: 'ejecutivo',      label: 'Dashboard ejecutivo',  section: 'gestion' },
   { key: 'nomina',         label: 'Nómina SAA',           section: 'gestion' },
   // Admin
