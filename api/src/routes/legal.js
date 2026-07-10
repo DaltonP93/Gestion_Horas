@@ -118,21 +118,42 @@ async function getMtessDaysConfig() {
   };
 }
 
+// Tipos de justificación con goce que NO descuentan (permiso pago, "otro").
+const NON_DISCOUNT_TYPES = ['permiso', 'otro'];
+
 // Calcula los "días trabajados" a informar y el desglose de descuentos.
+//
+// Clave: `status='absent'` sólo lo genera materializeAbsents para un día
+// LABORABLE del horario del empleado sin marcación → es una ausencia
+// injustificada real (los francos/libres son días NO laborables y nunca
+// generan fila 'absent'). Por eso una ausencia sin justificación SÍ descuenta,
+// mientras que un franco (sin fila, o status weekend/holiday) no.
 function computeDiasTrabajados(emp, cfg) {
   if (emp.pay_type === 'jornalero') {
     // Jornalero: cantidad exacta de días efectivamente trabajados.
     return { dias: emp.presentDays, base: emp.presentDays, descuentos: 0, detalle: {} };
   }
-  // Mensualizado: base (30) menos días con justificación descontable.
+  // Mensualizado: base (30) menos días descontables.
   const detalle = {};
   let descuentos = 0;
   for (const info of Object.values(emp.days)) {
     const jt = normalize(info.jtype);
-    if (!jt) continue; // sin justificación → franco/libre: no descuenta
-    if (cfg.discountTypes.some(t => jt.includes(t) || t.includes(jt))) {
+    const st = info.status;
+    // Días que NO descuentan: trabajados, feriado, franco/fin de semana.
+    if (st === 'present' || st === 'late' || st === 'holiday' || st === 'weekend') continue;
+    // Permiso con goce u "otro": no descuenta.
+    if (NON_DISCOUNT_TYPES.includes(jt)) continue;
+    // Tipo de ausencia descontable explícito (vacaciones, reposo, sin goce…).
+    if (jt && cfg.discountTypes.some(t => jt.includes(t) || t.includes(jt))) {
       descuentos++;
       detalle[info.jtype] = (detalle[info.jtype] || 0) + 1;
+      continue;
+    }
+    // Ausencia injustificada: día laborable sin marcación ni justificación.
+    if (st === 'absent') {
+      descuentos++;
+      const k = jt ? info.jtype : 'injustificada';
+      detalle[k] = (detalle[k] || 0) + 1;
     }
   }
   return { dias: Math.max(0, cfg.base - descuentos), base: cfg.base, descuentos, detalle };

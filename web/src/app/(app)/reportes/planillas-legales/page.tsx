@@ -247,8 +247,8 @@ export default function PlanillasLegalesPage() {
           <h2 className="font-bold text-slate-900 dark:text-white mb-1">Planilla de comunicación — {MESES[month - 1]} {year}</h2>
           {comun?.config && (
             <p className="text-xs text-slate-400 dark:text-white/30 mb-3">
-              Mensualizados: base {comun.config.base_mensual ?? 30} días, menos reposo / injustificada / licencia especial / sin goce / vacaciones ·
-              Jornaleros: días efectivamente trabajados. Los francos/libres no descuentan.
+              Mensualizados: base {comun.config.base_mensual ?? 30} días, menos reposo / ausencia injustificada / licencia especial / sin goce / vacaciones ·
+              Jornaleros: días efectivamente trabajados. Los francos/libres, feriados y permisos con goce no descuentan.
             </p>
           )}
           {loadingComun ? (
