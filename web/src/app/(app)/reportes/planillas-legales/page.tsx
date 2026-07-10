@@ -1,0 +1,210 @@
+'use client'
+import { useEffect, useState } from 'react'
+import { FileText, Save, Download, Building2, FileSpreadsheet, ArrowLeft } from 'lucide-react'
+import Link from 'next/link'
+import { api, apiUrl } from '@/lib/api'
+
+// Campos de datos del empleador (para el encabezado de las planillas).
+const EMPLOYER_FIELDS: { key: string; label: string; ph?: string }[] = [
+  { key: 'employer_razon_social', label: 'Razón social', ph: 'Nombre legal de la empresa' },
+  { key: 'employer_ruc',          label: 'RUC' },
+  { key: 'employer_ips_patronal', label: 'N° Patronal IPS' },
+  { key: 'employer_mtess_registro', label: 'N° Registro MTESS' },
+  { key: 'employer_actividad',    label: 'Actividad económica' },
+  { key: 'employer_domicilio',    label: 'Domicilio' },
+  { key: 'employer_ciudad',       label: 'Ciudad' },
+  { key: 'employer_telefono',     label: 'Teléfono' },
+  { key: 'employer_representante', label: 'Representante legal' },
+]
+
+const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+
+interface Dept { id: number; name: string }
+interface IpsRow { code: string; name: string; ci: string; ips: string; position: string; dias_trabajados: number; horas_trabajadas: number; horas_extra: number }
+
+export default function PlanillasLegalesPage() {
+  const now = new Date()
+  const [emp, setEmp] = useState<Record<string, string>>({})
+  const [depts, setDepts] = useState<Dept[]>([])
+  const [year, setYear] = useState(now.getFullYear())
+  const [month, setMonth] = useState(now.getMonth() + 1)
+  const [dept, setDept] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [ips, setIps] = useState<IpsRow[] | null>(null)
+  const [loadingIps, setLoadingIps] = useState(false)
+
+  useEffect(() => {
+    api.get('/api/settings').then(r => {
+      const s = r.data || {}
+      const e: Record<string, string> = {}
+      for (const f of EMPLOYER_FIELDS) e[f.key] = s[f.key] || ''
+      setEmp(e)
+    }).catch(() => {})
+    api.get('/api/employees/departments').then(r => setDepts(r.data || [])).catch(() => {})
+  }, [])
+
+  async function saveEmployer() {
+    setSaving(true); setMsg('')
+    try {
+      await api.put('/api/settings', emp)
+      setMsg('Datos del empleador guardados.')
+    } catch (e: any) {
+      setMsg(e?.response?.data?.error || 'Error al guardar')
+    } finally { setSaving(false) }
+  }
+
+  function tokenParam() {
+    const t = (typeof window !== 'undefined' && (localStorage.getItem('access_token') || localStorage.getItem('token'))) || ''
+    return `access_token=${encodeURIComponent(t)}`
+  }
+  const q = () => `year=${year}&month=${month}${dept ? `&dept=${dept}` : ''}&${tokenParam()}`
+
+  function downloadMtess() { window.open(apiUrl(`/api/legal/planilla-mtess?${q()}`), '_blank') }
+  function downloadIpsExcel() { window.open(apiUrl(`/api/legal/ips-jornales?format=xlsx&${q()}`), '_blank') }
+
+  async function previewIps() {
+    setLoadingIps(true); setIps(null)
+    try {
+      const r = await api.get(`/api/legal/ips-jornales`, { params: { year, month, dept: dept || undefined } })
+      setIps(r.data?.data || [])
+    } catch { setIps([]) } finally { setLoadingIps(false) }
+  }
+
+  return (
+    <div className="p-6 space-y-6 max-w-5xl">
+      <Link href="/reportes" className="text-slate-500 hover:text-slate-700 flex items-center gap-1 text-sm dark:text-white/40 w-fit">
+        <ArrowLeft size={16} /> Volver a reportes
+      </Link>
+
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-[0_8px_24px_-6px_rgba(34,211,238,0.5)]">
+          <FileText size={22} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Planillas legales</h1>
+          <p className="text-sm text-slate-500 dark:text-white/40">Control de asistencia (MTESS) y resumen de jornales para IPS.</p>
+        </div>
+      </div>
+
+      {msg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-3 dark:bg-emerald-400/[0.08] dark:border-emerald-400/30 dark:text-emerald-400">{msg}</div>}
+
+      {/* Datos del empleador */}
+      <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="flex items-center gap-2 mb-4">
+          <Building2 size={17} className="text-cyan-500" />
+          <h2 className="font-bold text-slate-900 dark:text-white">Datos del empleador</h2>
+          <span className="text-xs text-slate-400 dark:text-white/30">Aparecen en el encabezado de las planillas</span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {EMPLOYER_FIELDS.map(f => (
+            <div key={f.key}>
+              <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">{f.label}</label>
+              <input value={emp[f.key] || ''} onChange={e => setEmp(prev => ({ ...prev, [f.key]: e.target.value }))}
+                placeholder={f.ph || ''}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+            </div>
+          ))}
+        </div>
+        <div className="mt-4">
+          <button onClick={saveEmployer} disabled={saving}
+            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
+            <Save size={15} /> {saving ? 'Guardando...' : 'Guardar datos del empleador'}
+          </button>
+        </div>
+      </section>
+
+      {/* Período + generación */}
+      <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <h2 className="font-bold text-slate-900 dark:text-white mb-4">Generar planilla del período</h2>
+        <div className="flex flex-wrap gap-3 items-end mb-5">
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Mes</label>
+            <select value={month} onChange={e => setMonth(+e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent">
+              {MESES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Año</label>
+            <input type="number" value={year} onChange={e => setYear(+e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm w-28 dark:border-white/[0.08] bg-transparent" />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Departamento</label>
+            <select value={dept} onChange={e => setDept(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent">
+              <option value="">Todos</option>
+              {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <button onClick={downloadMtess}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-cyan-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-cyan-400/30">
+            <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center dark:bg-cyan-400/10 dark:text-cyan-400"><Download size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Planilla MTESS (PDF)</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Control de asistencia: entrada/salida diaria</div>
+            </div>
+          </button>
+          <button onClick={downloadIpsExcel}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-emerald-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-emerald-400/30">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center dark:bg-emerald-400/10 dark:text-emerald-400"><FileSpreadsheet size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Jornales IPS (Excel)</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Días y horas por empleado (C.I. y N° IPS)</div>
+            </div>
+          </button>
+          <button onClick={previewIps}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-slate-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-white/[0.16]">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center dark:bg-white/[0.06] dark:text-white/50"><FileText size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Vista previa IPS</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Ver el resumen en pantalla</div>
+            </div>
+          </button>
+        </div>
+      </section>
+
+      {/* Vista previa IPS */}
+      {(loadingIps || ips) && (
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-bold text-slate-900 dark:text-white mb-3">Resumen IPS — {MESES[month - 1]} {year}</h2>
+          {loadingIps ? (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Cargando...</p>
+          ) : ips && ips.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+                  <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                    <th className="px-3 py-2">Código</th><th className="px-3 py-2">Empleado</th>
+                    <th className="px-3 py-2">C.I.</th><th className="px-3 py-2">N° IPS</th>
+                    <th className="px-3 py-2 text-right">Días</th><th className="px-3 py-2 text-right">Horas</th>
+                    <th className="px-3 py-2 text-right">H. extra</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+                  {ips.map((r, i) => (
+                    <tr key={i} className="text-slate-700 dark:text-white/70">
+                      <td className="px-3 py-2 font-mono text-xs">{r.code}</td>
+                      <td className="px-3 py-2">{r.name}</td>
+                      <td className="px-3 py-2 tabular-nums">{r.ci || '—'}</td>
+                      <td className="px-3 py-2 tabular-nums">{r.ips || '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.dias_trabajados}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.horas_trabajadas}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.horas_extra}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Sin datos para el período.</p>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}

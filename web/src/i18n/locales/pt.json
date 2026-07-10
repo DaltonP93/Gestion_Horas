@@ -76,7 +76,8 @@
     "logout": "Sair",
     "section_portal": "Portal",
     "section_management": "Gestão",
-    "section_admin": "Administração"
+    "section_admin": "Administração",
+    "legal_sheets": "Planilhas legais"
   },
   "dashboard": {
     "title": "Painel principal",

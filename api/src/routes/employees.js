@@ -210,6 +210,9 @@ const QUICK_EDIT_COLS = {
   employee_number: 'employee_number', email: 'email',
   phone: 'phone', position: 'position',
   birth_date: 'birth_date', hire_date: 'hire_date',
+  // Datos para planillas legales (MTESS / IPS)
+  document_number: 'document_number', ips_number: 'ips_number',
+  salary_base: 'salary_base', gender: 'gender',
 };
 router.patch('/:id/quick', authorize('admin','hr'), requirePermission('empleados', 'update'), async (req, res) => {
   const id = parseInt(req.params.id);
