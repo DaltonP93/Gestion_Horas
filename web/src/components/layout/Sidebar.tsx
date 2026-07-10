@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Users, BarChart2, Settings, Clock, Calendar,
   LogOut, Shield, Server, Building2, CheckSquare, UserCircle2,
   Menu, X, FileText, TrendingUp, QrCode, DollarSign, ChevronDown, Activity,
-  Cake, Plane, PiggyBank, Megaphone, GraduationCap, ClipboardList, Star, UserCheck,
+  Cake, Plane, PiggyBank, Megaphone, GraduationCap, ClipboardList, Star, UserCheck, CalendarRange,
   type LucideIcon
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -39,6 +39,7 @@ const NAV: NavItem[] = [
   { href: '/permisos',      icon: Calendar,        i18nKey: 'nav.permissions',  section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'permisos' },
   { href: '/aprobaciones',  icon: CheckSquare,     i18nKey: 'nav.approvals',    section: 'gestion', roles: ['admin','gth','hr','coordinator','manager'], module: 'aprobaciones' },
   { href: '/supervisor',    icon: Users,           i18nKey: 'nav.my_team',      section: 'gestion', roles: ['coordinator','manager','supervisor','gestor'], module: 'supervisor' },
+  { href: '/turnera',       icon: CalendarRange,   i18nKey: 'nav.shifts',       section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'turnera' },
   { href: '/reportes',      icon: BarChart2,       i18nKey: 'nav.reports',      section: 'gestion', roles: ['admin','gth','hr','manager','gestor'], module: 'reportes' },
   { href: '/reportes/planillas-legales', icon: FileText, i18nKey: 'nav.legal_sheets', section: 'gestion', roles: ['admin','gth','hr'], module: 'reportes' },
   { href: '/ejecutivo',     icon: TrendingUp,      i18nKey: 'nav.executive',    section: 'gestion', roles: ['admin','gth','hr','manager'], module: 'ejecutivo' },

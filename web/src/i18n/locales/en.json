@@ -77,7 +77,8 @@
     "section_portal": "Portal",
     "section_management": "Management",
     "section_admin": "Administration",
-    "legal_sheets": "Legal Sheets"
+    "legal_sheets": "Legal Sheets",
+    "shifts": "Shifts"
   },
   "dashboard": {
     "title": "Main dashboard",

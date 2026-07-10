@@ -77,7 +77,8 @@
     "section_portal": "Portal",
     "section_management": "Gestão",
     "section_admin": "Administração",
-    "legal_sheets": "Planilhas legais"
+    "legal_sheets": "Planilhas legais",
+    "shifts": "Escala"
   },
   "dashboard": {
     "title": "Painel principal",
