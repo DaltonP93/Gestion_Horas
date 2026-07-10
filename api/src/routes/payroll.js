@@ -163,14 +163,23 @@ async function fetchSalaryRows(year, month, branchId) {
   return rows;
 }
 
+// Interpreta una tasa configurada en settings (campo de texto libre).
+// Acepta separador decimal con coma (uso paraguayo: "16,5") o punto ("16.5").
+// Si el valor es inválido o está vacío, devuelve el default.
+function parseRate(value, fallback) {
+  if (value == null) return fallback;
+  const n = parseFloat(String(value).trim().replace(',', '.'));
+  return Number.isFinite(n) ? n : fallback;
+}
+
 async function getIpsRates() {
   const [r] = await sequelize.query(
     "SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN ('ips_rate_obrero','ips_rate_patronal','employer_razon_social','employer_ruc','employer_ips_patronal')"
   );
   const m = Object.fromEntries(r.map(x => [x.setting_key, x.setting_value]));
   return {
-    obrero: parseFloat(m.ips_rate_obrero) || 9,
-    patronal: parseFloat(m.ips_rate_patronal) || 16.5,
+    obrero: parseRate(m.ips_rate_obrero, 9),
+    patronal: parseRate(m.ips_rate_patronal, 16.5),
     razon: m.employer_razon_social || '',
     ruc: m.employer_ruc || '',
     patronalNro: m.employer_ips_patronal || '',
