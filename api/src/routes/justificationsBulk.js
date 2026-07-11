@@ -39,6 +39,25 @@ router.get('/template', async (_req, res) => {
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
   ws.addRow({ code: 'E001', date: '2026-04-21', type: 'permiso', just: 'Ejemplo — reemplazar por datos reales' });
 
+  // Hoja de referencia: tipos válidos y cuáles descuentan días (MTESS).
+  const ref = wb.addWorksheet('Tipos válidos');
+  ref.columns = [
+    { header: 'tipo', key: 't', width: 18 },
+    { header: 'descuenta días (mensualizado)', key: 'd', width: 30 },
+    { header: 'descripción', key: 'x', width: 40 },
+  ];
+  ref.getRow(1).font = { bold: true };
+  [
+    ['permiso', 'No', 'Permiso con goce de sueldo'],
+    ['vacaciones', 'Sí', 'Vacaciones'],
+    ['enfermedad', 'Sí', 'Enfermedad / reposo médico'],
+    ['reposo', 'Sí', 'Reposo'],
+    ['licencia_especial', 'Sí', 'Licencia especial'],
+    ['sin_goce', 'Sí', 'Licencia sin goce de sueldo'],
+    ['injustificada', 'Sí', 'Ausencia injustificada'],
+    ['otro', 'No', 'Otro (no descuenta por defecto)'],
+  ].forEach(r => ref.addRow({ t: r[0], d: r[1], x: r[2] }));
+
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="plantilla_justificaciones.xlsx"');
   await wb.xlsx.write(res);

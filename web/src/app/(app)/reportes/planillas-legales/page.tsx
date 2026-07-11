@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { FileText, Save, Download, Building2, FileSpreadsheet, ArrowLeft } from 'lucide-react'
+import { FileText, Save, Download, Building2, FileSpreadsheet, ArrowLeft, Upload, AlertTriangle, CheckCircle2, ClipboardCheck } from 'lucide-react'
 import Link from 'next/link'
 import { api, apiUrl } from '@/lib/api'
 
@@ -48,6 +48,10 @@ export default function PlanillasLegalesPage() {
   const [loadingAp, setLoadingAp] = useState(false)
   const [comun, setComun] = useState<{ data: ComunRow[]; config: any } | null>(null)
   const [loadingComun, setLoadingComun] = useState(false)
+  const [comp, setComp] = useState<{ total: number; complete: number; counts: any; incomplete: any[] } | null>(null)
+  const [loadingComp, setLoadingComp] = useState(false)
+  const [importMsg, setImportMsg] = useState('')
+  const [importing, setImporting] = useState(false)
 
   useEffect(() => {
     api.get('/api/settings').then(r => {
@@ -84,6 +88,30 @@ export default function PlanillasLegalesPage() {
       const r = await api.get(`/api/legal/ips-jornales`, { params: { year, month, dept: dept || undefined } })
       setIps(r.data?.data || [])
     } catch { setIps([]) } finally { setLoadingIps(false) }
+  }
+
+  // Completitud de datos maestros para planillas.
+  async function loadCompleteness() {
+    setLoadingComp(true)
+    try {
+      const r = await api.get('/api/legal-data/completeness', { params: { dept: dept || undefined } })
+      setComp(r.data)
+    } catch { setComp(null) } finally { setLoadingComp(false) }
+  }
+  function downloadLegalTemplate() { window.open(apiUrl(`/api/legal-data/template?${tokenParam()}`), '_blank') }
+  async function handleLegalImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setImporting(true); setImportMsg('')
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const r = await api.post('/api/legal-data/import', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      const d = r.data
+      setImportMsg(`Actualizados: ${d.updated}. No encontrados: ${d.notFound?.length || 0}${d.errors?.length ? `. Errores: ${d.errors.length}` : ''}.`)
+      loadCompleteness()
+    } catch (err: any) {
+      setImportMsg(err?.response?.data?.error || 'Error al importar')
+    } finally { setImporting(false); e.target.value = '' }
   }
 
   // Planilla de comunicación MTESS (formato de carga oficial).
@@ -123,6 +151,77 @@ export default function PlanillasLegalesPage() {
       </div>
 
       {msg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-3 dark:bg-emerald-400/[0.08] dark:border-emerald-400/30 dark:text-emerald-400">{msg}</div>}
+
+      {/* Completitud de datos maestros */}
+      <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <ClipboardCheck size={17} className="text-emerald-500" />
+            <h2 className="font-bold text-slate-900 dark:text-white">Completitud de datos</h2>
+            <span className="text-xs text-slate-400 dark:text-white/30">C.I., N° IPS, salario base y horario</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={loadCompleteness} disabled={loadingComp}
+              className="px-3 py-2 rounded-xl border border-slate-200 hover:border-emerald-300 text-sm text-slate-600 dark:border-white/[0.08] dark:text-white/70 disabled:opacity-50">
+              {loadingComp ? 'Revisando...' : 'Revisar'}
+            </button>
+            <button onClick={downloadLegalTemplate}
+              className="px-3 py-2 rounded-xl border border-slate-200 hover:border-blue-300 text-sm text-slate-600 dark:border-white/[0.08] dark:text-white/70 flex items-center gap-1.5">
+              <Download size={14} /> Plantilla
+            </button>
+            <label className="px-3 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm flex items-center gap-1.5 cursor-pointer">
+              <Upload size={14} /> {importing ? 'Importando...' : 'Importar'}
+              <input type="file" accept=".xlsx" onChange={handleLegalImport} disabled={importing} className="hidden" />
+            </label>
+          </div>
+        </div>
+
+        {importMsg && <div className="mb-3 text-sm rounded-xl px-4 py-2.5 bg-blue-50 text-blue-800 border border-blue-200 dark:bg-blue-400/[0.08] dark:border-blue-400/30 dark:text-blue-300">{importMsg}</div>}
+
+        {comp ? (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4">
+              <StatChip label="Completos" value={comp.complete} total={comp.total} good />
+              <StatChip label="Sin C.I." value={comp.counts.sin_ci} />
+              <StatChip label="Sin N° IPS" value={comp.counts.sin_ips} />
+              <StatChip label="Sin salario" value={comp.counts.sin_salario} />
+              <StatChip label="Sin horario" value={comp.counts.sin_horario} />
+            </div>
+            {comp.incomplete.length ? (
+              <div className="overflow-x-auto max-h-64 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06] sticky top-0">
+                    <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                      <th className="px-3 py-2">Empleado</th><th className="px-3 py-2">Depto.</th><th className="px-3 py-2">Falta</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+                    {comp.incomplete.map((r: any) => (
+                      <tr key={r.id} className="text-slate-700 dark:text-white/70">
+                        <td className="px-3 py-2"><span className="font-mono text-xs text-slate-400">{r.code}</span> {r.name}</td>
+                        <td className="px-3 py-2 text-slate-400 dark:text-white/40">{r.department || '—'}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {r.missing.map((m: string) => (
+                              <span key={m} className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300">{m}</span>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-2"><CheckCircle2 size={16} /> Todos los empleados activos tienen sus datos completos.</p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-slate-400 dark:text-white/30 flex items-center gap-2">
+            <AlertTriangle size={15} /> Revisá qué empleados no tienen C.I., N° IPS, salario base u horario asignado. Podés cargarlos en masa con la plantilla.
+          </p>
+        )}
+      </section>
 
       {/* Datos del empleador */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
@@ -379,6 +478,21 @@ export default function PlanillasLegalesPage() {
           )}
         </section>
       )}
+    </div>
+  )
+}
+
+function StatChip({ label, value, total, good }: { label: string; value: number; total?: number; good?: boolean }) {
+  const alert = !good && value > 0
+  return (
+    <div className={`rounded-xl px-3 py-2 border ${
+      good ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-400/[0.08] dark:border-emerald-400/30'
+      : alert ? 'bg-amber-50 border-amber-200 dark:bg-amber-400/[0.08] dark:border-amber-400/30'
+      : 'bg-slate-50 border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]'}`}>
+      <div className={`text-xl font-bold tabular-nums ${good ? 'text-emerald-700 dark:text-emerald-400' : alert ? 'text-amber-700 dark:text-amber-400' : 'text-slate-500 dark:text-white/50'}`}>
+        {value}{total != null ? <span className="text-xs font-normal text-slate-400">/{total}</span> : null}
+      </div>
+      <div className="text-[11px] text-slate-500 dark:text-white/40">{label}</div>
     </div>
   )
 }
