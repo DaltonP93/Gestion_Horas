@@ -128,14 +128,23 @@ router.post('/bulk', authorize('admin', 'hr', 'gth'), upload.single('file'), asy
       }
 
       if (!dryRun) {
+        // Una ausencia injustificada NO es un permiso: debe quedar como
+        // 'absent' para que los reportes que suman status='absent' la sigan
+        // contando; sólo se registra su justification_type para la planilla.
+        // El resto (permiso, vacaciones, enfermedad…) sí pasa a 'permission'.
+        const isAbsence = r.type === 'injustificada';
+        const newStatus = isAbsence ? 'absent' : 'permission';
+        const statusUpdate = isAbsence
+          ? 'status = status'
+          : "status = CASE WHEN status = 'absent' THEN 'permission' ELSE status END";
         await sequelize.query(`
           INSERT INTO daily_summary (employee_id, date, justification, justification_type, status)
-          VALUES (?, ?, ?, ?, 'permission')
+          VALUES (?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             justification      = VALUES(justification),
             justification_type = VALUES(justification_type),
-            status = CASE WHEN status = 'absent' THEN 'permission' ELSE status END
-        `, { replacements: [emp.id, r.date, r.just, r.type] });
+            ${statusUpdate}
+        `, { replacements: [emp.id, r.date, r.just, r.type, newStatus] });
       }
       results.ok++;
     }

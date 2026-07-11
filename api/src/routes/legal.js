@@ -369,7 +369,9 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       periodo_pago_hasta: hasta,
       forma_de_pago: forma,
       canti_dias_trabajados: d.dias,
-      horas_ordinarias: Math.round(e.workedMin / 60),
+      // worked_minutes incluye el tramo de horas extra (span entrada→salida);
+      // las ordinarias son el total menos las extraordinarias.
+      horas_ordinarias: Math.round(Math.max(0, e.workedMin - e.otMin) / 60),
       horas_extraordinarias: Math.round(e.otMin / 60),
       salario_basico: basico,
       aporte_seg_social: aporteObrero,
