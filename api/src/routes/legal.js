@@ -77,11 +77,11 @@ async function getMonthlyGrid(year, month, dept) {
   );
   const holidays = new Set(hol.map(h => h.d));
 
-  // work_days es una lista "0,1,..,6" (0=domingo … 6=sábado, = DAYOFWEEK-1).
-  // Sin horario cargado, se asume lunes a viernes.
+  // work_days usa la convención DAYOFWEEK: 1=Dom, 2=Lun … 7=Sáb.
+  // Sin horario cargado, se asume lunes a viernes (2..6).
   function workDaySet(wd) {
     const s = String(wd || '').replace(/\s/g, '');
-    if (!s) return new Set([1, 2, 3, 4, 5]);
+    if (!s) return new Set([2, 3, 4, 5, 6]);
     return new Set(s.split(',').map(Number).filter(n => !Number.isNaN(n)));
   }
 
@@ -102,10 +102,9 @@ async function getMonthlyGrid(year, month, dept) {
       const day = dt.getDate();
       const emp = byEmp.get(r.id);
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      // work_days usa convención 1=Lun … 7=Dom (ver schedules.work_days).
-      // getDay() da 0=Dom … 6=Sáb, así que se normaliza el domingo a 7.
-      const jsDow = dt.getDay();
-      const dow = jsDow === 0 ? 7 : jsDow;
+      // work_days usa convención DAYOFWEEK: 1=Dom … 7=Sáb.
+      // getDay() da 0=Dom … 6=Sáb, así que se suma 1.
+      const dow = dt.getDay() + 1;
       const working = emp.workDays.has(dow) && !holidays.has(dateStr);
       const inHM = hhmm(r.first_in);
       const outHM = hhmm(r.last_out);

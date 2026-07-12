@@ -41,7 +41,7 @@ router.post('/', authorize('admin', 'hr', 'gth'), async (req, res) => {
   const {
     name, check_in, check_out,
     tolerance_in = 10, tolerance_out = 10,
-    work_days = '1,2,3,4,5',
+    work_days = '2,3,4,5,6', // Lun-Vie en convención DAYOFWEEK (1=Dom..7=Sáb)
   } = req.body;
   if (!name || !check_in || !check_out) {
     return res.status(400).json({ error: 'Datos incompletos (name, check_in, check_out)' });

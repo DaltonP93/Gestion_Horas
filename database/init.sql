@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   check_out       TIME NOT NULL,
   tolerance_in    INT DEFAULT 10,   -- minutos de tolerancia de entrada
   tolerance_out   INT DEFAULT 10,   -- minutos antes de salida permitida
-  work_days       VARCHAR(20) DEFAULT '1,2,3,4,5', -- 1=Lun...7=Dom
+  work_days       VARCHAR(20) DEFAULT '1,2,3,4,5', -- convención heredada 1=Lun..7=Dom; la migración 046 la remapea a DAYOFWEEK (1=Dom..7=Sáb)
   active          TINYINT(1) DEFAULT 1,
   created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
