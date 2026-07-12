@@ -102,7 +102,11 @@ async function getMonthlyGrid(year, month, dept) {
       const day = dt.getDate();
       const emp = byEmp.get(r.id);
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const working = emp.workDays.has(dt.getDay()) && !holidays.has(dateStr);
+      // work_days usa convención 1=Lun … 7=Dom (ver schedules.work_days).
+      // getDay() da 0=Dom … 6=Sáb, así que se normaliza el domingo a 7.
+      const jsDow = dt.getDay();
+      const dow = jsDow === 0 ? 7 : jsDow;
+      const working = emp.workDays.has(dow) && !holidays.has(dateStr);
       const inHM = hhmm(r.first_in);
       const outHM = hhmm(r.last_out);
       const inMinutes = inHM ? (+inHM.slice(0, 2) * 60 + +inHM.slice(3, 5)) : null;

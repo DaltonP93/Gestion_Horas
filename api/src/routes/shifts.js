@@ -418,7 +418,11 @@ router.get('/schedules/:id/compliance', requirePermission(MODULE, 'view'), async
     const actual = {};
     for (const a of actuals) (actual[a.employee_id] ||= {})[a.d] = a;
 
-    const allDays = cal.weeks.flatMap(w => w.days).filter(d => d.in_month).map(d => d.date);
+    // Sólo hasta hoy: un turno planificado a futuro aún no tiene marcación y
+    // no debe reportarse como ausencia.
+    const today = ymd(new Date());
+    const allDays = cal.weeks.flatMap(w => w.days)
+      .filter(d => d.in_month && d.date <= today).map(d => d.date);
 
     const result = employees.map(emp => {
       const pj = planned[emp.id] || {};

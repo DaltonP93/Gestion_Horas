@@ -12,6 +12,16 @@
 -- Idempotente.
 -- =============================================================
 
+-- Eliminar los feriados genéricos que sembró init.sql (México/Guatemala) y
+-- que NO son feriados de Paraguay, para que los cálculos no traten esas
+-- fechas como no laborables. Se borran sólo por (name,date) exactos del seed,
+-- sin tocar feriados cargados por el usuario. Los que coinciden con una fecha
+-- PY (Año Nuevo, Navidad…) se recrean abajo con el nombre correcto.
+DELETE FROM holidays WHERE (name = 'Año Nuevo'         AND date = '2026-01-01')
+                        OR (name = 'Día del Trabajo'   AND date = '2026-05-01')
+                        OR (name = 'Independencia'      AND date = '2026-09-15')
+                        OR (name = 'Navidad'            AND date = '2026-12-25');
+
 INSERT IGNORE INTO holidays (name, date, type) VALUES
   -- 2025
   ('Año Nuevo',                    '2025-01-01', 'national'),
