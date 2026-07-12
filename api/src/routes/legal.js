@@ -72,7 +72,7 @@ async function getMonthlyGrid(year, month, dept) {
 
   // Feriados del período (para no descontar días no laborables).
   const [hol] = await sequelize.query(
-    'SELECT DATE_FORMAT(date, "%Y-%m-%d") AS d FROM holidays WHERE date BETWEEN ? AND ?',
+    'SELECT DATE_FORMAT(date, "%Y-%m-%d") AS d FROM holidays WHERE active = 1 AND date BETWEEN ? AND ?',
     { replacements: [dateFrom, dateTo] }
   );
   const holidays = new Set(hol.map(h => h.d));

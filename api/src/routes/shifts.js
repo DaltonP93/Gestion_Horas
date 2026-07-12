@@ -419,8 +419,10 @@ router.get('/schedules/:id/compliance', requirePermission(MODULE, 'view'), async
     for (const a of actuals) (actual[a.employee_id] ||= {})[a.d] = a;
 
     // Sólo hasta hoy: un turno planificado a futuro aún no tiene marcación y
-    // no debe reportarse como ausencia.
-    const today = ymd(new Date());
+    // no debe reportarse como ausencia. Se usa la fecha calendario de Paraguay
+    // (UTC-3, igual que la BD) y no la del proceso, que en producción es UTC.
+    const pyNow = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    const today = `${pyNow.getUTCFullYear()}-${pad(pyNow.getUTCMonth() + 1)}-${pad(pyNow.getUTCDate())}`;
     const allDays = cal.weeks.flatMap(w => w.days)
       .filter(d => d.in_month && d.date <= today).map(d => d.date);
 
