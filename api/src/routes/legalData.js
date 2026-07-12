@@ -108,6 +108,32 @@ function cellStr(cell) {
   return v == null ? '' : String(v).trim();
 }
 
+// Interpreta el salario respetando el valor numérico de la celda y los
+// formatos locales de texto (₲ paraguayo: punto = miles, coma = decimal):
+//   número 2899048.5     → 2899048.5
+//   "2.899.048"          → 2899048   (patrón de miles)
+//   "2899048,5"          → 2899048.5 (coma decimal)
+//   "2899048.5"          → 2899048.5 (punto decimal, no es patrón de miles)
+function parseSalaryCell(cell) {
+  let v = cell?.value;
+  if (v && typeof v === 'object') {
+    if (v.result !== undefined) v = v.result;
+    else if (v.text) v = v.text;
+    else if (Array.isArray(v.richText)) v = v.richText.map(t => t.text).join('');
+  }
+  if (v == null || v === '') return { empty: true };
+  if (typeof v === 'number') return Number.isFinite(v) ? { value: v } : { error: String(v) };
+  let s = String(v).trim();
+  if (s === '') return { empty: true };
+  if (s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');          // coma decimal, punto miles
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    s = s.replace(/\./g, '');                            // sólo patrón de miles
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? { value: n } : { error: String(v) };
+}
+
 // ─── Import masivo ───────────────────────────────────────────────
 router.post('/import', authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'),
   upload.single('file'), async (req, res, next) => {
@@ -127,13 +153,13 @@ router.post('/import', authorize('admin', 'hr', 'gth'), requirePermission('emple
         if (!code) return;
         const ci = cellStr(row.getCell(2));
         const ips = cellStr(row.getCell(3));
-        const salaryRaw = cellStr(row.getCell(4)).replace(/\./g, '').replace(',', '.');
-        const salary = salaryRaw === '' ? null : Number(salaryRaw);
+        const sal = parseSalaryCell(row.getCell(4));
+        const salary = sal.empty ? null : sal.value;
         const payRaw = cellStr(row.getCell(5));
         const pay = payRaw ? normPayType(payRaw) : null;
 
-        if (salaryRaw !== '' && !Number.isFinite(salary)) {
-          results.errors.push({ row: rn, error: `Salario inválido: ${salaryRaw}` });
+        if (sal.error !== undefined) {
+          results.errors.push({ row: rn, error: `Salario inválido: ${sal.error}` });
           return;
         }
         if (payRaw && !pay) {

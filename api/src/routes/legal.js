@@ -56,17 +56,34 @@ async function getMonthlyGrid(year, month, dept) {
     SELECT
       e.id, e.code, e.document_number, e.ips_number, e.position,
       e.salary_base, e.pay_type, e.children_count, e.antiguedad_rate,
+      s.work_days,
       CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
       d.name AS department,
       ds.date, ds.status, ds.first_in, ds.last_out, ds.justification_type,
       ds.worked_minutes, ds.overtime_minutes
     FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
+    LEFT JOIN schedules   s ON e.schedule_id = s.id
     LEFT JOIN daily_summary ds ON e.id = ds.employee_id
          AND ds.date BETWEEN ? AND ?
     WHERE e.status = 'active' ${deptFilter}
     ORDER BY d.name, e.last_name, e.first_name, ds.date
   `, { replacements: params });
+
+  // Feriados del período (para no descontar días no laborables).
+  const [hol] = await sequelize.query(
+    'SELECT DATE_FORMAT(date, "%Y-%m-%d") AS d FROM holidays WHERE date BETWEEN ? AND ?',
+    { replacements: [dateFrom, dateTo] }
+  );
+  const holidays = new Set(hol.map(h => h.d));
+
+  // work_days es una lista "0,1,..,6" (0=domingo … 6=sábado, = DAYOFWEEK-1).
+  // Sin horario cargado, se asume lunes a viernes.
+  function workDaySet(wd) {
+    const s = String(wd || '').replace(/\s/g, '');
+    if (!s) return new Set([1, 2, 3, 4, 5]);
+    return new Set(s.split(',').map(Number).filter(n => !Number.isNaN(n)));
+  }
 
   const byEmp = new Map();
   for (const r of rows) {
@@ -76,18 +93,22 @@ async function getMonthlyGrid(year, month, dept) {
         position: r.position || '', name: r.employee_name, department: r.department || '',
         salary_base: Number(r.salary_base) || 0, pay_type: r.pay_type || 'mensualizado',
         children_count: Number(r.children_count) || 0, antiguedad_rate: Number(r.antiguedad_rate) || 0,
+        workDays: workDaySet(r.work_days),
         days: {}, workedMin: 0, otMin: 0, presentDays: 0,
       });
     }
     if (r.date) {
-      const day = new Date(r.date).getDate();
+      const dt = new Date(r.date);
+      const day = dt.getDate();
       const emp = byEmp.get(r.id);
+      const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const working = emp.workDays.has(dt.getDay()) && !holidays.has(dateStr);
       const outHM = hhmm(r.last_out);
       const outMinutes = outHM ? (+outHM.slice(0, 2) * 60 + +outHM.slice(3, 5)) : null;
       emp.days[day] = {
         in: hhmm(r.first_in), out: outHM,
         status: r.status, jtype: (r.justification_type || '').toLowerCase().trim(),
-        otMin: r.overtime_minutes || 0, outMinutes,
+        otMin: r.overtime_minutes || 0, outMinutes, working,
       };
       emp.workedMin += r.worked_minutes || 0;
       emp.otMin += r.overtime_minutes || 0;
@@ -143,6 +164,10 @@ function computeDiasTrabajados(emp, cfg) {
   for (const info of Object.values(emp.days)) {
     const jt = normalize(info.jtype);
     const st = info.status;
+    // Un día NO laborable (franco por horario o feriado) nunca descuenta,
+    // aunque una importación le haya puesto una justificación (p. ej.
+    // vacaciones cargadas sobre un rango que incluye sábados/domingos).
+    if (info.working === false) continue;
     // Días que NO descuentan: trabajados, feriado, franco/fin de semana.
     if (st === 'present' || st === 'late' || st === 'holiday' || st === 'weekend') continue;
     // Permiso con goce u "otro": no descuenta.
