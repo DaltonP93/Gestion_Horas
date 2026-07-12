@@ -372,4 +372,88 @@ router.get('/schedules/:id/export', requirePermission(MODULE, 'view'), async (re
   } catch (e) { next(e); }
 });
 
+// ── Cumplimiento: turno planificado vs. asistencia real ────────
+// Compara la turnera (shift_assignments) con lo efectivamente marcado
+// (daily_summary) en el mismo período: atrasos, ausencias y días
+// trabajados sin turno asignado.
+function toMin(t) {
+  if (!t) return null;
+  const m = String(t).match(/(\d{1,2}):(\d{2})/);
+  return m ? (+m[1] * 60 + +m[2]) : null;
+}
+
+router.get('/schedules/:id/compliance', requirePermission(MODULE, 'view'), async (req, res, next) => {
+  try {
+    const sched = await loadSchedule(req.params.id);
+    if (!sched) return res.status(404).json({ error: 'Turnera no encontrada' });
+    const tol = Number.isFinite(+req.query.tol) ? +req.query.tol : 10; // tolerancia atraso (min)
+    const cal = buildCalendar(sched.year, sched.month);
+    const employees = await scheduleEmployees(sched);
+
+    // Turnos planificados por empleado/día (tramos work).
+    const [plans] = await sequelize.query(`
+      SELECT employee_id, DATE_FORMAT(work_date,'%Y-%m-%d') AS d,
+             TIME_FORMAT(MIN(start_time),'%H:%i') AS ps, TIME_FORMAT(MAX(end_time),'%H:%i') AS pe,
+             SUM(minutes) AS pm
+      FROM shift_assignments
+      WHERE schedule_id = ? AND kind = 'work'
+      GROUP BY employee_id, work_date
+    `, { replacements: [sched.id] });
+    const planned = {};
+    for (const p of plans) (planned[p.employee_id] ||= {})[p.d] = p;
+
+    // Marcaciones reales del período.
+    const empIds = employees.map(e => e.id);
+    let actuals = [];
+    if (empIds.length) {
+      const [rows] = await sequelize.query(`
+        SELECT employee_id, DATE_FORMAT(date,'%Y-%m-%d') AS d,
+               TIME_FORMAT(first_in,'%H:%i') AS ai, TIME_FORMAT(last_out,'%H:%i') AS ao,
+               COALESCE(worked_minutes,0) AS wm, status
+        FROM daily_summary
+        WHERE employee_id IN (${empIds.map(() => '?').join(',')}) AND date BETWEEN ? AND ?
+      `, { replacements: [...empIds, cal.from, cal.to] });
+      actuals = rows;
+    }
+    const actual = {};
+    for (const a of actuals) (actual[a.employee_id] ||= {})[a.d] = a;
+
+    const allDays = cal.weeks.flatMap(w => w.days).filter(d => d.in_month).map(d => d.date);
+
+    const result = employees.map(emp => {
+      const pj = planned[emp.id] || {};
+      const aj = actual[emp.id] || {};
+      const days = [];
+      const sum = { planificados: 0, trabajados: 0, ausencias: 0, atrasos: 0, sin_plan: 0, atraso_min: 0 };
+      for (const date of allDays) {
+        const p = pj[date];
+        const a = aj[date];
+        const worked = a && (a.status === 'present' || a.status === 'late' || Number(a.wm) > 0);
+        let flag = null, lateMin = 0;
+        if (p) {
+          sum.planificados++;
+          if (worked) {
+            sum.trabajados++;
+            const ps = toMin(p.ps), ai = toMin(a.ai);
+            if (ps != null && ai != null && ai > ps + tol) { flag = 'late'; lateMin = ai - ps; sum.atrasos++; sum.atraso_min += lateMin; }
+            else flag = 'ok';
+          } else {
+            flag = 'absent'; sum.ausencias++;
+          }
+        } else if (worked) {
+          flag = 'unplanned'; sum.sin_plan++;
+        }
+        if (flag) days.push({
+          date, flag, late_min: lateMin,
+          planned: p ? { start: p.ps, end: p.pe, minutes: Number(p.pm) } : null,
+          actual: a ? { in: a.ai, out: a.ao, worked_min: Number(a.wm), status: a.status } : null,
+        });
+      }
+      return { id: emp.id, code: emp.code, name: emp.name, department: emp.department, summary: sum, days };
+    });
+
+    res.json({ schedule: { id: sched.id, name: sched.name, year: sched.year, month: sched.month }, tolerance_min: tol, employees: result });
+  } catch (e) { next(e); }
+});
+
 module.exports = router;
