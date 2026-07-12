@@ -103,12 +103,14 @@ async function getMonthlyGrid(year, month, dept) {
       const emp = byEmp.get(r.id);
       const dateStr = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const working = emp.workDays.has(dt.getDay()) && !holidays.has(dateStr);
+      const inHM = hhmm(r.first_in);
       const outHM = hhmm(r.last_out);
+      const inMinutes = inHM ? (+inHM.slice(0, 2) * 60 + +inHM.slice(3, 5)) : null;
       const outMinutes = outHM ? (+outHM.slice(0, 2) * 60 + +outHM.slice(3, 5)) : null;
       emp.days[day] = {
-        in: hhmm(r.first_in), out: outHM,
+        in: inHM, out: outHM,
         status: r.status, jtype: (r.justification_type || '').toLowerCase().trim(),
-        otMin: r.overtime_minutes || 0, outMinutes, working,
+        otMin: r.overtime_minutes || 0, inMinutes, outMinutes, working,
       };
       emp.workedMin += r.worked_minutes || 0;
       emp.otMin += r.overtime_minutes || 0;
@@ -375,7 +377,7 @@ const { DEFAULT_RATES, computeLiquidacion } = require('../services/liquidacion')
 async function getLiquidacionRates() {
   const keys = ['ips_rate_obrero', 'salario_minimo', 'hora_divisor_mensual',
     'nocturno_desde', 'nocturno_hasta', 'extra_diurna_mult', 'extra_nocturna_mult',
-    'bonif_familiar_pct', 'mtess_dias_base_mensual', 'mtess_prorratear_basico'];
+    'recargo_nocturno_pct', 'bonif_familiar_pct', 'mtess_dias_base_mensual', 'mtess_prorratear_basico'];
   const [rows] = await sequelize.query(
     `SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN (${keys.map(() => '?').join(',')})`,
     { replacements: keys }
@@ -390,6 +392,7 @@ async function getLiquidacionRates() {
     nocturnoHasta: hm(m.nocturno_hasta, DEFAULT_RATES.nocturnoHasta),
     extraDiurnaMult: num(m.extra_diurna_mult, DEFAULT_RATES.extraDiurnaMult),
     extraNocturnaMult: num(m.extra_nocturna_mult, DEFAULT_RATES.extraNocturnaMult),
+    recargoNocturnoPct: num(m.recargo_nocturno_pct, DEFAULT_RATES.recargoNocturnoPct),
     bonifFamiliarPct: num(m.bonif_familiar_pct, DEFAULT_RATES.bonifFamiliarPct),
     salarioMinimo: num(m.salario_minimo, DEFAULT_RATES.salarioMinimo),
     obreroPct: num(m.ips_rate_obrero, DEFAULT_RATES.obreroPct),
@@ -431,6 +434,7 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       salario_basico: liq.basico,
       extra_diurna: liq.monto_extra_diurna,
       extra_nocturna: liq.monto_extra_nocturna,
+      recargo_nocturno: liq.recargo_nocturno,
       bonif_familiar: liq.bonif_familiar,
       antiguedad: liq.antiguedad,
       aporte_seg_social: liq.aporte_obrero,
@@ -464,6 +468,7 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       row[8] = r.horas_extraordinarias;
       row[9]  = r.salario_basico;          // Salario Básico
       row[11] = r.extra_diurna || null;    // Horas extras diurnas(50%)
+      row[12] = r.recargo_nocturno || null; // Recargo horario Nocturno
       row[13] = r.extra_nocturna || null;  // Horas extras nocturnas(100%)
       row[22] = r.bonif_familiar || null;  // Bonificacion Familiar
       row[23] = r.antiguedad || null;      // Antigüedad
@@ -495,6 +500,70 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       periodo_pago_hasta: periodo_pago_hasta.toISOString().slice(0, 10),
       ..._meta,
     })),
+  });
+}));
+
+// ─── Aguinaldo (1/12 de lo percibido en el año) ──────────────────
+// Recorre los meses del año (hasta el mes indicado, default diciembre),
+// acumula la remuneración imponible de cada empleado y divide por 12.
+router.get('/aguinaldo', asyncHandler(async (req, res) => {
+  const year = parseInt(req.query.year) || new Date().getFullYear();
+  const upTo = Math.min(12, Math.max(1, parseInt(req.query.month) || 12));
+  const dept = req.query.dept || null;
+  const format = (req.query.format || 'json').toLowerCase();
+
+  const [employer, cfg, rates] = await Promise.all([
+    getEmployerData(), getMtessDaysConfig(), getLiquidacionRates(),
+  ]);
+
+  // Acumular por empleado a lo largo de los meses.
+  const acc = new Map(); // id → { code, name, ci, meses, percibido }
+  for (let m = 1; m <= upTo; m++) {
+    const employees = await getMonthlyGrid(year, m, dept);
+    for (const e of employees) {
+      const d = computeDiasTrabajados(e, cfg);
+      const liq = computeLiquidacion({ ...e, days: Object.values(e.days) }, d.dias, rates);
+      // Imponible del mes (sin bonif. familiar, que no integra el aguinaldo).
+      const mes = liq.basico + liq.monto_extra_diurna + liq.monto_extra_nocturna +
+        liq.recargo_nocturno + liq.antiguedad;
+      if (!acc.has(e.id)) acc.set(e.id, { code: e.code, name: e.name, ci: e.ci, meses: 0, percibido: 0 });
+      const a = acc.get(e.id);
+      a.percibido += mes;
+      if (mes > 0) a.meses += 1;
+    }
+  }
+
+  const data = Array.from(acc.values()).map(a => ({
+    code: a.code, name: a.name, ci: a.ci,
+    meses: a.meses, percibido_anual: a.percibido,
+    aguinaldo: Math.round(a.percibido / 12),
+  })).sort((x, y) => x.name.localeCompare(y.name));
+
+  if (format === 'xlsx') {
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`Aguinaldo ${year}`);
+    ws.addRow([`Aguinaldo ${year} — ${employer.employer_razon_social || employer.system_company || ''}`]);
+    ws.addRow([`RUC: ${employer.employer_ruc || ''}   Patronal IPS: ${employer.employer_ips_patronal || ''}`]);
+    ws.addRow([]);
+    ws.addRow(['Código', 'Apellido y Nombre', 'C.I.', 'Meses', 'Percibido anual', 'Aguinaldo (1/12)']);
+    ws.getRow(4).font = { bold: true };
+    for (const d of data) ws.addRow([d.code, d.name, d.ci, d.meses, d.percibido_anual, d.aguinaldo]);
+    const totAg = data.reduce((s, d) => s + d.aguinaldo, 0);
+    const tr = ws.addRow(['', 'TOTAL', '', '', '', totAg]);
+    tr.font = { bold: true };
+    ws.columns.forEach(c => { c.width = 20; });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="aguinaldo_${year}.xlsx"`);
+    await wb.xlsx.write(res);
+    return res.end();
+  }
+
+  res.json({
+    year, up_to_month: upTo,
+    total: data.length,
+    total_aguinaldo: data.reduce((s, d) => s + d.aguinaldo, 0),
+    data,
   });
 }));
 

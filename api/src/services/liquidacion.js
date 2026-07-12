@@ -24,6 +24,7 @@ const DEFAULT_RATES = {
   nocturnoHasta: 6 * 60,    // 06:00 en minutos
   extraDiurnaMult: 1.5,     // 50%
   extraNocturnaMult: 2.0,   // 100%
+  recargoNocturnoPct: 30,   // % de recargo sobre horas ordinarias nocturnas
   bonifFamiliarPct: 5,      // % del salario mínimo por hijo
   salarioMinimo: 0,         // referencia (settings salario_minimo)
   obreroPct: 9,             // % aporte obrero IPS
@@ -71,6 +72,21 @@ function splitOvertime(days, rates) {
   return { diurnaMin: total - nocturnaMin, nocturnaMin };
 }
 
+// Minutos ORDINARIOS (no extra) trabajados dentro de la franja nocturna.
+// Toma la ventana trabajada del día [entrada, salida] (ajustando si cruza
+// medianoche), calcula su solapamiento nocturno y le resta la porción
+// nocturna que ya es hora extra.
+function nightOrdinaryMinutes(days, rates, overtimeNocturnaMin) {
+  let workedNight = 0;
+  for (const d of days) {
+    if (d.inMinutes == null || d.outMinutes == null) continue;
+    let end = d.outMinutes;
+    if (end < d.inMinutes) end += 1440; // cruza medianoche
+    workedNight += nightOverlapMinutes(d.inMinutes, end, rates.nocturnoDesde, rates.nocturnoHasta);
+  }
+  return Math.max(0, workedNight - (overtimeNocturnaMin || 0));
+}
+
 /**
  * Calcula la liquidación de un empleado en el período.
  * @param emp  { pay_type, salary_base, children_count, antiguedad_rate, days:[{otMin,outMinutes}] }
@@ -94,10 +110,14 @@ function computeLiquidacion(emp, dias, rates = {}) {
   const montoExtraDiurna   = round(valorHora * (diurnaMin / 60) * r.extraDiurnaMult);
   const montoExtraNocturna = round(valorHora * (nocturnaMin / 60) * r.extraNocturnaMult);
 
+  // Recargo nocturno sobre las horas ordinarias trabajadas de noche.
+  const nocturnoOrdMin = nightOrdinaryMinutes(emp.days || [], r, nocturnaMin);
+  const recargoNocturno = round(valorHora * (nocturnoOrdMin / 60) * (r.recargoNocturnoPct / 100));
+
   const bonifFamiliar = round((Number(emp.children_count) || 0) * (Number(r.salarioMinimo) || 0) * (r.bonifFamiliarPct / 100));
   const antiguedad = round(basico * (Number(emp.antiguedad_rate) || 0) / 100);
 
-  const imponible = basico + montoExtraDiurna + montoExtraNocturna + antiguedad;
+  const imponible = basico + montoExtraDiurna + montoExtraNocturna + recargoNocturno + antiguedad;
   const aporteObrero = round(imponible * (r.obreroPct / 100));
 
   const totalBruto = imponible + bonifFamiliar;
@@ -111,6 +131,7 @@ function computeLiquidacion(emp, dias, rates = {}) {
     ot_nocturna_horas: +(nocturnaMin / 60).toFixed(2),
     monto_extra_diurna: montoExtraDiurna,
     monto_extra_nocturna: montoExtraNocturna,
+    recargo_nocturno: recargoNocturno,
     bonif_familiar: bonifFamiliar,
     antiguedad,
     aporte_obrero: aporteObrero,
@@ -119,4 +140,4 @@ function computeLiquidacion(emp, dias, rates = {}) {
   };
 }
 
-module.exports = { DEFAULT_RATES, nightOverlapMinutes, splitOvertime, computeLiquidacion, round };
+module.exports = { DEFAULT_RATES, nightOverlapMinutes, splitOvertime, nightOrdinaryMinutes, computeLiquidacion, round };
