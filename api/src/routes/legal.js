@@ -55,7 +55,7 @@ async function getMonthlyGrid(year, month, dept) {
   const [rows] = await sequelize.query(`
     SELECT
       e.id, e.code, e.document_number, e.ips_number, e.position,
-      e.salary_base, e.pay_type,
+      e.salary_base, e.pay_type, e.children_count, e.antiguedad_rate,
       CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
       d.name AS department,
       ds.date, ds.status, ds.first_in, ds.last_out, ds.justification_type,
@@ -75,15 +75,19 @@ async function getMonthlyGrid(year, month, dept) {
         id: r.id, code: r.code, ci: r.document_number || '', ips: r.ips_number || '',
         position: r.position || '', name: r.employee_name, department: r.department || '',
         salary_base: Number(r.salary_base) || 0, pay_type: r.pay_type || 'mensualizado',
+        children_count: Number(r.children_count) || 0, antiguedad_rate: Number(r.antiguedad_rate) || 0,
         days: {}, workedMin: 0, otMin: 0, presentDays: 0,
       });
     }
     if (r.date) {
       const day = new Date(r.date).getDate();
       const emp = byEmp.get(r.id);
+      const outHM = hhmm(r.last_out);
+      const outMinutes = outHM ? (+outHM.slice(0, 2) * 60 + +outHM.slice(3, 5)) : null;
       emp.days[day] = {
-        in: hhmm(r.first_in), out: hhmm(r.last_out),
+        in: hhmm(r.first_in), out: outHM,
         status: r.status, jtype: (r.justification_type || '').toLowerCase().trim(),
+        otMin: r.overtime_minutes || 0, outMinutes,
       };
       emp.workedMin += r.worked_minutes || 0;
       emp.otMin += r.overtime_minutes || 0;
@@ -340,14 +344,43 @@ async function getObreroRate() {
   return Number.isFinite(n) ? n : 9;
 }
 
+const { DEFAULT_RATES, computeLiquidacion } = require('../services/liquidacion');
+
+// Parámetros de liquidación desde settings (con defaults sensatos).
+async function getLiquidacionRates() {
+  const keys = ['ips_rate_obrero', 'salario_minimo', 'hora_divisor_mensual',
+    'nocturno_desde', 'nocturno_hasta', 'extra_diurna_mult', 'extra_nocturna_mult',
+    'bonif_familiar_pct', 'mtess_dias_base_mensual', 'mtess_prorratear_basico'];
+  const [rows] = await sequelize.query(
+    `SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN (${keys.map(() => '?').join(',')})`,
+    { replacements: keys }
+  );
+  const m = Object.fromEntries(rows.map(r => [r.setting_key, r.setting_value]));
+  const num = (v, def) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : def; };
+  // "HH:MM" → minutos desde medianoche.
+  const hm = (v, def) => { const s = String(v || '').match(/(\d{1,2}):(\d{2})/); return s ? (+s[1] * 60 + +s[2]) : def; };
+  return {
+    divisorMensual: num(m.hora_divisor_mensual, DEFAULT_RATES.divisorMensual),
+    nocturnoDesde: hm(m.nocturno_desde, DEFAULT_RATES.nocturnoDesde),
+    nocturnoHasta: hm(m.nocturno_hasta, DEFAULT_RATES.nocturnoHasta),
+    extraDiurnaMult: num(m.extra_diurna_mult, DEFAULT_RATES.extraDiurnaMult),
+    extraNocturnaMult: num(m.extra_nocturna_mult, DEFAULT_RATES.extraNocturnaMult),
+    bonifFamiliarPct: num(m.bonif_familiar_pct, DEFAULT_RATES.bonifFamiliarPct),
+    salarioMinimo: num(m.salario_minimo, DEFAULT_RATES.salarioMinimo),
+    obreroPct: num(m.ips_rate_obrero, DEFAULT_RATES.obreroPct),
+    baseMensual: num(m.mtess_dias_base_mensual, DEFAULT_RATES.baseMensual),
+    prorratearBasico: String(m.mtess_prorratear_basico ?? '1') !== '0',
+  };
+}
+
 router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
   const year = parseInt(req.query.year) || new Date().getFullYear();
   const month = parseInt(req.query.month) || (new Date().getMonth() + 1);
   const dept = req.query.dept || null;
   const format = (req.query.format || 'json').toLowerCase();
 
-  const [employer, employees, cfg, obreroRate] = await Promise.all([
-    getEmployerData(), getMonthlyGrid(year, month, dept), getMtessDaysConfig(), getObreroRate(),
+  const [employer, employees, cfg, rates] = await Promise.all([
+    getEmployerData(), getMonthlyGrid(year, month, dept), getMtessDaysConfig(), getLiquidacionRates(),
   ]);
 
   const desde = new Date(Date.UTC(year, month - 1, 1, 12));
@@ -357,10 +390,7 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
   const rows = employees.map(e => {
     const d = computeDiasTrabajados(e, cfg);
     const forma = e.pay_type === 'jornalero' ? 1 : 3; // 1=Jornal, 3=Mensual
-    const basico = e.pay_type === 'jornalero'
-      ? Math.round(e.salary_base * d.dias)
-      : Math.round(e.salary_base);
-    const aporteObrero = Math.round((basico * obreroRate) / 100);
+    const liq = computeLiquidacion({ ...e, days: Object.values(e.days) }, d.dias, rates);
     return {
       // Campos con datos que el sistema conoce
       numero_patronal: patronal,
@@ -373,12 +403,19 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       // las ordinarias son el total menos las extraordinarias.
       horas_ordinarias: Math.round(Math.max(0, e.workedMin - e.otMin) / 60),
       horas_extraordinarias: Math.round(e.otMin / 60),
-      salario_basico: basico,
-      aporte_seg_social: aporteObrero,
+      salario_basico: liq.basico,
+      extra_diurna: liq.monto_extra_diurna,
+      extra_nocturna: liq.monto_extra_nocturna,
+      bonif_familiar: liq.bonif_familiar,
+      antiguedad: liq.antiguedad,
+      aporte_seg_social: liq.aporte_obrero,
       // metadatos para la vista previa (no van al Excel de carga)
       _meta: {
         code: e.code, name: e.name, pay_type: e.pay_type,
         base: d.base, descuentos: d.descuentos, detalle: d.detalle,
+        valor_hora: liq.valor_hora, ot_diurna_horas: liq.ot_diurna_horas,
+        ot_nocturna_horas: liq.ot_nocturna_horas,
+        total_bruto: liq.total_bruto, total_neto: liq.total_neto,
       },
     };
   });
@@ -400,7 +437,11 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       row[6] = null;                       // canti_piezas_tareas
       row[7] = r.horas_ordinarias;
       row[8] = r.horas_extraordinarias;
-      row[9] = r.salario_basico;           // Salario Básico
+      row[9]  = r.salario_basico;          // Salario Básico
+      row[11] = r.extra_diurna || null;    // Horas extras diurnas(50%)
+      row[13] = r.extra_nocturna || null;  // Horas extras nocturnas(100%)
+      row[22] = r.bonif_familiar || null;  // Bonificacion Familiar
+      row[23] = r.antiguedad || null;      // Antigüedad
       row[25] = r.aporte_seg_social;       // Aporte Seg. Social
       const added = ws.addRow(row);
       added.getCell(3).numFmt = 'dd/mm/yyyy';
@@ -416,7 +457,12 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
 
   res.json({
     period: { year, month, label: `${MESES[month]} ${year}` },
-    config: { base_mensual: cfg.base, tipos_descuento: cfg.discountTypes, ips_rate_obrero: obreroRate },
+    config: {
+      base_mensual: cfg.base, tipos_descuento: cfg.discountTypes,
+      ips_rate_obrero: rates.obreroPct, salario_minimo: rates.salarioMinimo,
+      extra_diurna_mult: rates.extraDiurnaMult, extra_nocturna_mult: rates.extraNocturnaMult,
+      nocturno: `${String(Math.floor(rates.nocturnoDesde / 60)).padStart(2, '0')}:${String(rates.nocturnoDesde % 60).padStart(2, '0')}–${String(Math.floor(rates.nocturnoHasta / 60)).padStart(2, '0')}:${String(rates.nocturnoHasta % 60).padStart(2, '0')}`,
+    },
     total: rows.length,
     data: rows.map(({ _meta, periodo_pago_desde, periodo_pago_hasta, ...rest }) => ({
       ...rest,

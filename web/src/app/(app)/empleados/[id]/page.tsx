@@ -249,6 +249,8 @@ export default function EmpleadoDetallePage() {
               ]}
               onSave={onSaveField}
             />
+            <EditField label="N° de hijos" value={emp.children_count != null ? String(emp.children_count) : '0'} name="children_count" type="number" onSave={onSaveField} />
+            <EditField label="Antigüedad (%)" value={emp.antiguedad_rate != null ? String(emp.antiguedad_rate) : '0'} name="antiguedad_rate" type="number" onSave={onSaveField} />
           </div>
         </div>
 

@@ -19,6 +19,10 @@ const EMPLOYER_FIELDS: { key: string; label: string; ph?: string }[] = [
   { key: 'ips_rate_patronal',     label: 'Tasa IPS patronal (%)', ph: '16.5' },
   { key: 'mtess_dias_base_mensual', label: 'MTESS · base días (mensual)', ph: '30' },
   { key: 'mtess_dias_descuento_tipos', label: 'MTESS · tipos que descuentan', ph: 'vacaciones, reposo, injustificada, sin_goce, licencia_especial' },
+  { key: 'salario_minimo',     label: 'Salario mínimo (₲)', ph: '2680373' },
+  { key: 'hora_divisor_mensual', label: 'Divisor valor hora (mensual)', ph: '240' },
+  { key: 'nocturno_desde',     label: 'Nocturno desde (HH:MM)', ph: '20:00' },
+  { key: 'nocturno_hasta',     label: 'Nocturno hasta (HH:MM)', ph: '06:00' },
 ]
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -30,7 +34,10 @@ interface AporteRow { codigo: string; nombre: string; cedula: string; ips: strin
 interface ComunRow {
   code: string; name: string; pay_type: string; nro_ci: string; forma_de_pago: number
   canti_dias_trabajados: number; base: number; descuentos: number; detalle: Record<string, number>
-  horas_ordinarias: number; horas_extraordinarias: number; salario_basico: number; aporte_seg_social: number
+  horas_ordinarias: number; horas_extraordinarias: number; salario_basico: number
+  extra_diurna: number; extra_nocturna: number; bonif_familiar: number; antiguedad: number
+  aporte_seg_social: number; total_bruto: number; total_neto: number
+  ot_diurna_horas: number; ot_nocturna_horas: number
 }
 
 export default function PlanillasLegalesPage() {
@@ -346,8 +353,8 @@ export default function PlanillasLegalesPage() {
           <h2 className="font-bold text-slate-900 dark:text-white mb-1">Planilla de comunicación — {MESES[month - 1]} {year}</h2>
           {comun?.config && (
             <p className="text-xs text-slate-400 dark:text-white/30 mb-3">
-              Mensualizados: base {comun.config.base_mensual ?? 30} días, menos reposo / ausencia injustificada / licencia especial / sin goce / vacaciones ·
-              Jornaleros: días efectivamente trabajados. Los francos/libres, feriados y permisos con goce no descuentan.
+              Días: mensualizados base {comun.config.base_mensual ?? 30} menos reposo / injustificada / licencia especial / sin goce / vacaciones; jornaleros = días trabajados (francos, feriados y permisos con goce no descuentan). ·
+              Montos: básico prorrateado, extras {comun.config.extra_diurna_mult ?? 1.5}×/{comun.config.extra_nocturna_mult ?? 2}× (franja nocturna {comun.config.nocturno ?? '20:00–06:00'}), IPS obrero {comun.config.ips_rate_obrero ?? 9}%. Bonif. familiar y antigüedad según hijos y % cargados por empleado.
             </p>
           )}
           {loadingComun ? (
@@ -358,9 +365,13 @@ export default function PlanillasLegalesPage() {
                 <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
                   <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
                     <th className="px-3 py-2">Empleado</th><th className="px-3 py-2">C.I.</th>
-                    <th className="px-3 py-2">Tipo</th><th className="px-3 py-2 text-right">Base</th>
-                    <th className="px-3 py-2 text-right">Descuentos</th><th className="px-3 py-2 text-right">Días a informar</th>
+                    <th className="px-3 py-2">Tipo</th>
+                    <th className="px-3 py-2 text-right">Descuentos</th><th className="px-3 py-2 text-right">Días</th>
                     <th className="px-3 py-2 text-right">Hs ord.</th><th className="px-3 py-2 text-right">Hs extra</th>
+                    <th className="px-3 py-2 text-right">Básico</th>
+                    <th className="px-3 py-2 text-right">Extra 50%</th><th className="px-3 py-2 text-right">Extra 100%</th>
+                    <th className="px-3 py-2 text-right">Bonif. fam.</th><th className="px-3 py-2 text-right">Antig.</th>
+                    <th className="px-3 py-2 text-right">IPS obrero</th><th className="px-3 py-2 text-right">Neto</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
@@ -373,13 +384,19 @@ export default function PlanillasLegalesPage() {
                           {r.pay_type === 'jornalero' ? 'Jornalero' : 'Mensual'}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right tabular-nums text-slate-400">{r.pay_type === 'jornalero' ? '—' : r.base}</td>
                       <td className="px-3 py-2 text-right tabular-nums" title={Object.entries(r.detalle || {}).map(([k, v]) => `${k}: ${v}`).join(', ')}>
                         {r.descuentos ? <span className="text-rose-600 dark:text-rose-400">−{r.descuentos}</span> : <span className="text-slate-300">0</span>}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold text-slate-900 dark:text-white">{r.canti_dias_trabajados}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{r.horas_ordinarias}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{r.horas_extraordinarias}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-500 dark:text-white/50">{r.horas_ordinarias}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-slate-500 dark:text-white/50" title={`Diurnas ${r.ot_diurna_horas || 0}h · Nocturnas ${r.ot_nocturna_horas || 0}h`}>{r.horas_extraordinarias}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{gs(r.salario_basico)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.extra_diurna ? gs(r.extra_diurna) : '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.extra_nocturna ? gs(r.extra_nocturna) : '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.bonif_familiar ? gs(r.bonif_familiar) : '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.antiguedad ? gs(r.antiguedad) : '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-rose-600 dark:text-rose-400">{gs(r.aporte_seg_social)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700 dark:text-emerald-400">{gs(r.total_neto)}</td>
                     </tr>
                   ))}
                 </tbody>
