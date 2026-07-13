@@ -78,7 +78,8 @@
     "section_management": "Gestión",
     "section_admin": "Administración",
     "legal_sheets": "Planillas legales",
-    "shifts": "Turnera"
+    "shifts": "Turnera",
+    "overtime": "Horas extra"
   },
   "dashboard": {
     "title": "Panel principal",

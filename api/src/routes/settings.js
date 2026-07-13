@@ -92,6 +92,7 @@ const EMPLOYER_KEYS = [
   'extra_nocturna_mult',             // multiplicador hora extra nocturna (default 2)
   'recargo_nocturno_pct',            // % recargo horas ordinarias nocturnas (default 30)
   'bonif_familiar_pct',              // % del salario mínimo por hijo (default 5)
+  'att_overtime_requires_auth',      // '1' = las horas extra requieren aprobación
 ];
 
 const SETTING_KEYS = [
