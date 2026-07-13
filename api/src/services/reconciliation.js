@@ -26,22 +26,27 @@ async function runReconciliation(dateStr) {
   let diff = { missingInMysql: [], missingInAtt2000: [] };
   try {
     const { queryAtt2000 } = require('../config/att2000');
+    // Formatear la hora en cada motor (wall-clock local) para comparar sin que
+    // los drivers reinterpreten la zona: MySQL y SQL Server guardan la hora
+    // local de Paraguay; convertir a Date en JS producía un desfase de 3 h que
+    // marcaba TODOS los marcajes como diferentes.
     const att2000Rows = await queryAtt2000(`
-      SELECT USERID, CHECKTIME FROM CHECKINOUT
+      SELECT USERID, CONVERT(varchar(19), CHECKTIME, 120) AS ts FROM CHECKINOUT
       WHERE CAST(CHECKTIME AS DATE) = '${date}'
     `);
     att2000Count = att2000Rows.length;
 
-    // Comparar: marcajes en att2000 que no estén en MySQL (por user code + timestamp)
+    // Comparar: marcajes en att2000 que no estén en MySQL (por user code + hora)
     const [mysqlLogs] = await sequelize.query(`
-      SELECT e.code, al.timestamp
+      SELECT e.code, DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS ts
       FROM attendance_logs al
       JOIN employees e ON al.employee_id = e.id
       WHERE DATE(al.timestamp) = ?
     `, { replacements: [date] });
 
-    const mysqlSet = new Set(mysqlLogs.map(r => `${r.code}|${new Date(r.timestamp).toISOString().slice(0, 19)}`));
-    const attSet = new Set(att2000Rows.map(r => `${r.USERID}|${new Date(r.CHECKTIME).toISOString().slice(0, 19)}`));
+    const norm = (s) => String(s || '').replace('T', ' ').slice(0, 19);
+    const mysqlSet = new Set(mysqlLogs.map(r => `${r.code}|${norm(r.ts)}`));
+    const attSet = new Set(att2000Rows.map(r => `${r.USERID}|${norm(r.ts)}`));
 
     for (const k of attSet) if (!mysqlSet.has(k)) diff.missingInMysql.push(k);
     for (const k of mysqlSet) if (!attSet.has(k)) diff.missingInAtt2000.push(k);

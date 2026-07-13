@@ -6,6 +6,7 @@ import { es } from 'date-fns/locale'
 import { Clock, Search, Plus, Download, RefreshCw, ChevronLeft, ChevronRight, Users, CheckCircle, AlertTriangle, XCircle } from 'lucide-react'
 import { attendanceApi, employeesApi, api } from '@/lib/api'
 import { getSocket } from '@/lib/socket'
+import { fmtTimePy } from '@/lib/datetime'
 
 // ─── Tipos ────────────────────────────────────────────────────────
 interface AttendanceRow {
@@ -40,9 +41,9 @@ function minsToHM(mins: number | null) {
   return `${h}:${String(m).padStart(2, '0')}`
 }
 
+// Hora de la marcación SIEMPRE en zona de Paraguay (no la del navegador).
 function fmtTime(dt: string | null) {
-  if (!dt) return '—'
-  try { return format(new Date(dt), 'HH:mm') } catch { return '—' }
+  return fmtTimePy(dt)
 }
 
 const STATUS_CFG: Record<string, { label: string; cls: string }> = {

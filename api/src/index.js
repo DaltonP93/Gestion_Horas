@@ -1,4 +1,9 @@
 require('dotenv').config();
+// Zona horaria del proceso fija en Paraguay (UTC-3, sin DST desde 2023). Debe
+// setearse ANTES de cualquier uso de Date, para que las extracciones por string
+// (hhmm, comparaciones, logs) no dependan de la zona del servidor (que en la
+// nube suele ser UTC y producía el corrimiento de 3 h).
+process.env.TZ = process.env.TZ || 'America/Asuncion';
 // Validar la configuración del entorno antes de cualquier otra cosa: si falta
 // un secreto crítico en producción, el proceso falla acá con un mensaje claro.
 require('./config/env');
