@@ -23,7 +23,15 @@ const EMPLOYER_FIELDS: { key: string; label: string; ph?: string }[] = [
   { key: 'hora_divisor_mensual', label: 'Divisor valor hora (mensual)', ph: '240' },
   { key: 'nocturno_desde',     label: 'Nocturno desde (HH:MM)', ph: '20:00' },
   { key: 'nocturno_hasta',     label: 'Nocturno hasta (HH:MM)', ph: '06:00' },
+  { key: 'extra_diurna_mult',  label: 'Multiplicador extra diurna', ph: '1.5' },
+  { key: 'extra_nocturna_mult', label: 'Multiplicador extra nocturna', ph: '2' },
   { key: 'recargo_nocturno_pct', label: 'Recargo nocturno (%)', ph: '30' },
+]
+
+// Toggles booleanos (1/0) de las reglas de plus nocturno.
+const NIGHT_TOGGLES: { key: string; label: string; hint: string }[] = [
+  { key: 'plus_nocturno_feriados', label: 'Recargo nocturno en feriados', hint: 'Aplica el recargo a horas ordinarias nocturnas trabajadas en feriados.' },
+  { key: 'plus_nocturno_finde', label: 'Recargo nocturno en fin de semana', hint: 'Aplica el recargo a horas ordinarias nocturnas trabajadas sábados y domingos.' },
 ]
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -70,6 +78,7 @@ export default function PlanillasLegalesPage() {
       const s = r.data || {}
       const e: Record<string, string> = {}
       for (const f of EMPLOYER_FIELDS) e[f.key] = s[f.key] || ''
+      for (const t of NIGHT_TOGGLES) e[t.key] = s[t.key] ?? '1'
       setEmp(e)
     }).catch(() => {})
     api.get('/api/employees/departments').then(r => setDepts(r.data || [])).catch(() => {})
@@ -262,6 +271,25 @@ export default function PlanillasLegalesPage() {
             </div>
           ))}
         </div>
+
+        {/* Reglas de plus nocturno (parametrizable) */}
+        <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
+          <h3 className="text-sm font-bold text-slate-700 dark:text-white/80 mb-3">Reglas de plus / recargo nocturno</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {NIGHT_TOGGLES.map(t => (
+              <label key={t.key} className="flex items-start gap-3 p-3 rounded-xl border border-slate-200 dark:border-white/[0.08] cursor-pointer">
+                <input type="checkbox" checked={(emp[t.key] ?? '1') !== '0'}
+                  onChange={e => setEmp(prev => ({ ...prev, [t.key]: e.target.checked ? '1' : '0' }))}
+                  className="mt-0.5 h-4 w-4 accent-blue-600" />
+                <span>
+                  <span className="block text-sm font-semibold text-slate-700 dark:text-white/80">{t.label}</span>
+                  <span className="block text-[11px] text-slate-400 dark:text-white/30">{t.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
         <div className="mt-4">
           <button onClick={saveEmployer} disabled={saving}
             className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
@@ -430,7 +458,7 @@ export default function PlanillasLegalesPage() {
           {comun?.config && (
             <p className="text-xs text-slate-400 dark:text-white/30 mb-3">
               Días: mensualizados base {comun.config.base_mensual ?? 30} menos reposo / injustificada / licencia especial / sin goce / vacaciones; jornaleros = días trabajados (francos, feriados y permisos con goce no descuentan). ·
-              Montos: básico prorrateado, extras {comun.config.extra_diurna_mult ?? 1.5}×/{comun.config.extra_nocturna_mult ?? 2}× (franja nocturna {comun.config.nocturno ?? '20:00–06:00'}), IPS obrero {comun.config.ips_rate_obrero ?? 9}%. Bonif. familiar y antigüedad según hijos y % cargados por empleado.
+              Montos: básico prorrateado, extras {comun.config.extra_diurna_mult ?? 1.5}×/{comun.config.extra_nocturna_mult ?? 2}× (franja nocturna {comun.config.nocturno ?? '20:00–06:00'}), recargo nocturno {comun.config.recargo_nocturno_pct ?? 30}%{comun.config.plus_nocturno_feriados === false ? ' (no aplica en feriados)' : ''}{comun.config.plus_nocturno_finde === false ? ' (no aplica en fin de semana)' : ''}, IPS obrero {comun.config.ips_rate_obrero ?? 9}%. Bonif. familiar y antigüedad según hijos y % cargados por empleado.
             </p>
           )}
           {loadingComun ? (
