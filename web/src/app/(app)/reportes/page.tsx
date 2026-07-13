@@ -6,6 +6,7 @@ import { es } from 'date-fns/locale'
 import { BarChart2, RefreshCw, Plus, Trash2, Mail, Clock, Download, CheckCircle, XCircle, Calendar } from 'lucide-react'
 import { api, downloadUrl } from '@/lib/api'
 import { useI18n } from '@/i18n/I18nProvider'
+import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 
 // ─── Helpers ─────────────────────────────────────────────────────
 function minsToHM(mins: number | null) {
@@ -751,13 +752,17 @@ function TabSMTP() {
 // ─── Página principal ─────────────────────────────────────────────
 export default function ReportesPage() {
   const { t } = useI18n()
+  const user = useCurrentUser()
+  // La configuración SMTP (host, usuario, contraseña) es sólo para el
+  // administrador; RRHH y demás roles no deben verla.
+  const canSmtp = hasRole(user, 'admin') // super_admin ya incluido en hasRole
   const [tab, setTab] = useState<'marcadas' | 'mensual' | 'programados' | 'smtp'>('marcadas')
 
   const TABS = [
     { id: 'marcadas'    as const, label: '📋 ' + t('reports.marcadas') },
     { id: 'mensual'     as const, label: '📊 ' + t('reports.monthly')  },
     { id: 'programados' as const, label: '🕐 ' + t('reports.scheduled') },
-    { id: 'smtp'        as const, label: '📧 ' + t('reports.smtp')     },
+    ...(canSmtp ? [{ id: 'smtp' as const, label: '📧 ' + t('reports.smtp') }] : []),
   ]
 
   const linkToCustom = (
@@ -796,7 +801,7 @@ export default function ReportesPage() {
       {tab === 'marcadas'    && <TabMarcadas />}
       {tab === 'mensual'     && <TabMensual />}
       {tab === 'programados' && <TabScheduled />}
-      {tab === 'smtp'        && <TabSMTP />}
+      {tab === 'smtp'        && canSmtp && <TabSMTP />}
     </div>
   )
 }

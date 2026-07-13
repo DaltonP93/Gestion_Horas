@@ -14,8 +14,8 @@ router.use(authenticate, authorize('admin', 'hr'));
 
 // ─── SMTP CONFIG ───────────────────────────────────────────────────
 
-// GET /api/notifications/smtp
-router.get('/smtp', async (req, res) => {
+// GET /api/notifications/smtp — solo administrador (RRHH no ve la config SMTP).
+router.get('/smtp', authorize('admin'), async (req, res) => {
   try {
     const [rows] = await sequelize.query(
       "SELECT setting_value FROM notification_settings WHERE setting_key = 'smtp_config' LIMIT 1"
@@ -47,8 +47,8 @@ router.put('/smtp', authorize('admin'), async (req, res) => {
   res.json({ message: 'Configuración SMTP guardada' });
 });
 
-// POST /api/notifications/smtp/test — enviar correo de prueba
-router.post('/smtp/test', async (req, res) => {
+// POST /api/notifications/smtp/test — enviar correo de prueba (solo administrador)
+router.post('/smtp/test', authorize('admin'), async (req, res) => {
   const { to } = req.body;
   if (!to) return res.status(400).json({ error: 'Destinatario requerido' });
 
