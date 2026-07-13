@@ -314,6 +314,11 @@ async function bulkRecalcDailySummary(date) {
           MIN(CASE WHEN al.type = 'in'  THEN al.timestamp END),
           MAX(CASE WHEN al.type = 'out' THEN al.timestamp END)
         ), 0
+      ) - (
+        -- Descuento de descanso configurado en el horario del empleado.
+        SELECT COALESCE(s3.break_minutes, 0)
+        FROM employees e3 LEFT JOIN schedules s3 ON e3.schedule_id = s3.id
+        WHERE e3.id = al.employee_id LIMIT 1
       )) AS worked_minutes,
       GREATEST(0, COALESCE(
         TIMESTAMPDIFF(MINUTE,

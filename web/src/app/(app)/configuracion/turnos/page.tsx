@@ -11,6 +11,7 @@ interface Schedule {
   check_out: string
   tolerance_in: number
   tolerance_out: number
+  break_minutes: number
   work_days: string
   active: number
   employees_count: number
@@ -123,6 +124,7 @@ export default function TurnosPage() {
                 <td className="px-4 py-3 font-mono text-slate-700 dark:text-white/80">{s.check_out?.slice(0, 5)}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-white/60">
                   +{s.tolerance_in}m / −{s.tolerance_out}m
+                  {s.break_minutes > 0 && <span className="block text-[11px] text-amber-600 dark:text-amber-400">descanso {s.break_minutes}m</span>}
                 </td>
                 <td className="px-4 py-3 text-xs text-slate-600 dark:text-white/60">{daysToLabel(s.work_days)}</td>
                 <td className="px-4 py-3">
@@ -177,6 +179,7 @@ function ScheduleModal({
     check_out:     schedule?.check_out?.slice(0, 5) ?? '17:00',
     tolerance_in:  schedule?.tolerance_in  ?? 10,
     tolerance_out: schedule?.tolerance_out ?? 10,
+    break_minutes: schedule?.break_minutes ?? 0,
     work_days:     schedule?.work_days     ?? '2,3,4,5,6',
   })
   const [saving, setSaving] = useState(false)
@@ -295,6 +298,19 @@ function ScheduleModal({
                 onChange={e => setForm(f => ({ ...f, tolerance_out: Number(e.target.value) }))}
                 className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
               />
+            </div>
+            <div>
+              <label htmlFor="sch-break" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Descanso (min)</label>
+              <input
+                id="sch-break"
+                type="number"
+                min={0}
+                max={240}
+                value={form.break_minutes}
+                onChange={e => setForm(f => ({ ...f, break_minutes: Number(e.target.value) }))}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
+              />
+              <p className="text-[11px] text-slate-400 mt-1 dark:text-white/30">Se descuenta del tiempo trabajado.</p>
             </div>
           </div>
 
