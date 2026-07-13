@@ -11,6 +11,7 @@ import { attendanceApi, api } from '@/lib/api'
 import { getSocket, reconnectSocket } from '@/lib/socket'
 import { useI18n } from '@/i18n/I18nProvider'
 import { Bento, Ring, GlowDot, Avatar, StatCard } from '@/components/futurista'
+import { fmtTimePy } from '@/lib/datetime'
 
 interface AttendanceEvent {
   employeeId: number
@@ -22,14 +23,8 @@ interface AttendanceEvent {
   deviceId?: number
 }
 
-// Normaliza "YYYY-MM-DD HH:mm:ss" (sin TZ) a hora de Paraguay para display
-function formatPunchTime(raw: string) {
-  const iso = raw.includes('T') ? raw : raw.replace(' ', 'T') + '-03:00'
-  return new Date(iso).toLocaleTimeString('es-PY', {
-    timeZone: 'America/Asuncion',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  })
-}
+// Hora de la marcación en zona de Paraguay (helper compartido).
+const formatPunchTime = (raw: string) => fmtTimePy(raw)
 
 export default function DashboardPage() {
   const { t, locale } = useI18n()

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
+import { fmtTimePy } from '@/lib/datetime'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid, Cell, PieChart, Pie,
@@ -211,10 +212,10 @@ export default function AnalyticsPage() {
                       <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
                     </td>
                     <td className="px-4 py-2.5 text-center font-mono text-xs text-slate-600 dark:text-white/60">
-                      {d.first_in ? format(new Date(d.first_in), 'HH:mm') : '—'}
+                      {fmtTimePy(d.first_in)}
                     </td>
                     <td className="px-4 py-2.5 text-center font-mono text-xs text-slate-600 dark:text-white/60">
-                      {d.last_out ? format(new Date(d.last_out), 'HH:mm') : '—'}
+                      {fmtTimePy(d.last_out)}
                     </td>
                     <td className="px-4 py-2.5 text-center font-mono text-xs">{minsToHM(d.worked_minutes)}</td>
                     <td className="px-4 py-2.5 text-center text-xs">

@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Clock, Calendar, TrendingUp, AlertCircle, Download, QrCode } from 'lucide-react'
 import { api } from '@/lib/api'
+import { fmtDateTimePy } from '@/lib/datetime'
 
 interface Log { id: number; timestamp: string; type: 'in' | 'out'; source: string | null; device_id: number | null }
 interface Summary {
@@ -175,7 +176,7 @@ export default function MiAsistenciaPage() {
             <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
               {logs.map(l => (
                 <tr key={l.id}>
-                  <td className="px-4 py-2.5 text-slate-900 dark:text-white">{new Date(l.timestamp).toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-slate-900 dark:text-white">{fmtDateTimePy(l.timestamp)}</td>
                   <td className="px-4 py-2.5">
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${l.type === 'in' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}`}>
                       {l.type === 'in' ? 'Entrada' : 'Salida'}
@@ -197,7 +198,7 @@ function exportCsv(summary: Summary[], logs: Log[], from: string, to: string) {
   const sumHeaders = ['fecha','entrada','salida','trabajado_min','atraso_min','estado']
   const sumRows = summary.map(d => [d.date, d.first_in || '', d.last_out || '', d.worked_minutes || 0, d.late_minutes || 0, d.status])
   const logHeaders = ['marcaje','tipo','origen']
-  const logRows = logs.map(l => [new Date(l.timestamp).toLocaleString(), l.type, l.source || ''])
+  const logRows = logs.map(l => [fmtDateTimePy(l.timestamp), l.type, l.source || ''])
   const out = [
     `# Mi asistencia ${from} → ${to}`,
     '',

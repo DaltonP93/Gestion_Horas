@@ -57,7 +57,7 @@ export default function KioskPage({ params }: { params: { branchId: string } }) 
         </div>
         <div className="text-right">
           <div className="text-5xl font-mono font-bold tabular-nums" suppressHydrationWarning>
-            {now ? now.toLocaleTimeString('es-PY', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}
+            {now ? now.toLocaleTimeString('es-PY', { timeZone: 'America/Asuncion', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--:--:--'}
           </div>
           <div className="text-blue-200 text-sm capitalize" suppressHydrationWarning>
             {now ? now.toLocaleDateString('es-PY', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : ' '}
