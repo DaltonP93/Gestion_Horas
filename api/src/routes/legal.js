@@ -55,7 +55,7 @@ async function getMonthlyGrid(year, month, dept) {
   const [rows] = await sequelize.query(`
     SELECT
       e.id, e.code, e.document_number, e.ips_number, e.position,
-      e.salary_base, e.pay_type, e.children_count, e.antiguedad_rate,
+      e.salary_base, e.pay_type, e.children_count, e.antiguedad_rate, e.hire_date,
       s.work_days,
       CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
       d.name AS department,
@@ -93,6 +93,7 @@ async function getMonthlyGrid(year, month, dept) {
         position: r.position || '', name: r.employee_name, department: r.department || '',
         salary_base: Number(r.salary_base) || 0, pay_type: r.pay_type || 'mensualizado',
         children_count: Number(r.children_count) || 0, antiguedad_rate: Number(r.antiguedad_rate) || 0,
+        hire_date: r.hire_date || null,
         workDays: workDaySet(r.work_days),
         days: {}, workedMin: 0, otMin: 0, presentDays: 0,
       });
@@ -523,7 +524,11 @@ router.get('/aguinaldo', asyncHandler(async (req, res) => {
   const acc = new Map(); // id → { code, name, ci, meses, percibido }
   for (let m = 1; m <= upTo; m++) {
     const employees = await getMonthlyGrid(year, m, dept);
+    const monthEnd = new Date(year, m, 0); // último día del mes m
     for (const e of employees) {
+      // No acreditar meses anteriores al ingreso (un mensualizado devuelve
+      // base 30 aunque no tenga marcaciones): el empleado aún no existía.
+      if (e.hire_date && new Date(e.hire_date) > monthEnd) continue;
       const d = computeDiasTrabajados(e, cfg);
       const liq = computeLiquidacion({ ...e, days: Object.values(e.days) }, d.dias, rates);
       // Imponible del mes (sin bonif. familiar, que no integra el aguinaldo).
