@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { Users, CheckCircle, Clock, XCircle, Calendar, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
+import { fmtTimePy } from '@/lib/datetime'
 
 interface TeamMember {
   id: number; code: string; full_name: string
@@ -138,7 +139,7 @@ export default function SupervisorPage() {
                   </td>
                   <td className="px-3 py-2 text-right">{t.late_minutes ?? 0}</td>
                   <td className="px-3 py-2 text-right">{t.worked_minutes ? (t.worked_minutes / 60).toFixed(1) : '—'}</td>
-                  <td className="px-3 py-2 text-xs text-slate-500 dark:text-white/40">{t.last_mark ? new Date(t.last_mark).toLocaleTimeString() : '—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-500 dark:text-white/40">{fmtTimePy(t.last_mark)}</td>
                 </tr>
               )
             })}

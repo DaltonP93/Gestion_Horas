@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
+import { fmtTimePy } from '@/lib/datetime'
 import EmployeeNotes from '@/components/EmployeeNotes'
 import dynamic from 'next/dynamic'
 const FaceEnroll = dynamic(() => import('@/components/FaceEnroll'), { ssr: false })
@@ -23,9 +24,9 @@ function minsToHM(mins: number | null) {
   return `${h}:${String(m).padStart(2, '0')}`
 }
 
+// Hora de marcación en zona de Paraguay (no la del navegador).
 function fmtTime(dt: string | null) {
-  if (!dt) return '—'
-  try { return format(new Date(dt), 'HH:mm') } catch { return '—' }
+  return fmtTimePy(dt)
 }
 
 const STATUS_ROW: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
