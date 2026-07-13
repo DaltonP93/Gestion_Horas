@@ -46,6 +46,35 @@ router.get('/', authorize('admin'), requirePermission('usuarios', 'view'), async
   }
 });
 
+// GET /api/users/lookup — búsqueda liviana para selectores (asignados de
+// onboarding, revisores de evaluaciones, responsables de departamento, etc.).
+// Devuelve solo campos no sensibles y NO es la administración de usuarios, por
+// eso la pueden usar los roles de gestión (no solo admin). Debe ir ANTES de
+// la ruta '/:id' para no ser capturada como id.
+router.get('/lookup', authorize('admin', 'gth', 'hr', 'coordinator', 'manager', 'gestor', 'supervisor'), async (req, res) => {
+  try {
+    const { role, search } = req.query;
+    let where = 'WHERE u.active = 1';
+    const params = [];
+    if (role) {
+      const roles = String(role).split(',').map(s => s.trim()).filter(Boolean);
+      if (roles.length) { where += ` AND u.role IN (${roles.map(() => '?').join(',')})`; params.push(...roles); }
+    }
+    if (search) {
+      where += ' AND (u.full_name LIKE ? OR u.username LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
+    }
+    const [rows] = await sequelize.query(
+      `SELECT u.id, u.full_name, u.username, u.role, u.employee_id
+       FROM users u ${where} ORDER BY u.full_name LIMIT 500`,
+      { replacements: params }
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Error al buscar usuarios' });
+  }
+});
+
 // GET /api/users/:id
 router.get('/:id', async (req, res) => {
   // Solo admin puede ver a cualquier usuario; otros solo a sí mismos

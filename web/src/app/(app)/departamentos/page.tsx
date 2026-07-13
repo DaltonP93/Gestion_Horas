@@ -28,7 +28,7 @@ export default function DepartamentosPage() {
     try {
       const [d, u] = await Promise.all([
         api.get('/api/departments').then(r => r.data as Dept[]),
-        api.get('/api/users').then(r => r.data as UserRef[]).catch(() => [] as UserRef[]),
+        api.get('/api/users/lookup').then(r => r.data as UserRef[]).catch(() => [] as UserRef[]),
       ])
       setDepts(d); setUsers(u)
     } finally { setLoading(false) }
