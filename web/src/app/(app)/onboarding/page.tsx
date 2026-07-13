@@ -51,7 +51,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
     try {
       const [r, ru] = await Promise.all([
         api.get(`/api/onboarding/${id}`),
-        api.get('/api/users?limit=200').catch(() => ({ data: [] })),
+        api.get('/api/users/lookup').catch(() => ({ data: [] })),
       ])
       setData(r.data.data)
       setUsers(ru.data?.data || ru.data || [])
