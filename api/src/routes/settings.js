@@ -90,6 +90,7 @@ const EMPLOYER_KEYS = [
   'nocturno_hasta',                  // fin franja nocturna HH:MM (default 06:00)
   'extra_diurna_mult',               // multiplicador hora extra diurna (default 1.5)
   'extra_nocturna_mult',             // multiplicador hora extra nocturna (default 2)
+  'recargo_nocturno_pct',            // % recargo horas ordinarias nocturnas (default 30)
   'bonif_familiar_pct',              // % del salario mínimo por hijo (default 5)
 ];
 

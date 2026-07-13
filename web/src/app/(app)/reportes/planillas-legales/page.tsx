@@ -23,6 +23,7 @@ const EMPLOYER_FIELDS: { key: string; label: string; ph?: string }[] = [
   { key: 'hora_divisor_mensual', label: 'Divisor valor hora (mensual)', ph: '240' },
   { key: 'nocturno_desde',     label: 'Nocturno desde (HH:MM)', ph: '20:00' },
   { key: 'nocturno_hasta',     label: 'Nocturno hasta (HH:MM)', ph: '06:00' },
+  { key: 'recargo_nocturno_pct', label: 'Recargo nocturno (%)', ph: '30' },
 ]
 
 const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -35,10 +36,12 @@ interface ComunRow {
   code: string; name: string; pay_type: string; nro_ci: string; forma_de_pago: number
   canti_dias_trabajados: number; base: number; descuentos: number; detalle: Record<string, number>
   horas_ordinarias: number; horas_extraordinarias: number; salario_basico: number
-  extra_diurna: number; extra_nocturna: number; bonif_familiar: number; antiguedad: number
+  extra_diurna: number; extra_nocturna: number; recargo_nocturno: number
+  bonif_familiar: number; antiguedad: number
   aporte_seg_social: number; total_bruto: number; total_neto: number
   ot_diurna_horas: number; ot_nocturna_horas: number
 }
+interface AguinaldoRow { code: string; name: string; ci: string; meses: number; percibido_anual: number; aguinaldo: number }
 
 export default function PlanillasLegalesPage() {
   const now = new Date()
@@ -55,6 +58,8 @@ export default function PlanillasLegalesPage() {
   const [loadingAp, setLoadingAp] = useState(false)
   const [comun, setComun] = useState<{ data: ComunRow[]; config: any } | null>(null)
   const [loadingComun, setLoadingComun] = useState(false)
+  const [agui, setAgui] = useState<{ data: AguinaldoRow[]; total_aguinaldo: number } | null>(null)
+  const [loadingAgui, setLoadingAgui] = useState(false)
   const [comp, setComp] = useState<{ total: number; complete: number; counts: any; incomplete: any[] } | null>(null)
   const [loadingComp, setLoadingComp] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -129,6 +134,16 @@ export default function PlanillasLegalesPage() {
       const r = await api.get(`/api/legal/planilla-comunicacion`, { params: { year, month, dept: dept || undefined } })
       setComun({ data: r.data?.data || [], config: r.data?.config || {} })
     } catch { setComun({ data: [], config: {} }) } finally { setLoadingComun(false) }
+  }
+
+  // Aguinaldo del año (1/12 de lo percibido).
+  function downloadAguinaldo() { window.open(apiUrl(`/api/legal/aguinaldo?format=xlsx&year=${year}&month=${month}${dept ? `&dept=${dept}` : ''}&${tokenParam()}`), '_blank') }
+  async function previewAguinaldo() {
+    setLoadingAgui(true); setAgui(null)
+    try {
+      const r = await api.get(`/api/legal/aguinaldo`, { params: { year, month, dept: dept || undefined } })
+      setAgui({ data: r.data?.data || [], total_aguinaldo: r.data?.total_aguinaldo || 0 })
+    } catch { setAgui({ data: [], total_aguinaldo: 0 }) } finally { setLoadingAgui(false) }
   }
 
   // Los aportes IPS se calculan para toda la empresa (planilla patronal completa).
@@ -345,7 +360,68 @@ export default function PlanillasLegalesPage() {
             </div>
           </button>
         </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+          <button onClick={downloadAguinaldo}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-amber-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-amber-400/30">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center dark:bg-amber-400/10 dark:text-amber-400"><FileSpreadsheet size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Aguinaldo {year} (Excel)</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">1/12 de lo percibido en el año (hasta el mes elegido)</div>
+            </div>
+          </button>
+          <button onClick={previewAguinaldo}
+            className="flex items-center gap-3 p-4 rounded-2xl border border-slate-200 hover:border-slate-300 hover:-translate-y-0.5 transition-all text-left dark:border-white/[0.08] dark:hover:border-white/[0.16]">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center dark:bg-white/[0.06] dark:text-white/50"><FileText size={18} /></div>
+            <div>
+              <div className="font-bold text-sm text-slate-900 dark:text-white">Vista previa aguinaldo</div>
+              <div className="text-[11px] text-slate-400 dark:text-white/40">Percibido anual y aguinaldo por empleado</div>
+            </div>
+          </button>
+        </div>
       </section>
+
+      {/* Vista previa aguinaldo */}
+      {(loadingAgui || agui) && (
+        <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-bold text-slate-900 dark:text-white mb-1">Aguinaldo {year}</h2>
+          <p className="text-xs text-slate-400 dark:text-white/30 mb-3">Suma la remuneración imponible de cada mes (hasta {MESES[month - 1]}) y la divide por 12. La bonificación familiar no integra el aguinaldo.</p>
+          {loadingAgui ? (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Calculando (recorre los meses del año)...</p>
+          ) : agui && agui.data.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+                  <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                    <th className="px-3 py-2">Empleado</th><th className="px-3 py-2">C.I.</th>
+                    <th className="px-3 py-2 text-right">Meses</th><th className="px-3 py-2 text-right">Percibido anual</th>
+                    <th className="px-3 py-2 text-right">Aguinaldo</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+                  {agui.data.map((r, i) => (
+                    <tr key={i} className="text-slate-700 dark:text-white/70">
+                      <td className="px-3 py-2">{r.name}</td>
+                      <td className="px-3 py-2 tabular-nums">{r.ci || '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.meses}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">₲ {gs(r.percibido_anual)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-amber-700 dark:text-amber-400">₲ {gs(r.aguinaldo)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-200 dark:border-white/[0.1] font-bold text-slate-900 dark:text-white">
+                    <td className="px-3 py-2" colSpan={4}>TOTAL AGUINALDO</td>
+                    <td className="px-3 py-2 text-right tabular-nums">₲ {gs(agui.total_aguinaldo)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ) : (
+            <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Sin datos. Cargá salario base y asegurate de tener asistencia del año.</p>
+          )}
+        </section>
+      )}
 
       {/* Vista previa planilla de comunicación MTESS */}
       {(loadingComun || comun) && (
@@ -370,6 +446,7 @@ export default function PlanillasLegalesPage() {
                     <th className="px-3 py-2 text-right">Hs ord.</th><th className="px-3 py-2 text-right">Hs extra</th>
                     <th className="px-3 py-2 text-right">Básico</th>
                     <th className="px-3 py-2 text-right">Extra 50%</th><th className="px-3 py-2 text-right">Extra 100%</th>
+                    <th className="px-3 py-2 text-right">Rec. noct.</th>
                     <th className="px-3 py-2 text-right">Bonif. fam.</th><th className="px-3 py-2 text-right">Antig.</th>
                     <th className="px-3 py-2 text-right">IPS obrero</th><th className="px-3 py-2 text-right">Neto</th>
                   </tr>
@@ -393,6 +470,7 @@ export default function PlanillasLegalesPage() {
                       <td className="px-3 py-2 text-right tabular-nums">{gs(r.salario_basico)}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.extra_diurna ? gs(r.extra_diurna) : '—'}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.extra_nocturna ? gs(r.extra_nocturna) : '—'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{r.recargo_nocturno ? gs(r.recargo_nocturno) : '—'}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.bonif_familiar ? gs(r.bonif_familiar) : '—'}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{r.antiguedad ? gs(r.antiguedad) : '—'}</td>
                       <td className="px-3 py-2 text-right tabular-nums text-rose-600 dark:text-rose-400">{gs(r.aporte_seg_social)}</td>

@@ -381,7 +381,7 @@ async function bulkRecalcDailySummary(date) {
 }
 
 // Materializar ausentes: inserta filas 'absent' para empleados activos que,
-// según su horario (schedules.work_days, convención DAYOFWEEK-1: 0=Dom..6=Sáb),
+// según su horario (schedules.work_days, convención DAYOFWEEK: 1=Dom..7=Sáb),
 // debían trabajar ese día, no es feriado, y no tienen ya una fila. No pisa
 // filas existentes. Empleados sin horario asignado se omiten.
 async function materializeAbsents(date) {
@@ -391,7 +391,7 @@ async function materializeAbsents(date) {
     FROM employees e
     JOIN schedules s ON e.schedule_id = s.id
     WHERE e.status = 'active'
-      AND FIND_IN_SET(DAYOFWEEK(?) - 1, REPLACE(s.work_days, ' ', ''))
+      AND FIND_IN_SET(DAYOFWEEK(?), REPLACE(s.work_days, ' ', ''))
       AND NOT EXISTS (SELECT 1 FROM daily_summary ds WHERE ds.employee_id = e.id AND ds.date = ?)
       AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.date = ?)
     ON DUPLICATE KEY UPDATE status = status

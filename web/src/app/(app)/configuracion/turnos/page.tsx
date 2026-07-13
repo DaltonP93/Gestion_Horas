@@ -16,7 +16,8 @@ interface Schedule {
   employees_count: number
 }
 
-const DAY_LABELS = ['', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+// Convención DAYOFWEEK: 1=Dom, 2=Lun … 7=Sáb (semana domingo→sábado).
+const DAY_LABELS = ['', 'Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 
 function daysToLabel(csv: string): string {
   if (!csv) return '—'
@@ -176,7 +177,7 @@ function ScheduleModal({
     check_out:     schedule?.check_out?.slice(0, 5) ?? '17:00',
     tolerance_in:  schedule?.tolerance_in  ?? 10,
     tolerance_out: schedule?.tolerance_out ?? 10,
-    work_days:     schedule?.work_days     ?? '1,2,3,4,5',
+    work_days:     schedule?.work_days     ?? '2,3,4,5,6',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
