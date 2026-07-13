@@ -25,6 +25,8 @@ const DEFAULT_RATES = {
   extraDiurnaMult: 1.5,     // 50%
   extraNocturnaMult: 2.0,   // 100%
   recargoNocturnoPct: 30,   // % de recargo sobre horas ordinarias nocturnas
+  plusNocturnoFeriados: true, // aplicar recargo nocturno también en feriados
+  plusNocturnoFinde: true,    // aplicar recargo nocturno también en fin de semana
   bonifFamiliarPct: 5,      // % del salario mínimo por hijo
   salarioMinimo: 0,         // referencia (settings salario_minimo)
   obreroPct: 9,             // % aporte obrero IPS
@@ -72,14 +74,24 @@ function splitOvertime(days, rates) {
   return { diurnaMin: total - nocturnaMin, nocturnaMin };
 }
 
+// ¿Se excluye el recargo nocturno de este día por ser feriado o fin de semana
+// y estar desactivado el toggle correspondiente? (plus nocturno parametrizable)
+function nightPlusExcluded(d, rates) {
+  if (d.isHoliday && rates.plusNocturnoFeriados === false) return true;
+  if (d.isWeekend && rates.plusNocturnoFinde === false) return true;
+  return false;
+}
+
 // Minutos ORDINARIOS (no extra) trabajados dentro de la franja nocturna.
 // Toma la ventana trabajada del día [entrada, salida] (ajustando si cruza
 // medianoche), calcula su solapamiento nocturno y le resta la porción
-// nocturna que ya es hora extra.
+// nocturna que ya es hora extra. Los días excluidos por los toggles de plus
+// nocturno (feriados / fin de semana) no computan recargo.
 function nightOrdinaryMinutes(days, rates, overtimeNocturnaMin) {
   let workedNight = 0;
   for (const d of days) {
     if (d.inMinutes == null || d.outMinutes == null) continue;
+    if (nightPlusExcluded(d, rates)) continue;
     let end = d.outMinutes;
     if (end < d.inMinutes) end += 1440; // cruza medianoche
     workedNight += nightOverlapMinutes(d.inMinutes, end, rates.nocturnoDesde, rates.nocturnoHasta);

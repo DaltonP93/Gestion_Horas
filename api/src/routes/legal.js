@@ -114,7 +114,9 @@ async function getMonthlyGrid(year, month, dept) {
       // work_days usa convención DAYOFWEEK: 1=Dom … 7=Sáb.
       // getDay() da 0=Dom … 6=Sáb, así que se suma 1.
       const dow = dt.getDay() + 1;
-      const working = emp.workDays.has(dow) && !holidays.has(dateStr);
+      const isHoliday = holidays.has(dateStr);
+      const isWeekend = dow === 1 || dow === 7; // domingo=1, sábado=7
+      const working = emp.workDays.has(dow) && !isHoliday;
       const inHM = hhmm(r.first_in);
       const outHM = hhmm(r.last_out);
       const inMinutes = inHM ? (+inHM.slice(0, 2) * 60 + +inHM.slice(3, 5)) : null;
@@ -124,7 +126,7 @@ async function getMonthlyGrid(year, month, dept) {
       emp.days[day] = {
         in: inHM, out: outHM,
         status: r.status, jtype: (r.justification_type || '').toLowerCase().trim(),
-        otMin, inMinutes, outMinutes, working,
+        otMin, inMinutes, outMinutes, working, isHoliday, isWeekend,
       };
       emp.workedMin += r.worked_minutes || 0;
       emp.otMin += otMin;
@@ -391,7 +393,8 @@ const { DEFAULT_RATES, computeLiquidacion } = require('../services/liquidacion')
 async function getLiquidacionRates() {
   const keys = ['ips_rate_obrero', 'salario_minimo', 'hora_divisor_mensual',
     'nocturno_desde', 'nocturno_hasta', 'extra_diurna_mult', 'extra_nocturna_mult',
-    'recargo_nocturno_pct', 'bonif_familiar_pct', 'mtess_dias_base_mensual', 'mtess_prorratear_basico'];
+    'recargo_nocturno_pct', 'plus_nocturno_feriados', 'plus_nocturno_finde',
+    'bonif_familiar_pct', 'mtess_dias_base_mensual', 'mtess_prorratear_basico'];
   const [rows] = await sequelize.query(
     `SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN (${keys.map(() => '?').join(',')})`,
     { replacements: keys }
@@ -407,6 +410,8 @@ async function getLiquidacionRates() {
     extraDiurnaMult: num(m.extra_diurna_mult, DEFAULT_RATES.extraDiurnaMult),
     extraNocturnaMult: num(m.extra_nocturna_mult, DEFAULT_RATES.extraNocturnaMult),
     recargoNocturnoPct: num(m.recargo_nocturno_pct, DEFAULT_RATES.recargoNocturnoPct),
+    plusNocturnoFeriados: String(m.plus_nocturno_feriados ?? '1') !== '0',
+    plusNocturnoFinde: String(m.plus_nocturno_finde ?? '1') !== '0',
     bonifFamiliarPct: num(m.bonif_familiar_pct, DEFAULT_RATES.bonifFamiliarPct),
     salarioMinimo: num(m.salario_minimo, DEFAULT_RATES.salarioMinimo),
     obreroPct: num(m.ips_rate_obrero, DEFAULT_RATES.obreroPct),
@@ -505,6 +510,9 @@ router.get('/planilla-comunicacion', asyncHandler(async (req, res) => {
       base_mensual: cfg.base, tipos_descuento: cfg.discountTypes,
       ips_rate_obrero: rates.obreroPct, salario_minimo: rates.salarioMinimo,
       extra_diurna_mult: rates.extraDiurnaMult, extra_nocturna_mult: rates.extraNocturnaMult,
+      recargo_nocturno_pct: rates.recargoNocturnoPct,
+      plus_nocturno_feriados: rates.plusNocturnoFeriados,
+      plus_nocturno_finde: rates.plusNocturnoFinde,
       nocturno: `${String(Math.floor(rates.nocturnoDesde / 60)).padStart(2, '0')}:${String(rates.nocturnoDesde % 60).padStart(2, '0')}–${String(Math.floor(rates.nocturnoHasta / 60)).padStart(2, '0')}:${String(rates.nocturnoHasta % 60).padStart(2, '0')}`,
     },
     total: rows.length,

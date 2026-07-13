@@ -91,6 +91,8 @@ const EMPLOYER_KEYS = [
   'extra_diurna_mult',               // multiplicador hora extra diurna (default 1.5)
   'extra_nocturna_mult',             // multiplicador hora extra nocturna (default 2)
   'recargo_nocturno_pct',            // % recargo horas ordinarias nocturnas (default 30)
+  'plus_nocturno_feriados',          // aplicar recargo nocturno en feriados (1/0, default 1)
+  'plus_nocturno_finde',             // aplicar recargo nocturno en fin de semana (1/0, default 1)
   'bonif_familiar_pct',              // % del salario mínimo por hijo (default 5)
   'att_overtime_requires_auth',      // '1' = las horas extra requieren aprobación
   'att_early_mark_alert_min',        // umbral de entrada temprana que alerta (default 30)
