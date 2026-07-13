@@ -425,7 +425,7 @@ function NewAppraisalModal({ onClose, onCreated }: { onClose: () => void; onCrea
   useEffect(() => {
     api.get('/api/appraisals/templates').then(r => setTemplates(r.data.data || []))
     api.get('/api/employees?limit=500').then(r => setEmployees(r.data.data || r.data || []))
-    api.get('/api/users?role=manager,coordinator,gestor,admin,gth,hr&limit=200').then(r => setReviewers(r.data.data || r.data || []))
+    api.get('/api/users/lookup?role=manager,coordinator,gestor,admin,gth,hr').then(r => setReviewers(r.data.data || r.data || []))
       .catch(() => {})
   }, [])
 
