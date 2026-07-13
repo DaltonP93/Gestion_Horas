@@ -82,6 +82,15 @@ const EMPLOYER_KEYS = [
   'ips_rate_obrero',                 // % aporte obrero IPS (default 9)
   'ips_rate_patronal',               // % aporte patronal IPS (default 16.5)
   'salario_minimo',                  // salario mínimo legal vigente (referencia)
+  'mtess_dias_base_mensual',         // base de días para mensualizados (default 30)
+  'mtess_dias_descuento_tipos',      // tipos de ausencia que descuentan días (lista)
+  'mtess_prorratear_basico',         // prorratear básico por días informados (1/0)
+  'hora_divisor_mensual',            // divisor para el valor hora mensual (default 240)
+  'nocturno_desde',                  // inicio franja nocturna HH:MM (default 20:00)
+  'nocturno_hasta',                  // fin franja nocturna HH:MM (default 06:00)
+  'extra_diurna_mult',               // multiplicador hora extra diurna (default 1.5)
+  'extra_nocturna_mult',             // multiplicador hora extra nocturna (default 2)
+  'bonif_familiar_pct',              // % del salario mínimo por hijo (default 5)
 ];
 
 const SETTING_KEYS = [

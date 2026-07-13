@@ -39,6 +39,25 @@ router.get('/template', async (_req, res) => {
   ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
   ws.addRow({ code: 'E001', date: '2026-04-21', type: 'permiso', just: 'Ejemplo — reemplazar por datos reales' });
 
+  // Hoja de referencia: tipos válidos y cuáles descuentan días (MTESS).
+  const ref = wb.addWorksheet('Tipos válidos');
+  ref.columns = [
+    { header: 'tipo', key: 't', width: 18 },
+    { header: 'descuenta días (mensualizado)', key: 'd', width: 30 },
+    { header: 'descripción', key: 'x', width: 40 },
+  ];
+  ref.getRow(1).font = { bold: true };
+  [
+    ['permiso', 'No', 'Permiso con goce de sueldo'],
+    ['vacaciones', 'Sí', 'Vacaciones'],
+    ['enfermedad', 'Sí', 'Enfermedad / reposo médico'],
+    ['reposo', 'Sí', 'Reposo'],
+    ['licencia_especial', 'Sí', 'Licencia especial'],
+    ['sin_goce', 'Sí', 'Licencia sin goce de sueldo'],
+    ['injustificada', 'Sí', 'Ausencia injustificada'],
+    ['otro', 'No', 'Otro (no descuenta por defecto)'],
+  ].forEach(r => ref.addRow({ t: r[0], d: r[1], x: r[2] }));
+
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', 'attachment; filename="plantilla_justificaciones.xlsx"');
   await wb.xlsx.write(res);
@@ -49,7 +68,13 @@ router.get('/template', async (_req, res) => {
 router.post('/bulk', authorize('admin', 'hr', 'gth'), upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Archivo .xlsx requerido (campo "file")' });
   const dryRun = req.query.dry_run === '1' || req.body.dry_run === '1';
-  const validTypes = new Set(['permiso', 'vacaciones', 'enfermedad', 'otro']);
+  // Tipos válidos. Los que descuentan días para mensualizados en la planilla
+  // MTESS: vacaciones, enfermedad, reposo, licencia_especial, sin_goce,
+  // injustificada. 'permiso' (con goce) y 'otro' NO descuentan por defecto.
+  const validTypes = new Set([
+    'permiso', 'vacaciones', 'enfermedad', 'reposo',
+    'licencia_especial', 'sin_goce', 'injustificada', 'otro',
+  ]);
 
   try {
     const wb = new ExcelJS.Workbook();
@@ -103,14 +128,23 @@ router.post('/bulk', authorize('admin', 'hr', 'gth'), upload.single('file'), asy
       }
 
       if (!dryRun) {
+        // Una ausencia injustificada NO es un permiso: debe quedar como
+        // 'absent' para que los reportes que suman status='absent' la sigan
+        // contando; sólo se registra su justification_type para la planilla.
+        // El resto (permiso, vacaciones, enfermedad…) sí pasa a 'permission'.
+        const isAbsence = r.type === 'injustificada';
+        const newStatus = isAbsence ? 'absent' : 'permission';
+        const statusUpdate = isAbsence
+          ? 'status = status'
+          : "status = CASE WHEN status = 'absent' THEN 'permission' ELSE status END";
         await sequelize.query(`
           INSERT INTO daily_summary (employee_id, date, justification, justification_type, status)
-          VALUES (?, ?, ?, ?, 'permission')
+          VALUES (?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             justification      = VALUES(justification),
             justification_type = VALUES(justification_type),
-            status = CASE WHEN status = 'absent' THEN 'permission' ELSE status END
-        `, { replacements: [emp.id, r.date, r.just, r.type] });
+            ${statusUpdate}
+        `, { replacements: [emp.id, r.date, r.just, r.type, newStatus] });
       }
       results.ok++;
     }

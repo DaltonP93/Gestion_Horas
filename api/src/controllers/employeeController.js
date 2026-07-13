@@ -105,7 +105,12 @@ async function create(req, res) {
 // PUT /api/employees/:id
 async function update(req, res) {
   const { first_name, last_name, email, phone, department_id,
-          schedule_id, position, hire_date, birth_date, status } = req.body;
+          schedule_id, position, hire_date, birth_date, status,
+          document_number, ips_number, salary_base, gender, pay_type,
+          children_count, antiguedad_rate } = req.body;
+  // Un campo omitido o vacío ('') no debe pisar el valor existente: se pasa
+  // NULL para que COALESCE conserve lo que hay en la BD.
+  const nn = (v) => (v === undefined || v === '' ? null : v);
   try {
     await sequelize.query(`
       UPDATE employees SET
@@ -118,10 +123,20 @@ async function update(req, res) {
         position   = COALESCE(?, position),
         hire_date  = COALESCE(?, hire_date),
         birth_date = COALESCE(?, birth_date),
-        status     = COALESCE(?, status)
+        status     = COALESCE(?, status),
+        document_number = COALESCE(?, document_number),
+        ips_number = COALESCE(?, ips_number),
+        salary_base = COALESCE(?, salary_base),
+        gender     = COALESCE(?, gender),
+        pay_type   = COALESCE(?, pay_type),
+        children_count  = COALESCE(?, children_count),
+        antiguedad_rate = COALESCE(?, antiguedad_rate)
       WHERE id = ?
     `, { replacements: [first_name, last_name, email, phone, department_id,
-        schedule_id, position, hire_date, birth_date, status, req.params.id] });
+        schedule_id, position, hire_date, birth_date, status,
+        nn(document_number), nn(ips_number), nn(salary_base), nn(gender), nn(pay_type),
+        nn(children_count), nn(antiguedad_rate),
+        req.params.id] });
 
     res.json({ message: 'Empleado actualizado' });
   } catch (err) {
