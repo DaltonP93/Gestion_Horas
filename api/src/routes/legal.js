@@ -60,15 +60,23 @@ async function getMonthlyGrid(year, month, dept) {
       CONCAT(e.last_name, ', ', e.first_name) AS employee_name,
       d.name AS department,
       ds.date, ds.status, ds.first_in, ds.last_out, ds.justification_type,
-      ds.worked_minutes, ds.overtime_minutes
+      ds.worked_minutes, ds.overtime_minutes, oa.status AS ot_status
     FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
     LEFT JOIN schedules   s ON e.schedule_id = s.id
     LEFT JOIN daily_summary ds ON e.id = ds.employee_id
          AND ds.date BETWEEN ? AND ?
+    LEFT JOIN overtime_approvals oa ON oa.employee_id = ds.employee_id AND oa.date = ds.date
     WHERE e.status = 'active' ${deptFilter}
     ORDER BY d.name, e.last_name, e.first_name, ds.date
   `, { replacements: params });
+
+  // ¿La empresa exige autorizar las horas extra? Si sí, sólo se pagan/informan
+  // las aprobadas (el cálculo del overtime no cambia; sólo su cómputo aquí).
+  const [otCfg] = await sequelize.query(
+    "SELECT setting_value FROM notification_settings WHERE setting_key = 'att_overtime_requires_auth' LIMIT 1"
+  );
+  const otRequiresAuth = String(otCfg[0]?.setting_value ?? '') === '1';
 
   // Feriados del período (para no descontar días no laborables).
   const [hol] = await sequelize.query(
@@ -111,13 +119,15 @@ async function getMonthlyGrid(year, month, dept) {
       const outHM = hhmm(r.last_out);
       const inMinutes = inHM ? (+inHM.slice(0, 2) * 60 + +inHM.slice(3, 5)) : null;
       const outMinutes = outHM ? (+outHM.slice(0, 2) * 60 + +outHM.slice(3, 5)) : null;
+      // Overtime computable: si se exige autorización, sólo el aprobado.
+      const otMin = (otRequiresAuth && r.ot_status !== 'approved') ? 0 : (r.overtime_minutes || 0);
       emp.days[day] = {
         in: inHM, out: outHM,
         status: r.status, jtype: (r.justification_type || '').toLowerCase().trim(),
-        otMin: r.overtime_minutes || 0, inMinutes, outMinutes, working,
+        otMin, inMinutes, outMinutes, working,
       };
       emp.workedMin += r.worked_minutes || 0;
-      emp.otMin += r.overtime_minutes || 0;
+      emp.otMin += otMin;
       if (r.status === 'present' || r.status === 'late') emp.presentDays++;
     }
   }

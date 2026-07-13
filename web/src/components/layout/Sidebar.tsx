@@ -38,6 +38,7 @@ const NAV: NavItem[] = [
   { href: '/asistencia',    icon: Clock,           i18nKey: 'nav.attendance',   section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'asistencia' },
   { href: '/permisos',      icon: Calendar,        i18nKey: 'nav.permissions',  section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'permisos' },
   { href: '/aprobaciones',  icon: CheckSquare,     i18nKey: 'nav.approvals',    section: 'gestion', roles: ['admin','gth','hr','coordinator','manager'], module: 'aprobaciones' },
+  { href: '/horas-extra',   icon: Clock,           i18nKey: 'nav.overtime',     section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'aprobaciones' },
   { href: '/supervisor',    icon: Users,           i18nKey: 'nav.my_team',      section: 'gestion', roles: ['coordinator','manager','supervisor','gestor'], module: 'supervisor' },
   { href: '/turnera',       icon: CalendarRange,   i18nKey: 'nav.shifts',       section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'turnera' },
   { href: '/reportes',      icon: BarChart2,       i18nKey: 'nav.reports',      section: 'gestion', roles: ['admin','gth','hr','manager','gestor'], module: 'reportes' },

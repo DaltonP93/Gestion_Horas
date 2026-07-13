@@ -78,7 +78,8 @@
     "section_management": "Gestão",
     "section_admin": "Administração",
     "legal_sheets": "Planilhas legais",
-    "shifts": "Escala"
+    "shifts": "Escala",
+    "overtime": "Horas extras"
   },
   "dashboard": {
     "title": "Painel principal",
