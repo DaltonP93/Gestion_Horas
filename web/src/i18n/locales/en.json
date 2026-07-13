@@ -79,7 +79,8 @@
     "section_admin": "Administration",
     "legal_sheets": "Legal Sheets",
     "shifts": "Shifts",
-    "overtime": "Overtime"
+    "overtime": "Overtime",
+    "out_of_range": "Out of range"
   },
   "dashboard": {
     "title": "Main dashboard",

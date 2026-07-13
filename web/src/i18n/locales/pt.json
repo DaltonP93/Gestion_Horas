@@ -79,7 +79,8 @@
     "section_admin": "Administração",
     "legal_sheets": "Planilhas legais",
     "shifts": "Escala",
-    "overtime": "Horas extras"
+    "overtime": "Horas extras",
+    "out_of_range": "Fora do intervalo"
   },
   "dashboard": {
     "title": "Painel principal",

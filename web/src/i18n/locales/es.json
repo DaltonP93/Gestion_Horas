@@ -79,7 +79,8 @@
     "section_admin": "Administración",
     "legal_sheets": "Planillas legales",
     "shifts": "Turnera",
-    "overtime": "Horas extra"
+    "overtime": "Horas extra",
+    "out_of_range": "Fuera de rango"
   },
   "dashboard": {
     "title": "Panel principal",
