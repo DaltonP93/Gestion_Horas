@@ -21,10 +21,22 @@ const TZ = 'America/Asuncion';
 function fmtTimePy(v) {
   if (v == null || v === '') return '—';
   let s = String(v).trim().replace(' ', 'T');
-  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += '-03:00'; // naive → hora de Paraguay
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s += 'T00:00:00-03:00';        // solo fecha → medianoche PY
+  else if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += '-03:00';          // naive → hora de Paraguay
   const d = new Date(s);
   if (isNaN(d.getTime())) return '—';
   return new Intl.DateTimeFormat('es-PY', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+}
+
+// Formatea solo fecha "dd/mm/aaaa" en PY (para validar strings date-only).
+function fmtDatePy(v) {
+  if (v == null || v === '') return '—';
+  let s = String(v).trim().replace(' ', 'T');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s += 'T00:00:00-03:00';
+  else if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += '-03:00';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return '—';
+  return new Intl.DateTimeFormat('es-PY', { timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
 }
 
 const cases = [
@@ -44,6 +56,14 @@ for (const [input, expected, desc] of cases) {
   const ok = got === expected;
   if (!ok) failed++;
   console.log(`${ok ? '✓' : '✗'} ${desc}: ${JSON.stringify(input)} → ${got} (esperado ${expected})`);
+}
+
+// Caso solo-fecha (daily_summary.date): no debe caer en el fallback.
+{
+  const got = fmtDatePy('2026-07-12');
+  const ok = got === '12/07/2026';
+  if (!ok) failed++;
+  console.log(`${ok ? '✓' : '✗'} fecha sola (YYYY-MM-DD): "2026-07-12" → ${got} (esperado 12/07/2026)`);
 }
 
 assert.strictEqual(failed, 0, `${failed} caso(s) de zona horaria fallaron`);

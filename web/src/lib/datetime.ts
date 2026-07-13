@@ -14,9 +14,14 @@ function toDate(v: string | number | Date | null | undefined): Date | null {
   if (v instanceof Date) return isNaN(v.getTime()) ? null : v
   if (typeof v === 'number') { const d = new Date(v); return isNaN(d.getTime()) ? null : d }
   let s = String(v).trim().replace(' ', 'T')
-  // Si NO trae zona (ni "Z" ni "±hh:mm" al final), es hora local de Paraguay →
-  // se fija el offset -03:00 para que no la reinterprete la zona del navegador.
-  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += '-03:00'
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    // Solo fecha ("2026-07-12"): medianoche de Paraguay.
+    s += 'T00:00:00-03:00'
+  } else if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+    // Sin zona → es hora local de Paraguay; se fija -03:00 para que no la
+    // reinterprete la zona del navegador.
+    s += '-03:00'
+  }
   const d = new Date(s)
   return isNaN(d.getTime()) ? null : d
 }
