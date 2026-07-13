@@ -40,7 +40,7 @@ router.get('/:id', async (req, res) => {
 router.post('/', authorize('admin', 'hr', 'gth'), async (req, res) => {
   const {
     name, check_in, check_out,
-    tolerance_in = 10, tolerance_out = 10,
+    tolerance_in = 10, tolerance_out = 10, break_minutes = 0,
     work_days = '2,3,4,5,6', // Lun-Vie en convención DAYOFWEEK (1=Dom..7=Sáb)
   } = req.body;
   if (!name || !check_in || !check_out) {
@@ -48,9 +48,9 @@ router.post('/', authorize('admin', 'hr', 'gth'), async (req, res) => {
   }
   try {
     const [r] = await sequelize.query(
-      `INSERT INTO schedules (name, check_in, check_out, tolerance_in, tolerance_out, work_days)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      { replacements: [name, check_in, check_out, tolerance_in, tolerance_out, work_days] }
+      `INSERT INTO schedules (name, check_in, check_out, tolerance_in, tolerance_out, break_minutes, work_days)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      { replacements: [name, check_in, check_out, tolerance_in, tolerance_out, +break_minutes || 0, work_days] }
     );
     res.status(201).json({ id: r.insertId });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -58,7 +58,7 @@ router.post('/', authorize('admin', 'hr', 'gth'), async (req, res) => {
 
 // PUT /api/schedules/:id
 router.put('/:id', authorize('admin', 'hr', 'gth'), async (req, res) => {
-  const { name, check_in, check_out, tolerance_in, tolerance_out, work_days } = req.body;
+  const { name, check_in, check_out, tolerance_in, tolerance_out, break_minutes, work_days } = req.body;
   try {
     await sequelize.query(
       `UPDATE schedules SET
@@ -67,11 +67,13 @@ router.put('/:id', authorize('admin', 'hr', 'gth'), async (req, res) => {
          check_out     = COALESCE(?, check_out),
          tolerance_in  = COALESCE(?, tolerance_in),
          tolerance_out = COALESCE(?, tolerance_out),
+         break_minutes = COALESCE(?, break_minutes),
          work_days     = COALESCE(?, work_days)
        WHERE id = ?`,
       { replacements: [
         name ?? null, check_in ?? null, check_out ?? null,
-        tolerance_in ?? null, tolerance_out ?? null, work_days ?? null,
+        tolerance_in ?? null, tolerance_out ?? null,
+        break_minutes ?? null, work_days ?? null,
         req.params.id,
       ]}
     );
