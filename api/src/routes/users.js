@@ -13,7 +13,9 @@ const logger  = require('../config/logger');
 router.use(authenticate);
 
 // GET /api/users — listar todos
-router.get('/', authorize('admin', 'hr'), requirePermission('usuarios', 'view'), async (req, res) => {
+// Solo administrador gestiona usuarios del sistema (RRHH gestiona empleados,
+// no usuarios). super_admin pasa por el bypass de authorize.
+router.get('/', authorize('admin'), requirePermission('usuarios', 'view'), async (req, res) => {
   const { role, active = '1', search } = req.query;
   let where = 'WHERE 1=1';
   const params = [];
