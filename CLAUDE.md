@@ -64,6 +64,7 @@ La configuración de relojes biométricos debe mantenerse fuera del repositorio,
 - `/turnera` — planificación de turnos (semana domingo→sábado)
 - `/horas-extra` — revisión y autorización de horas extra
 - `/marcaciones-fuera-rango` — entradas muy tempranas / salidas muy tardías con umbrales configurables
+- `/marcaciones-geocerca` — marcajes registrados fuera del perímetro de la sede (modo "advertir")
 - `/vacaciones` — plan mensual, saldos por empleado y política parametrizable por antigüedad
 - `/ingresos` — Ingresos/Egresos: contratos, período de prueba, alertas y baja de personal
 - `/lactancia` — maternidad/lactancia: reducción horaria parametrizable con vigencia y alertas
