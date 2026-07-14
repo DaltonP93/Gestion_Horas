@@ -141,6 +141,13 @@ const help: Record<string, HelpContent> = {
           'Los aprobadores pueden ver el adjunto antes de decidir.',
         ],
       },
+      {
+        heading: 'Rechazo con fecha alternativa (vacaciones)',
+        items: [
+          'En una solicitud de vacaciones pendiente, el botón "Alternativa" permite rechazarla proponiendo otro rango de fechas.',
+          'Se guarda el motivo y la fecha sugerida, para que el empleado pueda reprogramar.',
+        ],
+      },
     ],
   },
 
@@ -271,21 +278,37 @@ const help: Record<string, HelpContent> = {
 
   '/vacaciones': {
     title: 'Vacaciones',
-    intro: 'Solicitud y gestión de períodos de vacaciones anuales. El sistema calcula el saldo disponible según días acumulados.',
+    intro: 'Plan de vacaciones, saldos por empleado y política parametrizable por antigüedad. Se organiza en tres pestañas: Plan mensual, Saldos y Política.',
     sections: [
       {
-        heading: 'Cómo funciona',
+        heading: 'Plan mensual',
         items: [
-          'El saldo de vacaciones se configura por empleado en función de su antigüedad.',
-          'Al aprobar una solicitud, los días quedan marcados como "vacaciones" en el daily_summary.',
-          'El empleado recibe notificación por email al aprobarse o rechazarse.',
+          'Vista tipo Gantt de permisos y vacaciones aprobados/pendientes por empleado.',
+          'Detecta posibles conflictos de cobertura (3 o más personas ausentes el mismo día se marcan con ⚠).',
+          'Botón "Solicitar ausencia" para cargar un pedido propio o (RRHH) de un empleado.',
         ],
       },
       {
-        heading: 'Estados',
+        heading: 'Saldos (por empleado y año)',
         items: [
-          'Solicitada → Aprobada → Tomada (días pasados).',
-          'Rechazada: el saldo se devuelve al empleado.',
+          'Muestra antigüedad, derecho (según la política), días asignados, ajuste, tomados y disponible.',
+          'Los días tomados se cuentan en días hábiles (excluye fines de semana y feriados) salvo que la política use días corridos.',
+          'RRHH puede sobrescribir el derecho con "Asignar" (días asignados) y aplicar un ajuste manual (+/−) con nota.',
+        ],
+      },
+      {
+        heading: 'Política (parametrizable)',
+        items: [
+          'Tramos por antigüedad → días (ej. Paraguay: <5 años 12, 5–10 18, >10 30). Editable: agregá/quitá tramos.',
+          'Tipo de conteo: días hábiles (excluye finde/feriados) o días corridos.',
+          'Solo Admin/GTH/RRHH pueden editar la política y los saldos.',
+        ],
+      },
+      {
+        heading: 'Rechazo con fecha alternativa',
+        items: [
+          'Las solicitudes de vacaciones se aprueban/rechazan en el módulo Permisos.',
+          'Al rechazar se puede proponer un rango de fechas alternativo para que el empleado reprograme.',
         ],
       },
     ],
@@ -405,11 +428,11 @@ const help: Record<string, HelpContent> = {
   },
 
   '/onboarding': {
-    title: 'Onboarding & Offboarding',
-    intro: 'Flujo de tareas estructurado para la incorporación de nuevos empleados o la salida de uno existente.',
+    title: 'Checklists de ingreso',
+    intro: 'Flujo de tareas estructurado para la incorporación o salida de empleados. Los datos de contrato y la baja formal se gestionan en el módulo Ingresos / Egresos.',
     sections: [
       {
-        heading: 'Onboarding (ingreso)',
+        heading: 'Checklist de ingreso',
         items: [
           'Cuando contratan a alguien, se crea un proceso basado en una plantilla.',
           'Ejemplo de tareas: "Firmar contrato", "Entregar credenciales de acceso", "Tour de oficina", "Alta en sistema".',
@@ -418,7 +441,7 @@ const help: Record<string, HelpContent> = {
         ],
       },
       {
-        heading: 'Offboarding (egreso)',
+        heading: 'Checklist de egreso',
         items: [
           'Al dar de baja a un empleado, se puede iniciar un proceso de salida.',
           'Ejemplo de tareas: "Devolver equipos", "Revocar accesos al sistema", "Entrevista de salida".',
@@ -430,6 +453,13 @@ const help: Record<string, HelpContent> = {
         items: [
           'Creá plantillas reutilizables en el botón "Nueva plantilla".',
           'Las tareas de la plantilla se copian a cada nuevo proceso.',
+        ],
+      },
+      {
+        heading: 'Relación con Ingresos / Egresos',
+        items: [
+          'El contrato, el período de prueba y la baja formal (fecha y motivo) se cargan en el módulo Ingresos / Egresos.',
+          'Este módulo es solo la lista de tareas operativas del alta/baja.',
         ],
       },
     ],
@@ -476,14 +506,25 @@ const help: Record<string, HelpContent> = {
 
   '/configuracion': {
     title: 'Configuración General',
-    intro: 'Parámetros globales del sistema: nombre de la empresa, logo, idioma y zona horaria.',
+    intro: 'Parámetros globales del sistema: identidad de la empresa, idioma, zona horaria y accesos a la configuración de cada módulo.',
     sections: [
       {
         heading: 'Identidad de la empresa',
         items: [
           'Logo: se muestra en el sidebar y en los PDFs generados.',
           'Nombre de la empresa: aparece en los reportes y correos.',
-          'Zona horaria: usada para calcular retardos y fechas de reportes.',
+          'Zona horaria: usada para calcular retardos y fechas de reportes (Paraguay = America/Asuncion, UTC−3).',
+        ],
+      },
+      {
+        heading: 'Dónde se configura cada módulo (todo parametrizable)',
+        items: [
+          'Turnos, Feriados, Sedes (+ geocerca), Apariencia, Firma, QR de asistencia, Webhooks, Plantillas de email, Reglas de permisos y Metas: en Configuración.',
+          'Reglas (condiciones): constructor de reglas "cuando… entonces…" por módulo, en Administración → Reglas.',
+          'Planillas legales (MTESS/IPS): parámetros de liquidación, salario mínimo, recargo nocturno y plus nocturno, en Reportes → Planillas legales.',
+          'Vacaciones: política por antigüedad y saldos, dentro del módulo Vacaciones.',
+          'Ingresos/Egresos: tipos de contrato y alertas de vencimiento; Maternidad/Lactancia: reducción y edad máxima, cada uno en su módulo.',
+          'Hora extra (autorización) y umbrales de marcación fuera de rango: en sus respectivos módulos.',
         ],
       },
     ],
@@ -522,7 +563,7 @@ const help: Record<string, HelpContent> = {
 
   '/configuracion/sedes': {
     title: 'Sedes / Sucursales',
-    intro: 'Gestión de las ubicaciones físicas de la empresa para reportes multi-sede.',
+    intro: 'Gestión de las ubicaciones físicas de la empresa para reportes multi-sede y para la geocerca de marcación móvil.',
     sections: [
       {
         heading: 'Usos',
@@ -530,6 +571,23 @@ const help: Record<string, HelpContent> = {
           'Filtrar reportes y nómina por sede.',
           'Asignar empleados y dispositivos a una sede.',
           'Cada sede puede tener su propio timezone.',
+        ],
+      },
+      {
+        heading: 'Geocerca por sede',
+        items: [
+          'En cada sede podés cargar latitud, longitud y radio (m); el botón "Usar mi ubicación" completa las coordenadas desde tu GPS.',
+          'La marcación móvil valida que el empleado esté dentro del radio de su sede.',
+          'Una sede sin coordenadas no valida perímetro (se usa el radio por defecto sólo si define coordenadas).',
+        ],
+      },
+      {
+        heading: 'Modo de geocerca (global)',
+        items: [
+          'Desactivado: no valida la ubicación.',
+          'Advertir: permite marcar pero registra si fue fuera del área.',
+          'Exigir: rechaza el marcaje fuera del radio.',
+          'También se define el radio por defecto para sedes sin radio propio.',
         ],
       },
     ],
@@ -780,14 +838,24 @@ const help: Record<string, HelpContent> = {
 
   '/marcar': {
     title: 'Marcar Asistencia',
-    intro: 'Marcaje de entrada o salida desde tu dispositivo móvil con confirmación de ubicación opcional.',
+    intro: 'Marcaje de entrada o salida desde tu dispositivo móvil con validación de ubicación (geocerca), QR o selfie.',
     sections: [
       {
         heading: 'Cómo marcar',
         items: [
           'El sistema detecta automáticamente si es entrada o salida según tus marcajes del día.',
-          'Podés activar ubicación GPS para que quede registrada.',
-          'También podés escanear el código QR de la empresa para marcar.',
+          'Con GPS activo, valida que estés dentro del área de tu sede antes de registrar.',
+          'También podés escanear el código QR de la sede para marcar.',
+          'Si no hay conexión, el marcaje se guarda y se envía automáticamente al volver online.',
+        ],
+      },
+      {
+        heading: 'Geocerca (dentro/fuera)',
+        items: [
+          'La pantalla muestra en vivo si estás "Dentro" o "Fuera" del área permitida, con la distancia al centro de la sede.',
+          'En modo "Exigir", estando fuera del radio no vas a poder marcar.',
+          'En modo "Advertir", podés marcar pero queda registrado como fuera de rango para RRHH.',
+          'Si tu sede no tiene coordenadas cargadas, no se valida perímetro.',
         ],
       },
     ],
@@ -853,6 +921,187 @@ const help: Record<string, HelpContent> = {
           'Anonimiza datos de empleados inactivos que llevan más de X días fuera del sistema.',
           'Reemplaza nombres, emails y CI con valores genéricos.',
           'Los logs de asistencia quedan intactos pero desvinculados del nombre real.',
+        ],
+      },
+    ],
+  },
+
+  '/turnera': {
+    title: 'Turnera (turnos)',
+    intro: 'Planificación de turnos y asignación de horarios a empleados por día, semana o mes.',
+    sections: [
+      {
+        heading: 'Cómo funciona',
+        items: [
+          'Asigná a cada empleado el turno/horario que le corresponde en cada fecha.',
+          'La semana va de domingo a sábado (convención Domingo=1 … Sábado=7).',
+          'Los turnos definen entrada, salida, tolerancias y minutos de descanso, que alimentan el cálculo de retardos y horas extra.',
+        ],
+      },
+      {
+        heading: 'Relación con asistencia',
+        items: [
+          'El horario asignado determina si un marcaje es retardo y desde cuándo cuenta la hora extra.',
+          'Los días no laborables del horario no generan ausencia.',
+        ],
+      },
+    ],
+  },
+
+  '/horas-extra': {
+    title: 'Horas Extra',
+    intro: 'Revisión y autorización de las horas extra calculadas por el sistema, cuando la empresa exige aprobación.',
+    sections: [
+      {
+        heading: 'Cómo funciona',
+        items: [
+          'La hora extra siempre se calcula (minutos que la salida excede el horario + tolerancia).',
+          'Con "requiere autorización" activo, sólo las horas extra aprobadas se pagan/informan en las planillas.',
+          'Cada día con hora extra puede aprobarse o rechazarse con una nota.',
+        ],
+      },
+      {
+        heading: 'Configuración',
+        items: [
+          'El interruptor "las horas extra requieren aprobación" se define en este módulo (solo Admin/GTH).',
+          'Los multiplicadores (diurna 50%, nocturna 100%) y el recargo/plus nocturno se configuran en Planillas legales.',
+        ],
+      },
+    ],
+  },
+
+  '/marcaciones-fuera-rango': {
+    title: 'Marcaciones fuera de rango',
+    intro: 'Detecta entradas muy anticipadas o salidas muy tardías respecto al horario, para que RRHH las revise.',
+    sections: [
+      {
+        heading: 'Cómo funciona',
+        items: [
+          'Lista los días en que la entrada fue mucho antes o la salida mucho después del horario del empleado.',
+          'Se usa para decidir si se autoriza la hora extra correspondiente, en vez de computarla automáticamente.',
+        ],
+      },
+      {
+        heading: 'Umbrales configurables',
+        items: [
+          'Entrada temprana (min) y salida tardía (min): definís cuántos minutos de desvío disparan la alerta.',
+          'Sólo Admin/GTH pueden editar los umbrales.',
+        ],
+      },
+    ],
+  },
+
+  '/reportes/planillas-legales': {
+    title: 'Planillas legales (MTESS / IPS)',
+    intro: 'Genera las planillas legales de Paraguay y centraliza los parámetros de liquidación.',
+    sections: [
+      {
+        heading: 'Planillas disponibles',
+        items: [
+          'Control de asistencia MTESS (PDF): grilla de entradas/salidas por empleado.',
+          'Jornales IPS (Excel): días y horas por empleado con C.I. y N° IPS.',
+          'Planilla de comunicación MTESS (Excel): formato de carga oficial con días trabajados por tipo de pago.',
+          'Aportes IPS con montos y Aguinaldo (1/12 de lo percibido en el año).',
+        ],
+      },
+      {
+        heading: 'Días trabajados (regla MTESS)',
+        items: [
+          'Jornaleros: cantidad exacta de días trabajados.',
+          'Mensualizados: base 30 menos reposo, ausencia injustificada, licencia especial, días sin goce y vacaciones. Los francos/feriados y permisos con goce no descuentan.',
+        ],
+      },
+      {
+        heading: 'Parámetros de liquidación (configurables)',
+        items: [
+          'Datos del empleador, salario mínimo, tasas IPS, divisor del valor hora.',
+          'Franja nocturna, multiplicadores de hora extra y recargo/plus nocturno (con toggles de aplicación en feriados y fines de semana).',
+          'Completitud de datos: revisa qué empleados no tienen C.I., N° IPS, salario u horario, con importación masiva por plantilla.',
+        ],
+      },
+    ],
+  },
+
+  '/configuracion/reglas': {
+    title: 'Reglas (constructor de condiciones)',
+    intro: 'Motor parametrizable para definir reglas "cuando [condiciones] entonces [acción]" por módulo, sin tocar código.',
+    sections: [
+      {
+        heading: 'Cómo armar una regla',
+        items: [
+          'Elegí el módulo (asistencia, hora extra, permisos, empleado) y agregá condiciones (campo, operador, valor).',
+          'Combiná las condiciones con "todas (Y)" o "alguna (O)".',
+          'Elegí la acción (marcar/alertar, requerir aprobación, notificar, bloquear, asignar valor, ajustar monto) y sus parámetros.',
+          'Definí prioridad y si la regla está activa.',
+        ],
+      },
+      {
+        heading: 'Probar antes de guardar',
+        items: [
+          'El "Probador" evalúa la regla contra valores de ejemplo y muestra si dispara.',
+          'Solo Admin/GTH pueden crear, editar o eliminar reglas.',
+        ],
+      },
+      {
+        heading: 'Alcance actual',
+        items: [
+          'Esta pantalla gestiona y prueba las reglas; el consumo dentro de cada módulo se irá conectando por fases.',
+        ],
+      },
+    ],
+  },
+
+  '/ingresos': {
+    title: 'Ingresos / Egresos',
+    intro: 'Contratos laborales, período de prueba, alertas de vencimiento y baja formal de personal.',
+    sections: [
+      {
+        heading: 'Contratos',
+        items: [
+          'Cargá por empleado el tipo de contrato, fecha de inicio/fin, fin del período de prueba y salario.',
+          'Cada empleado tiene su historial de contratos; el vigente queda como "activo".',
+        ],
+      },
+      {
+        heading: 'Alertas',
+        items: [
+          'Contratos por vencer y períodos de prueba por terminar dentro de la ventana configurada.',
+          'Los tipos de contrato y los días de anticipación de las alertas se configuran en el botón "Configuración".',
+        ],
+      },
+      {
+        heading: 'Egreso',
+        items: [
+          'El botón de egreso da de baja al empleado (pasa a inactivo), guarda fecha y motivo, y cierra sus contratos vigentes.',
+          'Solo Admin/GTH/RRHH pueden registrar el egreso y editar la configuración.',
+        ],
+      },
+    ],
+  },
+
+  '/lactancia': {
+    title: 'Maternidad / Lactancia',
+    intro: 'Reducción horaria por lactancia con vigencia y alertas de fin de período.',
+    sections: [
+      {
+        heading: 'Períodos',
+        items: [
+          'Cargá por empleada la fecha de nacimiento del hijo, el inicio y la reducción diaria (minutos).',
+          'Si no indicás fin, se calcula automáticamente como nacimiento + edad máxima (por defecto 24 meses).',
+          'Podés cerrar un período o filtrar por vigentes/finalizados.',
+        ],
+      },
+      {
+        heading: 'Configuración (parametrizable)',
+        items: [
+          'Reducción por defecto (ej. 90 min), edad máxima del hijo y días de anticipación de la alerta de fin.',
+          'Solo Admin/GTH/RRHH pueden editar la configuración.',
+        ],
+      },
+      {
+        heading: 'Alcance actual',
+        items: [
+          'La reducción queda registrada y disponible (también como campo del constructor de reglas); su aplicación directa al cálculo diario se conecta en una fase posterior para no afectar la liquidación.',
         ],
       },
     ],

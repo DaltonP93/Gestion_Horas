@@ -58,11 +58,23 @@ La configuración de relojes biométricos debe mantenerse fuera del repositorio,
 - `/empleados` — listado con filtros
 - `/empleados/[id]` — detalle con historial y edición inline
 - `/empleados/nuevo` — formulario alta
-- `/permisos` — gestión aprobación/rechazo
+- `/permisos` — gestión aprobación/rechazo (incluye rechazo con fecha alternativa en vacaciones)
 - `/reportes` — Marcadas (formato PDF ZKTeco), programados, SMTP
+- `/reportes/planillas-legales` — MTESS (control de asistencia y comunicación), IPS jornales/aportes, aguinaldo y parámetros de liquidación
+- `/turnera` — planificación de turnos (semana domingo→sábado)
+- `/horas-extra` — revisión y autorización de horas extra
+- `/marcaciones-fuera-rango` — entradas muy tempranas / salidas muy tardías con umbrales configurables
+- `/vacaciones` — plan mensual, saldos por empleado y política parametrizable por antigüedad
+- `/ingresos` — Ingresos/Egresos: contratos, período de prueba, alertas y baja de personal
+- `/lactancia` — maternidad/lactancia: reducción horaria parametrizable con vigencia y alertas
+- `/onboarding` — checklists de ingreso/egreso (tareas operativas)
+- `/marcar` — marcación móvil con geocerca (validación de perímetro por sede)
+- `/configuracion/reglas` — constructor de condiciones (motor de reglas parametrizable)
+- `/configuracion/sedes` — sedes + geocerca (coordenadas y radio por sede, modo global)
 - `/usuarios` — CRUD usuarios con roles
 - `/analytics/[id]` — gráficas por empleado (Recharts)
 - `/configuracion` — configuración general
+- **Ayuda contextual:** el botón flotante "?" (HelpButton) muestra la documentación de cada módulo desde `web/src/data/helpContent.ts`
 
 ## Comandos frecuentes en producción
 ```bash
