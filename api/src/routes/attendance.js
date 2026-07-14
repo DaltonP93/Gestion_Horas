@@ -78,7 +78,7 @@ router.get('/out-of-range', requirePermission('asistencia', 'view'), async (req,
         JOIN employees e ON e.id = ds.employee_id
         JOIN schedules  s ON s.id = e.schedule_id
         LEFT JOIN departments d ON d.id = e.department_id
-        WHERE ds.date BETWEEN ? AND ? AND ds.first_in IS NOT NULL ${deptFilter}
+        WHERE ds.date BETWEEN ? AND ? AND (ds.first_in IS NOT NULL OR ds.last_out IS NOT NULL) ${deptFilter}
       ) t
       WHERE t.early_min > ? OR t.late_out_min > ?
       ORDER BY t.date DESC, t.name
