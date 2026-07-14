@@ -340,10 +340,20 @@ async function registerMobile(req, res) {
     const ts = new Date();
     const type = await detectMarkType(employeeId, ts);
 
+    // Geocerca: valida el perímetro de la sede según el modo configurado.
+    const geofence = require('../services/geofence');
+    const gf = await geofence.check(employeeId, latitude, longitude);
+    if (gf.blocked) {
+      return res.status(403).json({
+        error: `Estás fuera del área permitida de tu sede (${gf.distance}m > ${gf.fence.radius}m).`,
+        geofence: { status: gf.status, distance_m: gf.distance, radius_m: gf.fence?.radius },
+      });
+    }
+
     await sequelize.query(`
-      INSERT INTO attendance_logs (employee_id, timestamp, type, source, latitude, longitude, accuracy)
-      VALUES (?, ?, ?, 'mobile', ?, ?, ?)
-    `, { replacements: [employeeId, ts, type, latitude, longitude, accuracy] });
+      INSERT INTO attendance_logs (employee_id, timestamp, type, source, latitude, longitude, accuracy, geofence_status, distance_m)
+      VALUES (?, ?, ?, 'mobile', ?, ?, ?, ?, ?)
+    `, { replacements: [employeeId, ts, type, latitude, longitude, accuracy, gf.status, gf.distance] });
 
     await recalcDailySummary(employeeId, ts);
 
@@ -357,7 +367,11 @@ async function registerMobile(req, res) {
       timestamp: ts.toISOString(), type, source: 'mobile', latitude, longitude
     });
 
-    res.status(201).json({ message: `Marcaje de ${type === 'in' ? 'entrada' : 'salida'} registrado`, type, timestamp: ts });
+    res.status(201).json({
+      message: `Marcaje de ${type === 'in' ? 'entrada' : 'salida'} registrado`,
+      type, timestamp: ts,
+      geofence: { status: gf.status, distance_m: gf.distance },
+    });
   } catch (err) {
     logger.error('Error registerMobile:', err);
     res.status(500).json({ error: 'Error al registrar marcaje móvil' });

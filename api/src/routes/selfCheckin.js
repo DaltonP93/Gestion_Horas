@@ -14,16 +14,6 @@ router.use(authenticate);
 
 const TOKEN_TTL_MIN = 5;
 
-function haversineMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const toRad = d => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
 // Rotar/crear token QR de una sede
 router.post('/qr-token', authorize('admin', 'hr', 'gth', 'super_admin'), async (req, res) => {
   try {
@@ -93,17 +83,17 @@ router.post('/mark', async (req, res) => {
       validated = true;
     }
 
-    // Validación geolocalización (si se envía)
+    // Validación geolocalización (si se envía). El modo (off/warn/enforce) es
+    // parametrizable; en 'enforce' se rechaza fuera del radio, en 'warn' se
+    // registra pero se permite. Se guarda el resultado para auditoría.
+    let geoStatus = null, geoDist = null;
     if (lat != null && lng != null) {
-      const [[br]] = await sequelize.query(
-        'SELECT geo_lat, geo_lng, geo_radius_m FROM branches WHERE id = ? LIMIT 1',
-        { replacements: [emp.branch_id] }
-      );
-      if (br && br.geo_lat != null && br.geo_lng != null) {
-        const dist = haversineMeters(+lat, +lng, +br.geo_lat, +br.geo_lng);
-        const radius = br.geo_radius_m || 200;
-        if (dist > radius)
-          return res.status(403).json({ error: `Fuera del rango permitido (${Math.round(dist)}m > ${radius}m)` });
+      const geofence = require('../services/geofence');
+      const gf = await geofence.check(emp.id, lat, lng);
+      geoStatus = gf.status; geoDist = gf.distance;
+      if (gf.blocked)
+        return res.status(403).json({ error: `Fuera del rango permitido (${gf.distance}m > ${gf.fence.radius}m)` });
+      if (gf.fence) {
         validated = true;
         if (source === 'web') source = 'geo';
       }
@@ -141,17 +131,38 @@ router.post('/mark', async (req, res) => {
     // Geolocalización canónica en latitude/longitude (mismas columnas que el
     // marcaje móvil), para que reportes y exports lean un único par.
     await sequelize.query(`
-      INSERT INTO attendance_logs (employee_id, timestamp, type, source, selfie_url, latitude, longitude, user_agent, raw_data)
-      VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO attendance_logs (employee_id, timestamp, type, source, selfie_url, latitude, longitude, user_agent, raw_data, geofence_status, distance_m)
+      VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, { replacements: [
       emp.id, type, source, selfieUrl,
       lat != null ? +lat : null,
       lng != null ? +lng : null,
       ua,
-      JSON.stringify({ self_checkin: true, user_id: userId, has_selfie: !!selfieUrl })
+      JSON.stringify({ self_checkin: true, user_id: userId, has_selfie: !!selfieUrl }),
+      geoStatus, geoDist,
     ] });
 
     res.json({ ok: true, source, type, employee_id: emp.id, code: emp.code, selfie_url: selfieUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/self-checkin/geofence — perímetro y modo para el empleado del
+// usuario, para que la app pueda mostrar el estado dentro/fuera antes de marcar.
+router.get('/geofence', async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'No autenticado' });
+    const [[emp]] = await sequelize.query(
+      "SELECT e.id FROM employees e JOIN users u ON u.employee_id = e.id WHERE u.id = ? AND e.status = 'active' LIMIT 1",
+      { replacements: [userId] }
+    );
+    if (!emp) return res.status(403).json({ error: 'Usuario sin empleado vinculado' });
+    const geofence = require('../services/geofence');
+    const { mode, default_radius_m } = await geofence.getConfig();
+    const fence = await geofence.getEmployeeFence(emp.id, default_radius_m);
+    res.json({ mode, fence });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

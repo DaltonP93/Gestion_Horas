@@ -91,6 +91,25 @@ export default function MarcarPage() {
   // Face ID panel
   const [showFacePanel, setShowFacePanel] = useState(false)
 
+  // Geocerca: perímetro de la sede del empleado + modo configurado.
+  const [fence, setFence] = useState<{ lat: number; lng: number; radius: number; name?: string } | null>(null)
+  const [geoMode, setGeoMode] = useState<'off' | 'warn' | 'enforce'>('enforce')
+  useEffect(() => {
+    api.get('/api/self-checkin/geofence')
+      .then(r => { setFence(r.data?.fence || null); if (r.data?.mode) setGeoMode(r.data.mode) })
+      .catch(() => {})
+  }, [])
+
+  // Estado dentro/fuera calculado en vivo con la última ubicación.
+  const geoStatus = (() => {
+    if (geoMode === 'off' || !fence || !geo.coords) return null
+    const R = 6371000, toRad = (d: number) => (d * Math.PI) / 180
+    const dLat = toRad(fence.lat - geo.coords.latitude), dLon = toRad(fence.lng - geo.coords.longitude)
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(geo.coords.latitude)) * Math.cos(toRad(fence.lat)) * Math.sin(dLon / 2) ** 2
+    const dist = Math.round(2 * R * Math.asin(Math.sqrt(a)))
+    return { inside: dist <= fence.radius, dist }
+  })()
+
   // Offline queue init
   useEffect(() => {
     setPending(listPending())
@@ -260,10 +279,18 @@ export default function MarcarPage() {
                 {geo.coords.latitude.toFixed(5)}, {geo.coords.longitude.toFixed(5)} (±{Math.round(geo.coords.accuracy)}m)
               </span>
             </div>
-            {user?.fullName && (
+            {fence && (
               <div className="flex items-center gap-2">
                 <Building2 size={14} className="text-slate-400 dark:text-white/30" />
-                <span className="text-slate-500 dark:text-white/40">El servidor valida que estés dentro del radio de tu sede.</span>
+                <span className="text-slate-500 dark:text-white/40">Sede{fence.name ? ` ${fence.name}` : ''} · radio {fence.radius}m</span>
+              </div>
+            )}
+            {geoStatus && (
+              <div className={`flex items-center gap-2 font-medium ${geoStatus.inside ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                <span className={`w-2 h-2 rounded-full ${geoStatus.inside ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                {geoStatus.inside
+                  ? `Dentro del área permitida (${geoStatus.dist}m)`
+                  : `Fuera del área permitida (${geoStatus.dist}m > ${fence?.radius}m)${geoMode === 'enforce' ? ' — no podrás marcar' : ' — se registrará como fuera de rango'}`}
               </div>
             )}
           </div>
