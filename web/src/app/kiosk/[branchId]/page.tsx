@@ -1,9 +1,11 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useParams } from 'next/navigation'
 import { Clock } from 'lucide-react'
 import { api } from '@/lib/api'
 
-export default function KioskPage({ params }: { params: { branchId: string } }) {
+export default function KioskPage() {
+  const params = useParams<{ branchId: string }>()
   const branchId = params.branchId
   const [token, setToken] = useState<string | null>(null)
   const [expiresAt, setExpiresAt] = useState<string | null>(null)

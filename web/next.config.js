@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  images: { domains: ['localhost'] },
+  images: { remotePatterns: [{ protocol: 'http', hostname: 'localhost' }] },
 
   /**
    * Headers de seguridad — respaldo en `next dev` y por si nginx no procesa la
