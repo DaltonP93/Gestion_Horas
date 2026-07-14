@@ -991,6 +991,28 @@ const help: Record<string, HelpContent> = {
     ],
   },
 
+  '/marcaciones-geocerca': {
+    title: 'Marcaciones fuera de geocerca',
+    intro: 'Lista los marcajes móviles que quedaron registrados fuera del perímetro de la sede, para revisión de RRHH.',
+    sections: [
+      {
+        heading: 'Cuándo aparecen',
+        items: [
+          'Cuando la geocerca está en modo "Advertir", el empleado puede marcar aunque esté fuera del radio, pero el marcaje se registra como "fuera".',
+          'En modo "Exigir" el marcaje se rechaza, así que no aparece aquí.',
+          'El modo y el radio se configuran en Configuración → Sedes.',
+        ],
+      },
+      {
+        heading: 'Qué muestra',
+        items: [
+          'Fecha/hora, empleado, tipo (entrada/salida), origen (app/QR/GPS), distancia al centro de la sede y enlace al mapa.',
+          'Filtrable por período y departamento.',
+        ],
+      },
+    ],
+  },
+
   '/reportes/planillas-legales': {
     title: 'Planillas legales (MTESS / IPS)',
     intro: 'Genera las planillas legales de Paraguay y centraliza los parámetros de liquidación.',
@@ -1043,9 +1065,18 @@ const help: Record<string, HelpContent> = {
         ],
       },
       {
+        heading: 'Alertas de reglas (asistencia)',
+        items: [
+          'La sección desplegable "Alertas de reglas" evalúa las reglas activas del módulo asistencia sobre un período real.',
+          'Elegí desde/hasta y presioná "Evaluar": se listan los días y empleados en que cada regla disparó, con su acción.',
+          'El contexto de cada día incluye minutos trabajados/tardanza/hora extra, desvíos de entrada/salida, feriado/fin de semana y la reducción vigente de lactancia (lactancia_activa / lactancia_reduccion_min).',
+        ],
+      },
+      {
         heading: 'Alcance actual',
         items: [
-          'Esta pantalla gestiona y prueba las reglas; el consumo dentro de cada módulo se irá conectando por fases.',
+          'El módulo asistencia ya evalúa las reglas sobre datos reales (ver "Alertas de reglas").',
+          'El consumo en otros módulos (hora extra, permisos, empleado) se irá conectando por fases.',
         ],
       },
     ],
