@@ -88,4 +88,35 @@ router.get('/out-of-range', requirePermission('asistencia', 'view'), async (req,
   } catch (e) { next(e); }
 });
 
+// ── Marcaciones fuera de la geocerca ───────────────────────────
+// Lista los marcajes que quedaron registrados FUERA del perímetro de la sede
+// (geofence_status = 'outside'). Útil cuando la geocerca está en modo
+// "advertir" (permite marcar pero registra la desviación) para que RRHH revise.
+router.get('/out-of-geofence', requirePermission('asistencia', 'view'), async (req, res, next) => {
+  try {
+    const now = new Date();
+    const from = req.query.from || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const to   = req.query.to   || new Date().toISOString().slice(0, 10);
+    const params = [from, to];
+    let deptFilter = '';
+    if (req.query.dept) { deptFilter = 'AND e.department_id = ?'; params.push(req.query.dept); }
+
+    const [rows] = await sequelize.query(`
+      SELECT al.id, al.employee_id, e.code, CONCAT(e.first_name,' ',e.last_name) AS name,
+             COALESCE(d.name,'') AS department,
+             DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i') AS marked_at,
+             al.type, al.source, al.distance_m, al.latitude, al.longitude
+      FROM attendance_logs al
+      JOIN employees e ON e.id = al.employee_id
+      LEFT JOIN departments d ON d.id = e.department_id
+      WHERE al.geofence_status = 'outside'
+        AND DATE(al.timestamp) BETWEEN ? AND ? ${deptFilter}
+      ORDER BY al.timestamp DESC
+      LIMIT 500
+    `, { replacements: params });
+
+    res.json({ from, to, total: rows.length, data: rows });
+  } catch (e) { next(e); }
+});
+
 module.exports = router;
