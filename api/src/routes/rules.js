@@ -18,6 +18,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
 const engine = require('../services/ruleEngine');
+const runtime = require('../services/ruleRuntime');
 
 router.use(authenticate);
 
@@ -151,6 +152,86 @@ router.post('/evaluate', requirePermission('reglas', 'view'), async (req, res, n
     }
     const result = engine.evaluateRule(rule, context && typeof context === 'object' ? context : {});
     res.json(result);
+  } catch (e) { next(e); }
+});
+
+// ── Alertas: evalúa las reglas ACTIVAS del módulo asistencia sobre el
+// resumen diario de un período y devuelve las que disparan. Convierte el motor
+// de reglas en un consumidor real (no sólo un editor). El contexto de cada día
+// incluye desvíos de horario, feriado/fin de semana y la reducción vigente de
+// lactancia.
+router.get('/alerts', requirePermission('reglas', 'view'), async (req, res, next) => {
+  try {
+    const module = req.query.module || 'asistencia';
+    if (module !== 'asistencia') {
+      // Por ahora sólo el módulo asistencia tiene un builder de contexto real.
+      return res.json({ module, total: 0, data: [], note: 'Sólo el módulo asistencia tiene evaluación sobre datos.' });
+    }
+    const rules = await runtime.getActiveRules('asistencia');
+    if (!rules.length) return res.json({ module, total: 0, data: [], rules: 0 });
+
+    const now = new Date();
+    const from = req.query.from || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const to   = req.query.to   || new Date().toISOString().slice(0, 10);
+    const params = [from, to];
+    let deptFilter = '';
+    if (req.query.dept) { deptFilter = 'AND e.department_id = ?'; params.push(req.query.dept); }
+
+    const [rows] = await sequelize.query(`
+      SELECT e.id AS employee_id, e.code, CONCAT(e.first_name,' ',e.last_name) AS name,
+             COALESCE(d.name,'') AS department,
+             DATE_FORMAT(ds.date, '%Y-%m-%d') AS date,
+             COALESCE(ds.worked_minutes,0)   AS worked_minutes,
+             COALESCE(ds.late_minutes,0)     AS late_minutes,
+             COALESCE(ds.overtime_minutes,0) AS overtime_minutes,
+             ds.status,
+             TIME_FORMAT(ds.first_in, '%H:%i') AS first_in,
+             TIME_FORMAT(ds.last_out, '%H:%i') AS last_out,
+             TIME_FORMAT(s.check_in,  '%H:%i') AS check_in,
+             TIME_FORMAT(s.check_out, '%H:%i') AS check_out,
+             (h.date IS NOT NULL) AS is_holiday,
+             lp.reduction_minutes AS lactancia_min
+      FROM daily_summary ds
+      JOIN employees e ON e.id = ds.employee_id
+      LEFT JOIN departments d ON d.id = e.department_id
+      LEFT JOIN schedules   s ON s.id = e.schedule_id
+      LEFT JOIN holidays    h ON h.date = ds.date AND h.active = 1
+      LEFT JOIN lactancia_periods lp ON lp.employee_id = e.id AND lp.status = 'active'
+             AND lp.start_date <= ds.date AND (lp.end_date IS NULL OR lp.end_date >= ds.date)
+      WHERE ds.date BETWEEN ? AND ? ${deptFilter}
+      ORDER BY ds.date DESC, name
+    `, { replacements: params });
+
+    const toMin = hm => hm ? (+hm.slice(0, 2) * 60 + +hm.slice(3, 5)) : null;
+    const alerts = [];
+    for (const r of rows) {
+      const inM = toMin(r.first_in), outM = toMin(r.last_out);
+      const ciM = toMin(r.check_in), coM = toMin(r.check_out);
+      const dow = new Date(r.date + 'T00:00:00').getDay() + 1; // 1=Dom … 7=Sáb
+      const context = {
+        worked_minutes: r.worked_minutes,
+        late_minutes: r.late_minutes,
+        overtime_minutes: r.overtime_minutes,
+        early_in_minutes: (inM != null && ciM != null) ? Math.max(0, ciM - inM) : 0,
+        late_out_minutes: (outM != null && coM != null) ? Math.max(0, outM - coM) : 0,
+        status: r.status,
+        is_holiday: !!r.is_holiday,
+        is_weekend: dow === 1 || dow === 7,
+        dow: String(dow),
+        lactancia_activa: r.lactancia_min != null,
+        lactancia_reduccion_min: r.lactancia_min || 0,
+      };
+      const fired = runtime.evaluate(rules, context);
+      for (const f of fired) {
+        alerts.push({
+          employee_id: r.employee_id, code: r.code, name: r.name, department: r.department,
+          date: r.date, rule_id: f.rule_id, rule_name: f.rule_name,
+          action_type: f.action_type, action_params: f.action_params,
+        });
+      }
+    }
+
+    res.json({ module, from, to, rules: rules.length, total: alerts.length, data: alerts });
   } catch (e) { next(e); }
 });
 
