@@ -24,6 +24,7 @@ const MODULES = [
   { key: 'departamentos',  label: 'Departamentos',        section: 'admin'   },
   { key: 'usuarios',       label: 'Usuarios',             section: 'admin'   },
   { key: 'auditoria',      label: 'Auditoría',            section: 'admin'   },
+  { key: 'reglas',         label: 'Reglas (condiciones)', section: 'admin'   },
   { key: 'configuracion',  label: 'Configuración',        section: 'admin'   },
   { key: 'sistema',        label: 'Sistema',              section: 'admin'   },
 ];

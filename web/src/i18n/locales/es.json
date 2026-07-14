@@ -80,7 +80,8 @@
     "legal_sheets": "Planillas legales",
     "shifts": "Turnera",
     "overtime": "Horas extra",
-    "out_of_range": "Fuera de rango"
+    "out_of_range": "Fuera de rango",
+    "rules": "Reglas (condiciones)"
   },
   "dashboard": {
     "title": "Panel principal",
