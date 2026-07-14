@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useMemo, useState, useCallback } from 'react'
-import { SlidersHorizontal, Plus, Trash2, Save, X, Play, Pencil, CheckCircle2, XCircle } from 'lucide-react'
+import { SlidersHorizontal, Plus, Trash2, Save, X, Play, Pencil, CheckCircle2, XCircle, Bell, ChevronDown } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 
@@ -118,6 +118,7 @@ export default function ReglasPage() {
         ? <RuleEditor rule={editing} schema={schema} onChange={setEditing} onSave={save} onCancel={() => setEditing(null)} canEdit={canEdit} />
         : (
           <div className="space-y-5">
+            <AlertsPanel actionLabel={actionLabel} />
             {loading ? (
               <p className="text-slate-400 text-sm py-6 text-center dark:text-white/30">Cargando...</p>
             ) : rules.length === 0 ? (
@@ -157,6 +158,89 @@ export default function ReglasPage() {
           </div>
         )}
     </div>
+  )
+}
+
+// ─── Panel de alertas: evalúa las reglas activas de asistencia sobre un
+// período y muestra las que dispararon (consumo real del motor de reglas). ──
+interface AlertRow {
+  employee_id: number; code: string; name: string; department: string
+  date: string; rule_id: number; rule_name: string; action_type: string
+  action_params: Record<string, string>
+}
+function AlertsPanel({ actionLabel }: { actionLabel: (k: string) => string }) {
+  const now = new Date()
+  const [open, setOpen] = useState(false)
+  const [from, setFrom] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`)
+  const [to, setTo] = useState(new Date().toISOString().slice(0, 10))
+  const [rows, setRows] = useState<AlertRow[] | null>(null)
+  const [meta, setMeta] = useState<{ rules: number } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  async function run() {
+    setLoading(true); setRows(null)
+    try {
+      const r = await api.get('/api/rules/alerts', { params: { module: 'asistencia', from, to } })
+      setRows(r.data?.data || []); setMeta({ rules: r.data?.rules || 0 })
+    } catch { setRows([]) } finally { setLoading(false) }
+  }
+
+  return (
+    <section className="bg-white rounded-2xl shadow-sm border border-slate-100 dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-2 px-5 py-3 text-left">
+        <Bell size={16} className="text-violet-500" />
+        <span className="font-bold text-slate-900 dark:text-white">Alertas de reglas (asistencia)</span>
+        <span className="text-xs text-slate-400 dark:text-white/30">evaluá las reglas activas sobre un período</span>
+        <ChevronDown size={16} className={`ml-auto text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="px-5 pb-5 space-y-3 border-t border-slate-100 dark:border-white/[0.06] pt-3">
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Desde</label>
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm dark:border-white/[0.08] bg-transparent" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Hasta</label>
+              <input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm dark:border-white/[0.08] bg-transparent" />
+            </div>
+            <button onClick={run} disabled={loading} className="px-3 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
+              <Play size={14} /> {loading ? 'Evaluando...' : 'Evaluar'}
+            </button>
+            {meta && <span className="text-xs text-slate-400 dark:text-white/30">{meta.rules} regla(s) activa(s)</span>}
+          </div>
+          {rows && (
+            rows.length === 0 ? (
+              <p className="text-sm text-slate-400 dark:text-white/30 py-2">Ninguna regla disparó en el período (o no hay reglas activas de asistencia).</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+                    <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                      <th className="px-3 py-2">Fecha</th><th className="px-3 py-2">Empleado</th>
+                      <th className="px-3 py-2">Regla</th><th className="px-3 py-2">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+                    {rows.map((a, i) => (
+                      <tr key={i} className="text-slate-700 dark:text-white/70">
+                        <td className="px-3 py-2 tabular-nums">{a.date}</td>
+                        <td className="px-3 py-2"><span className="font-mono text-xs text-slate-400">{a.code}</span> {a.name}<div className="text-[11px] text-slate-400">{a.department}</div></td>
+                        <td className="px-3 py-2">{a.rule_name}</td>
+                        <td className="px-3 py-2">
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-400/10 dark:text-violet-300">{actionLabel(a.action_type)}</span>
+                          {a.action_params?.message && <span className="text-xs text-slate-500 dark:text-white/50 ml-2">{a.action_params.message}</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </section>
   )
 }
 
