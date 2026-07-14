@@ -7,7 +7,7 @@ import {
   LogOut, Shield, Server, Building2, CheckSquare, UserCircle2,
   Menu, X, FileText, TrendingUp, QrCode, DollarSign, ChevronDown, Activity,
   Cake, Plane, PiggyBank, Megaphone, GraduationCap, ClipboardList, Star, UserCheck, CalendarRange, AlertTriangle,
-  SlidersHorizontal,
+  SlidersHorizontal, FileSignature,
   type LucideIcon
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -54,6 +54,7 @@ const NAV: NavItem[] = [
   { href: '/capacitaciones',icon: GraduationCap,   i18nKey: 'nav.training',     section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'capacitaciones' },
   { href: '/encuestas',     icon: ClipboardList,   i18nKey: 'nav.surveys',      section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'encuestas' },
   { href: '/evaluaciones',  icon: Star,            i18nKey: 'nav.appraisals',   section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'evaluaciones' },
+  { href: '/ingresos',      icon: FileSignature,   i18nKey: 'nav.ingresos',     section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor'], module: 'ingresos' },
   { href: '/onboarding',    icon: UserCheck,       i18nKey: 'nav.onboarding',   section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor'], module: 'onboarding' },
 
   // Admin
