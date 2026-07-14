@@ -74,6 +74,7 @@ const appraisalRoutes       = require('./routes/appraisals');
 const onboardingRoutes      = require('./routes/onboarding');
 const rulesRoutes           = require('./routes/rules');
 const contractsRoutes       = require('./routes/contracts');
+const lactanciaRoutes       = require('./routes/lactancia');
 const swaggerUi    = require('swagger-ui-express');
 const swaggerSpec  = require('./config/swagger');
 
@@ -189,6 +190,7 @@ app.use('/api/appraisals',    appraisalRoutes);
 app.use('/api/onboarding',   onboardingRoutes);
 app.use('/api/rules',        rulesRoutes);
 app.use('/api/contracts',    contractsRoutes);
+app.use('/api/lactancia',    lactanciaRoutes);
 
 // Documentación Swagger UI — http://localhost:4000/api/docs
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {

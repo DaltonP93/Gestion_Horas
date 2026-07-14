@@ -99,6 +99,8 @@ const REGISTRY = {
       { key: 'is_weekend', label: 'Es fin de semana', type: 'boolean' },
       { key: 'dow', label: 'Día de la semana (1=Dom…7=Sáb)', type: 'enum',
         options: ['1', '2', '3', '4', '5', '6', '7'] },
+      { key: 'lactancia_activa', label: 'Lactancia activa', type: 'boolean' },
+      { key: 'lactancia_reduccion_min', label: 'Reducción por lactancia (min)', type: 'number' },
     ],
   },
   hora_extra: {

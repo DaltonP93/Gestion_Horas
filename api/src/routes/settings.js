@@ -101,6 +101,9 @@ const EMPLOYER_KEYS = [
   'contract_types',                  // tipos de contrato (lista separada por comas)
   'contract_expiry_alert_days',      // anticipación de alerta de vencimiento (default 30)
   'probation_alert_days',            // anticipación de alerta de fin de prueba (default 7)
+  'lactancia_reduction_minutes',     // reducción horaria diaria por lactancia (default 90)
+  'lactancia_max_child_age_months',  // edad máxima del hijo para lactancia (default 24)
+  'lactancia_alert_days',            // anticipación de alerta de fin de lactancia (default 15)
 ];
 
 const SETTING_KEYS = [
