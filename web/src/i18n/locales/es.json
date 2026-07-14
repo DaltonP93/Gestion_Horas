@@ -83,6 +83,7 @@
     "shifts": "Turnera",
     "overtime": "Horas extra",
     "out_of_range": "Fuera de rango",
+    "out_of_geofence": "Fuera de geocerca",
     "rules": "Reglas (condiciones)"
   },
   "dashboard": {

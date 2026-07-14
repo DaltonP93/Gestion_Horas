@@ -83,6 +83,7 @@
     "shifts": "Shifts",
     "overtime": "Overtime",
     "out_of_range": "Out of range",
+    "out_of_geofence": "Outside geofence",
     "rules": "Rules (conditions)"
   },
   "dashboard": {

@@ -7,7 +7,7 @@ import {
   LogOut, Shield, Server, Building2, CheckSquare, UserCircle2,
   Menu, X, FileText, TrendingUp, QrCode, DollarSign, ChevronDown, Activity,
   Cake, Plane, PiggyBank, Megaphone, GraduationCap, ClipboardList, Star, UserCheck, CalendarRange, AlertTriangle,
-  SlidersHorizontal, FileSignature, Baby,
+  SlidersHorizontal, FileSignature, Baby, MapPinOff,
   type LucideIcon
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -41,6 +41,7 @@ const NAV: NavItem[] = [
   { href: '/aprobaciones',  icon: CheckSquare,     i18nKey: 'nav.approvals',    section: 'gestion', roles: ['admin','gth','hr','coordinator','manager'], module: 'aprobaciones' },
   { href: '/horas-extra',   icon: Clock,           i18nKey: 'nav.overtime',     section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'aprobaciones' },
   { href: '/marcaciones-fuera-rango', icon: AlertTriangle, i18nKey: 'nav.out_of_range', section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'asistencia' },
+  { href: '/marcaciones-geocerca', icon: MapPinOff, i18nKey: 'nav.out_of_geofence', section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'asistencia' },
   { href: '/supervisor',    icon: Users,           i18nKey: 'nav.my_team',      section: 'gestion', roles: ['coordinator','manager','supervisor','gestor'], module: 'supervisor' },
   { href: '/turnera',       icon: CalendarRange,   i18nKey: 'nav.shifts',       section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','supervisor'], module: 'turnera' },
   { href: '/reportes',      icon: BarChart2,       i18nKey: 'nav.reports',      section: 'gestion', roles: ['admin','gth','hr','manager','gestor'], module: 'reportes' },
