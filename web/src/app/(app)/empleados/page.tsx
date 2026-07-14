@@ -150,22 +150,39 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
     const ext = file.name.split('.').pop()?.toLowerCase()
 
     if (ext === 'xlsx' || ext === 'xls') {
-      // Parsear Excel con xlsx (SheetJS)
+      // Parsear Excel con exceljs (misma librería que la API; sin las
+      // vulnerabilidades de prototype pollution / ReDoS de SheetJS).
       try {
-        const XLSX = await import('xlsx')
+        const ExcelJS = (await import('exceljs')).default ?? (await import('exceljs'))
         const buf = await file.arrayBuffer()
-        const wb  = XLSX.read(buf, { type: 'array' })
-        const ws  = wb.Sheets[wb.SheetNames[0]]
-        const data: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as string[][]
+        const wb  = new ExcelJS.Workbook()
+        await wb.xlsx.load(buf)
+        const ws  = wb.worksheets[0]
+        if (!ws) return alert('El archivo Excel está vacío')
+        const cell = (v: any): string => {
+          if (v == null) return ''
+          if (typeof v === 'object') {
+            if (v.text != null) return String(v.text)          // rich text / hyperlink
+            if (v.result != null) return String(v.result)      // fórmula
+            if (v instanceof Date) return v.toISOString().slice(0, 10)
+            return ''
+          }
+          return String(v)
+        }
+        const data: string[][] = []
+        // row.values es 1-indexado (índice 0 vacío); normalizamos a 0-indexado.
+        ws.eachRow({ includeEmpty: false }, (row) => {
+          const vals = Array.isArray(row.values) ? row.values.slice(1) : []
+          data.push(vals.map(cell))
+        })
         if (data.length < 2) return alert('El archivo Excel está vacío')
         const headers = data[0].map(String)
         const rows    = data.slice(1).map(r => r.map(String))
-        const p = { headers, rows }
-        setParsed(p)
+        setParsed({ headers, rows })
         setColMap(autoMapHeaders(headers))
         setStep('map')
       } catch {
-        alert('No se pudo leer el archivo Excel. Instale la dependencia xlsx o convierta a CSV.')
+        alert('No se pudo leer el archivo Excel. Convierta a CSV e intente de nuevo.')
       }
       return
     }
