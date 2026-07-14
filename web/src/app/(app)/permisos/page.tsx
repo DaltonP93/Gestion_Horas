@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Calendar, Plus, CheckCircle, XCircle, Clock, Filter, Download } from 'lucide-react'
+import { Calendar, Plus, CheckCircle, XCircle, Clock, Filter, Download, CalendarClock } from 'lucide-react'
 import { api, employeesApi } from '@/lib/api'
 
 // ─── Tipos ────────────────────────────────────────────────────────
@@ -258,6 +258,22 @@ export default function PermisosPage() {
     }
   }
 
+  // Rechazo de vacaciones proponiendo una fecha alternativa.
+  const [altReject, setAltReject] = useState<Permission | null>(null)
+  async function submitAltReject(reason: string, from: string, to: string) {
+    if (!altReject) return
+    try {
+      await api.post('/api/vacations/reject-alternative', {
+        permission_id: altReject.id, reason,
+        alt_date_from: from || undefined, alt_date_to: to || undefined,
+      })
+      setAltReject(null)
+      qc.invalidateQueries({ queryKey: ['permissions'] })
+    } catch (err: any) {
+      alert(err?.response?.data?.error || 'Error al rechazar con alternativa')
+    }
+  }
+
   const allRows = data || []
   const rows = allRows.filter(r => filter === 'all' || r.status === filter)
 
@@ -426,6 +442,13 @@ export default function PermisosPage() {
                             className="flex items-center gap-1 bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 text-xs font-medium px-3 py-1.5 rounded-xl transition-colors">
                             <XCircle size={12} /> Rechazar
                           </button>
+                          {row.type === 'vacation' && (
+                            <button onClick={() => setAltReject(row)}
+                              className="flex items-center gap-1 bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 text-xs font-medium px-3 py-1.5 rounded-xl transition-colors"
+                              title="Rechazar proponiendo otra fecha">
+                              <CalendarClock size={12} /> Alternativa
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -451,6 +474,59 @@ export default function PermisosPage() {
       )}
 
       {showModal && <NuevoPermisoModal onClose={() => setModal(false)} />}
+      {altReject && <RechazoAlternativoModal perm={altReject} onClose={() => setAltReject(null)} onSubmit={submitAltReject} />}
+    </div>
+  )
+}
+
+// ─── Modal: rechazar vacaciones proponiendo fecha alternativa ────
+function RechazoAlternativoModal({ perm, onClose, onSubmit }: {
+  perm: Permission; onClose: () => void
+  onSubmit: (reason: string, from: string, to: string) => void
+}) {
+  const [reason, setReason] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [err, setErr] = useState('')
+
+  function submit() {
+    if (from && to && to < from) { setErr('La fecha de fin no puede ser anterior a la de inicio'); return }
+    onSubmit(reason, from, to)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
+          <h3 className="font-bold text-slate-900 dark:text-white">Rechazar con fecha alternativa</h3>
+          <p className="text-xs text-slate-400 dark:text-white/30 mt-0.5">{perm.employee_name} · {perm.date_from} a {perm.date_to}</p>
+        </div>
+        <div className="p-6 space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Motivo del rechazo</label>
+            <textarea rows={2} value={reason} onChange={e => setReason(e.target.value)} placeholder="Ej. mucha gente de licencia esa semana"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none dark:border-white/[0.08] bg-transparent" />
+          </div>
+          <p className="text-xs text-slate-500 dark:text-white/40">Fecha alternativa sugerida (opcional):</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Desde</label>
+              <input type="date" value={from} onChange={e => setFrom(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Hasta</label>
+              <input type="date" value={to} onChange={e => setTo(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+            </div>
+          </div>
+          {err && <p className="text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
+        </div>
+        <div className="px-6 py-4 border-t border-slate-100 dark:border-white/[0.06] flex gap-2">
+          <button onClick={onClose} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
+          <button onClick={submit} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2.5 text-sm font-medium">Rechazar</button>
+        </div>
+      </div>
     </div>
   )
 }

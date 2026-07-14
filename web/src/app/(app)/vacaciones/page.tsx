@@ -1,5 +1,5 @@
 'use client'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Calendar, Plane, Stethoscope, Heart, Baby, Users as UsersIcon, AlertTriangle, Plus, X, CheckCircle2 } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -148,7 +148,9 @@ export default function VacacionesPage() {
   const [month, setMonth]   = useState(now.getMonth() + 1)
   const [deptId, setDeptId] = useState('')
   const [showSolicitar, setShowSolicitar] = useState(false)
+  const [tab, setTab] = useState<'plan' | 'saldos' | 'politica'>('plan')
   const isAdmin = ['admin', 'gth', 'hr', 'coordinator', 'manager', 'super_admin'].includes(user?.role || '')
+  const canManagePolicy = ['admin', 'gth', 'hr', 'super_admin'].includes(user?.role || '')
 
   const { data: deptsData } = useQuery({
     queryKey: ['departments'],
@@ -219,6 +221,24 @@ export default function VacacionesPage() {
         />
       )}
 
+      {/* Pestañas */}
+      {isAdmin && (
+        <div className="flex items-center gap-1 border-b border-slate-100 dark:border-white/[0.06]">
+          {([['plan', 'Plan mensual'], ['saldos', 'Saldos'], ...(canManagePolicy ? [['politica', 'Política']] : [])] as [string, string][]).map(([k, label]) => (
+            <button key={k} onClick={() => setTab(k as any)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                tab === k ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-white/40 dark:hover:text-white/70'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === 'saldos' && isAdmin && <SaldosTab deptsData={deptsData} canManage={canManagePolicy} />}
+      {tab === 'politica' && canManagePolicy && <PoliticaTab />}
+
+      {tab === 'plan' && (<>
       {/* Controles */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 flex-wrap dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="flex items-center gap-1">
@@ -349,6 +369,216 @@ export default function VacacionesPage() {
           </div>
         </div>
       )}
+      </>)}
+    </div>
+  )
+}
+
+// ─── Pestaña: Saldos por empleado y año ──────────────────────────
+function SaldosTab({ deptsData, canManage }: { deptsData: any; canManage: boolean }) {
+  const now = new Date()
+  const [year, setYear] = useState(now.getFullYear())
+  const [deptId, setDeptId] = useState('')
+  const [rows, setRows] = useState<any[]>([])
+  const [dayType, setDayType] = useState('habiles')
+  const [loading, setLoading] = useState(false)
+  const [edit, setEdit] = useState<any | null>(null)
+  const [msg, setMsg] = useState('')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await api.get('/api/vacations/balances', { params: { year, deptId: deptId || undefined } })
+      setRows(r.data?.data || []); setDayType(r.data?.day_type || 'habiles')
+    } catch { setRows([]) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [year, deptId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveBalance() {
+    if (!edit) return
+    try {
+      await api.put('/api/vacations/balances', {
+        employee_id: edit.employee_id, year,
+        assigned: edit.assignedInput === '' ? null : parseInt(edit.assignedInput, 10),
+        adjustment: parseInt(edit.adjustmentInput || '0', 10) || 0,
+        note: edit.noteInput || null,
+      })
+      setMsg('Saldo actualizado.'); setEdit(null); load()
+    } catch { setMsg('No se pudo guardar el saldo.') }
+  }
+
+  return (
+    <div className="space-y-4">
+      {msg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-2.5 dark:bg-emerald-400/[0.08] dark:border-emerald-400/30 dark:text-emerald-400">{msg}</div>}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 flex-wrap dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <select value={year} onChange={e => setYear(+e.target.value)}
+          className="border border-slate-200 rounded-xl px-3 py-2 text-sm font-semibold dark:border-white/[0.08] bg-transparent">
+          {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+        <select value={deptId} onChange={e => setDeptId(e.target.value)}
+          className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent">
+          <option value="">Todos los departamentos</option>
+          {(deptsData || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
+        </select>
+        <span className="text-xs text-slate-400 dark:text-white/30 ml-auto">Conteo: días {dayType === 'corridos' ? 'corridos' : 'hábiles'}</span>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-x-auto dark:bg-white/[0.04] dark:border-white/[0.06]">
+        {loading ? (
+          <p className="text-slate-400 text-sm py-8 text-center dark:text-white/30">Cargando...</p>
+        ) : rows.length === 0 ? (
+          <p className="text-slate-400 text-sm py-8 text-center dark:text-white/30">Sin empleados.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
+              <tr className="text-left text-xs uppercase text-slate-500 dark:text-white/40">
+                <th className="px-3 py-2">Empleado</th><th className="px-3 py-2 text-right">Antig.</th>
+                <th className="px-3 py-2 text-right">Derecho</th><th className="px-3 py-2 text-right">Asignado</th>
+                <th className="px-3 py-2 text-right">Ajuste</th><th className="px-3 py-2 text-right">Tomado</th>
+                <th className="px-3 py-2 text-right">Disponible</th>{canManage && <th className="px-3 py-2"></th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
+              {rows.map(r => (
+                <tr key={r.employee_id} className="text-slate-700 dark:text-white/70">
+                  <td className="px-3 py-2"><span className="font-mono text-xs text-slate-400">{r.code}</span> {r.name}<div className="text-[11px] text-slate-400">{r.department || '—'}</div></td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.antiguedad_years}a</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-400">{r.entitlement}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-semibold">{r.assigned}{r.overridden && <span className="text-[10px] text-amber-500 ml-1" title="Sobrescrito por RRHH">✎</span>}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.adjustment ? (r.adjustment > 0 ? `+${r.adjustment}` : r.adjustment) : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{r.taken}</td>
+                  <td className={`px-3 py-2 text-right tabular-nums font-bold ${r.available < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-700 dark:text-emerald-400'}`}>{r.available}</td>
+                  {canManage && (
+                    <td className="px-3 py-2 text-right">
+                      <button onClick={() => setEdit({ ...r, assignedInput: r.overridden ? String(r.assigned) : '', adjustmentInput: String(r.adjustment || 0), noteInput: r.note || '' })}
+                        className="text-xs px-2.5 py-1 rounded-lg border border-slate-200 hover:border-blue-300 text-slate-600 dark:border-white/[0.08] dark:text-white/70">Asignar</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {edit && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setEdit(null)}>
+          <div className="bg-white dark:bg-slate-900 rounded-2xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-white/[0.06] flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 dark:text-white">Saldo · {edit.name} · {year}</h3>
+              <button onClick={() => setEdit(null)} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+            </div>
+            <div className="p-6 space-y-3">
+              <p className="text-xs text-slate-500 dark:text-white/40">Derecho por antigüedad: <b>{edit.entitlement}</b> días. Dejá &quot;Asignado&quot; vacío para usar el derecho.</p>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Días asignados (override)</label>
+                <input type="number" value={edit.assignedInput} placeholder={`${edit.entitlement} (derecho)`}
+                  onChange={e => setEdit((s: any) => ({ ...s, assignedInput: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Ajuste (+/−)</label>
+                <input type="number" value={edit.adjustmentInput}
+                  onChange={e => setEdit((s: any) => ({ ...s, adjustmentInput: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Nota</label>
+                <input value={edit.noteInput} onChange={e => setEdit((s: any) => ({ ...s, noteInput: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-slate-100 dark:border-white/[0.06] flex gap-2">
+              <button onClick={() => setEdit(null)} className="flex-1 border border-slate-200 rounded-xl py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
+              <button onClick={saveBalance} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white rounded-xl py-2.5 text-sm font-medium">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Pestaña: Política de vacaciones (tramos por antigüedad) ─────
+function PoliticaTab() {
+  const [brackets, setBrackets] = useState<any[]>([])
+  const [dayType, setDayType] = useState('habiles')
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const r = await api.get('/api/vacations/policy')
+      setBrackets((r.data?.brackets || []).map((b: any) => ({ ...b })))
+      setDayType(r.data?.day_type || 'habiles')
+    } catch { setBrackets([]) } finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const upd = (i: number, patch: any) => setBrackets(bs => bs.map((b, idx) => idx === i ? { ...b, ...patch } : b))
+  const addRow = () => setBrackets(bs => [...bs, { min_years: 0, max_years: '', days: 0, active: true }])
+  const removeRow = (i: number) => setBrackets(bs => bs.filter((_, idx) => idx !== i))
+
+  async function save() {
+    setSaving(true); setMsg('')
+    try {
+      await api.put('/api/vacations/policy', {
+        day_type: dayType,
+        brackets: brackets.map(b => ({
+          min_years: parseInt(b.min_years, 10) || 0,
+          max_years: b.max_years === '' || b.max_years == null ? null : parseInt(b.max_years, 10),
+          days: parseInt(b.days, 10) || 0,
+          active: b.active !== false,
+        })),
+      })
+      setMsg('Política guardada.'); load()
+    } catch (e: any) { setMsg(e?.response?.data?.error || 'Error al guardar') } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      {msg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm rounded-xl px-4 py-2.5 dark:bg-emerald-400/[0.08] dark:border-emerald-400/30 dark:text-emerald-400">{msg}</div>}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06] space-y-4">
+        <div>
+          <h2 className="font-bold text-slate-900 dark:text-white mb-1">Días por antigüedad</h2>
+          <p className="text-xs text-slate-400 dark:text-white/30">Definí cuántos días de vacaciones corresponden según los años de servicio. Dejá &quot;Hasta&quot; vacío para el último tramo (sin tope).</p>
+        </div>
+        {loading ? <p className="text-slate-400 text-sm py-4 text-center dark:text-white/30">Cargando...</p> : (
+          <div className="space-y-2">
+            <div className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-2 text-[11px] font-semibold text-slate-400 uppercase dark:text-white/30 px-1">
+              <span>Desde (años)</span><span>Hasta (años)</span><span>Días</span><span>Activo</span><span></span>
+            </div>
+            {brackets.map((b, i) => (
+              <div key={i} className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-2 items-center">
+                <input type="number" min={0} value={b.min_years} onChange={e => upd(i, { min_years: e.target.value })}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm dark:border-white/[0.08] bg-transparent" />
+                <input type="number" min={0} value={b.max_years ?? ''} placeholder="sin tope" onChange={e => upd(i, { max_years: e.target.value })}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm dark:border-white/[0.08] bg-transparent" />
+                <input type="number" min={0} value={b.days} onChange={e => upd(i, { days: e.target.value })}
+                  className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm dark:border-white/[0.08] bg-transparent" />
+                <input type="checkbox" checked={b.active !== false} onChange={e => upd(i, { active: e.target.checked })} className="h-4 w-4 accent-blue-600 mx-auto" />
+                <button onClick={() => removeRow(i)} className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600"><X size={15} /></button>
+              </div>
+            ))}
+            <button onClick={addRow} className="text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-blue-300 text-slate-600 dark:border-white/[0.08] dark:text-white/70 flex items-center gap-1 mt-1"><Plus size={13} /> Tramo</button>
+          </div>
+        )}
+        <div className="pt-3 border-t border-slate-100 dark:border-white/[0.06] flex items-center gap-3 flex-wrap">
+          <div>
+            <label className="text-xs font-semibold text-slate-500 dark:text-white/40 block mb-1">Conteo de días</label>
+            <select value={dayType} onChange={e => setDayType(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent">
+              <option value="habiles">Días hábiles (excluye fines de semana y feriados)</option>
+              <option value="corridos">Días corridos</option>
+            </select>
+          </div>
+          <button onClick={save} disabled={saving} className="ml-auto px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm disabled:opacity-50 self-end">
+            {saving ? 'Guardando...' : 'Guardar política'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

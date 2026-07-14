@@ -97,6 +97,7 @@ const EMPLOYER_KEYS = [
   'att_overtime_requires_auth',      // '1' = las horas extra requieren aprobación
   'att_early_mark_alert_min',        // umbral de entrada temprana que alerta (default 30)
   'att_late_mark_alert_min',         // umbral de salida tardía que alerta (default 30)
+  'vacation_day_type',               // conteo de vacaciones: 'habiles' | 'corridos'
 ];
 
 const SETTING_KEYS = [
