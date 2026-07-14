@@ -35,13 +35,15 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/branches
 router.post('/', authorize('admin', 'super_admin'), async (req, res) => {
-  const { code, name, address, city, phone, timezone } = req.body;
+  const { code, name, address, city, phone, timezone, geo_lat, geo_lng, geo_radius_m } = req.body;
   if (!code || !name) return res.status(400).json({ error: 'code y name son requeridos' });
+  const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
   try {
     const [r] = await sequelize.query(
-      `INSERT INTO branches (code, name, address, city, phone, timezone)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      { replacements: [code, name, address || null, city || null, phone || null, timezone || 'America/Asuncion'] }
+      `INSERT INTO branches (code, name, address, city, phone, timezone, geo_lat, geo_lng, geo_radius_m)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      { replacements: [code, name, address || null, city || null, phone || null, timezone || 'America/Asuncion',
+        num(geo_lat), num(geo_lng), geo_radius_m != null ? (parseInt(geo_radius_m, 10) || null) : null] }
     );
     res.status(201).json({ id: r.insertId, message: 'Sede creada' });
   } catch (err) {
@@ -54,16 +56,21 @@ router.post('/', authorize('admin', 'super_admin'), async (req, res) => {
 
 // PUT /api/branches/:id
 router.put('/:id', authorize('admin', 'super_admin'), async (req, res) => {
-  const { code, name, address, city, phone, timezone, active } = req.body;
+  const { code, name, address, city, phone, timezone, active, geo_lat, geo_lng, geo_radius_m } = req.body;
+  const num = v => { if (v === '' || v == null) return null; const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
   try {
     await sequelize.query(
       `UPDATE branches SET
          code=COALESCE(?,code), name=COALESCE(?,name),
          address=?, city=?, phone=?,
          timezone=COALESCE(?,timezone),
-         active=COALESCE(?,active)
+         active=COALESCE(?,active),
+         geo_lat=?, geo_lng=?, geo_radius_m=COALESCE(?,geo_radius_m)
        WHERE id=?`,
-      { replacements: [code || null, name || null, address || null, city || null, phone || null, timezone || null, active === undefined ? null : (active ? 1 : 0), req.params.id] }
+      { replacements: [code || null, name || null, address || null, city || null, phone || null, timezone || null,
+        active === undefined ? null : (active ? 1 : 0),
+        num(geo_lat), num(geo_lng), geo_radius_m === '' || geo_radius_m == null ? null : (parseInt(geo_radius_m, 10) || null),
+        req.params.id] }
     );
     res.json({ message: 'Sede actualizada' });
   } catch (err) {

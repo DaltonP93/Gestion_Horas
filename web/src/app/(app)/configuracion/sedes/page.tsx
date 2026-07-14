@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Building2, Plus, Edit, X } from 'lucide-react'
+import { ArrowLeft, Building2, Plus, Edit, X, MapPin, Save } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface Branch {
@@ -15,6 +15,9 @@ interface Branch {
   active: number
   employee_count: number
   device_count: number
+  geo_lat: number | null
+  geo_lng: number | null
+  geo_radius_m: number | null
 }
 
 export default function SedesPage() {
@@ -75,6 +78,8 @@ export default function SedesPage() {
         </div>
       )}
 
+      <GeofenceConfig />
+
       <div className="bg-white rounded-2xl shadow border border-slate-200 overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.08]">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 dark:bg-white/[0.03] dark:text-white/60">
@@ -96,7 +101,14 @@ export default function SedesPage() {
             {items.map(b => (
               <tr key={b.id} className="border-t border-slate-100 hover:bg-slate-50 dark:border-white/[0.06] dark:hover:bg-white/[0.04]">
                 <td className="px-4 py-3 font-mono text-slate-700 dark:text-white/80">{b.code}</td>
-                <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{b.name}</td>
+                <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">
+                  {b.name}
+                  {b.geo_lat != null && b.geo_lng != null && (
+                    <span className="ml-2 inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-teal-100 text-teal-700 dark:bg-teal-400/10 dark:text-teal-300" title={`Geocerca: radio ${b.geo_radius_m || 200}m`}>
+                      <MapPin size={10} /> {b.geo_radius_m || 200}m
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-slate-600 dark:text-white/60">{b.city || '—'}</td>
                 <td className="px-4 py-3 text-center">{b.employee_count}</td>
                 <td className="px-4 py-3 text-center">{b.device_count}</td>
@@ -139,9 +151,23 @@ function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onCl
     city: branch?.city || '',
     phone: branch?.phone || '',
     timezone: branch?.timezone || 'America/Asuncion',
+    geo_lat: branch?.geo_lat != null ? String(branch.geo_lat) : '',
+    geo_lng: branch?.geo_lng != null ? String(branch.geo_lng) : '',
+    geo_radius_m: branch?.geo_radius_m != null ? String(branch.geo_radius_m) : '',
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [locating, setLocating] = useState(false)
+
+  function useMyLocation() {
+    if (!navigator.geolocation) { setError('El navegador no soporta geolocalización'); return }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      pos => { setForm(f => ({ ...f, geo_lat: pos.coords.latitude.toFixed(6), geo_lng: pos.coords.longitude.toFixed(6) })); setLocating(false) },
+      () => { setError('No se pudo obtener la ubicación'); setLocating(false) },
+      { enableHighAccuracy: true, timeout: 10000 }
+    )
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -170,6 +196,24 @@ function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onCl
           <Field label="Ciudad" value={form.city} onChange={v => setForm(f => ({ ...f, city: v }))} />
           <Field label="Teléfono" value={form.phone} onChange={v => setForm(f => ({ ...f, phone: v }))} />
           <Field label="Zona horaria" value={form.timezone} onChange={v => setForm(f => ({ ...f, timezone: v }))} />
+
+          {/* Geocerca */}
+          <div className="pt-2 border-t border-slate-100 dark:border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold text-slate-700 dark:text-white/80 flex items-center gap-1.5"><MapPin size={14} /> Geocerca</span>
+              <button type="button" onClick={useMyLocation} disabled={locating}
+                className="text-xs px-2.5 py-1 rounded-lg border border-slate-200 hover:border-teal-300 text-slate-600 dark:border-white/[0.08] dark:text-white/70 disabled:opacity-50">
+                {locating ? 'Ubicando...' : 'Usar mi ubicación'}
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <Field label="Latitud" value={form.geo_lat} onChange={v => setForm(f => ({ ...f, geo_lat: v }))} />
+              <Field label="Longitud" value={form.geo_lng} onChange={v => setForm(f => ({ ...f, geo_lng: v }))} />
+              <Field label="Radio (m)" value={form.geo_radius_m} onChange={v => setForm(f => ({ ...f, geo_radius_m: v }))} />
+            </div>
+            <p className="text-[11px] text-slate-400 dark:text-white/30 mt-1">Dejá lat/lng vacíos para no validar perímetro en esta sede.</p>
+          </div>
+
           {error && <div role="alert" className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">{error}</div>}
           <div className="flex gap-2 pt-2">
             <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 dark:bg-white/[0.06] dark:text-white/80">Cancelar</button>
@@ -179,6 +223,58 @@ function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onCl
           </div>
         </form>
       </div>
+    </div>
+  )
+}
+
+function GeofenceConfig() {
+  const [mode, setMode] = useState('enforce')
+  const [radius, setRadius] = useState('200')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    api.get('/api/settings').then(r => {
+      const s = r.data || {}
+      if (s.geofence_mode) setMode(s.geofence_mode)
+      if (s.geofence_default_radius_m) setRadius(String(s.geofence_default_radius_m))
+    }).catch(() => {})
+  }, [])
+
+  async function save() {
+    setSaving(true); setMsg('')
+    try {
+      await api.put('/api/settings', { geofence_mode: mode, geofence_default_radius_m: String(parseInt(radius, 10) || 200) })
+      setMsg('Configuración de geocerca guardada.')
+    } catch { setMsg('No se pudo guardar.') } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="bg-white rounded-2xl shadow border border-slate-200 p-5 dark:bg-white/[0.04] dark:border-white/[0.08]">
+      <div className="flex items-center gap-2 mb-3">
+        <MapPin size={17} className="text-teal-500" />
+        <h2 className="font-bold text-slate-900 dark:text-white">Geocerca de marcación móvil</h2>
+      </div>
+      {msg && <div className="mb-3 text-sm rounded-xl px-4 py-2.5 bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-400/[0.08] dark:border-emerald-400/30 dark:text-emerald-400">{msg}</div>}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Modo</label>
+          <select value={mode} onChange={e => setMode(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent">
+            <option value="off">Desactivado (no valida)</option>
+            <option value="warn">Advertir (registra pero permite)</option>
+            <option value="enforce">Exigir (rechaza fuera del radio)</option>
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Radio por defecto (m)</label>
+          <input type="number" min={0} value={radius} onChange={e => setRadius(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm w-32 dark:border-white/[0.08] bg-transparent" />
+        </div>
+        <button onClick={save} disabled={saving} className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
+          <Save size={15} /> {saving ? 'Guardando...' : 'Guardar'}
+        </button>
+      </div>
+      <p className="text-[11px] text-slate-400 dark:text-white/30 mt-2">Se usa cuando el empleado marca desde la app con GPS. El radio por defecto aplica a sedes sin radio propio.</p>
     </div>
   )
 }

@@ -104,6 +104,8 @@ const EMPLOYER_KEYS = [
   'lactancia_reduction_minutes',     // reducción horaria diaria por lactancia (default 90)
   'lactancia_max_child_age_months',  // edad máxima del hijo para lactancia (default 24)
   'lactancia_alert_days',            // anticipación de alerta de fin de lactancia (default 15)
+  'geofence_mode',                   // geocerca: 'off' | 'warn' | 'enforce' (default enforce)
+  'geofence_default_radius_m',       // radio por defecto de geocerca en metros (default 200)
 ];
 
 const SETTING_KEYS = [
