@@ -7,7 +7,7 @@ import {
   LogOut, Shield, Server, Building2, CheckSquare, UserCircle2,
   Menu, X, FileText, TrendingUp, QrCode, DollarSign, ChevronDown, Activity,
   Cake, Plane, PiggyBank, Megaphone, GraduationCap, ClipboardList, Star, UserCheck, CalendarRange, AlertTriangle,
-  SlidersHorizontal, FileSignature, Baby, MapPinOff,
+  SlidersHorizontal, FileSignature, Baby, MapPinOff, RefreshCw,
   type LucideIcon
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -65,6 +65,7 @@ const NAV: NavItem[] = [
   { href: '/auditoria',     icon: FileText,        i18nKey: 'nav.audit',        section: 'admin', roles: ['admin','gth'], module: 'auditoria' },
   { href: '/configuracion/reglas', icon: SlidersHorizontal, i18nKey: 'nav.rules', section: 'admin', roles: ['admin','gth'], module: 'reglas' },
   { href: '/configuracion', icon: Settings,        i18nKey: 'nav.settings',     section: 'admin', roles: ['admin','gth'], module: 'configuracion' },
+  { href: '/configuracion/sincronizacion', icon: RefreshCw, i18nKey: 'nav.sync', section: 'admin', roles: ['admin'], module: 'sistema' },
   { href: '/sistema',       icon: Server,          i18nKey: 'nav.system',       section: 'admin', superOnly: true, module: 'sistema' },
   { href: '/sistema/salud', icon: Activity,        i18nKey: 'nav.system_health',section: 'admin', roles: ['admin','gth'], module: 'sistema' },
 ]
