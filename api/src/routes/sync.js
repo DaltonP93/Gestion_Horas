@@ -15,7 +15,7 @@
 
 const router = require('express').Router();
 const { authenticate, requireSuperAdmin } = require('../middleware/auth');
-const { testAtt2000Connection, writeCheckinOut, resetPool } = require('../config/att2000');
+const { testAtt2000Connection, writeCheckinOut, resetPool, queryAtt2000 } = require('../config/att2000');
 const { sequelize } = require('../config/database');
 const {
   fetchCheckInOut, fetchUserInfo, fetchDepartments,
@@ -303,6 +303,97 @@ router.get('/reconcile/history', async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// ─── GET /api/sync/diagnostics — panorama del flujo de marcaciones ──
+// Compara att2000 (origen) vs attendance_logs (destino), estado de relojes,
+// USERIDs sin mapeo y auto-polling. Robusto: si att2000 no responde, igual
+// devuelve el lado MySQL.
+router.get('/diagnostics', async (req, res) => {
+  const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 15));
+  const out = { days, att2000: { ok: false }, local: {}, per_day: [], devices: [], unmapped_userids: [], auto_poll: {} };
+
+  // Fecha de corte (para las consultas por día).
+  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+
+  // ── Lado MySQL (asistencia.attendance_logs) ──
+  try {
+    const [[loc]] = await sequelize.query(
+      `SELECT COUNT(*) AS total, DATE_FORMAT(MAX(timestamp), '%Y-%m-%d %H:%i') AS last_mark FROM attendance_logs`
+    );
+    out.local = { total: loc.total, last_mark: loc.last_mark };
+    const [locDaily] = await sequelize.query(
+      `SELECT DATE_FORMAT(timestamp,'%Y-%m-%d') AS d, COUNT(*) AS n,
+              SUM(source='device') AS device, SUM(source='mobile') AS mobile,
+              SUM(source='manual') AS manual, SUM(source='zkteco_direct') AS zkteco_direct
+       FROM attendance_logs WHERE timestamp >= ? GROUP BY DATE_FORMAT(timestamp,'%Y-%m-%d')`,
+      { replacements: [since] }
+    );
+    out._locDaily = Object.fromEntries(locDaily.map(r => [r.d, r]));
+  } catch (e) { out.local.error = e.message; out._locDaily = {}; }
+
+  // ── Relojes (devices) ──
+  try {
+    const [devs] = await sequelize.query(`
+      SELECT d.id, d.name, d.ip_address, d.sensor_id, d.status, d.port,
+             DATE_FORMAT(d.last_sync, '%Y-%m-%d %H:%i') AS last_sync,
+             (SELECT DATE_FORMAT(MAX(al.timestamp),'%Y-%m-%d %H:%i') FROM attendance_logs al WHERE al.device_id = d.id) AS last_mark
+      FROM devices d ORDER BY d.id`);
+    out.devices = devs.map(d => ({
+      ...d,
+      valid: !!(d.ip_address && String(d.ip_address).trim()),
+    }));
+  } catch (e) { out.devices_error = e.message; }
+
+  // ── Auto-polling ──
+  out.auto_poll = {
+    // ZKTECO_AUTO_POLL vive en el bridge; la API sólo lo refleja si está en su env.
+    zkteco_auto_poll: process.env.ZKTECO_AUTO_POLL === '1' || process.env.ZKTECO_AUTO_POLL === 'true',
+    att2000_pull_cron: process.env.ATT2000_PULL_ENABLED === '1' || process.env.ATT2000_PULL_ENABLED === 'true',
+    note: 'ZKTECO_AUTO_POLL se configura en el bridge; att2000_pull es el cron de respaldo att2000→MySQL.',
+  };
+
+  // ── Lado att2000 (CHECKINOUT) ──
+  let attDaily = {};
+  try {
+    const last = await queryAtt2000("SELECT CONVERT(varchar(16), MAX(CHECKTIME), 120) AS last_mark, COUNT(*) AS total FROM CHECKINOUT");
+    out.att2000 = { ok: true, total: last[0].total, last_mark: last[0].last_mark };
+    const daily = await queryAtt2000(
+      `SELECT CONVERT(varchar(10), CHECKTIME, 120) AS d, COUNT(*) AS n
+       FROM CHECKINOUT WHERE CHECKTIME >= @since
+       GROUP BY CONVERT(varchar(10), CHECKTIME, 120)`,
+      { since: `${since} 00:00:00` }
+    );
+    attDaily = Object.fromEntries(daily.map(r => [r.d, r.n]));
+
+    // USERIDs de att2000 sin mapeo a employees.code (muestra hasta 50).
+    const uids = await queryAtt2000('SELECT DISTINCT USERID FROM CHECKINOUT');
+    const [emps] = await sequelize.query('SELECT code FROM employees');
+    const codes = new Set(emps.map(e => String(e.code)));
+    out.unmapped_userids = uids
+      .map(u => String(u.USERID))
+      .filter(id => !codes.has(id))
+      .slice(0, 50);
+    out.unmapped_count = uids.filter(u => !codes.has(String(u.USERID))).length;
+  } catch (e) {
+    out.att2000 = { ok: false, error: e.message };
+  }
+
+  // ── Comparativa por día: origen (att2000) vs destino (attendance_logs) ──
+  const allDays = new Set([...Object.keys(attDaily), ...Object.keys(out._locDaily || {})]);
+  out.per_day = [...allDays].sort().reverse().map(d => {
+    const l = (out._locDaily || {})[d] || {};
+    return {
+      date: d,
+      att2000: attDaily[d] ?? 0,
+      local: l.n ?? 0,
+      by_source: { device: +l.device || 0, mobile: +l.mobile || 0, manual: +l.manual || 0, zkteco_direct: +l.zkteco_direct || 0 },
+      diff: (attDaily[d] ?? 0) - (l.n ?? 0),
+    };
+  });
+  delete out._locDaily;
+
+  res.json(out);
 });
 
 module.exports = router;

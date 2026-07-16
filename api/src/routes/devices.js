@@ -352,6 +352,47 @@ router.delete('/:id', requireSuperAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: fmtErr(err) }); }
 });
 
+// GET /api/devices/invalid — relojes inválidos (sin IP): no operativos.
+router.get('/invalid', authorize('admin','gestor','hr'), async (req, res) => {
+  try {
+    const [rows] = await sequelize.query(`
+      SELECT d.id, d.name, d.ip_address, d.sensor_id, d.last_sync,
+             (SELECT COUNT(*) FROM attendance_logs al WHERE al.device_id = d.id) AS logs
+      FROM devices d
+      WHERE d.ip_address IS NULL OR TRIM(d.ip_address) = ''
+      ORDER BY d.id`);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: fmtErr(err) }); }
+});
+
+// POST /api/devices/cleanup-invalid — elimina relojes sin IP que NUNCA
+// sincronizaron y no tienen marcajes asociados (ej. el duplicado id=16).
+// Los que sí tienen marcajes no se borran (se informan) para no perder datos.
+router.post('/cleanup-invalid', requireSuperAdmin, async (req, res) => {
+  try {
+    const [invalid] = await sequelize.query(`
+      SELECT d.id, d.name,
+             (SELECT COUNT(*) FROM attendance_logs al WHERE al.device_id = d.id) AS logs
+      FROM devices d
+      WHERE d.ip_address IS NULL OR TRIM(d.ip_address) = ''`);
+    const deletable = invalid.filter(d => Number(d.logs) === 0).map(d => d.id);
+    const kept = invalid.filter(d => Number(d.logs) > 0);
+    let deleted = 0;
+    if (deletable.length) {
+      const [r] = await sequelize.query(
+        `DELETE FROM devices WHERE id IN (${deletable.map(() => '?').join(',')})`,
+        { replacements: deletable });
+      deleted = r?.affectedRows ?? deletable.length;
+    }
+    res.json({
+      ok: true, deleted, deleted_ids: deletable,
+      kept_with_logs: kept.map(d => ({ id: d.id, name: d.name, logs: d.logs })),
+      message: `${deleted} reloj(es) inválido(s) eliminado(s).` +
+        (kept.length ? ` ${kept.length} conservado(s) por tener marcajes asociados.` : ''),
+    });
+  } catch (err) { res.status(500).json({ error: fmtErr(err) }); }
+});
+
 // GET /api/devices/:id/info — info completa del reloj vía ZKLib
 // Si el reloj está ocupado, devuelve datos parciales de la BD (no 500).
 router.get('/:id/info', authorize('admin','gestor','hr'), async (req, res) => {
