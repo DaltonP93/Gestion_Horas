@@ -24,6 +24,9 @@ export default function SincronizacionPage() {
   const now = new Date()
   const [from, setFrom] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`)
   const [to, setTo] = useState(new Date().toISOString().slice(0, 10))
+  // Rango para la lectura directa de relojes (default: últimos 3 días — el hueco).
+  const [readFrom, setReadFrom] = useState(new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10))
+  const [readTo, setReadTo] = useState(new Date().toISOString().slice(0, 10))
 
   const addLog = (s: string) => setLog(l => [`${new Date().toLocaleTimeString('es-PY')} · ${s}`, ...l].slice(0, 60))
 
@@ -37,17 +40,28 @@ export default function SincronizacionPage() {
 
   // B) Relojes → SisHoras (flujo principal)
   async function readAllDevices() {
-    setBusy('devices'); addLog('▶ Leyendo todos los relojes válidos → SisHoras...')
+    setBusy('devices'); addLog(`▶ Leyendo relojes válidos → SisHoras (${readFrom} … ${readTo})...`)
     try {
-      const r = await api.post('/api/devices/backup-all')
+      const r = await api.post('/api/devices/backup-all', { from: readFrom, to: readTo }, { timeout: 120000 })
+      if (r.data.ok === false) { addLog(`✖ ${r.data.error || 'Error en la lectura'}`) }
       const t = r.data.totals || {}
-      addLog(`✅ Relojes leídos: ${r.data.devices}. Importados ${t.imported}, duplicados ${t.skipped}, sin empleado ${t.notFound}.`)
+      addLog(`✅ Relojes: ${r.data.devices ?? 0}. Importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}.`)
       for (const d of r.data.results || []) {
-        addLog(d.ok ? `   · ${d.device}: +${d.imported} (dup ${d.skipped})` : `   · ${d.device}: ✖ ${d.error}`)
+        addLog(d.ok
+          ? `   · ${d.device}: leídos ${d.total_read} · en rango ${d.in_range} · +${d.imported} (dup ${d.skipped}, sinEmp ${d.notFound})`
+          : `   · ${d.device}: ✖ ${d.error}`)
       }
       loadDiag()
-    } catch (e: any) { addLog(`✖ ${e?.response?.data?.error || e.message}`) }
-    finally { setBusy('') }
+    } catch (e: any) {
+      // 504 de Nginx o timeout del cliente: el request web es demasiado largo.
+      if (e?.code === 'ECONNABORTED' || e?.response?.status === 504) {
+        addLog('✖ La lectura tardó demasiado para el navegador/Nginx (504/timeout).')
+        addLog('   → Probá un rango más chico, o corré en el servidor:')
+        addLog('     cd api && node scripts/read-zkteco-now.js --from ' + readFrom + ' --to ' + readTo)
+      } else {
+        addLog(`✖ ${e?.response?.data?.error || e.message}`)
+      }
+    } finally { setBusy('') }
   }
 
   // A) att2000 → SisHoras (histórico por rango)
@@ -136,12 +150,17 @@ export default function SincronizacionPage() {
 
       {/* B) Relojes → SisHoras (principal) */}
       <FlowCard color="emerald" icon={<Cpu size={18} />} title="B) Leer relojes → SisHoras" principal
-        desc="Fuente: relojes ZKTeco. Destino: attendance_logs. Flujo recomendado para el día a día — no depende de att2000.">
+        desc="Fuente: relojes ZKTeco. Destino: attendance_logs. Flujo recomendado para el día a día — no depende de att2000. Filtra por rango: el reloj guarda todo su histórico, acá sólo importás lo que pedís.">
         {canManage && (
-          <button onClick={readAllDevices} disabled={busy === 'devices'} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
-            <Cpu size={15} /> {busy === 'devices' ? 'Leyendo relojes...' : 'Leer todos los relojes ahora'}
-          </button>
+          <div className="flex flex-wrap items-end gap-3">
+            <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Desde</label><input type="date" value={readFrom} onChange={e => setReadFrom(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
+            <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Hasta</label><input type="date" value={readTo} onChange={e => setReadTo(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
+            <button onClick={readAllDevices} disabled={busy === 'devices'} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
+              <Cpu size={15} /> {busy === 'devices' ? 'Leyendo relojes...' : 'Leer relojes del rango'}
+            </button>
+          </div>
         )}
+        <p className="text-[11px] text-slate-400 dark:text-white/30 mt-2">Para lecturas grandes o si el navegador da timeout (504), usá el script <code>read-zkteco-now.js</code> en el servidor.</p>
       </FlowCard>
 
       {/* A) att2000 → SisHoras (histórico) */}
