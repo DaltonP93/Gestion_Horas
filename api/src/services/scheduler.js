@@ -371,13 +371,17 @@ async function bulkRecalcDailySummary(date) {
     WHERE DATE(al.timestamp) = ?
     GROUP BY al.employee_id
     ON DUPLICATE KEY UPDATE
-      first_in         = COALESCE(VALUES(first_in),       first_in),
-      last_out         = COALESCE(VALUES(last_out),        last_out),
+      first_in         = COALESCE(VALUES(first_in),       daily_summary.first_in),
+      last_out         = COALESCE(VALUES(last_out),        daily_summary.last_out),
       worked_minutes   = VALUES(worked_minutes),
       late_minutes     = VALUES(late_minutes),
       overtime_minutes = VALUES(overtime_minutes),
+      -- 'status' aparece tanto en la columna destino (daily_summary) como en
+      -- la lista derivada del SELECT (… END AS status), por eso MySQL 8 lo ve
+      -- ambiguo. Se califica el valor EXISTENTE con daily_summary.status y el
+      -- valor NUEVO con VALUES(status). No se pisan estados manuales.
       status           = CASE
-        WHEN status IN ('holiday','weekend','permission') THEN status
+        WHEN daily_summary.status IN ('holiday','weekend','permission') THEN daily_summary.status
         ELSE VALUES(status)
       END
   `, { replacements: [date, date, date, date, date] });
@@ -399,7 +403,7 @@ async function materializeAbsents(date) {
       AND FIND_IN_SET(DAYOFWEEK(?), REPLACE(s.work_days, ' ', ''))
       AND NOT EXISTS (SELECT 1 FROM daily_summary ds WHERE ds.employee_id = e.id AND ds.date = ?)
       AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.date = ?)
-    ON DUPLICATE KEY UPDATE status = status
+    ON DUPLICATE KEY UPDATE status = daily_summary.status
   `, { replacements: [date, date, date, date] });
   const n = res?.affectedRows ?? 0;
   if (n > 0) logger.info(`🚫 ${n} ausente(s) materializado(s) para ${date}`);
