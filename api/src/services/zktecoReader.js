@@ -83,8 +83,8 @@ function withTimeout(promise, ms, label) {
 // (decodeRecordData40/16). Otras versiones/firmwares usan attTime, timestamp,
 // userId, uid, etc. y algunos exponen in/out (inOutStatus/state). Aceptamos
 // varias formas para no depender de un único nombre de campo.
-const TS_FIELDS = ['recordTime', 'attTime', 'timestamp', 'punchTime', 'verifyTime', 'checkTime', 'time'];
-const UID_FIELDS = ['deviceUserId', 'userId', 'uid', 'userSn', 'id'];
+const TS_FIELDS = ['recordTime', 'attTime', 'timestamp', 'punchTime', 'verifyTime', 'time', 'dateTime', 'logTime', 'checkTime'];
+const UID_FIELDS = ['deviceUserId', 'userId', 'uid', 'user_id', 'enrollNumber', 'userSn', 'id'];
 const INOUT_FIELDS = ['inOutStatus', 'state', 'status', 'type'];
 
 function pickField(obj, fields) {
@@ -96,12 +96,44 @@ function pickField(obj, fields) {
   return undefined;
 }
 
+// Decodifica el entero compuesto ZK ("segundos desde 2000") a Date local.
+// (Misma fórmula que node-zklib parseTimeToDate, por si un registro llega
+// como número crudo en vez de Date.)
+function zkIntToDate(t) {
+  let time = t;
+  const second = time % 60; time = (time - second) / 60;
+  const minute = time % 60; time = (time - minute) / 60;
+  const hour = time % 24; time = (time - hour) / 24;
+  const day = time % 31 + 1; time = (time - (day - 1)) / 31;
+  const month = time % 12; time = (time - month) / 12;
+  const year = time + 2000;
+  const d = new Date(year, month, day, hour, minute, second);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Convierte cualquier forma de timestamp (Date, string, número, Buffer) a Date.
+function coerceDate(v) {
+  if (v == null) return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  const sane = d => d && !isNaN(d.getTime()) && d.getFullYear() >= 2010 && d.getFullYear() <= 2100 ? d : null;
+  if (typeof v === 'string') { const d = new Date(v); return sane(d); }
+  if (typeof v === 'number') {
+    return sane(new Date(v))            // epoch ms
+      || sane(new Date(v * 1000))       // epoch segundos
+      || sane(zkIntToDate(v));          // entero compuesto ZK
+  }
+  if (Buffer.isBuffer(v)) {
+    try {
+      if (v.length >= 6) return sane(new Date(2000 + v[0], Math.max(0, (v[1] || 1) - 1), v[2] || 1, v[3] || 0, v[4] || 0, v[5] || 0));
+      if (v.length >= 4) return sane(zkIntToDate(v.readUInt32LE(0)));
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
 // Devuelve { ts:Date|null, userId:string|null, inout } desde un registro crudo.
 function normalizeRecord(l) {
-  const rawTs = pickField(l, TS_FIELDS);
-  let ts = null;
-  if (rawTs instanceof Date) ts = rawTs;
-  else if (rawTs != null) { const d = new Date(rawTs); if (!isNaN(d.getTime())) ts = d; }
+  const ts = coerceDate(pickField(l, TS_FIELDS));
   const uid = pickField(l, UID_FIELDS);
   const inout = pickField(l, INOUT_FIELDS);
   return { ts, userId: uid != null ? String(uid) : null, inout };
@@ -115,8 +147,8 @@ function explicitType(inout) {
 }
 
 // Qué campos trae un registro (para el diagnóstico crudo).
-const ALL_KNOWN_FIELDS = ['uid', 'id', 'userSn', 'userId', 'deviceUserId',
-  'timestamp', 'recordTime', 'attTime', 'verifyTime', 'punchTime', 'checkTime', 'time',
+const ALL_KNOWN_FIELDS = ['uid', 'id', 'userSn', 'userId', 'user_id', 'deviceUserId', 'enrollNumber',
+  'timestamp', 'recordTime', 'attTime', 'verifyTime', 'punchTime', 'checkTime', 'time', 'dateTime', 'logTime',
   'inOutStatus', 'state', 'status', 'type'];
 function detectFields(sample) {
   if (!sample || typeof sample !== 'object') return [];
@@ -176,13 +208,15 @@ async function probeMode(device, mode, timeoutMs = 8000) {
  * Devuelve un reporte por reloj (siempre; los errores se capturan arriba).
  */
 async function backupDeviceDirect(device, opts = {}) {
-  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false } = opts;
+  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false } = opts;
   const t0 = Date.now();
   const report = {
     device_id: device.id, device: device.name, ip: device.ip_address, dry_run: !!dryRun,
     range: { from, to },
-    total_read: 0, in_range: 0, imported: 0, would_import: 0, skipped: 0, notFound: 0, dates: [], att2000: null,
-    duration_ms: 0, sample: [],
+    total_read: 0, with_date: 0, without_date: 0, with_user: 0,
+    in_range: 0, out_of_range: 0, first_valid: null, last_valid: null,
+    imported: 0, would_import: 0, skipped: 0, notFound: 0, dates: [], att2000: null,
+    duration_ms: 0, sample: [], debug: null,
   };
 
   const logs = await withTimeout(
@@ -195,6 +229,30 @@ async function backupDeviceDirect(device, opts = {}) {
 
   // Normalizar todos los registros (acepta recordTime/attTime/… y varios uid).
   const norm = logs.map(normalizeRecord);
+
+  // Contadores globales de diagnóstico (independientes del rango).
+  let minValid = null, maxValid = null;
+  for (const n of norm) {
+    if (n.ts) {
+      report.with_date++;
+      if (!minValid || n.ts < minValid) minValid = n.ts;
+      if (!maxValid || n.ts > maxValid) maxValid = n.ts;
+    } else report.without_date++;
+    if (n.userId) report.with_user++;
+  }
+  report.first_valid = minValid ? pyDateTimeStr(minValid) : null;
+  report.last_valid = maxValid ? pyDateTimeStr(maxValid) : null;
+
+  // Volcado de depuración (sólo si se pide): forma cruda + normalizada.
+  if (debugRaw) {
+    report.debug = {
+      detected_fields: detectFields(logs[0]),
+      raw_first5: logs.slice(0, 5).map(safeStringify),
+      raw_last20: logs.slice(-20).map(safeStringify),
+      normalized_last20: norm.filter(n => n.ts).slice(-20)
+        .map(n => ({ user: n.userId, ts_py: pyDateTimeStr(n.ts), inout: n.inout ?? null })),
+    };
+  }
 
   // Códigos → empleados activos.
   const codes = [...new Set(norm.map(n => n.userId).filter(Boolean))];
@@ -213,8 +271,7 @@ async function backupDeviceDirect(device, opts = {}) {
   for (const n of norm) {
     if (!n.ts) continue;
     const day = pyDateStr(n.ts);
-    if (from && day < from) continue;
-    if (to && day > to) continue;
+    if ((from && day < from) || (to && day > to)) { report.out_of_range++; continue; }
     report.in_range++;
     const empId = empByCode.get(n.userId);
     if (!empId) { report.notFound++; continue; }
@@ -349,7 +406,7 @@ async function readDeviceRaw(device, opts = {}) {
         data_length: logs.length,
         detected_fields: detectFields(logs[0]),
         first: logs[0] ? safeStringify(logs[0]) : null,
-        last5: logs.slice(-5).map(safeStringify),
+        last: logs.slice(-10).map(safeStringify),
       };
     }
 

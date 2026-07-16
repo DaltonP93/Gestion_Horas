@@ -82,9 +82,9 @@ function arg(name, def) {
       console.log(`  🧪 RAW getAttendances(): type=${r.raw.result_type} keys=${r.raw.result_keys ? r.raw.result_keys.join(',') : '(array)'} · data.isArray=${r.raw.data_is_array} · data.length=${r.raw.data_length}`);
       console.log(`     campos detectados: ${r.raw.detected_fields.length ? r.raw.detected_fields.join(', ') : '(ninguno conocido)'}`);
       if (r.raw.first) console.log(`     primer registro RAW: ${r.raw.first}`);
-      if (r.raw.last5 && r.raw.last5.length) {
-        console.log(`     últimos ${r.raw.last5.length} registros RAW:`);
-        for (const s of r.raw.last5) console.log(`       ${s}`);
+      if (r.raw.last && r.raw.last.length) {
+        console.log(`     últimos ${r.raw.last.length} registros RAW:`);
+        for (const s of r.raw.last) console.log(`       ${s}`);
       }
     }
 
