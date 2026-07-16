@@ -12,6 +12,10 @@
  *   --from YYYY-MM-DD   inicio del rango (hora Paraguay). Default: hace 3 días.
  *   --to   YYYY-MM-DD   fin del rango INCLUSIVO (todo el día, 00:00 → 23:59:59).
  *   --dry-run           NO inserta ni recalcula; muestra qué importaría.
+ *   --debug-raw         vuelca registros crudos (primeros 5 / últimos 20),
+ *                       campos detectados y últimos 20 normalizados; imprime
+ *                       contadores (conFecha/sinFecha/conUser/enRango/fueraRango)
+ *                       y el rango de fechas válidas presentes en el reloj.
  *   --device-id N[,M]   limita a esos relojes (evita que uno lento bloquee).
  *   --timeout SEG       timeout de lectura por reloj en segundos (default 180).
  *
@@ -55,6 +59,7 @@ function pyWallToUTC(dateStr, timeStr) {
   const to = arg('to', new Date().toISOString().slice(0, 10));
   const from = arg('from', new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10));
   const dryRun = flag('dry-run');
+  const debugRaw = flag('debug-raw');
   const timeoutSec = parseInt(arg('timeout', '180'), 10);
   const readTimeoutMs = (isNaN(timeoutSec) ? 180 : timeoutSec) * 1000;
   const deviceIdArg = arg('device-id', null);
@@ -63,7 +68,7 @@ function pyWallToUTC(dateStr, timeStr) {
     : null;
 
   if (!isDate(from) || !isDate(to)) {
-    console.error('Uso: node scripts/read-zkteco-now.js --from YYYY-MM-DD [--to YYYY-MM-DD] [--dry-run] [--device-id N] [--timeout SEG]');
+    console.error('Uso: node scripts/read-zkteco-now.js --from YYYY-MM-DD [--to YYYY-MM-DD] [--dry-run] [--debug-raw] [--device-id N] [--timeout SEG]');
     process.exit(1);
   }
 
@@ -80,7 +85,7 @@ function pyWallToUTC(dateStr, timeStr) {
   console.log(`Timeout por reloj   : ${readTimeoutMs / 1000}s${deviceIds ? `  ·  Relojes: [${deviceIds.join(', ')}]` : ''}\n`);
 
   const out = await backupAllDevices({
-    from, to, recalc: !dryRun, dryRun, readTimeoutMs, deviceIds,
+    from, to, recalc: !dryRun, dryRun, debugRaw, readTimeoutMs, deviceIds,
   });
 
   for (const r of out.results) {
@@ -89,13 +94,35 @@ function pyWallToUTC(dateStr, timeStr) {
       continue;
     }
     const dur = r.duration_ms != null ? ` · ${(r.duration_ms / 1000).toFixed(1)}s` : '';
-    if (dryRun) {
-      console.log(`🔎 [#${r.device_id}] ${r.device} (${r.ip}) · leídos=${r.total_read} enRango=${r.in_range} importaría=${r.would_import} dup=${r.skipped} sinEmp=${r.notFound}${r.dates.length ? ` · fechas: ${r.dates.join(', ')}` : ''}${dur}`);
-      if (r.sample && r.sample.length) {
-        for (const s of r.sample) console.log(`     · ${s.ts_py}  emp#${s.employee_id}  ${s.type}`);
-      }
-    } else {
-      console.log(`✅ [#${r.device_id}] ${r.device} (${r.ip}) · leídos=${r.total_read} enRango=${r.in_range} importados=${r.imported} dup=${r.skipped} sinEmp=${r.notFound}${r.dates.length ? ` · fechas: ${r.dates.join(', ')}` : ''}${dur}`);
+    const icon = dryRun ? '🔎' : '✅';
+    const imp = dryRun ? `importaría=${r.would_import}` : `importados=${r.imported}`;
+    console.log(`${icon} [#${r.device_id}] ${r.device} (${r.ip}) · leídos=${r.total_read} conFecha=${r.with_date} sinFecha=${r.without_date} conUser=${r.with_user} enRango=${r.in_range} fueraRango=${r.out_of_range} ${imp} dup=${r.skipped} sinEmp=${r.notFound}${dur}`);
+    if (r.first_valid || r.last_valid) {
+      console.log(`     rango de fechas VÁLIDAS en el reloj: ${r.first_valid || '—'}  →  ${r.last_valid || '—'}`);
+    }
+    if (r.total_read > 0 && r.with_date === 0) {
+      console.log(`     ⚠️  Se leyeron ${r.total_read} registros, pero ninguno pudo normalizarse (0 con fecha válida).`);
+      console.log(`         Corré:  node scripts/inspect-zkteco-raw.js --device-id ${r.device_id} --limit 20`);
+      console.log(`         o repetí con --debug-raw para ver los campos crudos reales.`);
+    } else if (r.total_read > 0 && r.in_range === 0) {
+      console.log(`     ⚠️  ${r.with_date} registros con fecha, pero 0 en el rango pedido.`);
+      console.log(`         Si first_valid/last_valid muestran un año raro, el reloj tiene la FECHA mal configurada.`);
+    }
+    if (r.dates && r.dates.length) console.log(`     fechas afectadas: ${r.dates.join(', ')}`);
+    if (dryRun && r.sample && r.sample.length) {
+      for (const s of r.sample) console.log(`     · ${s.ts_py}  emp#${s.employee_id}  ${s.type}`);
+    }
+
+    // Volcado de depuración detallado.
+    if (debugRaw && r.debug) {
+      console.log(`     ── DEBUG RAW ──`);
+      console.log(`     campos detectados: ${r.debug.detected_fields.length ? r.debug.detected_fields.join(', ') : '(ninguno conocido)'}`);
+      console.log(`     primeros ${r.debug.raw_first5.length} registros RAW:`);
+      for (const s of r.debug.raw_first5) console.log(`       ${s}`);
+      console.log(`     últimos ${r.debug.raw_last20.length} registros RAW:`);
+      for (const s of r.debug.raw_last20) console.log(`       ${s}`);
+      console.log(`     últimos ${r.debug.normalized_last20.length} normalizados:`);
+      for (const n of r.debug.normalized_last20) console.log(`       ${n.ts_py}  user ${n.user}  io=${n.inout}`);
     }
   }
 
