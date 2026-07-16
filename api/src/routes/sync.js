@@ -325,7 +325,8 @@ router.get('/diagnostics', async (req, res) => {
     const [locDaily] = await sequelize.query(
       `SELECT DATE_FORMAT(timestamp,'%Y-%m-%d') AS d, COUNT(*) AS n,
               SUM(source='device') AS device, SUM(source='mobile') AS mobile,
-              SUM(source='manual') AS manual, SUM(source='zkteco_direct') AS zkteco_direct
+              SUM(source='manual') AS manual, SUM(source='zkteco_direct') AS zkteco_direct,
+              SUM(source='att2000') AS att2000
        FROM attendance_logs WHERE timestamp >= ? GROUP BY DATE_FORMAT(timestamp,'%Y-%m-%d')`,
       { replacements: [since] }
     );
@@ -387,7 +388,7 @@ router.get('/diagnostics', async (req, res) => {
       date: d,
       att2000: attDaily[d] ?? 0,
       local: l.n ?? 0,
-      by_source: { device: +l.device || 0, mobile: +l.mobile || 0, manual: +l.manual || 0, zkteco_direct: +l.zkteco_direct || 0 },
+      by_source: { att2000: +l.att2000 || 0, device: +l.device || 0, mobile: +l.mobile || 0, manual: +l.manual || 0, zkteco_direct: +l.zkteco_direct || 0 },
       diff: (attDaily[d] ?? 0) - (l.n ?? 0),
     };
   });

@@ -238,7 +238,7 @@ async function syncEmployees() {
 // se precargan los mapas code→id y sensor_id→device_id (2 queries) y se
 // insertan los marcajes en lotes multi-fila. Reduce de ~3·N a ~2 + N/500
 // round-trips (de decenas de miles a cientos en un fullSync).
-async function syncAttendance({ dateFrom, dateTo, limit = 10000 } = {}) {
+async function syncAttendance({ dateFrom, dateTo, limit = 10000, source = 'att2000' } = {}) {
   const records = await fetchCheckInOut({ dateFrom, dateTo, limit });
   let imported = 0, skipped = 0, notFound = 0;
 
@@ -274,7 +274,7 @@ async function syncAttendance({ dateFrom, dateTo, limit = 10000 } = {}) {
       deviceId,
       new Date(r.CHECKTIME),
       mapType(r.CHECKTYPE),
-      'device',
+      source,   // 'att2000' (import histórico); distingue de 'zkteco_direct' y del legacy 'device'
       JSON.stringify({ userid: r.USERID, checktype: r.CHECKTYPE, verifycode: r.VERIFYCODE, sensorid: r.SENSORID }),
     ]);
   }
