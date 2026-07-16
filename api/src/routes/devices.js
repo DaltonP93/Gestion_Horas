@@ -473,64 +473,153 @@ router.get('/:id/users', authorize('admin','gestor'), async (req, res) => {
   }
 });
 
-// POST /api/devices/:id/backup
-// Query param: ?push_att2000=true  → también escribe en att2000.CHECKINOUT
+// Fecha-hora "YYYY-MM-DD HH:mm:ss" de un Date en hora Paraguay (misma forma en
+// que MySQL almacena el DATETIME), para deduplicar por representación estable.
+const _pyDT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Asuncion', year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+});
+function pyDateTimeStr(d) {
+  const p = Object.fromEntries(_pyDT.formatToParts(d).map(x => [x.type, x.value]));
+  const hh = p.hour === '24' ? '00' : p.hour;
+  return `${p.year}-${p.month}-${p.day} ${hh}:${p.minute}:${p.second}`;
+}
+function pyDateStr(d) { return pyDateTimeStr(d).slice(0, 10); }
+
+/**
+ * Lee marcajes DIRECTAMENTE de un reloj ZKTeco → attendance_logs.
+ * - Resuelve códigos → empleados en lote.
+ * - Deduplica contra CUALQUIER origen (att2000/device/mobile/…) comparando
+ *   (empleado, fecha-hora) en hora Paraguay, más INSERT IGNORE como respaldo.
+ * - Guarda source='zkteco_direct', actualiza last_sync y recalcula
+ *   daily_summary de las fechas afectadas.
+ */
+async function backupDeviceDirect(device, { pushAtt2000 = false, recalc = true } = {}) {
+  const report = { device_id: device.id, device: device.name, total: 0, imported: 0, skipped: 0, notFound: 0, dates: [], att2000: null };
+
+  const logs = await withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 4, delayMs: 4000 });
+  report.total = logs.length;
+  await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
+  if (!logs.length) return report;
+
+  // 1) códigos → empleados activos (una query).
+  const codes = [...new Set(logs.map(l => String(l.deviceUserId)))];
+  const [emps] = await sequelize.query(
+    `SELECT id, code FROM employees WHERE status='active' AND code IN (${codes.map(() => '?').join(',')})`,
+    { replacements: codes }
+  );
+  const empByCode = new Map(emps.map(e => [String(e.code), e.id]));
+
+  // 2) candidatos válidos + rango temporal.
+  const candidates = [];
+  let minTs = null, maxTs = null;
+  for (const l of logs) {
+    const empId = empByCode.get(String(l.deviceUserId));
+    if (!empId) { report.notFound++; continue; }
+    const ts = new Date(l.attTime);
+    if (isNaN(ts.getTime())) { report.skipped++; continue; }
+    const type = l.inOutStatus === 0 ? 'in' : (l.inOutStatus === 1 ? 'out' : 'unknown');
+    candidates.push({ empId, ts, type });
+    if (!minTs || ts < minTs) minTs = ts;
+    if (!maxTs || ts > maxTs) maxTs = ts;
+  }
+  if (!candidates.length) return report;
+
+  // 3) dedup contra lo ya existente (cualquier source/device) por (emp, fecha-hora PY).
+  const empIds = [...new Set(candidates.map(c => c.empId))];
+  const [existing] = await sequelize.query(
+    `SELECT employee_id, DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS ts
+     FROM attendance_logs
+     WHERE employee_id IN (${empIds.map(() => '?').join(',')}) AND \`timestamp\` BETWEEN ? AND ?`,
+    { replacements: [...empIds, minTs, maxTs] }
+  );
+  const seen = new Set(existing.map(r => `${r.employee_id}|${r.ts}`));
+
+  const toInsert = [];
+  const dates = new Set();
+  for (const c of candidates) {
+    const key = `${c.empId}|${pyDateTimeStr(c.ts)}`;
+    if (seen.has(key)) { report.skipped++; continue; }
+    seen.add(key);
+    toInsert.push([c.empId, device.id, c.ts, c.type, 'zkteco_direct']);
+    dates.add(pyDateStr(c.ts));
+  }
+
+  // 4) inserción por lotes (INSERT IGNORE = respaldo por la clave única).
+  const CHUNK = 500;
+  for (let i = 0; i < toInsert.length; i += CHUNK) {
+    const chunk = toInsert.slice(i, i + CHUNK);
+    const vals = chunk.map(() => '(?,?,?,?,?)').join(',');
+    const [r] = await sequelize.query(
+      `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES ${vals}`,
+      { replacements: chunk.flat() }
+    );
+    const affected = r?.affectedRows ?? 0;
+    report.imported += affected;
+    report.skipped += chunk.length - affected;
+  }
+  report.dates = [...dates].sort();
+
+  // 5) recalcular daily_summary de las fechas afectadas.
+  if (recalc && report.dates.length) {
+    const { bulkRecalcDailySummary, materializeAbsents } = require('../services/scheduler');
+    for (const d of report.dates) {
+      try { await bulkRecalcDailySummary(d); await materializeAbsents(d); } catch (e) { /* seguir */ }
+    }
+  }
+
+  // 6) opcional: reflejar en att2000 (compatibilidad legacy, NO por defecto).
+  if (pushAtt2000) {
+    try {
+      const { writeCheckinOut } = require('../config/att2000');
+      report.att2000 = await writeCheckinOut(logs.map(l => ({
+        userId: l.deviceUserId, attTime: l.attTime, inOutStatus: l.inOutStatus,
+        sensorId: device.id, verifyMode: l.verifyType ?? 0,
+      })));
+    } catch (e) { report.att2000 = { error: e.message }; }
+  }
+
+  return report;
+}
+
+// POST /api/devices/:id/backup — lectura directa del reloj → SisHoras.
+// Query param opcional ?push_att2000=true → además refleja en att2000 (legacy).
 router.post('/:id/backup', authorize('admin','gestor'), async (req, res) => {
   const [[device]] = await sequelize.query('SELECT * FROM devices WHERE id=?', { replacements: [req.params.id] });
   if (!device) return res.status(404).json({ error: 'Reloj no encontrado' });
-
+  if (!device.ip_address || !String(device.ip_address).trim()) {
+    return res.status(400).json({ error: 'El reloj no tiene IP configurada (no operativo).' });
+  }
   const pushAtt2000 = req.query.push_att2000 === 'true' || req.body.push_att2000 === true;
-
   try {
-    const logs = await withZK(device, async zk => {
-      const { data } = await zk.getAttendances();
-      return data;
-    }, { maxAttempts: 4, delayMs: 4000 });
-
-    let imported = 0, skipped = 0;
-    for (const log of logs) {
-      const checkTime = new Date(log.attTime);
-      const type = log.inOutStatus === 0 ? 'in' : 'out';
-      const [[emp]] = await sequelize.query(
-        'SELECT id FROM employees WHERE code=? AND status="active"',
-        { replacements: [String(log.deviceUserId)] }
-      );
-      if (!emp) { skipped++; continue; }
-      const [[existing]] = await sequelize.query(
-        'SELECT id FROM attendance_logs WHERE employee_id=? AND `timestamp`=? AND source="device"',
-        { replacements: [emp.id, checkTime] }
-      );
-      if (existing) { skipped++; continue; }
-      await sequelize.query(
-        'INSERT INTO attendance_logs (employee_id, device_id, `timestamp`, type, source) VALUES (?,?,?,?,?)',
-        { replacements: [emp.id, device.id, checkTime, type, 'device'] }
-      );
-      imported++;
-    }
-    await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
-
-    // ── Opcional: también escribir en att2000.CHECKINOUT ──────────
-    let att2000Result = null;
-    if (pushAtt2000 && logs.length > 0) {
-      try {
-        const { writeCheckinOut } = require('../config/att2000');
-        // Mapear formato ZKLib → formato esperado por writeCheckinOut
-        const mapped = logs.map(l => ({
-          userId:      l.deviceUserId,
-          attTime:     l.attTime,
-          inOutStatus: l.inOutStatus,
-          sensorId:    device.id,
-          verifyMode:  l.verifyType ?? 0,
-        }));
-        att2000Result = await writeCheckinOut(mapped);
-      } catch (e) {
-        att2000Result = { error: e.message };
-      }
-    }
-
-    res.json({ ok: true, total: logs.length, imported, skipped, att2000: att2000Result });
+    const report = await backupDeviceDirect(device, { pushAtt2000, recalc: true });
+    res.json({ ok: true, ...report });
   } catch (err) {
     res.status(503).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// POST /api/devices/backup-all — leer TODOS los relojes válidos → SisHoras.
+// Job operativo del día a día (no depende de att2000). Excluye relojes sin IP.
+router.post('/backup-all', authorize('admin','gestor'), async (req, res) => {
+  try {
+    const [devices] = await sequelize.query(
+      "SELECT * FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id"
+    );
+    const results = [];
+    const totals = { imported: 0, skipped: 0, notFound: 0 };
+    for (const device of devices) {
+      try {
+        const r = await backupDeviceDirect(device, { pushAtt2000: false, recalc: true });
+        totals.imported += r.imported; totals.skipped += r.skipped; totals.notFound += r.notFound;
+        results.push({ ...r, ok: true });
+      } catch (err) {
+        results.push({ device_id: device.id, device: device.name, ok: false, error: fmtErr(err) });
+      }
+    }
+    res.json({ ok: true, devices: devices.length, totals, results });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: fmtErr(err) });
   }
 });
 
