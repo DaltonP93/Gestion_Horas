@@ -85,10 +85,13 @@ function withTimeout(promise, ms, label) {
  * Devuelve un reporte por reloj (siempre; los errores se capturan arriba).
  */
 async function backupDeviceDirect(device, opts = {}) {
-  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000 } = opts;
+  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false } = opts;
+  const t0 = Date.now();
   const report = {
-    device_id: device.id, device: device.name, ip: device.ip_address,
-    total_read: 0, in_range: 0, imported: 0, skipped: 0, notFound: 0, dates: [], att2000: null,
+    device_id: device.id, device: device.name, ip: device.ip_address, dry_run: !!dryRun,
+    range: { from, to },
+    total_read: 0, in_range: 0, imported: 0, would_import: 0, skipped: 0, notFound: 0, dates: [], att2000: null,
+    duration_ms: 0, sample: [],
   };
 
   const logs = await withTimeout(
@@ -96,8 +99,8 @@ async function backupDeviceDirect(device, opts = {}) {
     readTimeoutMs, 'lectura del reloj'
   );
   report.total_read = logs.length;
-  await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
-  if (!logs.length) return report;
+  if (!dryRun) await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
+  if (!logs.length) { report.duration_ms = Date.now() - t0; return report; }
 
   // Códigos → empleados activos.
   const codes = [...new Set(logs.map(l => String(l.deviceUserId)))];
@@ -124,7 +127,7 @@ async function backupDeviceDirect(device, opts = {}) {
     if (!minTs || ts < minTs) minTs = ts;
     if (!maxTs || ts > maxTs) maxTs = ts;
   }
-  if (!candidates.length) return report;
+  if (!candidates.length) { report.duration_ms = Date.now() - t0; return report; }
 
   // Dedup cross-source por (emp, fecha-hora PY).
   const empIds = [...new Set(candidates.map(c => c.empId))];
@@ -144,6 +147,17 @@ async function backupDeviceDirect(device, opts = {}) {
     seen.add(key);
     toInsert.push([c.empId, device.id, c.ts, c.type, 'zkteco_direct']);
     dates.add(pyDateStr(c.ts));
+  }
+
+  // Modo dry-run: NO inserta ni recalcula. Sólo reporta lo que haría.
+  if (dryRun) {
+    report.would_import = toInsert.length;
+    report.dates = [...dates].sort();
+    report.sample = toInsert.slice(0, 20).map(([empId, , ts, type]) => ({
+      employee_id: empId, ts_py: pyDateTimeStr(ts), type,
+    }));
+    report.duration_ms = Date.now() - t0;
+    return report;
   }
 
   const CHUNK = 500;
@@ -177,20 +191,101 @@ async function backupDeviceDirect(device, opts = {}) {
     } catch (e) { report.att2000 = { error: e.message }; }
   }
 
+  report.duration_ms = Date.now() - t0;
+  return report;
+}
+
+/**
+ * readDeviceRaw — Diagnóstico READ-ONLY de un reloj. NO escribe nada
+ * (ni attendance_logs, ni devices.last_sync). Sirve para verificar si el
+ * reloj sigue registrando marcas.
+ * opts: { timeoutMs=45000, recentSample=20, recentDays=10 }
+ * Devuelve: conexión, cantidad leída, primera/última marca cruda,
+ *   últimas N marcas, histograma por día de las marcas recientes,
+ *   hora del reloj (si la librería lo permite) y duración.
+ */
+async function readDeviceRaw(device, opts = {}) {
+  const { timeoutMs = 45000, recentSample = 20, recentDays = 10 } = opts;
+  const t0 = Date.now();
+  const report = {
+    device_id: device.id, device: device.name, ip: device.ip_address,
+    port: device.port, connection_mode: device.connection_mode || 'auto',
+    connected: false, total_read: 0,
+    first_mark: null, last_mark: null,
+    device_time: null, device_info: null,
+    recent: [], per_day: [], error: null, duration_ms: 0,
+  };
+
+  try {
+    const data = await withTimeout(
+      withZK(device, async zk => {
+        const out = { logs: (await zk.getAttendances()).data, info: null, time: null };
+        // Intentos best-effort de metadata; nunca deben tumbar el diagnóstico.
+        try { if (typeof zk.getInfo === 'function') out.info = await zk.getInfo(); } catch {}
+        try { if (typeof zk.getTime === 'function') out.time = await zk.getTime(); } catch {}
+        return out;
+      }, { maxAttempts: 2, delayMs: 3000 }),
+      timeoutMs, 'lectura del reloj'
+    );
+
+    report.connected = true;
+    const logs = data.logs || [];
+    report.total_read = logs.length;
+    report.device_info = data.info || null;
+    if (data.time) { try { report.device_time = pyDateTimeStr(new Date(data.time)); } catch { report.device_time = String(data.time); } }
+
+    if (logs.length) {
+      const parsed = logs
+        .map(l => ({ ts: new Date(l.attTime), userId: String(l.deviceUserId), st: l.inOutStatus }))
+        .filter(x => !isNaN(x.ts.getTime()))
+        .sort((a, b) => a.ts - b.ts);
+
+      if (parsed.length) {
+        const fmt = x => ({ user_id: x.userId, ts_py: pyDateTimeStr(x.ts), in_out: x.st });
+        report.first_mark = fmt(parsed[0]);
+        report.last_mark = fmt(parsed[parsed.length - 1]);
+        report.recent = parsed.slice(-recentSample).reverse().map(fmt);
+
+        // Histograma por día (últimos N días con marcas).
+        const byDay = new Map();
+        for (const x of parsed) {
+          const d = pyDateStr(x.ts);
+          byDay.set(d, (byDay.get(d) || 0) + 1);
+        }
+        report.per_day = [...byDay.entries()]
+          .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+          .slice(0, recentDays)
+          .map(([date, count]) => ({ date, count }));
+      }
+    }
+  } catch (err) {
+    report.error = err?.message || String(err);
+  }
+
+  report.duration_ms = Date.now() - t0;
   return report;
 }
 
 // Lee todos los relojes válidos (con IP), uno por uno, capturando errores.
+// opts.deviceIds (array) → limita a esos relojes (para no bloquear los demás
+// cuando uno está lento, p.ej. Lavadero con --device-id 2).
 async function backupAllDevices(opts = {}) {
-  const [devices] = await sequelize.query(
-    "SELECT * FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id"
-  );
+  const { deviceIds = null, ...deviceOpts } = opts;
+  let sql = "SELECT * FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> ''";
+  const replacements = [];
+  if (Array.isArray(deviceIds) && deviceIds.length) {
+    sql += ` AND id IN (${deviceIds.map(() => '?').join(',')})`;
+    replacements.push(...deviceIds);
+  }
+  sql += ' ORDER BY id';
+  const [devices] = await sequelize.query(sql, { replacements });
   const results = [];
-  const totals = { imported: 0, skipped: 0, notFound: 0 };
+  const totals = { imported: 0, skipped: 0, notFound: 0, would_import: 0 };
   for (const device of devices) {
     try {
-      const r = await backupDeviceDirect(device, opts);
-      totals.imported += r.imported; totals.skipped += r.skipped; totals.notFound += r.notFound;
+      const r = await backupDeviceDirect(device, deviceOpts);
+      totals.imported += r.imported; totals.skipped += r.skipped;
+      totals.notFound += r.notFound; totals.would_import += (r.would_import || 0);
       results.push({ ...r, ok: true });
     } catch (err) {
       results.push({ device_id: device.id, device: device.name, ip: device.ip_address, ok: false, error: err.message });
@@ -199,4 +294,4 @@ async function backupAllDevices(opts = {}) {
   return { devices: devices.length, totals, results };
 }
 
-module.exports = { openZK, withZK, backupDeviceDirect, backupAllDevices, pyDateStr, pyDateTimeStr };
+module.exports = { openZK, withZK, backupDeviceDirect, backupAllDevices, readDeviceRaw, pyDateStr, pyDateTimeStr };
