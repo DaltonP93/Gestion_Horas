@@ -83,8 +83,8 @@ function withTimeout(promise, ms, label) {
 // (decodeRecordData40/16). Otras versiones/firmwares usan attTime, timestamp,
 // userId, uid, etc. y algunos exponen in/out (inOutStatus/state). Aceptamos
 // varias formas para no depender de un único nombre de campo.
-const TS_FIELDS = ['recordTime', 'attTime', 'timestamp', 'punchTime', 'verifyTime', 'time', 'dateTime', 'logTime', 'checkTime'];
-const UID_FIELDS = ['deviceUserId', 'userId', 'uid', 'user_id', 'enrollNumber', 'userSn', 'id'];
+const TS_FIELDS = ['recordTime', 'attTime', 'timestamp', 'punchTime', 'verifyTime', 'time', 'dateTime', 'logTime', 'attendanceTime', 'checkTime'];
+const UID_FIELDS = ['deviceUserId', 'userId', 'uid', 'user_id', 'enrollNumber', 'enrollNo', 'userSn', 'id'];
 const INOUT_FIELDS = ['inOutStatus', 'state', 'status', 'type'];
 
 function pickField(obj, fields) {
@@ -147,8 +147,8 @@ function explicitType(inout) {
 }
 
 // Qué campos trae un registro (para el diagnóstico crudo).
-const ALL_KNOWN_FIELDS = ['uid', 'id', 'userSn', 'userId', 'user_id', 'deviceUserId', 'enrollNumber',
-  'timestamp', 'recordTime', 'attTime', 'verifyTime', 'punchTime', 'checkTime', 'time', 'dateTime', 'logTime',
+const ALL_KNOWN_FIELDS = ['uid', 'id', 'userSn', 'userId', 'user_id', 'deviceUserId', 'enrollNumber', 'enrollNo',
+  'timestamp', 'recordTime', 'attTime', 'verifyTime', 'punchTime', 'checkTime', 'time', 'dateTime', 'logTime', 'attendanceTime',
   'inOutStatus', 'state', 'status', 'type'];
 function detectFields(sample) {
   if (!sample || typeof sample !== 'object') return [];

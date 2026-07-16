@@ -100,6 +100,14 @@ function pyWallToUTC(dateStr, timeStr) {
     if (r.first_valid || r.last_valid) {
       console.log(`     rango de fechas VÁLIDAS en el reloj: ${r.first_valid || '—'}  →  ${r.last_valid || '—'}`);
     }
+    if (r.total_read > 0 && r.with_date === 0) {
+      console.log(`     ⚠️  Se leyeron ${r.total_read} registros, pero ninguno pudo normalizarse (0 con fecha válida).`);
+      console.log(`         Corré:  node scripts/inspect-zkteco-raw.js --device-id ${r.device_id} --limit 20`);
+      console.log(`         o repetí con --debug-raw para ver los campos crudos reales.`);
+    } else if (r.total_read > 0 && r.in_range === 0) {
+      console.log(`     ⚠️  ${r.with_date} registros con fecha, pero 0 en el rango pedido.`);
+      console.log(`         Si first_valid/last_valid muestran un año raro, el reloj tiene la FECHA mal configurada.`);
+    }
     if (r.dates && r.dates.length) console.log(`     fechas afectadas: ${r.dates.join(', ')}`);
     if (dryRun && r.sample && r.sample.length) {
       for (const s of r.sample) console.log(`     · ${s.ts_py}  emp#${s.employee_id}  ${s.type}`);
