@@ -84,7 +84,8 @@
     "overtime": "Horas extras",
     "out_of_range": "Fora do intervalo",
     "out_of_geofence": "Fora da geocerca",
-    "rules": "Regras (condições)"
+    "rules": "Regras (condições)",
+    "sync": "Sincronização"
   },
   "dashboard": {
     "title": "Painel principal",
