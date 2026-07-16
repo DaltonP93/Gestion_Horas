@@ -16,9 +16,11 @@
  *   --days N           cuántos días mostrar en el histograma (default 12).
  *   --sample N         cuántas marcas recientes listar (default 20).
  *
- * Por cada reloj muestra: conexión OK/fallo, cantidad leída, primera/última
- * marca cruda, últimas N marcas, conteo por día de las marcas recientes,
- * hora del reloj (si la librería lo permite) y duración de la lectura.
+ * Por cada reloj muestra: conexión OK/fallo, cantidad leída, VOLCADO CRUDO
+ * (tipo/keys del resultado, campos detectados, primer y últimos registros sin
+ * normalizar), primera/última marca normalizada, últimas N marcas, conteo por
+ * día, info del reloj y duración. Si la lectura falla, prueba conexión TCP/UDP
+ * por separado y da una recomendación operativa.
  *
  * OBJETIVO: verificar si los relojes dejaron de guardar marcas (p.ej. después
  * del 13/07). Si la última marca cruda es vieja, el problema es del reloj/red,
@@ -62,15 +64,32 @@ function arg(name, def) {
     console.log(`[#${r.device_id}] ${r.device}  (${r.ip}:${r.port} · ${r.connection_mode})`);
 
     if (!r.connected) {
-      console.error(`  ❌ SIN CONEXIÓN tras ${dur}: ${r.error}`);
+      console.error(`  ❌ FALLO DE LECTURA tras ${dur}: ${r.error}`);
+      if (r.probes) {
+        console.log(`  🔌 Prueba de conexión por modo:`);
+        for (const p of r.probes) console.log(`       ${p.mode.toUpperCase()}: ${p.ok ? 'OK (socket abre)' : `FALLA — ${p.error}`}`);
+      }
+      if (r.recommendation) console.log(`  💡 ${r.recommendation}`);
       console.log('');
       continue;
     }
 
     console.log(`  ✅ Conectado · leídas=${r.total_read} · lectura ${dur}`);
-    if (r.device_time) console.log(`  🕒 Hora del reloj: ${r.device_time}`);
-    if (r.first_mark) console.log(`  ⏮  Primera marca: ${r.first_mark.ts_py}  (user ${r.first_mark.user_id})`);
-    if (r.last_mark)  console.log(`  ⏭  Última marca : ${r.last_mark.ts_py}  (user ${r.last_mark.user_id})`);
+    if (r.device_info) console.log(`  ℹ️  Info del reloj: ${JSON.stringify(r.device_info)}`);
+
+    // (A) Volcado CRUDO — lo que realmente devuelve la librería.
+    if (r.raw) {
+      console.log(`  🧪 RAW getAttendances(): type=${r.raw.result_type} keys=${r.raw.result_keys ? r.raw.result_keys.join(',') : '(array)'} · data.isArray=${r.raw.data_is_array} · data.length=${r.raw.data_length}`);
+      console.log(`     campos detectados: ${r.raw.detected_fields.length ? r.raw.detected_fields.join(', ') : '(ninguno conocido)'}`);
+      if (r.raw.first) console.log(`     primer registro RAW: ${r.raw.first}`);
+      if (r.raw.last5 && r.raw.last5.length) {
+        console.log(`     últimos ${r.raw.last5.length} registros RAW:`);
+        for (const s of r.raw.last5) console.log(`       ${s}`);
+      }
+    }
+
+    if (r.first_mark) console.log(`  ⏮  Primera marca (normalizada): ${r.first_mark.ts_py}  (user ${r.first_mark.user_id})`);
+    if (r.last_mark)  console.log(`  ⏭  Última marca  (normalizada): ${r.last_mark.ts_py}  (user ${r.last_mark.user_id})`);
 
     if (r.per_day.length) {
       console.log(`  📅 Marcas por día (más recientes):`);
@@ -78,8 +97,11 @@ function arg(name, def) {
     }
 
     if (r.recent.length) {
-      console.log(`  🔎 Últimas ${r.recent.length} marcas crudas:`);
+      console.log(`  🔎 Últimas ${r.recent.length} marcas normalizadas:`);
       for (const m of r.recent) console.log(`       ${m.ts_py}  user ${m.user_id}  io=${m.in_out}`);
+    } else if (r.total_read > 0) {
+      console.log(`  ⚠️  Se leyeron ${r.total_read} registros pero ninguno tenía timestamp reconocible.`);
+      console.log(`      Revisá el "primer registro RAW" de arriba para ver los nombres de campo reales.`);
     } else {
       console.log(`  ⚠️  El reloj no devolvió ninguna marca.`);
     }
@@ -87,8 +109,12 @@ function arg(name, def) {
   }
 
   console.log('─'.repeat(72));
-  console.log('Nota: si la "Última marca" es vieja (p.ej. 2026-07-13), el reloj');
-  console.log('dejó de registrar marcas — el problema es del reloj/red, no de SisHoras.');
+  console.log('Notas:');
+  console.log(' · Si la "Última marca (normalizada)" es vieja (p.ej. 2026-07-13), el reloj');
+  console.log('   dejó de registrar — el problema es del reloj/red, no de SisHoras.');
+  console.log(' · Si hay leídas>0 pero 0 normalizadas, el bug es de parseo: mirá el RAW.');
+  console.log(' · TIMEOUT_ON_WRITING con socket que abre = el reloj está tomado por otro');
+  console.log('   software (p.ej. Attendance Management) o saturado; liberalo y reintentá.');
 
   await sequelize.close();
   process.exit(0);
