@@ -45,11 +45,15 @@ export default function SincronizacionPage() {
       const r = await api.post('/api/devices/backup-all', { from: readFrom, to: readTo }, { timeout: 120000 })
       if (r.data.ok === false) { addLog(`✖ ${r.data.error || 'Error en la lectura'}`) }
       const t = r.data.totals || {}
-      addLog(`✅ Relojes: ${r.data.devices ?? 0}. Importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}.`)
+      addLog(`✅ Relojes: ${r.data.devices ?? 0}. En rango ${t.in_range || 0}, importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}, basura ${t.junk || 0}.`)
+      if ((t.in_range || 0) > 0 && (t.notFound || 0) / (t.in_range || 1) > 0.5) {
+        addLog('🚨 La mayoría de las marcas en rango NO se importó por falta de mapeo deviceUserId→empleado.')
+      }
       for (const d of r.data.results || []) {
-        addLog(d.ok
-          ? `   · ${d.device}: leídos ${d.total_read} · en rango ${d.in_range} · +${d.imported} (dup ${d.skipped}, sinEmp ${d.notFound})`
-          : `   · ${d.device}: ✖ ${d.error}`)
+        if (!d.ok) { addLog(`   · ${d.device}: ✖ ${d.error}`); continue }
+        addLog(`   · ${d.device}: leídos ${d.total_read} · basura ${d.junk ?? 0} · en rango ${d.in_range} · +${d.imported} (dup ${d.skipped}, sinEmp ${d.notFound})`)
+        if (d.read_unstable) addLog(`      ⚠️ lectura inestable del reloj; puede faltar data. Reintentá o usá el script con --attempts 3.`)
+        if (d.warn_unmapped) addLog(`      🚨 ${d.notFound}/${d.in_range} marcas sin empleado. deviceUserId no coincide con employees (${(d.match_columns || []).join(', ')}).`)
       }
       loadDiag()
     } catch (e: any) {

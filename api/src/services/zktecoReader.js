@@ -201,6 +201,74 @@ async function probeMode(device, mode, timeoutMs = 8000) {
   }
 }
 
+// ─── Limpieza de registros basura ───────────────────────────────
+// El buffer del reloj suele traer relleno: userSn=0, deviceUserId vacío y
+// recordTime=2000-01-01. Esos registros no son marcas reales.
+function isJunkRaw(l) {
+  if (!l || typeof l !== 'object') return true;
+  const uid = pickField(l, UID_FIELDS);
+  if (uid == null || String(uid).trim() === '') return true;   // sin usuario (incluye relleno userSn=0)
+  const ts = coerceDate(pickField(l, TS_FIELDS));
+  if (!ts || ts.getFullYear() <= 2001) return true;            // recordTime 2000-01-01 (relleno)
+  return false;
+}
+
+// Lee attendances con reintentos y elige la lectura con MÁS registros no basura
+// (el reloj a veces devuelve buffers truncados/inestables entre ejecuciones).
+async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1 } = {}) {
+  const reads = [];
+  for (let i = 0; i < Math.max(1, attempts); i++) {
+    const logs = await withTimeout(
+      withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 2, delayMs: 3000 }),
+      readTimeoutMs, 'lectura del reloj'
+    );
+    const valid = logs.reduce((a, l) => a + (isJunkRaw(l) ? 0 : 1), 0);
+    reads.push({ logs, total: logs.length, valid });
+  }
+  const best = reads.reduce((a, b) => (b.valid > a.valid ? b : a));
+  const totals = reads.map(r => r.total);
+  const valids = reads.map(r => r.valid);
+  // Varianza notable = la lectura es inestable (avisar).
+  const spread = valids.length > 1 ? Math.max(...valids) - Math.min(...valids) : 0;
+  const unstable = valids.length > 1 && spread > Math.max(20, 0.2 * Math.max(...valids));
+  return { logs: best.logs, attempts: reads.length, totals, valids, unstable };
+}
+
+// Columnas de `employees` (de una lista candidata) que existen realmente, para
+// mapear deviceUserId contra cualquiera de ellas (no sólo `code`).
+const EMP_MATCH_CANDIDATES = ['code', 'employee_number', 'employee_code', 'badge_number', 'biometric_id', 'external_id', 'legajo', 'device_user_id'];
+async function getEmployeeMatchColumns() {
+  const [cols] = await sequelize.query(
+    `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'`
+  );
+  const present = new Set(cols.map(x => x.c));
+  const match = EMP_MATCH_CANDIDATES.filter(c => present.has(c));
+  return match.length ? match : ['code'];
+}
+
+// Construye dos mapas deviceUserId → empleado:
+//   active: sólo activos (para importar).
+//   any: cualquier estado, indicando por qué columna coincidió (diagnóstico).
+async function buildEmployeeMatcher() {
+  const columns = await getEmployeeMatchColumns();
+  const [emps] = await sequelize.query(
+    `SELECT id, status, ${columns.map(c => `\`${c}\``).join(', ')} FROM employees`
+  );
+  const active = new Map();
+  const any = new Map();
+  for (const e of emps) {
+    for (const col of columns) {
+      const v = e[col];
+      if (v == null || String(v).trim() === '') continue;
+      const key = String(v).trim();
+      if (!any.has(key)) any.set(key, { id: e.id, via: col, status: e.status });
+      if (e.status === 'active' && !active.has(key)) active.set(key, e.id);
+    }
+  }
+  return { active, any, columns };
+}
+
 /**
  * Lee un reloj y guarda en attendance_logs.
  * opts: { from, to, recalc=true, pushAtt2000=false, readTimeoutMs=45000 }
@@ -208,26 +276,34 @@ async function probeMode(device, mode, timeoutMs = 8000) {
  * Devuelve un reporte por reloj (siempre; los errores se capturan arriba).
  */
 async function backupDeviceDirect(device, opts = {}) {
-  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false } = opts;
+  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1 } = opts;
   const t0 = Date.now();
   const report = {
     device_id: device.id, device: device.name, ip: device.ip_address, dry_run: !!dryRun,
     range: { from, to },
-    total_read: 0, with_date: 0, without_date: 0, with_user: 0,
+    total_read: 0, junk: 0, valid: 0, with_date: 0, without_date: 0, with_user: 0,
     in_range: 0, out_of_range: 0, first_valid: null, last_valid: null,
-    imported: 0, would_import: 0, skipped: 0, notFound: 0, dates: [], att2000: null,
+    imported: 0, would_import: 0, skipped: 0, notFound: 0,
+    unmapped_distinct: 0, unmapped_top: [], warn_unmapped: false,
+    match_columns: [], read_unstable: false, dates: [], att2000: null,
     duration_ms: 0, sample: [], debug: null,
   };
 
-  const logs = await withTimeout(
-    withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 2, delayMs: 3000 }),
-    readTimeoutMs, 'lectura del reloj'
-  );
-  report.total_read = logs.length;
+  // Lectura estable (varios intentos, mejor lectura no basura).
+  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts });
+  const rawLogs = stable.logs;
+  report.total_read = rawLogs.length;
+  report.read_unstable = stable.unstable;
+  if (stable.attempts > 1) report.read_attempts = { attempts: stable.attempts, totals: stable.totals, valids: stable.valids };
   if (!dryRun) await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
-  if (!logs.length) { report.duration_ms = Date.now() - t0; return report; }
+  if (!rawLogs.length) { report.duration_ms = Date.now() - t0; return report; }
 
-  // Normalizar todos los registros (acepta recordTime/attTime/… y varios uid).
+  // Descartar registros basura (relleno del buffer) ANTES de normalizar.
+  const logs = rawLogs.filter(l => !isJunkRaw(l));
+  report.junk = rawLogs.length - logs.length;
+  report.valid = logs.length;
+
+  // Normalizar los registros limpios (acepta recordTime/attTime/… y varios uid).
   const norm = logs.map(normalizeRecord);
 
   // Contadores globales de diagnóstico (independientes del rango).
@@ -247,39 +323,52 @@ async function backupDeviceDirect(device, opts = {}) {
   if (debugRaw) {
     report.debug = {
       detected_fields: detectFields(logs[0]),
-      raw_first5: logs.slice(0, 5).map(safeStringify),
-      raw_last20: logs.slice(-20).map(safeStringify),
+      raw_first5: rawLogs.slice(0, 5).map(safeStringify),
+      raw_last20: rawLogs.slice(-20).map(safeStringify),
       normalized_last20: norm.filter(n => n.ts).slice(-20)
         .map(n => ({ user: n.userId, ts_py: pyDateTimeStr(n.ts), inout: n.inout ?? null })),
     };
   }
 
-  // Códigos → empleados activos.
-  const codes = [...new Set(norm.map(n => n.userId).filter(Boolean))];
-  const empByCode = new Map();
-  if (codes.length) {
-    const [emps] = await sequelize.query(
-      `SELECT id, code FROM employees WHERE status='active' AND code IN (${codes.map(() => '?').join(',')})`,
-      { replacements: codes }
-    );
-    for (const e of emps) empByCode.set(String(e.code), e.id);
-  }
+  // Mapeo deviceUserId → empleado, contra TODAS las columnas disponibles
+  // (code, employee_number, …), no sólo `code`.
+  const matcher = await buildEmployeeMatcher();
+  report.match_columns = matcher.columns;
 
   // Candidatos válidos, filtrados por RANGO (hora Paraguay).
   const candidates = [];
+  const unmapped = new Map();
   let minTs = null, maxTs = null;
   for (const n of norm) {
     if (!n.ts) continue;
     const day = pyDateStr(n.ts);
     if ((from && day < from) || (to && day > to)) { report.out_of_range++; continue; }
     report.in_range++;
-    const empId = empByCode.get(n.userId);
-    if (!empId) { report.notFound++; continue; }
+    const empId = n.userId != null ? matcher.active.get(n.userId) : null;
+    if (!empId) {
+      report.notFound++;
+      if (n.userId != null) unmapped.set(n.userId, (unmapped.get(n.userId) || 0) + 1);
+      continue;
+    }
     const type = explicitType(n.inout);   // null si el registro no trae in/out
     candidates.push({ empId, ts: n.ts, type, explicit: !!type });
     if (!minTs || n.ts < minTs) minTs = n.ts;
     if (!maxTs || n.ts > maxTs) maxTs = n.ts;
   }
+
+  // Diagnóstico de no-mapeados: top 30 con conteo y, si existe el id en
+  // employees por otra columna/estado, indicarlo.
+  report.unmapped_distinct = unmapped.size;
+  report.unmapped_top = [...unmapped.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([id, count]) => {
+      const alt = matcher.any.get(id);
+      return { device_user_id: id, count, employee: alt ? { id: alt.id, via: alt.via, status: alt.status } : null };
+    });
+  // Aviso fuerte si la mayoría de las marcas en rango no se mapeó.
+  report.warn_unmapped = report.in_range > 0 && report.notFound / report.in_range > 0.5;
+
   if (!candidates.length) { report.duration_ms = Date.now() - t0; return report; }
 
   // Inferir in/out por orden temporal cuando el reloj no lo reporta.
@@ -457,12 +546,13 @@ async function backupAllDevices(opts = {}) {
   sql += ' ORDER BY id';
   const [devices] = await sequelize.query(sql, { replacements });
   const results = [];
-  const totals = { imported: 0, skipped: 0, notFound: 0, would_import: 0 };
+  const totals = { imported: 0, skipped: 0, notFound: 0, would_import: 0, junk: 0, in_range: 0 };
   for (const device of devices) {
     try {
       const r = await backupDeviceDirect(device, deviceOpts);
       totals.imported += r.imported; totals.skipped += r.skipped;
       totals.notFound += r.notFound; totals.would_import += (r.would_import || 0);
+      totals.junk += (r.junk || 0); totals.in_range += (r.in_range || 0);
       results.push({ ...r, ok: true });
     } catch (err) {
       results.push({ device_id: device.id, device: device.name, ip: device.ip_address, ok: false, error: err.message });
@@ -473,6 +563,7 @@ async function backupAllDevices(opts = {}) {
 
 module.exports = {
   openZK, withZK, backupDeviceDirect, backupAllDevices, readDeviceRaw,
+  readAttendancesStable, buildEmployeeMatcher, getEmployeeMatchColumns, isJunkRaw,
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
   normalizeRecord, resolveTypes, explicitType, detectFields,
