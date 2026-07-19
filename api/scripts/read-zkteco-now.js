@@ -16,6 +16,10 @@
  *                       campos detectados y últimos 20 normalizados; imprime
  *                       contadores (conFecha/sinFecha/conUser/enRango/fueraRango)
  *                       y el rango de fechas válidas presentes en el reloj.
+ *   --show-unmapped     lista los deviceUserId sin empleado (top 30) con conteo
+ *                       y pista si existen en employees por otra columna/estado.
+ *   --attempts N        lee N veces y usa la lectura con más registros válidos
+ *                       (mitiga lecturas inestables/truncadas del reloj).
  *   --device-id N[,M]   limita a esos relojes (evita que uno lento bloquee).
  *   --timeout SEG       timeout de lectura por reloj en segundos (default 180).
  *
@@ -60,6 +64,8 @@ function pyWallToUTC(dateStr, timeStr) {
   const from = arg('from', new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10));
   const dryRun = flag('dry-run');
   const debugRaw = flag('debug-raw');
+  const showUnmapped = flag('show-unmapped');
+  const attempts = Math.max(1, parseInt(arg('attempts', '1'), 10) || 1);
   const timeoutSec = parseInt(arg('timeout', '180'), 10);
   const readTimeoutMs = (isNaN(timeoutSec) ? 180 : timeoutSec) * 1000;
   const deviceIdArg = arg('device-id', null);
@@ -68,7 +74,7 @@ function pyWallToUTC(dateStr, timeStr) {
     : null;
 
   if (!isDate(from) || !isDate(to)) {
-    console.error('Uso: node scripts/read-zkteco-now.js --from YYYY-MM-DD [--to YYYY-MM-DD] [--dry-run] [--debug-raw] [--device-id N] [--timeout SEG]');
+    console.error('Uso: node scripts/read-zkteco-now.js --from YYYY-MM-DD [--to YYYY-MM-DD] [--dry-run] [--debug-raw] [--show-unmapped] [--device-id N] [--timeout SEG] [--attempts N]');
     process.exit(1);
   }
 
@@ -85,7 +91,7 @@ function pyWallToUTC(dateStr, timeStr) {
   console.log(`Timeout por reloj   : ${readTimeoutMs / 1000}s${deviceIds ? `  ·  Relojes: [${deviceIds.join(', ')}]` : ''}\n`);
 
   const out = await backupAllDevices({
-    from, to, recalc: !dryRun, dryRun, debugRaw, readTimeoutMs, deviceIds,
+    from, to, recalc: !dryRun, dryRun, debugRaw, showUnmapped, attempts, readTimeoutMs, deviceIds,
   });
 
   for (const r of out.results) {
@@ -96,21 +102,42 @@ function pyWallToUTC(dateStr, timeStr) {
     const dur = r.duration_ms != null ? ` · ${(r.duration_ms / 1000).toFixed(1)}s` : '';
     const icon = dryRun ? '🔎' : '✅';
     const imp = dryRun ? `importaría=${r.would_import}` : `importados=${r.imported}`;
-    console.log(`${icon} [#${r.device_id}] ${r.device} (${r.ip}) · leídos=${r.total_read} conFecha=${r.with_date} sinFecha=${r.without_date} conUser=${r.with_user} enRango=${r.in_range} fueraRango=${r.out_of_range} ${imp} dup=${r.skipped} sinEmp=${r.notFound}${dur}`);
+    console.log(`${icon} [#${r.device_id}] ${r.device} (${r.ip}) · leídos=${r.total_read} basura=${r.junk} válidos=${r.valid} conFecha=${r.with_date} enRango=${r.in_range} fueraRango=${r.out_of_range} ${imp} dup=${r.skipped} sinEmp=${r.notFound}${dur}`);
     if (r.first_valid || r.last_valid) {
-      console.log(`     rango de fechas VÁLIDAS en el reloj: ${r.first_valid || '—'}  →  ${r.last_valid || '—'}`);
+      console.log(`     rango de fechas VÁLIDAS (sin basura): ${r.first_valid || '—'}  →  ${r.last_valid || '—'}`);
     }
-    if (r.total_read > 0 && r.with_date === 0) {
-      console.log(`     ⚠️  Se leyeron ${r.total_read} registros, pero ninguno pudo normalizarse (0 con fecha válida).`);
+    if (r.match_columns && r.match_columns.length) {
+      console.log(`     columnas de mapeo empleado: ${r.match_columns.join(', ')}`);
+    }
+    if (r.read_unstable) {
+      const ra = r.read_attempts;
+      console.log(`     ⚠️  LECTURA INESTABLE entre intentos${ra ? ` (válidos: ${ra.valids.join(', ')})` : ''}. Se usó la de mayor cantidad válida. Probá --attempts 3.`);
+    }
+    if (r.total_read > 0 && r.valid === 0) {
+      console.log(`     ⚠️  Se leyeron ${r.total_read} registros pero TODOS eran basura (relleno userSn=0 / fecha 2000).`);
       console.log(`         Corré:  node scripts/inspect-zkteco-raw.js --device-id ${r.device_id} --limit 20`);
-      console.log(`         o repetí con --debug-raw para ver los campos crudos reales.`);
-    } else if (r.total_read > 0 && r.in_range === 0) {
-      console.log(`     ⚠️  ${r.with_date} registros con fecha, pero 0 en el rango pedido.`);
+    } else if (r.valid > 0 && r.in_range === 0) {
+      console.log(`     ⚠️  ${r.valid} registros válidos, pero 0 en el rango pedido.`);
       console.log(`         Si first_valid/last_valid muestran un año raro, el reloj tiene la FECHA mal configurada.`);
+    }
+    if (r.warn_unmapped) {
+      console.log(`     🚨 La MAYORÍA de las marcas en rango (${r.notFound}/${r.in_range}) NO se importó por falta de mapeo deviceUserId→empleado.`);
+      console.log(`        Revisá el mapeo con:  node scripts/diagnose-device-mapping.js --device-id ${r.device_id} --from ${from} --to ${to}`);
     }
     if (r.dates && r.dates.length) console.log(`     fechas afectadas: ${r.dates.join(', ')}`);
     if (dryRun && r.sample && r.sample.length) {
       for (const s of r.sample) console.log(`     · ${s.ts_py}  emp#${s.employee_id}  ${s.type}`);
+    }
+
+    // Top de deviceUserId sin empleado (con pista si existe por otra columna/estado).
+    if (showUnmapped && r.unmapped_top && r.unmapped_top.length) {
+      console.log(`     ── deviceUserId SIN empleado (top ${r.unmapped_top.length} de ${r.unmapped_distinct}) ──`);
+      for (const u of r.unmapped_top) {
+        const hint = u.employee
+          ? `→ existe emp#${u.employee.id} por '${u.employee.via}' (status=${u.employee.status})`
+          : '→ no existe en employees por ninguna columna';
+        console.log(`        ${u.device_user_id}  (x${u.count})  ${hint}`);
+      }
     }
 
     // Volcado de depuración detallado.
@@ -127,10 +154,10 @@ function pyWallToUTC(dateStr, timeStr) {
   }
 
   console.log(`\n── Resumen ──`);
-  if (dryRun) {
-    console.log(`Relojes: ${out.devices} · Importaría: ${out.totals.would_import} · Duplicados: ${out.totals.skipped} · Sin empleado: ${out.totals.notFound}`);
-  } else {
-    console.log(`Relojes: ${out.devices} · Importados: ${out.totals.imported} · Duplicados: ${out.totals.skipped} · Sin empleado: ${out.totals.notFound}`);
+  const impT = dryRun ? `Importaría: ${out.totals.would_import}` : `Importados: ${out.totals.imported}`;
+  console.log(`Relojes: ${out.devices} · En rango: ${out.totals.in_range} · ${impT} · Duplicados: ${out.totals.skipped} · Sin empleado: ${out.totals.notFound} · Basura: ${out.totals.junk}`);
+  if (out.totals.in_range > 0 && out.totals.notFound / out.totals.in_range > 0.5) {
+    console.log(`🚨 ATENCIÓN: la mayoría de las marcas en rango NO se importó por falta de mapeo empleado. Corré diagnose-device-mapping.js.`);
   }
 
   await sequelize.close();

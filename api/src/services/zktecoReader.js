@@ -201,6 +201,124 @@ async function probeMode(device, mode, timeoutMs = 8000) {
   }
 }
 
+// ─── Limpieza de registros basura ───────────────────────────────
+// El buffer del reloj suele traer relleno: userSn=0, deviceUserId vacío y
+// recordTime=2000-01-01. Esos registros no son marcas reales.
+function isJunkRaw(l) {
+  if (!l || typeof l !== 'object') return true;
+  const uid = pickField(l, UID_FIELDS);
+  if (uid == null || String(uid).trim() === '') return true;   // sin usuario (incluye relleno userSn=0)
+  const ts = coerceDate(pickField(l, TS_FIELDS));
+  if (!ts || ts.getFullYear() <= 2001) return true;            // recordTime 2000-01-01 (relleno)
+  return false;
+}
+
+// Lee attendances con reintentos y elige la lectura con MÁS registros no basura
+// (el reloj a veces devuelve buffers truncados/inestables entre ejecuciones).
+async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1 } = {}) {
+  const reads = [];
+  for (let i = 0; i < Math.max(1, attempts); i++) {
+    const logs = await withTimeout(
+      withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 2, delayMs: 3000 }),
+      readTimeoutMs, 'lectura del reloj'
+    );
+    const valid = logs.reduce((a, l) => a + (isJunkRaw(l) ? 0 : 1), 0);
+    reads.push({ logs, total: logs.length, valid });
+  }
+  const best = reads.reduce((a, b) => (b.valid > a.valid ? b : a));
+  const totals = reads.map(r => r.total);
+  const valids = reads.map(r => r.valid);
+  // Varianza notable = la lectura es inestable (avisar).
+  const spread = valids.length > 1 ? Math.max(...valids) - Math.min(...valids) : 0;
+  const unstable = valids.length > 1 && spread > Math.max(20, 0.2 * Math.max(...valids));
+  return { logs: best.logs, attempts: reads.length, totals, valids, unstable };
+}
+
+// Columnas de `employees` para AUTO-mapear deviceUserId (sólo las que existen).
+// Sólo columnas confirmadas: code y employee_number. document_number es sólo
+// PISTA de diagnóstico (no auto-mapea) porque no siempre corresponde.
+const EMP_AUTO_MATCH = ['code', 'employee_number'];
+const EMP_HINT_COLUMNS = ['code', 'employee_number', 'document_number'];
+async function getExistingColumns(table, wanted) {
+  const [cols] = await sequelize.query(
+    `SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    { replacements: [table] }
+  );
+  const present = new Set(cols.map(x => x.c));
+  return wanted.filter(c => present.has(c));
+}
+async function getEmployeeMatchColumns() {
+  const cols = await getExistingColumns('employees', EMP_AUTO_MATCH);
+  return cols.length ? cols : ['code'];
+}
+async function tableExists(table) {
+  const [r] = await sequelize.query(
+    `SELECT COUNT(*) AS n FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    { replacements: [table] }
+  );
+  return (r[0]?.n || 0) > 0;
+}
+
+// Matcher deviceUserId → empleado con prioridad:
+//   1) employee_device_map (device-específico, luego global)
+//   2) employees.code
+//   3) employees.employee_number
+// Además expone `any` (todas las columnas de pista + estado) para diagnóstico.
+async function buildEmployeeMatcher() {
+  const columns = await getEmployeeMatchColumns();
+  const hintCols = await getExistingColumns('employees', EMP_HINT_COLUMNS);
+  const allCols = [...new Set([...columns, ...hintCols])];
+  const [emps] = await sequelize.query(
+    `SELECT id, status, ${allCols.map(c => `\`${c}\``).join(', ')} FROM employees`
+  );
+  const active = new Map();   // clave (code/employee_number) → id (sólo activos)
+  const any = new Map();      // clave (cualquier col de pista) → {id, via, status}
+  for (const e of emps) {
+    for (const col of hintCols) {
+      const v = e[col];
+      if (v == null || String(v).trim() === '') continue;
+      const key = String(v).trim();
+      if (!any.has(key)) any.set(key, { id: e.id, via: col, status: e.status });
+    }
+    for (const col of columns) {  // sólo columnas de AUTO-mapeo van a `active`
+      const v = e[col];
+      if (v == null || String(v).trim() === '') continue;
+      const key = String(v).trim();
+      if (e.status === 'active' && !active.has(key)) active.set(key, e.id);
+    }
+  }
+
+  // employee_device_map (si la tabla existe): clave `${device|*}|uid` → id.
+  const byDevice = new Map();
+  if (await tableExists('employee_device_map')) {
+    const [maps] = await sequelize.query(
+      `SELECT edm.employee_id, edm.device_id, edm.device_user_id
+       FROM employee_device_map edm
+       JOIN employees e ON e.id = edm.employee_id
+       WHERE edm.active = 1 AND e.status = 'active'`
+    );
+    for (const m of maps) {
+      const uid = String(m.device_user_id).trim();
+      const dk = m.device_id == null ? '*' : String(m.device_id);
+      byDevice.set(`${dk}|${uid}`, m.employee_id);
+    }
+  }
+
+  const resolve = (deviceId, uid) => {
+    if (uid == null) return null;
+    const key = String(uid).trim();
+    if (key === '') return null;
+    return byDevice.get(`${deviceId}|${key}`)
+      || byDevice.get(`*|${key}`)
+      || active.get(key)
+      || null;
+  };
+
+  return { active, any, byDevice, columns, resolve };
+}
+
 /**
  * Lee un reloj y guarda en attendance_logs.
  * opts: { from, to, recalc=true, pushAtt2000=false, readTimeoutMs=45000 }
@@ -208,26 +326,34 @@ async function probeMode(device, mode, timeoutMs = 8000) {
  * Devuelve un reporte por reloj (siempre; los errores se capturan arriba).
  */
 async function backupDeviceDirect(device, opts = {}) {
-  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false } = opts;
+  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1 } = opts;
   const t0 = Date.now();
   const report = {
     device_id: device.id, device: device.name, ip: device.ip_address, dry_run: !!dryRun,
     range: { from, to },
-    total_read: 0, with_date: 0, without_date: 0, with_user: 0,
+    total_read: 0, junk: 0, valid: 0, with_date: 0, without_date: 0, with_user: 0,
     in_range: 0, out_of_range: 0, first_valid: null, last_valid: null,
-    imported: 0, would_import: 0, skipped: 0, notFound: 0, dates: [], att2000: null,
+    staged: 0, imported: 0, would_import: 0, skipped: 0, notFound: 0,
+    unmapped_distinct: 0, unmapped_top: [], warn_unmapped: false,
+    match_columns: [], read_unstable: false, dates: [], att2000: null,
     duration_ms: 0, sample: [], debug: null,
   };
 
-  const logs = await withTimeout(
-    withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 2, delayMs: 3000 }),
-    readTimeoutMs, 'lectura del reloj'
-  );
-  report.total_read = logs.length;
+  // Lectura estable (varios intentos, mejor lectura no basura).
+  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts });
+  const rawLogs = stable.logs;
+  report.total_read = rawLogs.length;
+  report.read_unstable = stable.unstable;
+  if (stable.attempts > 1) report.read_attempts = { attempts: stable.attempts, totals: stable.totals, valids: stable.valids };
   if (!dryRun) await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
-  if (!logs.length) { report.duration_ms = Date.now() - t0; return report; }
+  if (!rawLogs.length) { report.duration_ms = Date.now() - t0; return report; }
 
-  // Normalizar todos los registros (acepta recordTime/attTime/… y varios uid).
+  // Descartar registros basura (relleno del buffer) ANTES de normalizar.
+  const logs = rawLogs.filter(l => !isJunkRaw(l));
+  report.junk = rawLogs.length - logs.length;
+  report.valid = logs.length;
+
+  // Normalizar los registros limpios (acepta recordTime/attTime/… y varios uid).
   const norm = logs.map(normalizeRecord);
 
   // Contadores globales de diagnóstico (independientes del rango).
@@ -247,67 +373,88 @@ async function backupDeviceDirect(device, opts = {}) {
   if (debugRaw) {
     report.debug = {
       detected_fields: detectFields(logs[0]),
-      raw_first5: logs.slice(0, 5).map(safeStringify),
-      raw_last20: logs.slice(-20).map(safeStringify),
+      raw_first5: rawLogs.slice(0, 5).map(safeStringify),
+      raw_last20: rawLogs.slice(-20).map(safeStringify),
       normalized_last20: norm.filter(n => n.ts).slice(-20)
         .map(n => ({ user: n.userId, ts_py: pyDateTimeStr(n.ts), inout: n.inout ?? null })),
     };
   }
 
-  // Códigos → empleados activos.
-  const codes = [...new Set(norm.map(n => n.userId).filter(Boolean))];
-  const empByCode = new Map();
-  if (codes.length) {
-    const [emps] = await sequelize.query(
-      `SELECT id, code FROM employees WHERE status='active' AND code IN (${codes.map(() => '?').join(',')})`,
-      { replacements: codes }
-    );
-    for (const e of emps) empByCode.set(String(e.code), e.id);
-  }
+  // Mapeo deviceUserId → empleado, contra TODAS las columnas disponibles
+  // (code, employee_number, …), no sólo `code`.
+  const matcher = await buildEmployeeMatcher();
+  report.match_columns = matcher.columns;
 
-  // Candidatos válidos, filtrados por RANGO (hora Paraguay).
-  const candidates = [];
+  // Recorrer válidos: filtrar por RANGO, resolver empleado y preparar STAGING.
+  // Regla clave: NUNCA se descarta una marca; toda marca en rango se guardará
+  // en raw_device_punches (mapeada o no).
+  const punches = [];        // { raw, ts, userId, empId, type, explicit }
+  const unmapped = new Map();
   let minTs = null, maxTs = null;
-  for (const n of norm) {
+  for (let i = 0; i < norm.length; i++) {
+    const n = norm[i];
     if (!n.ts) continue;
     const day = pyDateStr(n.ts);
     if ((from && day < from) || (to && day > to)) { report.out_of_range++; continue; }
     report.in_range++;
-    const empId = empByCode.get(n.userId);
-    if (!empId) { report.notFound++; continue; }
-    const type = explicitType(n.inout);   // null si el registro no trae in/out
-    candidates.push({ empId, ts: n.ts, type, explicit: !!type });
+    const empId = matcher.resolve(device.id, n.userId) || null;
+    if (!empId) {
+      report.notFound++;
+      if (n.userId != null) unmapped.set(n.userId, (unmapped.get(n.userId) || 0) + 1);
+    }
+    const t = explicitType(n.inout);
+    punches.push({ raw: logs[i], ts: n.ts, userId: n.userId, empId, type: t, explicit: !!t });
     if (!minTs || n.ts < minTs) minTs = n.ts;
     if (!maxTs || n.ts > maxTs) maxTs = n.ts;
   }
-  if (!candidates.length) { report.duration_ms = Date.now() - t0; return report; }
 
-  // Inferir in/out por orden temporal cuando el reloj no lo reporta.
-  resolveTypes(candidates);
+  // Diagnóstico de no-mapeados: top 30 con conteo y pista si existe por otra columna/estado.
+  report.unmapped_distinct = unmapped.size;
+  report.unmapped_top = [...unmapped.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([id, count]) => {
+      const alt = matcher.any.get(id);
+      return { device_user_id: id, count, employee: alt ? { id: alt.id, via: alt.via, status: alt.status } : null };
+    });
+  report.warn_unmapped = report.in_range > 0 && report.notFound / report.in_range > 0.5;
 
-  // Dedup cross-source por (emp, fecha-hora PY).
-  const empIds = [...new Set(candidates.map(c => c.empId))];
-  const [existing] = await sequelize.query(
-    `SELECT employee_id, DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS ts
-     FROM attendance_logs
-     WHERE employee_id IN (${empIds.map(() => '?').join(',')}) AND \`timestamp\` BETWEEN ? AND ?`,
-    { replacements: [...empIds, minTs, maxTs] }
-  );
-  const seen = new Set(existing.map(r => `${r.employee_id}|${r.ts}`));
+  if (!punches.length) { report.duration_ms = Date.now() - t0; return report; }
+
+  // Inferir in/out por orden temporal para las marcas mapeadas.
+  const mapped = punches.filter(p => p.empId);
+  resolveTypes(mapped);
+
+  // Dedup cross-source por (emp, fecha-hora PY): las que ya existen quedan
+  // 'duplicate'; las nuevas se insertan y quedan 'mapped'.
+  const empIds = [...new Set(mapped.map(p => p.empId))];
+  let seen = new Set();
+  if (empIds.length) {
+    const [existing] = await sequelize.query(
+      `SELECT employee_id, DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS ts
+       FROM attendance_logs
+       WHERE employee_id IN (${empIds.map(() => '?').join(',')}) AND \`timestamp\` BETWEEN ? AND ?`,
+      { replacements: [...empIds, minTs, maxTs] }
+    );
+    seen = new Set(existing.map(r => `${r.employee_id}|${r.ts}`));
+  }
 
   const toInsert = [];
   const dates = new Set();
-  for (const c of candidates) {
-    const key = `${c.empId}|${pyDateTimeStr(c.ts)}`;
-    if (seen.has(key)) { report.skipped++; continue; }
+  for (const p of mapped) {
+    const key = `${p.empId}|${pyDateTimeStr(p.ts)}`;
+    if (seen.has(key)) { p.status = 'duplicate'; report.skipped++; continue; }
     seen.add(key);
-    toInsert.push([c.empId, device.id, c.ts, c.type, 'zkteco_direct']);
-    dates.add(pyDateStr(c.ts));
+    p.status = 'mapped';
+    toInsert.push([p.empId, device.id, p.ts, p.type, 'zkteco_direct']);
+    dates.add(pyDateStr(p.ts));
   }
+  for (const p of punches) if (!p.status) p.status = p.empId ? 'mapped' : 'unmapped';
+  report.would_import = toInsert.length;
 
-  // Modo dry-run: NO inserta ni recalcula. Sólo reporta lo que haría.
+  // Modo dry-run: NO escribe nada (ni staging ni attendance_logs).
   if (dryRun) {
-    report.would_import = toInsert.length;
+    report.staged = punches.length;
     report.dates = [...dates].sort();
     report.sample = toInsert.slice(0, 20).map(([empId, , ts, type]) => ({
       employee_id: empId, ts_py: pyDateTimeStr(ts), type,
@@ -316,6 +463,33 @@ async function backupDeviceDirect(device, opts = {}) {
     return report;
   }
 
+  // 1) STAGING idempotente de TODAS las marcas en rango (mapeadas o no).
+  const hasRaw = await tableExists('raw_device_punches');
+  if (hasRaw) {
+    const rawRows = punches.map(p => [
+      device.id, String(p.userId ?? ''), (p.raw && p.raw.userSn != null) ? p.raw.userSn : null,
+      p.ts, pyDateTimeStr(p.ts), (p.raw && p.raw.ip) || device.ip_address || null,
+      safeStringify(p.raw), 'zkteco_direct', p.status, p.empId || null,
+    ]);
+    const RCHUNK = 300;
+    for (let i = 0; i < rawRows.length; i += RCHUNK) {
+      const chunk = rawRows.slice(i, i + RCHUNK);
+      const vals = chunk.map(() => '(?,?,?,?,?,?,?,?,?,?)').join(',');
+      await sequelize.query(
+        `INSERT INTO raw_device_punches
+           (device_id, device_user_id, user_sn, record_time, record_time_py, ip, raw_json, source, mapping_status, employee_id)
+         VALUES ${vals}
+         ON DUPLICATE KEY UPDATE
+           mapping_status = VALUES(mapping_status), employee_id = VALUES(employee_id),
+           user_sn = VALUES(user_sn), record_time_py = VALUES(record_time_py), ip = VALUES(ip),
+           updated_at = NOW()`,
+        { replacements: chunk.flat() }
+      );
+    }
+    report.staged = rawRows.length;
+  }
+
+  // 2) Insertar attendance_logs de las marcas mapeadas nuevas.
   const CHUNK = 500;
   for (let i = 0; i < toInsert.length; i += CHUNK) {
     const chunk = toInsert.slice(i, i + CHUNK);
@@ -324,11 +498,24 @@ async function backupDeviceDirect(device, opts = {}) {
       `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES ${vals}`,
       { replacements: chunk.flat() }
     );
-    const affected = r?.affectedRows ?? 0;
-    report.imported += affected;
-    report.skipped += chunk.length - affected;
+    report.imported += (r?.affectedRows ?? 0);
   }
   report.dates = [...dates].sort();
+
+  // 3) Enlazar raw → attendance_logs (idempotente, set-based).
+  if (hasRaw && report.imported > 0) {
+    await sequelize.query(
+      `UPDATE raw_device_punches r
+       JOIN attendance_logs a
+         ON a.device_id = r.device_id AND a.employee_id = r.employee_id
+        AND a.\`timestamp\` = r.record_time AND a.source = 'zkteco_direct'
+       SET r.imported_attendance_log_id = a.id, r.mapping_status = 'mapped'
+       WHERE r.device_id = ? AND r.employee_id IS NOT NULL
+         AND r.imported_attendance_log_id IS NULL
+         AND r.record_time BETWEEN ? AND ?`,
+      { replacements: [device.id, minTs, maxTs] }
+    );
+  }
 
   if (recalc && report.dates.length) {
     const { bulkRecalcDailySummary, materializeAbsents } = require('./scheduler');
@@ -457,12 +644,13 @@ async function backupAllDevices(opts = {}) {
   sql += ' ORDER BY id';
   const [devices] = await sequelize.query(sql, { replacements });
   const results = [];
-  const totals = { imported: 0, skipped: 0, notFound: 0, would_import: 0 };
+  const totals = { imported: 0, skipped: 0, notFound: 0, would_import: 0, junk: 0, in_range: 0 };
   for (const device of devices) {
     try {
       const r = await backupDeviceDirect(device, deviceOpts);
       totals.imported += r.imported; totals.skipped += r.skipped;
       totals.notFound += r.notFound; totals.would_import += (r.would_import || 0);
+      totals.junk += (r.junk || 0); totals.in_range += (r.in_range || 0);
       results.push({ ...r, ok: true });
     } catch (err) {
       results.push({ device_id: device.id, device: device.name, ip: device.ip_address, ok: false, error: err.message });
@@ -473,6 +661,8 @@ async function backupAllDevices(opts = {}) {
 
 module.exports = {
   openZK, withZK, backupDeviceDirect, backupAllDevices, readDeviceRaw,
+  readAttendancesStable, buildEmployeeMatcher, getEmployeeMatchColumns, isJunkRaw,
+  tableExists, getExistingColumns,
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
   normalizeRecord, resolveTypes, explicitType, detectFields,

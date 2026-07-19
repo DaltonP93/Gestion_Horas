@@ -560,6 +560,143 @@ router.post('/backup-all', authorize('admin','gestor'), async (req, res) => {
   }
 });
 
+// GET /api/devices/unmapped — marcas crudas SIN empleado (staging), agrupadas
+// por (reloj, device_user_id). Query: { from, to, device_id }.
+router.get('/unmapped', authorize('admin','gestor','hr'), async (req, res) => {
+  const { buildEmployeeMatcher } = require('../services/zktecoReader');
+  const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  const where = ["r.mapping_status = 'unmapped'"];
+  const repl = [];
+  if (isDate(req.query.from)) { where.push('r.record_time_py >= ?'); repl.push(`${req.query.from} 00:00:00`); }
+  if (isDate(req.query.to))   { where.push('r.record_time_py <= ?'); repl.push(`${req.query.to} 23:59:59`); }
+  if (req.query.device_id)    { where.push('r.device_id = ?'); repl.push(parseInt(req.query.device_id, 10)); }
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT r.device_id, d.name AS device_name, r.device_user_id,
+              MIN(r.user_sn) AS user_sn, COUNT(*) AS marcas,
+              MIN(r.record_time_py) AS first_py, MAX(r.record_time_py) AS last_py
+       FROM raw_device_punches r
+       LEFT JOIN devices d ON d.id = r.device_id
+       WHERE ${where.join(' AND ')}
+       GROUP BY r.device_id, d.name, r.device_user_id
+       ORDER BY marcas DESC LIMIT 500`,
+      { replacements: repl }
+    );
+    const matcher = await buildEmployeeMatcher();
+    const items = rows.map(r => {
+      const alt = matcher.any.get(String(r.device_user_id));
+      return { ...r, candidate: alt ? { id: alt.id, via: alt.via, status: alt.status } : null };
+    });
+    res.json({ ok: true, count: items.length, items });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// POST /api/devices/map — vincular un deviceUserId a un empleado (crea/activa
+// employee_device_map) y reprocesa las marcas crudas de ese usuario.
+// Body: { employee_id, device_user_id, device_id? }.
+router.post('/map', authorize('admin','gestor'), async (req, res) => {
+  const employeeId = parseInt(req.body.employee_id, 10);
+  const deviceUserId = String(req.body.device_user_id || '').trim();
+  const deviceId = req.body.device_id != null && req.body.device_id !== '' ? parseInt(req.body.device_id, 10) : null;
+  if (isNaN(employeeId) || !deviceUserId) {
+    return res.status(400).json({ error: 'employee_id y device_user_id son obligatorios.' });
+  }
+  try {
+    const [[emp]] = await sequelize.query("SELECT id, status FROM employees WHERE id=?", { replacements: [employeeId] });
+    if (!emp) return res.status(404).json({ error: 'Empleado no encontrado.' });
+    // Upsert idempotente del mapeo.
+    await sequelize.query(
+      `INSERT INTO employee_device_map (employee_id, device_id, device_user_id, active, created_by)
+       VALUES (?,?,?,1,?)
+       ON DUPLICATE KEY UPDATE employee_id = VALUES(employee_id), active = 1, updated_at = NOW()`,
+      { replacements: [employeeId, deviceId, deviceUserId, req.user?.id || null] }
+    );
+    // Reprocesar las marcas crudas de ese usuario (crea attendance_logs + recalc).
+    const summary = await reprocessUnmapped({ deviceUserId, deviceId });
+    res.json({ ok: true, employee_id: employeeId, device_user_id: deviceUserId, ...summary });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// POST /api/devices/reprocess-unmapped — reprocesar marcas sin empleado por rango.
+router.post('/reprocess-unmapped', authorize('admin','gestor'), async (req, res) => {
+  const { from, to } = readRange(req);
+  try {
+    const summary = await reprocessUnmapped({ from, to });
+    res.json({ ok: true, from, to, ...summary });
+  } catch (err) {
+    res.status(200).json({ ok: false, from, to, error: fmtErr(err) });
+  }
+});
+
+// Reprocesa raw_device_punches 'unmapped' (por rango o por deviceUserId): mapea,
+// crea attendance_logs y recalcula daily_summary. Devuelve el resumen.
+async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, deviceId = null } = {}) {
+  const { buildEmployeeMatcher, resolveTypes, pyDateStr, pyDateTimeStr } = require('../services/zktecoReader');
+  const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  const where = ["mapping_status = 'unmapped'"];
+  const repl = [];
+  if (isDate(from)) { where.push('record_time_py >= ?'); repl.push(`${from} 00:00:00`); }
+  if (isDate(to))   { where.push('record_time_py <= ?'); repl.push(`${to} 23:59:59`); }
+  if (deviceUserId) { where.push('device_user_id = ?'); repl.push(deviceUserId); }
+  if (deviceId != null) { where.push('device_id = ?'); repl.push(deviceId); }
+
+  const [rows] = await sequelize.query(
+    `SELECT id, device_id, device_user_id, record_time FROM raw_device_punches
+     WHERE ${where.join(' AND ')} ORDER BY record_time`,
+    { replacements: repl }
+  );
+  const result = { candidates: rows.length, mapped: 0, still_unmapped: 0, duplicate: 0, errors: 0 };
+  if (!rows.length) return result;
+
+  const matcher = await buildEmployeeMatcher();
+  const mappable = [];
+  for (const r of rows) {
+    const empId = matcher.resolve(r.device_id, r.device_user_id);
+    if (!empId) { result.still_unmapped++; continue; }
+    mappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time) });
+  }
+  if (!mappable.length) return result;
+
+  resolveTypes(mappable);
+  const dates = new Set();
+  for (const p of mappable) {
+    try {
+      const tsStr = pyDateTimeStr(p.ts);
+      dates.add(pyDateStr(p.ts));
+      const [dup] = await sequelize.query(
+        `SELECT id FROM attendance_logs WHERE employee_id=? AND DATE_FORMAT(\`timestamp\`,'%Y-%m-%d %H:%i:%s')=? LIMIT 1`,
+        { replacements: [p.empId, tsStr] }
+      );
+      let logId;
+      if (dup.length) { logId = dup[0].id; result.duplicate++; }
+      else {
+        const [ins] = await sequelize.query(
+          `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES (?,?,?,?, 'zkteco_direct')`,
+          { replacements: [p.empId, p.device_id, p.ts, p.type] }
+        );
+        if (ins?.insertId) { logId = ins.insertId; result.mapped++; } else { result.duplicate++; }
+      }
+      await sequelize.query(
+        `UPDATE raw_device_punches SET mapping_status='mapped', employee_id=?, imported_attendance_log_id=? WHERE id=?`,
+        { replacements: [p.empId, logId || null, p.rawId] }
+      );
+    } catch { result.errors++; }
+  }
+
+  if (dates.size) {
+    const { bulkRecalcDailySummary, materializeAbsents } = require('../services/scheduler');
+    for (const d of [...dates].sort()) {
+      try { await bulkRecalcDailySummary(d); await materializeAbsents(d); } catch { /* seguir */ }
+    }
+  }
+  result.dates = [...dates].sort();
+  return result;
+}
+
 // POST /api/devices/:id/clear
 router.post('/:id/clear', requireSuperAdmin, async (req, res) => {
   const [[device]] = await sequelize.query('SELECT * FROM devices WHERE id=?', { replacements: [req.params.id] });

@@ -14,6 +14,12 @@ interface Diag {
   auto_poll?: { zkteco_auto_poll?: boolean; att2000_pull_cron?: boolean }
 }
 
+interface UnmappedRow {
+  device_id: number; device_name: string | null; device_user_id: string
+  user_sn: number | null; marcas: number; first_py: string; last_py: string
+  candidate: { id: number; via: string; status: string } | null
+}
+
 export default function SincronizacionPage() {
   const user = useCurrentUser()
   const canManage = hasRole(user, 'admin', 'super_admin')
@@ -27,6 +33,9 @@ export default function SincronizacionPage() {
   // Rango para la lectura directa de relojes (default: últimos 3 días — el hueco).
   const [readFrom, setReadFrom] = useState(new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10))
   const [readTo, setReadTo] = useState(new Date().toISOString().slice(0, 10))
+  // Marcaciones sin empleado (staging raw_device_punches).
+  const [unmapped, setUnmapped] = useState<UnmappedRow[] | null>(null)
+  const [loadingUnmapped, setLoadingUnmapped] = useState(false)
 
   const addLog = (s: string) => setLog(l => [`${new Date().toLocaleTimeString('es-PY')} · ${s}`, ...l].slice(0, 60))
 
@@ -45,11 +54,15 @@ export default function SincronizacionPage() {
       const r = await api.post('/api/devices/backup-all', { from: readFrom, to: readTo }, { timeout: 120000 })
       if (r.data.ok === false) { addLog(`✖ ${r.data.error || 'Error en la lectura'}`) }
       const t = r.data.totals || {}
-      addLog(`✅ Relojes: ${r.data.devices ?? 0}. Importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}.`)
+      addLog(`✅ Relojes: ${r.data.devices ?? 0}. En rango ${t.in_range || 0}, importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}, basura ${t.junk || 0}.`)
+      if ((t.in_range || 0) > 0 && (t.notFound || 0) / (t.in_range || 1) > 0.5) {
+        addLog('🚨 La mayoría de las marcas en rango NO se importó por falta de mapeo deviceUserId→empleado.')
+      }
       for (const d of r.data.results || []) {
-        addLog(d.ok
-          ? `   · ${d.device}: leídos ${d.total_read} · en rango ${d.in_range} · +${d.imported} (dup ${d.skipped}, sinEmp ${d.notFound})`
-          : `   · ${d.device}: ✖ ${d.error}`)
+        if (!d.ok) { addLog(`   · ${d.device}: ✖ ${d.error}`); continue }
+        addLog(`   · ${d.device}: leídos ${d.total_read} · basura ${d.junk ?? 0} · en rango ${d.in_range} · +${d.imported} (dup ${d.skipped}, sinEmp ${d.notFound})`)
+        if (d.read_unstable) addLog(`      ⚠️ lectura inestable del reloj; puede faltar data. Reintentá o usá el script con --attempts 3.`)
+        if (d.warn_unmapped) addLog(`      🚨 ${d.notFound}/${d.in_range} marcas sin empleado. deviceUserId no coincide con employees (${(d.match_columns || []).join(', ')}).`)
       }
       loadDiag()
     } catch (e: any) {
@@ -81,6 +94,39 @@ export default function SincronizacionPage() {
     try {
       const r = await api.post('/api/devices/cleanup-invalid')
       addLog(`🧹 ${r.data.message}`); loadDiag()
+    } catch (e: any) { addLog(`✖ ${e?.response?.data?.error || e.message}`) }
+    finally { setBusy('') }
+  }
+
+  // Marcaciones sin empleado (staging).
+  const loadUnmapped = useCallback(async () => {
+    setLoadingUnmapped(true)
+    try {
+      const r = await api.get('/api/devices/unmapped', { params: { from: readFrom, to: readTo } })
+      setUnmapped(r.data.items || [])
+    } catch (e: any) { addLog(`✖ Sin empleado: ${e?.response?.data?.error || e.message}`) }
+    finally { setLoadingUnmapped(false) }
+  }, [readFrom, readTo])
+
+  async function linkEmployee(row: UnmappedRow, employeeId: number) {
+    if (!employeeId) return
+    setBusy('map')
+    try {
+      const r = await api.post('/api/devices/map', { employee_id: employeeId, device_user_id: row.device_user_id, device_id: row.device_id })
+      if (r.data.ok) addLog(`🔗 ${row.device_user_id} → emp#${employeeId}: importadas ${r.data.mapped || 0}, duplicadas ${r.data.duplicate || 0}.`)
+      else addLog(`✖ ${r.data.error}`)
+      await loadUnmapped(); loadDiag()
+    } catch (e: any) { addLog(`✖ ${e?.response?.data?.error || e.message}`) }
+    finally { setBusy('') }
+  }
+
+  async function reprocessUnmapped() {
+    setBusy('reprocess')
+    try {
+      const r = await api.post('/api/devices/reprocess-unmapped', { from: readFrom, to: readTo })
+      if (r.data.ok) addLog(`♻ Reproceso: mapeadas ${r.data.mapped || 0}, sin empleado ${r.data.still_unmapped || 0}, duplicadas ${r.data.duplicate || 0}, errores ${r.data.errors || 0}.`)
+      else addLog(`✖ ${r.data.error}`)
+      await loadUnmapped(); loadDiag()
     } catch (e: any) { addLog(`✖ ${e?.response?.data?.error || e.message}`) }
     finally { setBusy('') }
   }
@@ -163,6 +209,48 @@ export default function SincronizacionPage() {
         <p className="text-[11px] text-slate-400 dark:text-white/30 mt-2">Para lecturas grandes o si el navegador da timeout (504), usá el script <code>read-zkteco-now.js</code> en el servidor.</p>
       </FlowCard>
 
+      {/* Marcaciones sin empleado (staging) */}
+      <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <MapPinOff size={18} className="text-amber-500" />
+            <h3 className="font-semibold text-slate-700 dark:text-white/80">Marcaciones sin empleado</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={loadUnmapped} disabled={loadingUnmapped} className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/[0.08] text-sm flex items-center gap-1.5 disabled:opacity-50">
+              <RefreshCw size={14} className={loadingUnmapped ? 'animate-spin' : ''} /> {loadingUnmapped ? 'Cargando...' : 'Cargar'}
+            </button>
+            {canManage && <button onClick={reprocessUnmapped} disabled={busy === 'reprocess'} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm disabled:opacity-50">{busy === 'reprocess' ? 'Reprocesando...' : 'Reprocesar rango'}</button>}
+          </div>
+        </div>
+        <p className="text-[11px] text-slate-400 dark:text-white/30 mt-1">
+          Las marcas crudas del reloj que aún no se vinculan a un empleado quedan acá (no se pierden). Vinculá el usuario del reloj a un empleado y reprocesá para que pasen a asistencia.
+        </p>
+        {unmapped && unmapped.length === 0 && <p className="text-sm text-emerald-600 dark:text-emerald-400 mt-3">✅ No hay marcaciones sin empleado en el rango {readFrom} → {readTo}.</p>}
+        {unmapped && unmapped.length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs text-slate-400 dark:text-white/40 border-b border-slate-100 dark:border-white/[0.06]">
+                <th className="py-2 pr-3">deviceUserId</th><th className="pr-3">userSn</th><th className="pr-3">Marcas</th><th className="pr-3">Primera → Última</th><th className="pr-3">Reloj</th><th className="pr-3">Candidato</th><th>Vincular</th>
+              </tr></thead>
+              <tbody>
+                {unmapped.map((r, i) => (
+                  <tr key={i} className="border-b border-slate-50 dark:border-white/[0.04]">
+                    <td className="py-2 pr-3 font-mono">{r.device_user_id}</td>
+                    <td className="pr-3 text-slate-400">{r.user_sn ?? '—'}</td>
+                    <td className="pr-3">{r.marcas}</td>
+                    <td className="pr-3 text-xs text-slate-500 dark:text-white/40">{String(r.first_py).slice(0, 16)} → {String(r.last_py).slice(0, 16)}</td>
+                    <td className="pr-3">{r.device_name || r.device_id}</td>
+                    <td className="pr-3">{r.candidate ? <span className="text-xs">emp#{r.candidate.id} <span className="text-slate-400">({r.candidate.via}, {r.candidate.status})</span></span> : <span className="text-xs text-slate-400">—</span>}</td>
+                    <td>{canManage && <LinkCell row={r} onLink={linkEmployee} busy={busy === 'map'} />}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {/* A) att2000 → SisHoras (histórico) */}
       <FlowCard color="sky" icon={<Database size={18} />} title="A) Importar histórico att2000 → SisHoras"
         desc="Fuente: att2000.CHECKINOUT. Destino: attendance_logs. Para reconstruir el histórico. La migración completa se corre con el script migrate-att2000-history.js.">
@@ -189,6 +277,19 @@ export default function SincronizacionPage() {
           {log.map((l, i) => <div key={i} className="whitespace-pre-wrap">{l}</div>)}
         </section>
       )}
+    </div>
+  )
+}
+
+function LinkCell({ row, onLink, busy }: { row: UnmappedRow; onLink: (r: UnmappedRow, id: number) => void; busy: boolean }) {
+  const [manual, setManual] = useState('')
+  if (row.candidate && row.candidate.status === 'active') {
+    return <button onClick={() => onLink(row, row.candidate!.id)} disabled={busy} className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs disabled:opacity-50">Vincular a #{row.candidate.id}</button>
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <input value={manual} onChange={e => setManual(e.target.value.replace(/\D/g, ''))} placeholder="ID empleado" className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-xs dark:border-white/[0.08] bg-transparent" />
+      <button onClick={() => onLink(row, parseInt(manual, 10))} disabled={busy || !manual} className="px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs disabled:opacity-50">Vincular</button>
     </div>
   )
 }
