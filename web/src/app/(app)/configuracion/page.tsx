@@ -641,10 +641,13 @@ function RelojesTab() {
                       const s = syncStatus[d.id]
                       const run = s.last_run
                       return (
-                        <p className={`text-xs mt-0.5 ${s.suspect ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                          {s.suspect ? '⚠️' : '✓'} Hoy: {s.marks_today} marcas · {s.employees_today} empleados
-                          {run && ` · último: ${run.status}${run.error ? ` (${String(run.error).slice(0, 60)})` : ''}${run.attempts ? ` · ${run.attempts} intento(s)` : ''}${run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}`}
-                        </p>
+                        <>
+                          <p className={`text-xs mt-0.5 ${s.suspect ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                            {s.suspect ? '⚠️' : '✓'} Hoy: {s.marks_today} marcas · {s.employees_today} empleados
+                            {run && ` · último: ${run.status}${run.error ? ` (${String(run.error).slice(0, 60)})` : ''}${run.attempts ? ` · ${run.attempts} intento(s)` : ''}${run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}`}
+                          </p>
+                          {s.recommendation && <p className="text-[11px] text-amber-700/80 dark:text-amber-300/70 mt-0.5">💡 {s.recommendation}</p>}
+                        </>
                       )
                     })()}
                   </div>

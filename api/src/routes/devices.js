@@ -816,6 +816,17 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
     const [devices] = await sequelize.query(
       "SELECT id, name, ip_address, status, last_sync FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id"
     );
+    // Recomendación operativa según el error de la última lectura.
+    const recommendFor = (msg) => {
+      const m = String(msg || '');
+      if (/TIMEOUT_ON_WRITING/i.test(m))
+        return 'El reloj acepta TCP pero no responde al protocolo ZKTeco. Revisar: (1) que ningún otro software (p.ej. Attendance Management) tenga tomado el equipo, (2) contraseña de comunicación del reloj, (3) red y puerto 4370.';
+      if (/ECONNREFUSED/i.test(m)) return 'Conexión rechazada: verificar IP y puerto 4370, y que el reloj esté encendido en red.';
+      if (/EHOSTUNREACH|ENETUNREACH|EHOSTDOWN/i.test(m)) return 'Reloj inalcanzable en la red: verificar IP, cableado/switch y VLAN.';
+      if (/timeout/i.test(m)) return 'Sin respuesta del reloj (timeout): verificar red, puerto 4370 y que no esté tomado por otro software.';
+      return null;
+    };
+
     const STALE_MS = 26 * 3600 * 1000, now = Date.now();
     const items = devices.map(d => {
       const m = marksById.get(d.id) || {};
@@ -823,11 +834,13 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
       const marks_today = Number(m.marks_today) || 0;
       const lastSyncMs = d.last_sync ? new Date(d.last_sync).getTime() : null;
       const stale = !lastSyncMs || (now - lastSyncMs) > STALE_MS;
+      const failing = run && (run.status === 'error' || run.status === 'timeout');
       return {
         id: d.id, name: d.name, ip: d.ip_address, status: d.status,
         last_sync: d.last_sync, last_mark: m.last_mark || null,
         marks_today, employees_today: Number(m.employees_today) || 0,
-        stale, suspect: marks_today === 0 || stale || d.status === 'error',
+        stale, failing: !!failing, suspect: marks_today === 0 || stale || d.status === 'error' || !!failing,
+        recommendation: failing ? recommendFor(run.error_message) : null,
         last_run: run ? {
           status: run.status, started_at: run.started_at, finished_at: run.finished_at,
           imported: run.imported_count, in_range: run.in_range_count, unmapped: run.unmapped_count,
