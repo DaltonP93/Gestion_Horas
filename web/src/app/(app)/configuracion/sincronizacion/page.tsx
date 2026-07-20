@@ -51,7 +51,7 @@ export default function SincronizacionPage() {
   async function readAllDevices() {
     setBusy('devices'); addLog(`▶ Leyendo relojes válidos → SisHoras (${readFrom} … ${readTo})...`)
     try {
-      const r = await api.post('/api/devices/backup-all', { from: readFrom, to: readTo }, { timeout: 120000 })
+      const r = await api.post('/api/devices/backup-all', { from: readFrom, to: readTo, attempts: 2 }, { timeout: 120000 })
       if (r.data.ok === false) { addLog(`✖ ${r.data.error || 'Error en la lectura'}`) }
       const t = r.data.totals || {}
       addLog(`✅ Relojes: ${r.data.devices ?? 0}. En rango ${t.in_range || 0}, importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}, basura ${t.junk || 0}.`)

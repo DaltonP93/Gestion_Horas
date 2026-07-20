@@ -527,6 +527,14 @@ function readRange(req) {
   return { from, to };
 }
 
+// Intentos de lectura por reloj (mitiga buffers inestables). Default 2 desde la
+// UI para no exceder el timeout de Nginx; configurable por body/query.
+function readAttempts(req) {
+  const raw = parseInt((req.body && req.body.attempts) ?? req.query.attempts, 10);
+  if (isNaN(raw)) return 2;
+  return Math.min(5, Math.max(1, raw));
+}
+
 // POST /api/devices/:id/backup — lectura directa del reloj → SisHoras.
 // Body/query: { from, to } (rango en hora Paraguay), push_att2000 (legacy).
 router.post('/:id/backup', authorize('admin','gestor'), async (req, res) => {
@@ -538,7 +546,7 @@ router.post('/:id/backup', authorize('admin','gestor'), async (req, res) => {
   const pushAtt2000 = req.query.push_att2000 === 'true' || req.body.push_att2000 === true;
   const { from, to } = readRange(req);
   try {
-    const report = await backupDeviceDirect(device, { from, to, pushAtt2000, recalc: true });
+    const report = await backupDeviceDirect(device, { from, to, pushAtt2000, recalc: true, attempts: readAttempts(req) });
     res.json({ ok: true, from, to, ...report });
   } catch (err) {
     // Siempre JSON, incluso ante error/timeout del reloj.
@@ -553,7 +561,7 @@ router.post('/:id/backup', authorize('admin','gestor'), async (req, res) => {
 router.post('/backup-all', authorize('admin','gestor'), async (req, res) => {
   const { from, to } = readRange(req);
   try {
-    const out = await backupAllDevices({ from, to, recalc: true, readTimeoutMs: 45000 });
+    const out = await backupAllDevices({ from, to, recalc: true, readTimeoutMs: 45000, attempts: readAttempts(req) });
     res.json({ ok: true, from, to, ...out });
   } catch (err) {
     res.status(200).json({ ok: false, from, to, error: fmtErr(err) });

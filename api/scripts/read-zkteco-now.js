@@ -18,8 +18,9 @@
  *                       y el rango de fechas válidas presentes en el reloj.
  *   --show-unmapped     lista los deviceUserId sin empleado (top 30) con conteo
  *                       y pista si existen en employees por otra columna/estado.
- *   --attempts N        lee N veces y usa la lectura con más registros válidos
- *                       (mitiga lecturas inestables/truncadas del reloj).
+ *   --attempts N        lee N veces y usa la MEJOR lectura por (en-rango, fecha
+ *                       válida más reciente, más válidos). Default 3. Mitiga
+ *                       lecturas inestables/truncadas del reloj.
  *   --device-id N[,M]   limita a esos relojes (evita que uno lento bloquee).
  *   --timeout SEG       timeout de lectura por reloj en segundos (default 180).
  *
@@ -65,7 +66,7 @@ function pyWallToUTC(dateStr, timeStr) {
   const dryRun = flag('dry-run');
   const debugRaw = flag('debug-raw');
   const showUnmapped = flag('show-unmapped');
-  const attempts = Math.max(1, parseInt(arg('attempts', '1'), 10) || 1);
+  const attempts = Math.max(1, parseInt(arg('attempts', '3'), 10) || 3);
   const timeoutSec = parseInt(arg('timeout', '180'), 10);
   const readTimeoutMs = (isNaN(timeoutSec) ? 180 : timeoutSec) * 1000;
   const deviceIdArg = arg('device-id', null);
