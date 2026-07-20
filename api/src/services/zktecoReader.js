@@ -339,13 +339,56 @@ async function buildEmployeeMatcher() {
   return { active, any, byDevice, columns, resolve };
 }
 
+// Registra una lectura de reloj en device_sync_runs (auditoría). No dry-run.
+// Best-effort: nunca debe tumbar la lectura.
+async function recordSyncRun(device, { startedAt, report = null, error = null, opts = {}, sanitizeErr }) {
+  try {
+    if (!(await tableExists('device_sync_runs'))) return;
+    const now = new Date();
+    let status = 'success';
+    if (error) {
+      status = /timeout/i.test(String(error?.message || error)) ? 'timeout' : 'error';
+    } else if (report) {
+      status = (report.read_unstable || report.warn_unmapped) ? 'partial' : 'success';
+    }
+    const errMsg = error ? String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500) : null;
+    const attempts = report?.read_attempts?.attempts || opts.attempts || 1;
+    await sequelize.query(
+      `INSERT INTO device_sync_runs
+        (device_id, started_at, finished_at, status, raw_count, valid_count, in_range_count,
+         imported_count, duplicate_count, unmapped_count, garbage_count, first_valid_time,
+         last_valid_time, attempts, duration_ms, from_date, to_date, error_message, created_by)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      { replacements: [
+        device.id, startedAt, now, status,
+        report?.total_read || 0, report?.valid || 0, report?.in_range || 0,
+        report?.imported || 0, report?.skipped || 0, report?.notFound || 0, report?.junk || 0,
+        report?.first_valid || null, report?.last_valid || null,
+        attempts, report?.duration_ms ?? (now - startedAt),
+        opts.from || null, opts.to || null, errMsg, opts.createdBy || null,
+      ] }
+    );
+  } catch { /* auditoría best-effort */ }
+}
+
 /**
- * Lee un reloj y guarda en attendance_logs.
- * opts: { from, to, recalc=true, pushAtt2000=false, readTimeoutMs=45000 }
- *   from/to: 'YYYY-MM-DD' (hora Paraguay). Filtra el buffer del reloj a ese rango.
- * Devuelve un reporte por reloj (siempre; los errores se capturan arriba).
+ * Lee un reloj y guarda en attendance_logs. Envuelve la lógica real y registra
+ * el resultado en device_sync_runs (salvo dry-run).
+ * opts: { from, to, recalc, pushAtt2000, readTimeoutMs, dryRun, attempts, createdBy }
  */
 async function backupDeviceDirect(device, opts = {}) {
+  const startedAt = new Date();
+  try {
+    const report = await _backupDeviceDirectImpl(device, opts);
+    if (!opts.dryRun) await recordSyncRun(device, { startedAt, report, opts });
+    return report;
+  } catch (err) {
+    if (!opts.dryRun) await recordSyncRun(device, { startedAt, error: err, opts });
+    throw err;
+  }
+}
+
+async function _backupDeviceDirectImpl(device, opts = {}) {
   const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1 } = opts;
   const t0 = Date.now();
   const report = {
