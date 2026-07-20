@@ -213,25 +213,45 @@ function isJunkRaw(l) {
   return false;
 }
 
-// Lee attendances con reintentos y elige la lectura con MÁS registros no basura
-// (el reloj a veces devuelve buffers truncados/inestables entre ejecuciones).
-async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1 } = {}) {
+// Lee attendances con reintentos y elige la MEJOR lectura. El reloj a veces
+// devuelve buffers truncados/inestables entre ejecuciones. Criterio de "mejor"
+// (en orden): (a) más marcas EN RANGO, (b) fecha válida más reciente, (c) más
+// marcas válidas (no basura).
+async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1, from = null, to = null } = {}) {
+  const scoreOf = (logs) => {
+    let valid = 0, inRange = 0, maxTs = 0;
+    for (const l of logs) {
+      if (isJunkRaw(l)) continue;
+      valid++;
+      const ts = coerceDate(pickField(l, TS_FIELDS));
+      if (!ts) continue;
+      const t = ts.getTime();
+      if (t > maxTs) maxTs = t;
+      if (from || to) { const d = pyDateStr(ts); if ((from && d < from) || (to && d > to)) continue; }
+      inRange++;
+    }
+    return { total: logs.length, valid, inRange, maxTs };
+  };
+
   const reads = [];
   for (let i = 0; i < Math.max(1, attempts); i++) {
     const logs = await withTimeout(
       withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 2, delayMs: 3000 }),
       readTimeoutMs, 'lectura del reloj'
     );
-    const valid = logs.reduce((a, l) => a + (isJunkRaw(l) ? 0 : 1), 0);
-    reads.push({ logs, total: logs.length, valid });
+    reads.push({ logs, ...scoreOf(logs) });
   }
-  const best = reads.reduce((a, b) => (b.valid > a.valid ? b : a));
-  const totals = reads.map(r => r.total);
+  const best = reads.reduce((a, b) => {
+    if (b.inRange !== a.inRange) return b.inRange > a.inRange ? b : a;
+    if (b.maxTs !== a.maxTs) return b.maxTs > a.maxTs ? b : a;
+    return b.valid > a.valid ? b : a;
+  });
   const valids = reads.map(r => r.valid);
-  // Varianza notable = la lectura es inestable (avisar).
+  const inRanges = reads.map(r => r.inRange);
+  // Varianza notable en válidos = lectura inestable (avisar).
   const spread = valids.length > 1 ? Math.max(...valids) - Math.min(...valids) : 0;
   const unstable = valids.length > 1 && spread > Math.max(20, 0.2 * Math.max(...valids));
-  return { logs: best.logs, attempts: reads.length, totals, valids, unstable };
+  return { logs: best.logs, attempts: reads.length, totals: reads.map(r => r.total), valids, inRanges, unstable };
 }
 
 // Columnas de `employees` para AUTO-mapear deviceUserId (sólo las que existen).
@@ -339,8 +359,8 @@ async function backupDeviceDirect(device, opts = {}) {
     duration_ms: 0, sample: [], debug: null,
   };
 
-  // Lectura estable (varios intentos, mejor lectura no basura).
-  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts });
+  // Lectura estable (varios intentos, mejor lectura por en-rango/fecha/válidos).
+  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to });
   const rawLogs = stable.logs;
   report.total_read = rawLogs.length;
   report.read_unstable = stable.unstable;
