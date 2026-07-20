@@ -781,4 +781,64 @@ router.post('/bridge/discovery/probe',
   (req, res) => bridgeRequest('POST', '/discovery/probe', req.body, res)
 );
 
+// GET /api/devices/sync-status — estado por reloj: marcas de HOY + última lectura
+// registrada (device_sync_runs). Para Config → Relojes: ver si cada reloj aporta
+// marcas, su último error, intentos y duración. Read-only.
+router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(new Date());
+  try {
+    // Marcas/empleados de hoy por reloj.
+    const [marks] = await sequelize.query(`
+      SELECT d.id,
+             COUNT(al.id) AS marks_today,
+             COUNT(DISTINCT al.employee_id) AS employees_today,
+             MAX(al.timestamp) AS last_mark
+      FROM devices d
+      LEFT JOIN attendance_logs al ON al.device_id = d.id AND DATE(al.timestamp) = ?
+      GROUP BY d.id
+    `, { replacements: [today] });
+    const marksById = new Map(marks.map(m => [m.id, m]));
+
+    // Última corrida registrada por reloj (si existe la tabla de auditoría).
+    let lastRunById = new Map();
+    const [[tbl]] = await sequelize.query(
+      `SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='device_sync_runs'`
+    );
+    if ((tbl?.n || 0) > 0) {
+      const [runs] = await sequelize.query(`
+        SELECT r.* FROM device_sync_runs r
+        JOIN (SELECT device_id, MAX(id) AS mx FROM device_sync_runs GROUP BY device_id) t
+          ON t.mx = r.id
+      `);
+      lastRunById = new Map(runs.map(r => [r.device_id, r]));
+    }
+
+    const [devices] = await sequelize.query(
+      "SELECT id, name, ip_address, status, last_sync FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id"
+    );
+    const STALE_MS = 26 * 3600 * 1000, now = Date.now();
+    const items = devices.map(d => {
+      const m = marksById.get(d.id) || {};
+      const run = lastRunById.get(d.id) || null;
+      const marks_today = Number(m.marks_today) || 0;
+      const lastSyncMs = d.last_sync ? new Date(d.last_sync).getTime() : null;
+      const stale = !lastSyncMs || (now - lastSyncMs) > STALE_MS;
+      return {
+        id: d.id, name: d.name, ip: d.ip_address, status: d.status,
+        last_sync: d.last_sync, last_mark: m.last_mark || null,
+        marks_today, employees_today: Number(m.employees_today) || 0,
+        stale, suspect: marks_today === 0 || stale || d.status === 'error',
+        last_run: run ? {
+          status: run.status, started_at: run.started_at, finished_at: run.finished_at,
+          imported: run.imported_count, in_range: run.in_range_count, unmapped: run.unmapped_count,
+          attempts: run.attempts, duration_ms: run.duration_ms, error: run.error_message,
+        } : null,
+      };
+    });
+    res.json({ ok: true, date: today, complete: items.every(i => !i.suspect), items });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
 module.exports = router;

@@ -333,13 +333,24 @@ function RelojesTab() {
   const [deviceLoading, setDeviceLoading] = useState<Record<number, string>>({})
   const [opLog, setOpLog]           = useState<Record<number, string[]>>({})
 
+  const [syncStatus, setSyncStatus] = useState<Record<number, any>>({})
+
   async function loadDevices() {
     setLoading(true)
     try { const r = await api.get('/api/devices'); setDevices(r.data) } catch { setDevices([]) }
     setLoading(false)
   }
 
-  useEffect(() => { loadDevices() }, [])
+  async function loadSyncStatus() {
+    try {
+      const r = await api.get('/api/devices/sync-status')
+      const map: Record<number, any> = {}
+      for (const it of (r.data.items || [])) map[it.id] = it
+      setSyncStatus(map)
+    } catch { /* opcional */ }
+  }
+
+  useEffect(() => { loadDevices(); loadSyncStatus() }, [])
 
   async function pingAll() {
     setPinging(true)
@@ -446,7 +457,10 @@ function RelojesTab() {
       : `⬇️ Iniciando backup de "${d.name}"...`)
     try {
       const r = await api.post(`/api/devices/${d.id}/backup`, { push_att2000: pushAtt2000 })
-      addLog(d.id, `✅ Backup: ${r.data.imported} importados, ${r.data.skipped} omitidos (${r.data.total} total)`)
+      if (r.data.ok === false) addLog(d.id, `❌ ${r.data.error}`)
+      else {
+        addLog(d.id, `✅ Lectura: leídos ${r.data.total_read ?? 0} · en rango ${r.data.in_range ?? 0} · +${r.data.imported ?? 0} importados · dup ${r.data.skipped ?? 0} · sin empleado ${r.data.notFound ?? 0}${r.data.read_unstable ? ' · ⚠️ lectura inestable' : ''}`)
+      }
       if (pushAtt2000 && r.data.att2000) {
         const a = r.data.att2000
         if (a.error) addLog(d.id, `⚠️ att2000: ${a.error}`)
@@ -454,6 +468,7 @@ function RelojesTab() {
       }
     } catch (e: any) { addLog(d.id, `❌ Error: ${errMsg(e)}`) }
     setBusy(d.id, '')
+    loadSyncStatus()
   }
   async function doClear(d: Device) {
     if (!confirm(`⚠️ ¿Eliminar TODOS los registros del reloj "${d.name}"? Solo borra del reloj, no de la BD.`)) return
@@ -622,6 +637,16 @@ function RelojesTab() {
                       </p>
                     )}
                     {d.last_sync && <p className="text-xs text-slate-400 dark:text-white/30">Sync: {new Date(d.last_sync).toLocaleString()}</p>}
+                    {syncStatus[d.id] && (() => {
+                      const s = syncStatus[d.id]
+                      const run = s.last_run
+                      return (
+                        <p className={`text-xs mt-0.5 ${s.suspect ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                          {s.suspect ? '⚠️' : '✓'} Hoy: {s.marks_today} marcas · {s.employees_today} empleados
+                          {run && ` · último: ${run.status}${run.error ? ` (${String(run.error).slice(0, 60)})` : ''}${run.attempts ? ` · ${run.attempts} intento(s)` : ''}${run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}`}
+                        </p>
+                      )
+                    })()}
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span className={`text-xs font-semibold px-2.5 py-1 rounded-full hidden sm:block ${
