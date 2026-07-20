@@ -67,9 +67,12 @@ export default function DashboardPage() {
   const stats = data?.stats || {}
   const recentLogs: AttendanceEvent[] = [...liveEvents, ...(data?.recentLogs || [])].slice(0, 20)
 
-  const total = stats.total_employees || 0
-  const presentes = (stats.present || 0) + (stats.late || 0)
-  const pct = total ? Math.round((presentes / total) * 100) : 0
+  // Presentes hoy = EMPLEADOS ÚNICOS con marca válida del día (no cantidad de
+  // marcas). Cobertura = presentes únicos / empleados activos. Ambos vienen ya
+  // calculados del backend; se conserva un fallback por compatibilidad.
+  const total = stats.active_employees ?? stats.total_employees ?? 0
+  const presentes = stats.present_today ?? ((stats.present || 0) + (stats.late || 0))
+  const pct = stats.coverage_pct ?? (total ? Math.round((presentes / total) * 100) : 0)
 
   async function recalc() {
     setRecalcLoading(true)

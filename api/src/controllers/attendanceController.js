@@ -230,17 +230,47 @@ async function getDashboardStats(req, res) {
   const today = todayPY();
 
   try {
-    const [[stats]] = await sequelize.query(`
+    // Métricas por EMPLEADO ÚNICO (no por cantidad de marcas). Se usa
+    // COUNT(DISTINCT employee_id), inmune a duplicados de daily_summary.
+    // - present/late/absent/permission: empleados activos únicos en ese estado hoy.
+    // - present_today: empleados únicos con AL MENOS una marca válida hoy (fuente
+    //   operativa de verdad; coincide con COUNT(DISTINCT employee_id) de logs).
+    // - active_employees: denominador de cobertura.
+    // - live_punches: CANTIDAD de marcas del día (logs), NO empleados.
+    const [[counts]] = await sequelize.query(`
       SELECT
-        COUNT(*)                                          AS total_employees,
-        SUM(ds.status = 'present')                        AS present,
-        SUM(ds.status = 'late')                           AS late,
-        SUM(ds.status = 'absent')                         AS absent,
-        SUM(ds.status = 'permission')                     AS on_permission
-      FROM employees e
-      LEFT JOIN daily_summary ds ON e.id = ds.employee_id AND ds.date = ?
-      WHERE e.status = 'active'
-    `, { replacements: [today] });
+        (SELECT COUNT(*) FROM employees WHERE status = 'active') AS active_employees,
+        (SELECT COUNT(DISTINCT ds.employee_id)
+           FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
+          WHERE ds.date = ? AND ds.status = 'present')    AS present,
+        (SELECT COUNT(DISTINCT ds.employee_id)
+           FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
+          WHERE ds.date = ? AND ds.status = 'late')       AS late,
+        (SELECT COUNT(DISTINCT ds.employee_id)
+           FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
+          WHERE ds.date = ? AND ds.status = 'absent')     AS absent,
+        (SELECT COUNT(DISTINCT ds.employee_id)
+           FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
+          WHERE ds.date = ? AND ds.status = 'permission') AS on_permission,
+        (SELECT COUNT(DISTINCT al.employee_id)
+           FROM attendance_logs al JOIN employees e ON e.id = al.employee_id AND e.status = 'active'
+          WHERE DATE(al.timestamp) = ?)                   AS present_today,
+        (SELECT COUNT(*) FROM attendance_logs WHERE DATE(timestamp) = ?) AS live_punches
+    `, { replacements: [today, today, today, today, today, today] });
+
+    const active = Number(counts.active_employees) || 0;
+    const presentToday = Number(counts.present_today) || 0;
+    const stats = {
+      total_employees: active,          // compat: el denominador SON los activos
+      active_employees: active,
+      present: Number(counts.present) || 0,
+      late: Number(counts.late) || 0,
+      absent: Number(counts.absent) || 0,
+      on_permission: Number(counts.on_permission) || 0,
+      present_today: presentToday,      // empleados únicos con marca válida hoy
+      live_punches: Number(counts.live_punches) || 0,  // cantidad de marcas hoy
+      coverage_pct: active ? Math.round((presentToday / active) * 100) : 0,
+    };
 
     const [recentLogs] = await sequelize.query(`
       SELECT
