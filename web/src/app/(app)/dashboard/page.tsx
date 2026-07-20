@@ -44,6 +44,14 @@ export default function DashboardPage() {
     refetchInterval: 30_000,
   })
 
+  // Cobertura por reloj: para avisar si el día puede estar incompleto porque
+  // algún reloj no se leyó (0 marcas, error o last_sync viejo).
+  const { data: coverage } = useQuery({
+    queryKey: ['device-coverage-today'],
+    queryFn: async () => (await api.get('/api/devices/coverage-today')).data,
+    refetchInterval: 60_000,
+  })
+
   useEffect(() => {
     reconnectSocket()
     const socket = getSocket()
@@ -67,9 +75,12 @@ export default function DashboardPage() {
   const stats = data?.stats || {}
   const recentLogs: AttendanceEvent[] = [...liveEvents, ...(data?.recentLogs || [])].slice(0, 20)
 
-  const total = stats.total_employees || 0
-  const presentes = (stats.present || 0) + (stats.late || 0)
-  const pct = total ? Math.round((presentes / total) * 100) : 0
+  // Presentes hoy = EMPLEADOS ÚNICOS con marca válida del día (no cantidad de
+  // marcas). Cobertura = presentes únicos / empleados activos. Ambos vienen ya
+  // calculados del backend; se conserva un fallback por compatibilidad.
+  const total = stats.active_employees ?? stats.total_employees ?? 0
+  const presentes = stats.present_today ?? ((stats.present || 0) + (stats.late || 0))
+  const pct = stats.coverage_pct ?? (total ? Math.round((presentes / total) * 100) : 0)
 
   async function recalc() {
     setRecalcLoading(true)
@@ -118,6 +129,25 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Aviso de cobertura parcial de relojes */}
+      {coverage && coverage.ok && coverage.complete === false && (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:bg-amber-400/[0.06] dark:border-amber-400/30">
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-sm text-amber-800 dark:text-amber-300">
+              <b>Datos parciales:</b> {coverage.devices_suspect} de {coverage.total_devices} relojes no reportaron marcas hoy, tienen error o no sincronizan hace tiempo. El total de presentes puede estar incompleto.
+              <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-amber-700/80 dark:text-amber-300/70">
+                {coverage.devices.map((d: any) => (
+                  <span key={d.id} className={d.suspect ? 'font-semibold' : ''}>
+                    {d.suspect ? '⚠️' : '✓'} {d.name}: {d.marks_today} marcas{d.stale ? ' · sync viejo' : ''}{d.status === 'error' ? ' · error' : ''}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bento grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 md:gap-4 auto-rows-[minmax(90px,auto)]">

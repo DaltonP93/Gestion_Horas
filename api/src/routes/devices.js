@@ -640,6 +640,56 @@ router.post('/reprocess-unmapped', authorize('admin','gestor'), async (req, res)
   }
 });
 
+// GET /api/devices/coverage-today — cobertura por reloj para HOY (hora Paraguay).
+// Read-only: marcas/empleados importados por reloj + salud (last_sync, 0 marcas).
+// Sirve para NO dar la impresión de que el total del día es completo si algún
+// reloj no fue leído.
+function _todayPY() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(new Date());
+}
+router.get('/coverage-today', authorize('admin','gestor','hr'), async (req, res) => {
+  const today = _todayPY();
+  try {
+    const [rows] = await sequelize.query(`
+      SELECT d.id, d.name, d.ip_address, d.status, d.last_sync,
+             COUNT(al.id)                    AS marks_today,
+             COUNT(DISTINCT al.employee_id)  AS employees_today,
+             MAX(al.timestamp)               AS last_mark
+      FROM devices d
+      LEFT JOIN attendance_logs al ON al.device_id = d.id AND DATE(al.timestamp) = ?
+      WHERE d.ip_address IS NOT NULL AND TRIM(d.ip_address) <> ''
+      GROUP BY d.id, d.name, d.ip_address, d.status, d.last_sync
+      ORDER BY d.id
+    `, { replacements: [today] });
+
+    const STALE_MS = 26 * 3600 * 1000;  // ~26h sin sincronizar = sospechoso
+    const now = Date.now();
+    const devices = rows.map(r => {
+      const marks = Number(r.marks_today) || 0;
+      const lastSyncMs = r.last_sync ? new Date(r.last_sync).getTime() : null;
+      const stale = !lastSyncMs || (now - lastSyncMs) > STALE_MS;
+      const suspect = marks === 0 || stale || r.status === 'error';
+      return {
+        id: r.id, name: r.name, ip: r.ip_address, status: r.status,
+        last_sync: r.last_sync, last_mark: r.last_mark,
+        marks_today: marks, employees_today: Number(r.employees_today) || 0,
+        stale, suspect,
+      };
+    });
+    const suspects = devices.filter(d => d.suspect);
+    res.json({
+      ok: true, date: today,
+      total_devices: devices.length,
+      devices_with_marks: devices.filter(d => d.marks_today > 0).length,
+      devices_suspect: suspects.length,
+      complete: suspects.length === 0,   // false → el día puede estar incompleto
+      devices,
+    });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
 // Reprocesa raw_device_punches 'unmapped' (por rango o por deviceUserId): mapea,
 // crea attendance_logs y recalcula daily_summary. Devuelve el resumen.
 async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, deviceId = null } = {}) {
