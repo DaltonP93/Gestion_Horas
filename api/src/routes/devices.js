@@ -226,6 +226,48 @@ async function handleDiagnose(req, res) {
   })();
   result.steps.push({ step: 'zkteco_udp_handshake', ok: udpZk.ok, detail: udpZk.err || 'handshake UDP OK' });
 
+  // Paso 4 — Comm Key. IMPORTANTE: node-zklib NO envía la commkey (CMD_AUTH) al
+  // conectar; sólo manda CMD_CONNECT vacío. Si el reloj TIENE contraseña de
+  // comunicación, acepta el socket pero rechaza los comandos → TIMEOUT_ON_WRITING.
+  // Es decir: por PULL no se puede leer un reloj con Comm Key activa.
+  const commKeyTimeout = !tcpZk.ok && !udpZk.ok &&
+    /TIMEOUT_ON_WRITING|timeout/i.test(`${tcpZk.err || ''} ${udpZk.err || ''}`);
+  result.steps.push({
+    step: 'comm_key',
+    ok: !result.has_commkey && !commKeyTimeout,
+    detail: result.has_commkey
+      ? 'Hay comm_password configurada en SisHoras, pero la lectura por PULL (node-zklib) NO autentica Comm Key.'
+      : (commKeyTimeout
+        ? 'El patrón de error (socket OK + TIMEOUT_ON_WRITING) es típico de reloj con Comm Key activa o tomado por Attendance Management.'
+        : 'Sin indicios de bloqueo por Comm Key.'),
+  });
+
+  // Paso 5 — Disponibilidad PUSH/ADMS (vía bridge). Para GT200/Granding con
+  // Push Service + ADMS, la vía recomendada es que el reloj EMPUJE las marcas a
+  // SisHoras en vez de leerlas por pull.
+  const push = await (async () => {
+    const bridgeUrl = process.env.BRIDGE_URL || 'http://localhost:8081';
+    try {
+      const r = await fetch(`${bridgeUrl}/devices/${device.id}/push-state`, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) return { available: false, detail: `bridge respondió ${r.status}` };
+      const payload = await r.json();
+      const st = payload?.state || null;
+      const lastSeen = st?.lastSeen ? new Date(st.lastSeen) : null;
+      const active = lastSeen && (Date.now() - lastSeen.getTime()) < 10 * 60 * 1000;
+      return { available: true, pushing: !!active, lastSeen: st?.lastSeen || null, sn: st?.sn || null };
+    } catch (e) {
+      return { available: false, detail: 'bridge no disponible (' + (e.message || e) + ')' };
+    }
+  })();
+  result.push = push;
+  result.steps.push({
+    step: 'push_adms',
+    ok: !!push.pushing,
+    detail: push.pushing ? `El reloj está EMPUJANDO marcas (last seen ${push.lastSeen})`
+      : push.available ? 'El bridge PUSH está disponible pero este reloj no está empujando todavía.'
+        : `PUSH no verificable: ${push.detail || 'bridge no disponible'}`,
+  });
+
   // Recomendación
   if (tcpZk.ok && udpZk.ok) {
     result.recommendation = 'TCP y UDP responden. Use connection_mode=auto o tcp (recomendado).';
@@ -234,10 +276,14 @@ async function handleDiagnose(req, res) {
   } else if (udpZk.ok) {
     result.recommendation = 'Solo UDP responde (típico en modelos antiguos como GT200). Configure connection_mode=udp.';
   } else {
-    result.recommendation = 'TCP acepta socket pero ningún handshake ZKTeco responde. Causas probables: '
-      + '(1) otro software (Attendance Management) conectado — cerrarlo; '
-      + '(2) contraseña de comunicación configurada en el reloj — ingresarla en comm_password; '
-      + '(3) firmware incompatible con ZKProtocol.';
+    // Ningún handshake ZKTeco responde: pull inviable si hay Comm Key.
+    result.recommendation =
+      'TCP acepta socket pero ningún handshake ZKTeco responde. En este modelo (GT200/Granding) las causas más probables son: '
+      + '(1) Comm Key (contraseña de comunicación) activa en el reloj — node-zklib NO la autentica, así que por PULL no se puede leer: '
+      + 'quitá la Comm Key en el reloj (Menú → Comunicación → Seguridad) o dejala en 0; '
+      + '(2) otro software (Attendance Management) tomó la sesión — cerralo; '
+      + '(3) usar la vía PUSH/ADMS: el reloj ya tiene Push Service + ADMS — configurá "Ajustes Servidor Cloud" del reloj apuntando a SisHoras '
+      + `(host del bridge, puerto ${process.env.BRIDGE_PUSH_PORT || '8080'}) para que EMPUJE las marcas sin depender del pull.`;
   }
   result.summary = result.steps.map(s => `${s.ok ? '✓' : '✗'} ${s.step}`).join(' · ');
   res.json(result);
