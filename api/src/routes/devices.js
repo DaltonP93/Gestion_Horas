@@ -884,7 +884,8 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
         last_run: run ? {
           status: run.status, started_at: run.started_at, finished_at: run.finished_at,
           imported: run.imported_count, in_range: run.in_range_count, unmapped: run.unmapped_count,
-          attempts: run.attempts, duration_ms: run.duration_ms, error: run.error_message,
+          attempts: run.attempts, attempts_requested: run.attempts_requested ?? run.attempts,
+          duration_ms: run.duration_ms, error: run.error_message,
           first_valid: run.first_valid_time, last_valid: run.last_valid_time,
         } : null,
       };
