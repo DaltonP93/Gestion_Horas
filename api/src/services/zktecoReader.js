@@ -213,45 +213,82 @@ function isJunkRaw(l) {
   return false;
 }
 
-// Lee attendances con reintentos y elige la MEJOR lectura. El reloj a veces
-// devuelve buffers truncados/inestables entre ejecuciones. Criterio de "mejor"
-// (en orden): (a) más marcas EN RANGO, (b) fecha válida más reciente, (c) más
-// marcas válidas (no basura).
-async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1, from = null, to = null } = {}) {
-  const scoreOf = (logs) => {
-    let valid = 0, inRange = 0, maxTs = 0;
+// Lee attendances con reintentos y elige la MEJOR lectura. El buffer del GT200
+// llega truncado: node-zklib readWithBuffer tiene un timeout INTER-PAQUETE fijo
+// (10s) y, al vencer, RESUELVE con el buffer parcial + un `err` que el resto del
+// código ignoraba. Ahora capturamos ese `err` (= lectura incompleta) y damos
+// prioridad a las lecturas completas.
+// Criterio de "mejor" (en orden): (a) NO truncada, (b) más marcas EN RANGO,
+// (c) fecha válida más reciente, (d) más válidas, (e) menos basura.
+async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1, from = null, to = null, cooldownMs = 0 } = {}) {
+  const scoreOf = (logs, truncated) => {
+    let valid = 0, inRange = 0, garbage = 0, maxTs = 0, minTs = 0;
     for (const l of logs) {
-      if (isJunkRaw(l)) continue;
+      if (isJunkRaw(l)) { garbage++; continue; }
       valid++;
       const ts = coerceDate(pickField(l, TS_FIELDS));
       if (!ts) continue;
       const t = ts.getTime();
       if (t > maxTs) maxTs = t;
+      if (!minTs || t < minTs) minTs = t;
       if (from || to) { const d = pyDateStr(ts); if ((from && d < from) || (to && d > to)) continue; }
       inRange++;
     }
-    return { total: logs.length, valid, inRange, maxTs };
+    return { total: logs.length, valid, inRange, garbage, maxTs, minTs, truncated: !!truncated };
   };
 
   const reads = [];
+  const detail = [];
+  const covers = r => !r.truncated && (r.inRange > 0 || (!from && !to));
   for (let i = 0; i < Math.max(1, attempts); i++) {
-    const logs = await withTimeout(
-      withZK(device, async zk => (await zk.getAttendances()).data, { maxAttempts: 2, delayMs: 3000 }),
-      readTimeoutMs, 'lectura del reloj'
-    );
-    reads.push({ logs, ...scoreOf(logs) });
+    if (i > 0 && cooldownMs > 0) await sleep(cooldownMs);   // enfriar y NO reusar sesión
+    const t0 = Date.now();
+    let logs = [], truncated = false, err = null;
+    try {
+      const res = await withTimeout(
+        withZK(device, async zk => await zk.getAttendances(), { maxAttempts: 2, delayMs: 3000 }),
+        readTimeoutMs, 'lectura del reloj'
+      );
+      logs = (res && Array.isArray(res.data)) ? res.data : (Array.isArray(res) ? res : []);
+      truncated = !!(res && res.err);   // buffer incompleto (TIMEOUT WHEN RECEIVING PACKET)
+    } catch (e) {
+      // Si TODOS los intentos fallan, relanzamos al final; acá seguimos probando.
+      err = e?.message || String(e);
+    }
+    const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
+      : scoreOf(logs, truncated);
+    reads.push({ logs, err, ...sc });
+    detail.push({
+      attempt: i + 1, mode: device.connection_mode || 'auto',
+      raw: sc.total, valid: sc.valid, in_range: sc.inRange, garbage: sc.garbage,
+      truncated: sc.truncated,
+      first_valid: sc.minTs ? pyDateTimeStr(new Date(sc.minTs)) : null,
+      last_valid: sc.maxTs ? pyDateTimeStr(new Date(sc.maxTs)) : null,
+      duration_ms: Date.now() - t0, error: err,
+    });
+    // Early-stop: si ya tenemos una lectura COMPLETA que cubre el rango, basta.
+    if (covers(reads[reads.length - 1])) break;
   }
-  const best = reads.reduce((a, b) => {
+
+  const okReads = reads.filter(r => !r.err);
+  if (!okReads.length) {
+    // Ningún intento devolvió datos: relanzar el último error real.
+    throw new Error(reads[reads.length - 1]?.err || 'lectura del reloj falló');
+  }
+  const best = okReads.reduce((a, b) => {
+    if (a.truncated !== b.truncated) return a.truncated ? b : a;   // completa > truncada
     if (b.inRange !== a.inRange) return b.inRange > a.inRange ? b : a;
     if (b.maxTs !== a.maxTs) return b.maxTs > a.maxTs ? b : a;
-    return b.valid > a.valid ? b : a;
+    if (b.valid !== a.valid) return b.valid > a.valid ? b : a;
+    return b.garbage < a.garbage ? b : a;
   });
-  const valids = reads.map(r => r.valid);
-  const inRanges = reads.map(r => r.inRange);
-  // Varianza notable en válidos = lectura inestable (avisar).
+  const valids = okReads.map(r => r.valid);
   const spread = valids.length > 1 ? Math.max(...valids) - Math.min(...valids) : 0;
   const unstable = valids.length > 1 && spread > Math.max(20, 0.2 * Math.max(...valids));
-  return { logs: best.logs, attempts: reads.length, totals: reads.map(r => r.total), valids, inRanges, unstable };
+  return {
+    logs: best.logs, attempts: reads.length, detail,
+    truncated: best.truncated, valids, inRanges: okReads.map(r => r.inRange), unstable,
+  };
 }
 
 // Columnas de `employees` para AUTO-mapear deviceUserId (sólo las que existen).
@@ -346,27 +383,34 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     if (!(await tableExists('device_sync_runs'))) return;
     const now = new Date();
     let status = 'success';
+    let note = null;
     if (error) {
       status = /timeout/i.test(String(error?.message || error)) ? 'timeout' : 'error';
     } else if (report) {
-      status = (report.read_unstable || report.warn_unmapped) ? 'partial' : 'success';
+      status = (report.partial || report.read_unstable || report.warn_unmapped) ? 'partial' : 'success';
+      if (report.read_truncated) note = 'Lectura incompleta: el buffer del reloj llegó truncado (reintentá con más --attempts).';
+      else if (report.partial) note = `Lectura completada pero NO cubre el rango solicitado (recibido ${report.first_valid || '?'} → ${report.last_valid || '?'}).`;
     }
-    const errMsg = error ? String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500) : null;
+    const errMsg = error ? String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500) : note;
     const attempts = report?.read_attempts?.attempts || opts.attempts || 1;
+    const detailJson = report?.read_attempts_detail?.length ? JSON.stringify(report.read_attempts_detail).slice(0, 4000) : null;
+    const hasDetailCol = await tableExists('device_sync_runs') &&
+      (await getExistingColumns('device_sync_runs', ['attempts_detail'])).length > 0;
+    const cols = ['device_id', 'started_at', 'finished_at', 'status', 'raw_count', 'valid_count', 'in_range_count',
+      'imported_count', 'duplicate_count', 'unmapped_count', 'garbage_count', 'first_valid_time',
+      'last_valid_time', 'attempts', 'duration_ms', 'from_date', 'to_date', 'error_message', 'created_by'];
+    const vals = [
+      device.id, startedAt, now, status,
+      report?.total_read || 0, report?.valid || 0, report?.in_range || 0,
+      report?.imported || 0, report?.skipped || 0, report?.notFound || 0, report?.junk || 0,
+      report?.first_valid || null, report?.last_valid || null,
+      attempts, report?.duration_ms ?? (now - startedAt),
+      opts.from || null, opts.to || null, errMsg, opts.createdBy || null,
+    ];
+    if (hasDetailCol) { cols.push('attempts_detail'); vals.push(detailJson); }
     await sequelize.query(
-      `INSERT INTO device_sync_runs
-        (device_id, started_at, finished_at, status, raw_count, valid_count, in_range_count,
-         imported_count, duplicate_count, unmapped_count, garbage_count, first_valid_time,
-         last_valid_time, attempts, duration_ms, from_date, to_date, error_message, created_by)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      { replacements: [
-        device.id, startedAt, now, status,
-        report?.total_read || 0, report?.valid || 0, report?.in_range || 0,
-        report?.imported || 0, report?.skipped || 0, report?.notFound || 0, report?.junk || 0,
-        report?.first_valid || null, report?.last_valid || null,
-        attempts, report?.duration_ms ?? (now - startedAt),
-        opts.from || null, opts.to || null, errMsg, opts.createdBy || null,
-      ] }
+      `INSERT INTO device_sync_runs (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`,
+      { replacements: vals }
     );
   } catch { /* auditoría best-effort */ }
 }
@@ -389,7 +433,7 @@ async function backupDeviceDirect(device, opts = {}) {
 }
 
 async function _backupDeviceDirectImpl(device, opts = {}) {
-  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1 } = opts;
+  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1, cooldownMs = 0 } = opts;
   const t0 = Date.now();
   const report = {
     device_id: device.id, device: device.name, ip: device.ip_address, dry_run: !!dryRun,
@@ -398,16 +442,20 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
     in_range: 0, out_of_range: 0, first_valid: null, last_valid: null,
     staged: 0, imported: 0, would_import: 0, skipped: 0, notFound: 0,
     unmapped_distinct: 0, unmapped_top: [], warn_unmapped: false,
-    match_columns: [], read_unstable: false, dates: [], att2000: null,
+    match_columns: [], read_unstable: false, read_truncated: false, partial: false,
+    read_attempts_detail: [], dates: [], att2000: null,
     duration_ms: 0, sample: [], debug: null,
   };
 
-  // Lectura estable (varios intentos, mejor lectura por en-rango/fecha/válidos).
-  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to });
+  // Lectura estable (varios intentos con cooldown, mejor lectura por
+  // completa/en-rango/fecha/válidos; detecta buffers truncados del GT200).
+  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to, cooldownMs });
   const rawLogs = stable.logs;
   report.total_read = rawLogs.length;
   report.read_unstable = stable.unstable;
-  if (stable.attempts > 1) report.read_attempts = { attempts: stable.attempts, totals: stable.totals, valids: stable.valids };
+  report.read_truncated = stable.truncated;
+  report.read_attempts_detail = stable.detail;
+  if (stable.attempts > 1) report.read_attempts = { attempts: stable.attempts, valids: stable.valids };
   if (!dryRun) await sequelize.query('UPDATE devices SET last_sync=NOW() WHERE id=?', { replacements: [device.id] });
   if (!rawLogs.length) { report.duration_ms = Date.now() - t0; return report; }
 
@@ -481,6 +529,9 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
       return { device_user_id: id, count, employee: alt ? { id: alt.id, via: alt.via, status: alt.status } : null };
     });
   report.warn_unmapped = report.in_range > 0 && report.notFound / report.in_range > 0.5;
+  // Lectura PARCIAL: buffer truncado, o se pidió un rango pero la mejor lectura
+  // no trajo ninguna marca en ese rango (típico bloque histórico del GT200).
+  report.partial = report.read_truncated || ((!!from || !!to) && report.in_range === 0 && report.valid > 0);
 
   if (!punches.length) { report.duration_ms = Date.now() - t0; return report; }
 

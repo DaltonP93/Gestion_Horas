@@ -873,16 +873,19 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
       const lastSyncMs = d.last_sync ? new Date(d.last_sync).getTime() : null;
       const stale = !lastSyncMs || (now - lastSyncMs) > STALE_MS;
       const failing = run && (run.status === 'error' || run.status === 'timeout');
+      const partialRun = run && run.status === 'partial';
       return {
         id: d.id, name: d.name, ip: d.ip_address, status: d.status,
         last_sync: d.last_sync, last_mark: m.last_mark || null,
         marks_today, employees_today: Number(m.employees_today) || 0,
-        stale, failing: !!failing, suspect: marks_today === 0 || stale || d.status === 'error' || !!failing,
+        stale, failing: !!failing, partial: !!partialRun,
+        suspect: marks_today === 0 || stale || d.status === 'error' || !!failing || !!partialRun,
         recommendation: failing ? recommendFor(run.error_message) : null,
         last_run: run ? {
           status: run.status, started_at: run.started_at, finished_at: run.finished_at,
           imported: run.imported_count, in_range: run.in_range_count, unmapped: run.unmapped_count,
           attempts: run.attempts, duration_ms: run.duration_ms, error: run.error_message,
+          first_valid: run.first_valid_time, last_valid: run.last_valid_time,
         } : null,
       };
     });
