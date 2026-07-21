@@ -13,6 +13,7 @@ import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
 import { fmtTimePy } from '@/lib/datetime'
 import EmployeeNotes from '@/components/EmployeeNotes'
+import BiometriaRelojes from '@/components/BiometriaRelojes'
 import dynamic from 'next/dynamic'
 const FaceEnroll = dynamic(() => import('@/components/FaceEnroll'), { ssr: false })
 
@@ -314,6 +315,9 @@ export default function EmpleadoDetallePage() {
               })}
             </div>
           </div>
+
+          {/* Biometría / Relojes */}
+          {emp?.id && <BiometriaRelojes employeeId={emp.id} />}
 
           {/* Reconocimiento facial */}
           {emp?.id && <FaceEnroll employeeId={emp.id} />}

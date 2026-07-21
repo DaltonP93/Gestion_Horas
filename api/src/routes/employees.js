@@ -231,4 +231,89 @@ router.patch('/:id/quick', authorize('admin','hr'), requirePermission('empleados
   }
 });
 
+// ─── Biometría / Relojes (Fase C) ─────────────────────────────
+const { linkEmployeeDevice, unlinkEmployeeDevice } = require('../services/deviceMapping');
+const { tableExists } = require('../services/zktecoReader');
+const audit = require('../services/audit');
+
+// GET /api/employees/:id/biometrics — vínculos del empleado + sugerencias +
+// última marca por reloj. No pierde nada: sólo lectura.
+router.get('/:id/biometrics', requirePermission('empleados', 'view'), asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const [[emp]] = await sequelize.query('SELECT id, code, employee_number FROM employees WHERE id=?', { replacements: [id] });
+  if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+  const hasEdm = await tableExists('employee_device_map');
+  const hasRaw = await tableExists('raw_device_punches');
+
+  let linked = [];
+  if (hasEdm) {
+    [linked] = await sequelize.query(`
+      SELECT edm.id, edm.device_id, d.name AS device_name, edm.device_user_id,
+             edm.active, edm.created_at,
+             (SELECT MAX(al.timestamp) FROM attendance_logs al
+               WHERE al.employee_id = edm.employee_id
+                 AND (edm.device_id IS NULL OR al.device_id = edm.device_id)) AS last_mark
+      FROM employee_device_map edm
+      LEFT JOIN devices d ON d.id = edm.device_id
+      WHERE edm.employee_id = ? AND edm.active = 1
+      ORDER BY edm.id`, { replacements: [id] });
+  }
+
+  // Sugerencias: marcas sin empleado cuyo device_user_id coincide con code/employee_number.
+  let suggestions = [];
+  const keys = [emp.code, emp.employee_number].filter(v => v != null && String(v).trim() !== '').map(String);
+  if (hasRaw && keys.length) {
+    [suggestions] = await sequelize.query(`
+      SELECT r.device_id, d.name AS device_name, r.device_user_id,
+             COUNT(*) AS marcas, MIN(r.record_time_py) AS first_py, MAX(r.record_time_py) AS last_py
+      FROM raw_device_punches r
+      LEFT JOIN devices d ON d.id = r.device_id
+      WHERE r.mapping_status = 'unmapped' AND r.device_user_id IN (${keys.map(() => '?').join(',')})
+      GROUP BY r.device_id, d.name, r.device_user_id`, { replacements: keys });
+  }
+
+  // Última marca del empleado por reloj (para "Biometría / Relojes").
+  const [byDevice] = await sequelize.query(`
+    SELECT al.device_id, d.name AS device_name, COUNT(*) AS marcas, MAX(al.timestamp) AS last_mark
+    FROM attendance_logs al
+    LEFT JOIN devices d ON d.id = al.device_id
+    WHERE al.employee_id = ?
+    GROUP BY al.device_id, d.name
+    ORDER BY last_mark DESC`, { replacements: [id] });
+
+  res.json({ ok: true, employee: { id: emp.id, code: emp.code, employee_number: emp.employee_number }, linked, suggestions, by_device: byDevice });
+}));
+
+// POST /api/employees/:id/biometrics — vincular un device_user_id al empleado
+// (permite resolver casos como 5404 desde el perfil) y reprocesar sus marcas.
+router.post('/:id/biometrics', authorize('admin', 'hr'), requirePermission('empleados', 'update'), asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id);
+  const deviceUserId = String(req.body.device_user_id || '').trim();
+  const deviceId = req.body.device_id != null && req.body.device_id !== '' ? parseInt(req.body.device_id, 10) : null;
+  if (!deviceUserId) return res.status(400).json({ error: 'device_user_id es obligatorio' });
+  const [[emp]] = await sequelize.query('SELECT id FROM employees WHERE id=?', { replacements: [id] });
+  if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+  try {
+    const summary = await linkEmployeeDevice({ employeeId: id, deviceUserId, deviceId, createdBy: req.user?.id || null });
+    audit.log({ req, user: req.user, action: 'biometric.link', entity: 'employee', entity_id: id,
+      details: { device_user_id: deviceUserId, device_id: deviceId, ...summary } });
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: err.message });
+  }
+}));
+
+// DELETE /api/employees/:id/biometrics/:mapId — desvincular (active=0). NO borra
+// attendance_logs históricos.
+router.delete('/:id/biometrics/:mapId', authorize('admin', 'hr'), requirePermission('empleados', 'update'), asyncHandler(async (req, res) => {
+  try {
+    const r = await unlinkEmployeeDevice({ mapId: parseInt(req.params.mapId), employeeId: parseInt(req.params.id) });
+    audit.log({ req, user: req.user, action: 'biometric.unlink', entity: 'employee', entity_id: parseInt(req.params.id), details: r });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err.message });
+  }
+}));
+
 module.exports = router;

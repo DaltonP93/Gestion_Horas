@@ -6,6 +6,8 @@ const router  = require('express').Router();
 const net     = require('net');
 const { authenticate, authorize, requireSuperAdmin } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const { reprocessUnmapped, linkEmployeeDevice } = require('../services/deviceMapping');
+const audit = require('../services/audit');
 
 router.use(authenticate);
 
@@ -614,15 +616,9 @@ router.post('/map', authorize('admin','gestor'), async (req, res) => {
   try {
     const [[emp]] = await sequelize.query("SELECT id, status FROM employees WHERE id=?", { replacements: [employeeId] });
     if (!emp) return res.status(404).json({ error: 'Empleado no encontrado.' });
-    // Upsert idempotente del mapeo.
-    await sequelize.query(
-      `INSERT INTO employee_device_map (employee_id, device_id, device_user_id, active, created_by)
-       VALUES (?,?,?,1,?)
-       ON DUPLICATE KEY UPDATE employee_id = VALUES(employee_id), active = 1, updated_at = NOW()`,
-      { replacements: [employeeId, deviceId, deviceUserId, req.user?.id || null] }
-    );
-    // Reprocesar las marcas crudas de ese usuario (crea attendance_logs + recalc).
-    const summary = await reprocessUnmapped({ deviceUserId, deviceId });
+    const summary = await linkEmployeeDevice({ employeeId, deviceUserId, deviceId, createdBy: req.user?.id || null });
+    audit.log({ req, user: req.user, action: 'biometric.link', entity: 'employee', entity_id: employeeId,
+      details: { device_user_id: deviceUserId, device_id: deviceId, ...summary } });
     res.json({ ok: true, employee_id: employeeId, device_user_id: deviceUserId, ...summary });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
@@ -689,71 +685,6 @@ router.get('/coverage-today', authorize('admin','gestor','hr'), async (req, res)
     res.status(200).json({ ok: false, error: fmtErr(err) });
   }
 });
-
-// Reprocesa raw_device_punches 'unmapped' (por rango o por deviceUserId): mapea,
-// crea attendance_logs y recalcula daily_summary. Devuelve el resumen.
-async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, deviceId = null } = {}) {
-  const { buildEmployeeMatcher, resolveTypes, pyDateStr, pyDateTimeStr } = require('../services/zktecoReader');
-  const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
-  const where = ["mapping_status = 'unmapped'"];
-  const repl = [];
-  if (isDate(from)) { where.push('record_time_py >= ?'); repl.push(`${from} 00:00:00`); }
-  if (isDate(to))   { where.push('record_time_py <= ?'); repl.push(`${to} 23:59:59`); }
-  if (deviceUserId) { where.push('device_user_id = ?'); repl.push(deviceUserId); }
-  if (deviceId != null) { where.push('device_id = ?'); repl.push(deviceId); }
-
-  const [rows] = await sequelize.query(
-    `SELECT id, device_id, device_user_id, record_time FROM raw_device_punches
-     WHERE ${where.join(' AND ')} ORDER BY record_time`,
-    { replacements: repl }
-  );
-  const result = { candidates: rows.length, mapped: 0, still_unmapped: 0, duplicate: 0, errors: 0 };
-  if (!rows.length) return result;
-
-  const matcher = await buildEmployeeMatcher();
-  const mappable = [];
-  for (const r of rows) {
-    const empId = matcher.resolve(r.device_id, r.device_user_id);
-    if (!empId) { result.still_unmapped++; continue; }
-    mappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time) });
-  }
-  if (!mappable.length) return result;
-
-  resolveTypes(mappable);
-  const dates = new Set();
-  for (const p of mappable) {
-    try {
-      const tsStr = pyDateTimeStr(p.ts);
-      dates.add(pyDateStr(p.ts));
-      const [dup] = await sequelize.query(
-        `SELECT id FROM attendance_logs WHERE employee_id=? AND DATE_FORMAT(\`timestamp\`,'%Y-%m-%d %H:%i:%s')=? LIMIT 1`,
-        { replacements: [p.empId, tsStr] }
-      );
-      let logId;
-      if (dup.length) { logId = dup[0].id; result.duplicate++; }
-      else {
-        const [ins] = await sequelize.query(
-          `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES (?,?,?,?, 'zkteco_direct')`,
-          { replacements: [p.empId, p.device_id, p.ts, p.type] }
-        );
-        if (ins?.insertId) { logId = ins.insertId; result.mapped++; } else { result.duplicate++; }
-      }
-      await sequelize.query(
-        `UPDATE raw_device_punches SET mapping_status='mapped', employee_id=?, imported_attendance_log_id=? WHERE id=?`,
-        { replacements: [p.empId, logId || null, p.rawId] }
-      );
-    } catch { result.errors++; }
-  }
-
-  if (dates.size) {
-    const { bulkRecalcDailySummary, materializeAbsents } = require('../services/scheduler');
-    for (const d of [...dates].sort()) {
-      try { await bulkRecalcDailySummary(d); await materializeAbsents(d); } catch { /* seguir */ }
-    }
-  }
-  result.dates = [...dates].sort();
-  return result;
-}
 
 // POST /api/devices/:id/clear
 router.post('/:id/clear', requireSuperAdmin, async (req, res) => {
