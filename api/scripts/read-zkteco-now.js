@@ -21,6 +21,9 @@
  *   --attempts N        lee N veces y usa la MEJOR lectura por (en-rango, fecha
  *                       válida más reciente, más válidos). Default 3. Mitiga
  *                       lecturas inestables/truncadas del reloj.
+ *   --mode auto|tcp|udp fuerza el protocolo SÓLO en esta corrida (no persiste).
+ *                       Útil para GT200/Granding que a veces requieren UDP para
+ *                       descargar marcaciones aunque TCP responda al diagnóstico.
  *   --device-id N[,M]   limita a esos relojes (evita que uno lento bloquee).
  *   --timeout SEG       timeout de lectura por reloj en segundos (default 180).
  *
@@ -67,6 +70,8 @@ function pyWallToUTC(dateStr, timeStr) {
   const debugRaw = flag('debug-raw');
   const showUnmapped = flag('show-unmapped');
   const attempts = Math.max(1, parseInt(arg('attempts', '3'), 10) || 3);
+  const modeArg = (arg('mode', '') || '').toLowerCase();
+  const mode = ['auto', 'tcp', 'udp'].includes(modeArg) ? modeArg : null;
   const timeoutSec = parseInt(arg('timeout', '180'), 10);
   const readTimeoutMs = (isNaN(timeoutSec) ? 180 : timeoutSec) * 1000;
   const deviceIdArg = arg('device-id', null);
@@ -91,8 +96,9 @@ function pyWallToUTC(dateStr, timeStr) {
   console.log(`Rango (UTC)         : ${fromUTC.toISOString()}  …  ${toUTC.toISOString()}`);
   console.log(`Timeout por reloj   : ${readTimeoutMs / 1000}s${deviceIds ? `  ·  Relojes: [${deviceIds.join(', ')}]` : ''}\n`);
 
+  if (mode) console.log(`Forzando connection_mode = ${mode} (sólo esta corrida)\n`);
   const out = await backupAllDevices({
-    from, to, recalc: !dryRun, dryRun, debugRaw, showUnmapped, attempts, readTimeoutMs, deviceIds,
+    from, to, recalc: !dryRun, dryRun, debugRaw, showUnmapped, attempts, readTimeoutMs, deviceIds, mode,
   });
 
   for (const r of out.results) {

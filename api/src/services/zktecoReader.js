@@ -697,7 +697,7 @@ async function readDeviceRaw(device, opts = {}) {
 // opts.deviceIds (array) → limita a esos relojes (para no bloquear los demás
 // cuando uno está lento, p.ej. Lavadero con --device-id 2).
 async function backupAllDevices(opts = {}) {
-  const { deviceIds = null, ...deviceOpts } = opts;
+  const { deviceIds = null, mode = null, ...deviceOpts } = opts;
   let sql = "SELECT * FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> ''";
   const replacements = [];
   if (Array.isArray(deviceIds) && deviceIds.length) {
@@ -708,7 +708,10 @@ async function backupAllDevices(opts = {}) {
   const [devices] = await sequelize.query(sql, { replacements });
   const results = [];
   const totals = { imported: 0, skipped: 0, notFound: 0, would_import: 0, junk: 0, in_range: 0 };
+  const validMode = ['auto', 'tcp', 'udp'].includes(String(mode).toLowerCase()) ? String(mode).toLowerCase() : null;
   for (const device of devices) {
+    // --mode fuerza el protocolo SÓLO para esta corrida (no persiste en la BD).
+    if (validMode) device.connection_mode = validMode;
     try {
       const r = await backupDeviceDirect(device, deviceOpts);
       totals.imported += r.imported; totals.skipped += r.skipped;
