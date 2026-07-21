@@ -249,6 +249,9 @@ async function handleDiagnose(req, res) {
     const bridgeUrl = process.env.BRIDGE_URL || 'http://localhost:8081';
     try {
       const r = await fetch(`${bridgeUrl}/devices/${device.id}/push-state`, { signal: AbortSignal.timeout(4000) });
+      if (r.status === 401 || r.status === 403) {
+        return { available: null, protected: true, detail: `El endpoint push-state del bridge está protegido (${r.status}); no bloquea la lectura directa. Para verlo, el bridge necesita exponer un health público o un token interno.` };
+      }
       if (!r.ok) return { available: false, detail: `bridge respondió ${r.status}` };
       const payload = await r.json();
       const st = payload?.state || null;
