@@ -392,10 +392,14 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
       else if (report.partial) note = `Lectura completada pero NO cubre el rango solicitado (recibido ${report.first_valid || '?'} → ${report.last_valid || '?'}).`;
     }
     const errMsg = error ? String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500) : note;
-    const attempts = report?.read_attempts?.attempts || opts.attempts || 1;
+    // attempts = intentos REALMENTE ejecutados (early-stop puede cortar antes);
+    // attempts_requested = los pedidos. Antes `attempts` guardaba los pedidos.
+    const executed = report?.read_attempts_detail?.length || (report ? 1 : (opts.attempts || 1));
+    const requested = opts.attempts || executed;
     const detailJson = report?.read_attempts_detail?.length ? JSON.stringify(report.read_attempts_detail).slice(0, 4000) : null;
-    const hasDetailCol = await tableExists('device_sync_runs') &&
-      (await getExistingColumns('device_sync_runs', ['attempts_detail'])).length > 0;
+    const extraCols = await getExistingColumns('device_sync_runs', ['attempts_detail', 'attempts_requested']);
+    const hasDetailCol = extraCols.includes('attempts_detail');
+    const hasReqCol = extraCols.includes('attempts_requested');
     const cols = ['device_id', 'started_at', 'finished_at', 'status', 'raw_count', 'valid_count', 'in_range_count',
       'imported_count', 'duplicate_count', 'unmapped_count', 'garbage_count', 'first_valid_time',
       'last_valid_time', 'attempts', 'duration_ms', 'from_date', 'to_date', 'error_message', 'created_by'];
@@ -404,9 +408,10 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
       report?.total_read || 0, report?.valid || 0, report?.in_range || 0,
       report?.imported || 0, report?.skipped || 0, report?.notFound || 0, report?.junk || 0,
       report?.first_valid || null, report?.last_valid || null,
-      attempts, report?.duration_ms ?? (now - startedAt),
+      executed, report?.duration_ms ?? (now - startedAt),
       opts.from || null, opts.to || null, errMsg, opts.createdBy || null,
     ];
+    if (hasReqCol) { cols.push('attempts_requested'); vals.push(requested); }
     if (hasDetailCol) { cols.push('attempts_detail'); vals.push(detailJson); }
     await sequelize.query(
       `INSERT INTO device_sync_runs (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`,
