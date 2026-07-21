@@ -646,6 +646,11 @@ function RelojesTab() {
                             {s.suspect ? '⚠️' : '✓'} Hoy: {s.marks_today} marcas · {s.employees_today} empleados
                             {run && ` · último: ${run.status}${run.error ? ` (${String(run.error).slice(0, 60)})` : ''}${run.attempts ? ` · ${run.attempts} intento(s)` : ''}${run.duration_ms ? ` · ${(run.duration_ms / 1000).toFixed(1)}s` : ''}`}
                           </p>
+                          {s.partial && (
+                            <p className="text-[11px] text-amber-700/80 dark:text-amber-300/70 mt-0.5">
+                              ⚠️ Conectado, pero lectura parcial: no cubrió el rango. Recibido {run?.first_valid || '?'} → {run?.last_valid || '?'}. Reintentá con más intentos/cooldown.
+                            </p>
+                          )}
                           {s.recommendation && <p className="text-[11px] text-amber-700/80 dark:text-amber-300/70 mt-0.5">💡 {s.recommendation}</p>}
                         </>
                       )

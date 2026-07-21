@@ -18,9 +18,10 @@
  *                       y el rango de fechas válidas presentes en el reloj.
  *   --show-unmapped     lista los deviceUserId sin empleado (top 30) con conteo
  *                       y pista si existen en employees por otra columna/estado.
- *   --attempts N        lee N veces y usa la MEJOR lectura por (en-rango, fecha
- *                       válida más reciente, más válidos). Default 3. Mitiga
- *                       lecturas inestables/truncadas del reloj.
+ *   --attempts N        lee N veces y usa la MEJOR lectura (completa > en-rango >
+ *                       fecha reciente > más válidos > menos basura). Default 3.
+ *   --cooldown-seconds N espera N s entre intentos (nueva conexión, sin reusar
+ *                       sesión). Ayuda con GT200 que truncan el buffer.
  *   --mode auto|tcp|udp fuerza el protocolo SÓLO en esta corrida (no persiste).
  *                       Útil para GT200/Granding que a veces requieren UDP para
  *                       descargar marcaciones aunque TCP responda al diagnóstico.
@@ -72,6 +73,7 @@ function pyWallToUTC(dateStr, timeStr) {
   const attempts = Math.max(1, parseInt(arg('attempts', '3'), 10) || 3);
   const modeArg = (arg('mode', '') || '').toLowerCase();
   const mode = ['auto', 'tcp', 'udp'].includes(modeArg) ? modeArg : null;
+  const cooldownMs = Math.max(0, parseInt(arg('cooldown-seconds', '0'), 10) || 0) * 1000;
   const timeoutSec = parseInt(arg('timeout', '180'), 10);
   const readTimeoutMs = (isNaN(timeoutSec) ? 180 : timeoutSec) * 1000;
   const deviceIdArg = arg('device-id', null);
@@ -98,7 +100,7 @@ function pyWallToUTC(dateStr, timeStr) {
 
   if (mode) console.log(`Forzando connection_mode = ${mode} (sólo esta corrida)\n`);
   const out = await backupAllDevices({
-    from, to, recalc: !dryRun, dryRun, debugRaw, showUnmapped, attempts, readTimeoutMs, deviceIds, mode,
+    from, to, recalc: !dryRun, dryRun, debugRaw, showUnmapped, attempts, readTimeoutMs, deviceIds, mode, cooldownMs,
   });
 
   for (const r of out.results) {
@@ -116,16 +118,25 @@ function pyWallToUTC(dateStr, timeStr) {
     if (r.match_columns && r.match_columns.length) {
       console.log(`     columnas de mapeo empleado: ${r.match_columns.join(', ')}`);
     }
-    if (r.read_unstable) {
+    if (r.read_truncated) {
+      console.log(`     ⚠️  LECTURA TRUNCADA: el buffer del reloj llegó incompleto (timeout inter-paquete del GT200). Reintentá con más --attempts y/o --cooldown-seconds.`);
+    } else if (r.read_unstable) {
       const ra = r.read_attempts;
-      console.log(`     ⚠️  LECTURA INESTABLE entre intentos${ra ? ` (válidos: ${ra.valids.join(', ')})` : ''}. Se usó la de mayor cantidad válida. Probá --attempts 3.`);
+      console.log(`     ⚠️  LECTURA INESTABLE entre intentos${ra ? ` (válidos: ${ra.valids.join(', ')})` : ''}. Se usó la mejor. Probá más --attempts.`);
+    }
+    if (r.read_attempts_detail && r.read_attempts_detail.length > 1) {
+      console.log(`     intentos:`);
+      for (const a of r.read_attempts_detail) {
+        console.log(`       #${a.attempt} ${a.mode}: raw=${a.raw} válidos=${a.valid} enRango=${a.in_range}${a.truncated ? ' TRUNCADA' : ''}${a.error ? ` ERROR(${a.error})` : ''} · ${a.last_valid || '—'} · ${(a.duration_ms / 1000).toFixed(1)}s`);
+      }
     }
     if (r.total_read > 0 && r.valid === 0) {
       console.log(`     ⚠️  Se leyeron ${r.total_read} registros pero TODOS eran basura (relleno userSn=0 / fecha 2000).`);
       console.log(`         Corré:  node scripts/inspect-zkteco-raw.js --device-id ${r.device_id} --limit 20`);
-    } else if (r.valid > 0 && r.in_range === 0) {
-      console.log(`     ⚠️  ${r.valid} registros válidos, pero 0 en el rango pedido.`);
-      console.log(`         Si first_valid/last_valid muestran un año raro, el reloj tiene la FECHA mal configurada.`);
+    } else if (r.partial) {
+      // NO afirmar "fecha mal configurada": la causa real es una lectura parcial.
+      console.log(`     ⚠️  LECTURA PARCIAL: se recibió un bloque que NO cubre el rango pedido (recibido ${r.first_valid || '?'} → ${r.last_valid || '?'}).`);
+      console.log(`         No es (necesariamente) fecha mal configurada: el buffer del GT200 llega en bloques. Reintentá con --attempts 5 --cooldown-seconds 4.`);
     }
     if (r.warn_unmapped) {
       console.log(`     🚨 La MAYORÍA de las marcas en rango (${r.notFound}/${r.in_range}) NO se importó por falta de mapeo deviceUserId→empleado.`);
