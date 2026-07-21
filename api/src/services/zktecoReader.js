@@ -387,9 +387,15 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     if (error) {
       status = /timeout/i.test(String(error?.message || error)) ? 'timeout' : 'error';
     } else if (report) {
-      status = (report.partial || report.read_unstable || report.warn_unmapped) ? 'partial' : 'success';
+      // 'partial' es SÓLO estado de LECTURA: buffer truncado o rango no cubierto.
+      // Las marcas sin empleado (warn_unmapped) o la inestabilidad entre intentos
+      // (cuando la lectura elegida SÍ fue completa) NO hacen partial → son
+      // 'success' + advertencia aparte (unmapped_count / read_unstable).
+      status = report.partial ? 'partial' : 'success';
       if (report.read_truncated) note = 'Lectura incompleta: el buffer del reloj llegó truncado (reintentá con más --attempts).';
       else if (report.partial) note = `Lectura completada pero NO cubre el rango solicitado (recibido ${report.first_valid || '?'} → ${report.last_valid || '?'}).`;
+      else if (report.notFound > 0) note = `Lectura OK; ${report.notFound} marca(s) sin empleado vinculado.`;
+      else if (report.read_unstable) note = 'Lectura OK tras reintentos (algún intento llegó truncado).';
     }
     const errMsg = error ? String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500) : note;
     // attempts = intentos REALMENTE ejecutados (early-stop puede cortar antes);
