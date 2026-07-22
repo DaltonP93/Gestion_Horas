@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, UserPlus, Save } from 'lucide-react'
@@ -58,6 +58,21 @@ export default function NuevoEmpleadoPage() {
   const [form, setForm] = useState<FormData>(EMPTY)
   const [saving, setSaving]   = useState(false)
   const [error, setError]     = useState('')
+  // Flujo "Crear empleado y vincular" desde Marcaciones sin empleado: conserva
+  // device_id/device_user_id y, tras crear, vincula y vuelve automáticamente.
+  const [linkCtx, setLinkCtx] = useState<{ deviceId: string | null; deviceUserId: string } | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const p = new URLSearchParams(window.location.search)
+    const uid = (p.get('device_user_id') || '').trim()
+    if (p.get('return_to') === 'vinculacion' && uid) {
+      setLinkCtx({ deviceId: p.get('device_id'), deviceUserId: uid })
+      // Prefill del código con el usuario del reloj (editable): si coincide,
+      // las próximas marcas mapean solas incluso sin employee_device_map.
+      setForm(prev => prev.code ? prev : { ...prev, code: uid })
+    }
+  }, [])
 
   const { data: schedules } = useQuery({
     queryKey: ['schedules'],
@@ -90,6 +105,18 @@ export default function NuevoEmpleadoPage() {
         phone:         form.phone || undefined,
       }
       const result = await employeesApi.create(payload)
+      if (linkCtx) {
+        // Vincular automáticamente y volver a Marcaciones sin empleado.
+        try {
+          await api.post('/api/devices/map', {
+            employee_id: result.id,
+            device_user_id: linkCtx.deviceUserId,
+            device_id: linkCtx.deviceId ? +linkCtx.deviceId : null,
+          })
+        } catch { /* si el vínculo falla, la pantalla de pendientes lo muestra */ }
+        router.push('/configuracion/sincronizacion?unmapped=1')
+        return
+      }
       router.push(`/empleados/${result.id}`)
     } catch (err: any) {
       setError(err?.response?.data?.error || 'Error al crear empleado')
@@ -110,6 +137,12 @@ export default function NuevoEmpleadoPage() {
         </div>
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Nuevo empleado</h1>
       </div>
+
+      {linkCtx && (
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-800 dark:bg-indigo-400/[0.06] dark:border-indigo-400/30 dark:text-indigo-300">
+          🔗 Al guardar, este empleado se <b>vinculará automáticamente</b> al usuario del reloj <span className="font-mono font-semibold">{linkCtx.deviceUserId}</span>, se importarán sus marcas pendientes y volverás a “Marcaciones sin empleado”.
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 space-y-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {/* Identificación */}

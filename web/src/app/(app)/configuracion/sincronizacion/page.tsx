@@ -35,7 +35,9 @@ export default function SincronizacionPage() {
   const [readTo, setReadTo] = useState(new Date().toISOString().slice(0, 10))
   // Marcaciones sin empleado (staging raw_device_punches).
   const [unmapped, setUnmapped] = useState<UnmappedRow[] | null>(null)
+  const [unmappedTotals, setUnmappedTotals] = useState<{ marks: number; today: number } | null>(null)
   const [loadingUnmapped, setLoadingUnmapped] = useState(false)
+  const [linkTarget, setLinkTarget] = useState<UnmappedRow | null>(null)
   const unmappedRef = useRef<HTMLDivElement | null>(null)
 
   const addLog = (s: string) => setLog(l => [`${new Date().toLocaleTimeString('es-PY')} · ${s}`, ...l].slice(0, 60))
@@ -105,6 +107,7 @@ export default function SincronizacionPage() {
     try {
       const r = await api.get('/api/devices/unmapped')   // status=unmapped, todas las pendientes
       setUnmapped(r.data.items || [])
+      setUnmappedTotals(r.data.totals || null)
     } catch (e: any) { addLog(`✖ Sin empleado: ${e?.response?.data?.error || e.message}`) }
     finally { setLoadingUnmapped(false) }
   }, [])
@@ -122,8 +125,10 @@ export default function SincronizacionPage() {
     setBusy('map')
     try {
       const r = await api.post('/api/devices/map', { employee_id: employeeId, device_user_id: row.device_user_id, device_id: row.device_id })
-      if (r.data.ok) addLog(`🔗 ${row.device_user_id} → emp#${employeeId}: importadas ${r.data.mapped || 0}, duplicadas ${r.data.duplicate || 0}.`)
-      else addLog(`✖ ${r.data.error}`)
+      if (r.data.ok) {
+        addLog(`🔗 ${row.device_user_id} → empleado vinculado: importadas ${r.data.mapped || 0}, duplicadas ${r.data.duplicate || 0}.`)
+        setLinkTarget(null)
+      } else addLog(`✖ ${r.data.error}`)
       await loadUnmapped(); loadDiag()
     } catch (e: any) { addLog(`✖ ${e?.response?.data?.error || e.message}`) }
     finally { setBusy('') }
@@ -227,6 +232,11 @@ export default function SincronizacionPage() {
           <div className="flex items-center gap-2">
             <MapPinOff size={18} className="text-amber-500" />
             <h3 className="font-semibold text-slate-700 dark:text-white/80">Marcaciones sin empleado</h3>
+            {unmappedTotals && (
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${unmappedTotals.marks > 0 ? 'bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300'}`}>
+                {unmappedTotals.marks} pendientes acumuladas · {unmappedTotals.today} recibidas hoy
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button onClick={loadUnmapped} disabled={loadingUnmapped} className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/[0.08] text-sm flex items-center gap-1.5 disabled:opacity-50">
@@ -238,7 +248,7 @@ export default function SincronizacionPage() {
         <p className="text-[11px] text-slate-400 dark:text-white/30 mt-1">
           Las marcas crudas del reloj que aún no se vinculan a un empleado quedan acá (no se pierden). Vinculá el usuario del reloj a un empleado y reprocesá para que pasen a asistencia.
         </p>
-        {unmapped && unmapped.length === 0 && <p className="text-sm text-emerald-600 dark:text-emerald-400 mt-3">✅ No hay marcaciones sin empleado en el rango {readFrom} → {readTo}.</p>}
+        {unmapped && unmapped.length === 0 && <p className="text-sm text-emerald-600 dark:text-emerald-400 mt-3">✅ No hay marcaciones sin empleado pendientes.</p>}
         {unmapped && unmapped.length > 0 && (
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-sm">
@@ -254,7 +264,12 @@ export default function SincronizacionPage() {
                     <td className="pr-3 text-xs text-slate-500 dark:text-white/40">{String(r.first_py).slice(0, 16)} → {String(r.last_py).slice(0, 16)}</td>
                     <td className="pr-3">{r.device_name || r.device_id}</td>
                     <td className="pr-3">{r.candidate ? <span className="text-xs">emp#{r.candidate.id} <span className="text-slate-400">({r.candidate.via}, {r.candidate.status})</span></span> : <span className="text-xs text-slate-400">—</span>}</td>
-                    <td>{canManage && <LinkCell row={r} onLink={linkEmployee} busy={busy === 'map'} />}</td>
+                    <td>{canManage && (
+                      <button onClick={() => setLinkTarget(r)} disabled={busy === 'map'}
+                        className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs disabled:opacity-50 flex items-center gap-1 whitespace-nowrap">
+                        <Search size={12} /> Vincular a empleado
+                      </button>
+                    )}</td>
                   </tr>
                 ))}
               </tbody>
@@ -262,6 +277,13 @@ export default function SincronizacionPage() {
           </div>
         )}
       </section>
+
+      {/* Modal de vinculación (centrado — no se solapa con la tabla) */}
+      {linkTarget && (
+        <VincularModal row={linkTarget} busy={busy === 'map'}
+          onClose={() => setLinkTarget(null)}
+          onConfirm={(empId) => linkEmployee(linkTarget, empId)} />
+      )}
 
       {/* A) att2000 → SisHoras (histórico) */}
       <FlowCard color="sky" icon={<Database size={18} />} title="A) Importar histórico att2000 → SisHoras"
@@ -293,57 +315,117 @@ export default function SincronizacionPage() {
   )
 }
 
-function LinkCell({ row, onLink, busy }: { row: UnmappedRow; onLink: (r: UnmappedRow, id: number) => void; busy: boolean }) {
-  const [open, setOpen] = useState(false)
+// Modal de vinculación centrado: buscar empleado → tarjeta de confirmación →
+// confirmar. Evita el popover solapado dentro de la tabla. "Crear empleado y
+// vincular" lleva a /empleados/nuevo conservando device_id/device_user_id para
+// que al crear vuelva y vincule automáticamente.
+function VincularModal({ row, busy, onClose, onConfirm }: {
+  row: UnmappedRow; busy: boolean; onClose: () => void; onConfirm: (employeeId: number) => void
+}) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
+  const [selected, setSelected] = useState<any | null>(null)
 
   useEffect(() => {
-    if (!open || q.trim().length < 2) { setResults([]); return }
+    if (selected || q.trim().length < 2) { setResults([]); return }
     let alive = true
     setSearching(true)
     const t = setTimeout(async () => {
       try {
-        const r = await api.get('/api/employees', { params: { search: q.trim(), status: 'all', limit: 8 } })
+        const r = await api.get('/api/employees', { params: { search: q.trim(), status: 'all', limit: 10 } })
         if (alive) setResults(r.data?.data || [])
       } catch { if (alive) setResults([]) }
       finally { if (alive) setSearching(false) }
     }, 300)
     return () => { alive = false; clearTimeout(t) }
-  }, [q, open])
+  }, [q, selected])
+
+  const crearHref = `/empleados/nuevo?device_id=${row.device_id ?? ''}&device_user_id=${encodeURIComponent(row.device_user_id)}&return_to=vinculacion`
 
   return (
-    <div className="relative">
-      <div className="flex items-center gap-1">
-        {row.candidate && row.candidate.status === 'active' && (
-          <button onClick={() => onLink(row, row.candidate!.id)} disabled={busy} className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs disabled:opacity-50">Sugerido #{row.candidate.id}</button>
-        )}
-        <button onClick={() => setOpen(o => !o)} disabled={busy} className="px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs disabled:opacity-50 flex items-center gap-1">
-          <Search size={12} /> Vincular a empleado
-        </button>
-      </div>
-      {open && (
-        <div className="absolute right-0 z-20 mt-1 w-72 rounded-xl border border-slate-200 dark:border-white/[0.1] bg-white dark:bg-slate-900 shadow-lg p-2">
-          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="nombre, código, legajo o documento…"
-            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08] bg-transparent" />
-          <div className="mt-1 max-h-56 overflow-y-auto">
-            {searching && <p className="text-[11px] text-slate-400 px-1 py-2">Buscando…</p>}
-            {!searching && q.trim().length >= 2 && results.length === 0 && (
-              <div className="px-1 py-2 text-[11px] text-slate-400">
-                Sin resultados. <a href="/empleados/nuevo" className="text-blue-600 hover:underline">Crear empleado</a> y volvé a vincular.
-              </div>
-            )}
-            {results.map(e => (
-              <button key={e.id} onClick={() => { onLink(row, e.id); setOpen(false) }} disabled={busy}
-                className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-white/[0.05] text-xs disabled:opacity-50">
-                <div className="font-semibold text-slate-700 dark:text-white/80">{e.full_name} {e.status !== 'active' && <span className="text-[10px] text-amber-500">({e.status})</span>}</div>
-                <div className="text-[10px] text-slate-400">#{e.id} · code {e.code || '—'} · legajo {e.employee_number || '—'}</div>
-              </button>
-            ))}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={busy ? undefined : onClose} />
+      <div className="relative w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/[0.1] shadow-2xl p-5">
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <h3 className="font-bold text-slate-900 dark:text-white">Vincular usuario del reloj</h3>
+            <p className="text-xs text-slate-500 dark:text-white/40 mt-0.5">
+              <span className="font-mono font-semibold">{row.device_user_id}</span> · {row.device_name || `reloj #${row.device_id}`} · {row.marcas} marca(s) pendiente(s) · {String(row.first_py).slice(0, 16)} → {String(row.last_py).slice(0, 16)}
+            </p>
           </div>
+          <button onClick={onClose} disabled={busy} className="text-slate-400 hover:text-slate-600 text-lg leading-none disabled:opacity-50">✕</button>
         </div>
-      )}
+
+        {!selected ? (
+          <>
+            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar por nombre, código, legajo o documento…"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
+            <div className="mt-2 max-h-64 overflow-y-auto space-y-0.5">
+              {searching && <p className="text-xs text-slate-400 px-1 py-2">Buscando…</p>}
+              {!searching && q.trim().length >= 2 && results.length === 0 && (
+                <div className="px-1 py-3 text-xs text-slate-500 dark:text-white/40">
+                  No se encontró ningún empleado con “{q.trim()}”.
+                </div>
+              )}
+              {results.map(e => (
+                <button key={e.id} onClick={() => setSelected(e)} disabled={busy}
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-50 dark:hover:bg-white/[0.05] disabled:opacity-50">
+                  <div className="text-sm font-semibold text-slate-700 dark:text-white/80">
+                    {e.full_name} {e.status !== 'active' && <span className="text-[10px] text-amber-500 font-normal">({e.status})</span>}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    código {e.code || '—'} · legajo {e.employee_number || '—'} · C.I. {e.document_number || '—'}{e.department ? ` · ${e.department}` : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {row.candidate && row.candidate.status === 'active' && (
+              <p className="mt-2 text-[11px] text-emerald-600 dark:text-emerald-400">
+                Sugerencia automática por coincidencia de código: empleado con {row.candidate.via} = {row.device_user_id}. Buscalo arriba para confirmar con sus datos.
+              </p>
+            )}
+            <div className="mt-3 pt-3 border-t border-slate-100 dark:border-white/[0.06] flex items-center justify-between">
+              <span className="text-[11px] text-slate-400 dark:text-white/30">¿El empleado no existe todavía?</span>
+              <a href={crearHref} className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs">
+                Crear empleado y vincular
+              </a>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Tarjeta de confirmación antes de vincular */}
+            <div className="rounded-xl border border-slate-200 dark:border-white/[0.08] divide-y divide-slate-100 dark:divide-white/[0.06] text-sm">
+              <ConfirmRow k="Usuario del reloj" v={row.device_user_id} mono />
+              <ConfirmRow k="Reloj" v={row.device_name || `#${row.device_id}`} />
+              <ConfirmRow k="Empleado" v={`${selected.full_name}${selected.status !== 'active' ? ` (${selected.status})` : ''}`} />
+              <ConfirmRow k="Código" v={selected.code || '—'} />
+              <ConfirmRow k="Legajo" v={selected.employee_number || '—'} />
+              <ConfirmRow k="Documento" v={selected.document_number || '—'} />
+              <ConfirmRow k="Marcas pendientes" v={String(row.marcas)} />
+              <ConfirmRow k="Período" v={`${String(row.first_py).slice(0, 16)} → ${String(row.last_py).slice(0, 16)}`} />
+            </div>
+            <p className="text-[11px] text-slate-400 dark:text-white/30 mt-2">
+              Al confirmar se crea el vínculo, se importan sus marcas pendientes y se recalcula la asistencia de las fechas afectadas.
+            </p>
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button onClick={() => setSelected(null)} disabled={busy} className="px-3 py-2 rounded-xl border border-slate-200 dark:border-white/[0.08] text-sm disabled:opacity-50">Volver</button>
+              <button onClick={() => onConfirm(selected.id)} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm disabled:opacity-50">
+                {busy ? 'Vinculando…' : 'Confirmar vínculo'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ConfirmRow({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center justify-between px-3 py-1.5">
+      <span className="text-xs text-slate-400 dark:text-white/30">{k}</span>
+      <span className={`text-slate-700 dark:text-white/80 ${mono ? 'font-mono font-semibold' : ''}`}>{v}</span>
     </div>
   )
 }
