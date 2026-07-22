@@ -23,6 +23,7 @@ interface UnmappedRow {
 export default function SincronizacionPage() {
   const user = useCurrentUser()
   const canManage = hasRole(user, 'admin', 'super_admin')
+  const isSuper = hasRole(user, 'super_admin')
   const [diag, setDiag] = useState<Diag | null>(null)
   const [loadingDiag, setLoadingDiag] = useState(false)
   const [busy, setBusy] = useState('')
@@ -48,7 +49,22 @@ export default function SincronizacionPage() {
     catch (e: any) { addLog(`✖ Diagnóstico: ${e?.response?.data?.error || e.message}`) }
     finally { setLoadingDiag(false) }
   }, [])
-  useEffect(() => { loadDiag() }, [loadDiag])
+
+  // Estado operativo: relojes (sync-status) + KPIs del día (attendance/live).
+  const [clocks, setClocks] = useState<any[] | null>(null)
+  const [liveStats, setLiveStats] = useState<any | null>(null)
+  const loadEstado = useCallback(async () => {
+    try {
+      const [cs, live] = await Promise.all([
+        api.get('/api/devices/sync-status'),
+        api.get('/api/attendance/live'),
+      ])
+      setClocks(cs.data?.items || [])
+      setLiveStats(live.data?.stats || null)
+    } catch { /* la sección muestra "sin datos" */ }
+  }, [])
+
+  useEffect(() => { loadDiag(); loadEstado() }, [loadDiag, loadEstado])
 
   // B) Relojes → SisHoras (flujo principal)
   async function readAllDevices() {
@@ -80,8 +96,10 @@ export default function SincronizacionPage() {
     } finally { setBusy('') }
   }
 
-  // A) att2000 → SisHoras (histórico por rango)
+  // A) att2000 → SisHoras (histórico por rango). Herramienta histórica: pide
+  // confirmación porque no es una operación diaria.
   async function importAtt2000() {
+    if (!confirm(`¿Importar marcaciones históricas desde el sistema anterior (att2000) para ${from} … ${to}?\n\nNo es necesario para las marcaciones actuales de los relojes.`)) return
     setBusy('att2000'); addLog(`▶ Importando att2000 → SisHoras (${from} … ${to})...`)
     try {
       const r = await api.post('/api/sync/attendance', { dateFrom: `${from} 00:00:00`, dateTo: `${to} 23:59:59`, limit: 200000 })
@@ -161,14 +179,53 @@ export default function SincronizacionPage() {
         </div>
       </div>
 
-      {/* Diagnóstico */}
+      {/* Estado general de marcaciones (lenguaje operativo) */}
       <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2"><Activity size={17} className="text-sky-500" /><h2 className="font-bold text-slate-900 dark:text-white">Diagnóstico del flujo</h2></div>
-          <button onClick={loadDiag} disabled={loadingDiag} className="px-3 py-1.5 rounded-xl border border-slate-200 hover:border-sky-300 text-sm text-slate-600 dark:border-white/[0.08] dark:text-white/70 disabled:opacity-50">{loadingDiag ? 'Cargando...' : 'Actualizar'}</button>
+          <div className="flex items-center gap-2"><Activity size={17} className="text-sky-500" /><h2 className="font-bold text-slate-900 dark:text-white">Estado general de marcaciones</h2></div>
+          <button onClick={() => { loadEstado(); loadDiag() }} disabled={loadingDiag} className="px-3 py-1.5 rounded-xl border border-slate-200 hover:border-sky-300 text-sm text-slate-600 dark:border-white/[0.08] dark:text-white/70 disabled:opacity-50">{loadingDiag ? 'Cargando...' : 'Actualizar'}</button>
         </div>
-        {diag ? (
-          <>
+
+        {(() => {
+          if (!clocks && !liveStats) return <p className="text-slate-400 text-sm py-2 dark:text-white/30">Cargando estado…</p>
+          const cs = clocks || []
+          const ok = cs.filter((c: any) => !c.suspect).length
+          const failing = cs.some((c: any) => c.failing || c.status === 'error')
+          const pending = liveStats?.unmapped_pending ?? 0
+          const level = failing ? 'rojo' : (pending > 0 || ok < cs.length) ? 'amarillo' : 'verde'
+          const banner = level === 'rojo'
+            ? { cls: 'bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-400/[0.06] dark:border-rose-400/30 dark:text-rose-300', txt: '🔴 Uno o más relojes no pudieron sincronizarse.' }
+            : level === 'amarillo'
+              ? { cls: 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-400/[0.06] dark:border-amber-400/30 dark:text-amber-300', txt: '🟡 Hay marcas pendientes de vinculación o relojes sin datos.' }
+              : { cls: 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-400/[0.06] dark:border-emerald-400/30 dark:text-emerald-300', txt: '🟢 Todo operativo.' }
+          const lastMark = cs.reduce((mx: string | null, c: any) => (c.last_mark && (!mx || c.last_mark > mx)) ? c.last_mark : mx, null)
+          return (
+            <>
+              <div className={`rounded-xl border px-4 py-2.5 text-sm font-semibold mb-3 ${banner.cls}`}>{banner.txt}</div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2 text-sm">
+                <EstadoRow k="Relojes operativos" v={`${ok} de ${cs.length}`} warn={ok < cs.length} />
+                <EstadoRow k="Última marca recibida" v={lastMark ? new Date(lastMark).toLocaleString('es-PY') : '—'} />
+                <EstadoRow k="Marcaciones recibidas hoy" v={`${liveStats?.raw_today ?? '—'}`} />
+                <EstadoRow k="Vinculadas a empleados" v={`${liveStats?.mapped_today ?? '—'}`} />
+                <button className="text-left" onClick={() => { loadUnmapped(); setTimeout(() => unmappedRef.current?.scrollIntoView({ behavior: 'smooth' }), 300) }}>
+                  <EstadoRow k="Pendientes de vinculación" v={`${pending} acumuladas · ${liveStats?.unmapped_today ?? 0} hoy`} warn={pending > 0} link />
+                </button>
+                <EstadoRow k="Empleados presentes" v={`${liveStats?.present_today ?? '—'}`} />
+              </div>
+              {cs.some((c: any) => c.suspect) && (
+                <p className="mt-2 text-[11px] text-amber-700/80 dark:text-amber-300/70">
+                  {cs.filter((c: any) => c.suspect).map((c: any) => `⚠️ ${c.name}: ${c.marks_today} marcas hoy${c.last_run?.error ? ` · ${String(c.last_run.error).slice(0, 50)}` : ''}`).join('  ·  ')}
+                </p>
+              )}
+            </>
+          )
+        })()}
+
+        {/* Comparación técnica con att2000 (para técnicos, colapsada) */}
+        <details className="mt-4">
+          <summary className="cursor-pointer text-xs font-semibold text-slate-500 dark:text-white/40">Ver detalles técnicos (comparación con att2000)</summary>
+          {diag ? (
+          <div className="mt-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
               <Stat label="att2000 (origen)" value={diag.att2000?.ok ? `${diag.att2000.total ?? 0}` : 'sin conexión'} sub={diag.att2000?.last_mark ? `última: ${diag.att2000.last_mark}` : diag.att2000?.error} warn={!diag.att2000?.ok} />
               <Stat label="attendance_logs (destino)" value={`${diag.local?.total ?? 0}`} sub={diag.local?.last_mark ? `última: ${diag.local.last_mark}` : '—'} good />
@@ -207,13 +264,14 @@ export default function SincronizacionPage() {
                 {canManage && <button onClick={cleanupInvalid} disabled={busy === 'cleanup'} className="text-xs px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50">Limpiar inválidos</button>}
               </div>
             )}
-          </>
-        ) : <p className="text-slate-400 text-sm py-4 text-center dark:text-white/30">{loadingDiag ? 'Cargando...' : 'Sin datos de diagnóstico.'}</p>}
+          </div>
+          ) : <p className="text-slate-400 text-sm py-2 mt-2 dark:text-white/30">{loadingDiag ? 'Cargando...' : 'Sin datos de diagnóstico.'}</p>}
+        </details>
       </section>
 
-      {/* B) Relojes → SisHoras (principal) */}
-      <FlowCard color="emerald" icon={<Cpu size={18} />} title="B) Leer relojes → SisHoras" principal
-        desc="Fuente: relojes ZKTeco. Destino: attendance_logs. Flujo recomendado para el día a día — no depende de att2000. Filtra por rango: el reloj guarda todo su histórico, acá sólo importás lo que pedís.">
+      {/* Lectura manual y recuperación (relojes → SisHoras) */}
+      <FlowCard color="emerald" icon={<Cpu size={18} />} title="Lectura manual y recuperación" principal
+        desc="SisHoras leerá los relojes automáticamente cuando la sincronización automática esté activa. Use esta opción para sincronizar ahora, recuperar un período específico, reintentar un reloj o cargar datos si la sincronización estuvo pausada.">
         {canManage && (
           <div className="flex flex-wrap items-end gap-3">
             <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Desde</label><input type="date" value={readFrom} onChange={e => setReadFrom(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
@@ -285,25 +343,35 @@ export default function SincronizacionPage() {
           onConfirm={(empId) => linkEmployee(linkTarget, empId)} />
       )}
 
-      {/* A) att2000 → SisHoras (histórico) */}
-      <FlowCard color="sky" icon={<Database size={18} />} title="A) Importar histórico att2000 → SisHoras"
-        desc="Fuente: att2000.CHECKINOUT. Destino: attendance_logs. Para reconstruir el histórico. La migración completa se corre con el script migrate-att2000-history.js.">
-        <div className="flex flex-wrap items-end gap-3">
-          <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Desde</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
-          <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Hasta</label><input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
-          {canManage && <button onClick={importAtt2000} disabled={busy === 'att2000'} className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-sm flex items-center gap-2 disabled:opacity-50"><Database size={15} /> {busy === 'att2000' ? 'Importando...' : 'Importar rango'}</button>}
-        </div>
-      </FlowCard>
-
-      {/* C) SisHoras → att2000 (legacy) */}
-      <details className="bg-white rounded-2xl shadow-sm border border-slate-100 dark:bg-white/[0.04] dark:border-white/[0.06]">
-        <summary className="px-5 py-3 cursor-pointer text-sm font-semibold text-slate-500 dark:text-white/50 flex items-center gap-2">
-          <Send size={15} /> C) Enviar marcajes a att2000 (compatibilidad legacy)
-        </summary>
-        <div className="px-5 pb-5 text-sm text-slate-500 dark:text-white/40">
-          Flujo inverso, sólo para mantener att2000 actualizado por compatibilidad. <b>No es el flujo principal.</b> Se dispara desde cada reloj con la opción “enviar a att2000” (parámetro <code>push_att2000</code>) en la pantalla de relojes.
-        </div>
-      </details>
+      {/* Herramientas del sistema anterior (att2000) — sólo Super Admin */}
+      {isSuper && (
+        <details className="bg-white rounded-2xl shadow-sm border border-slate-100 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <summary className="px-5 py-3 cursor-pointer text-sm font-semibold text-slate-500 dark:text-white/50 flex items-center gap-2">
+            <Database size={15} /> Herramientas históricas / Sistema anterior (att2000)
+          </summary>
+          <div className="px-5 pb-5 space-y-5">
+            <div>
+              <p className="text-sm font-semibold text-slate-700 dark:text-white/80">Importar marcaciones antiguas desde att2000</p>
+              <p className="text-xs text-slate-400 dark:text-white/30 mt-0.5 mb-3">
+                Importa marcaciones del sistema anterior (att2000). No es necesario usarlo para las marcaciones actuales de los relojes.
+                La migración completa se corre con el script <code>migrate-att2000-history.js</code>.
+              </p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Desde</label><input type="date" value={from} onChange={e => setFrom(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
+                <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Hasta</label><input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
+                <button onClick={importAtt2000} disabled={busy === 'att2000'} className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-sm flex items-center gap-2 disabled:opacity-50"><Database size={15} /> {busy === 'att2000' ? 'Importando...' : 'Importar rango'}</button>
+              </div>
+            </div>
+            <div className="pt-4 border-t border-slate-100 dark:border-white/[0.06]">
+              <p className="text-sm font-semibold text-slate-700 dark:text-white/80 flex items-center gap-1.5"><Send size={14} /> Compatibilidad: enviar marcaciones a att2000</p>
+              <p className="text-xs text-slate-400 dark:text-white/30 mt-0.5">
+                Copia marcaciones de SisHoras al sistema anterior, únicamente para reportes o integraciones que todavía dependan de att2000.
+                <b> No significa enviar empleados al reloj</b> (eso es otro proceso, aún no habilitado). Se dispara por reloj con la opción “enviar a att2000” (<code>push_att2000</code>) en la pantalla de relojes.
+              </p>
+            </div>
+          </div>
+        </details>
+      )}
 
       {/* Log */}
       {log.length > 0 && (
@@ -453,5 +521,14 @@ function FlowCard({ color, icon, title, desc, principal, children }: { color: 'e
       <p className="text-xs text-slate-500 dark:text-white/40 mb-3">{desc}</p>
       {children}
     </section>
+  )
+}
+
+function EstadoRow({ k, v, warn, link }: { k: string; v: string; warn?: boolean; link?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-50 dark:border-white/[0.04] py-1">
+      <span className="text-xs text-slate-500 dark:text-white/40">{k}</span>
+      <span className={`font-semibold tabular-nums ${warn ? 'text-amber-600 dark:text-amber-400' : 'text-slate-800 dark:text-white/90'} ${link ? 'underline decoration-dotted underline-offset-2' : ''}`}>{v}</span>
+    </div>
   )
 }
