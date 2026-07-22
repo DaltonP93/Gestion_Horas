@@ -1,7 +1,7 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, RefreshCw, Database, Cpu, Send, MapPinOff, Activity, Star } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Database, Cpu, Send, MapPinOff, Activity, Star, Search } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 
@@ -36,6 +36,7 @@ export default function SincronizacionPage() {
   // Marcaciones sin empleado (staging raw_device_punches).
   const [unmapped, setUnmapped] = useState<UnmappedRow[] | null>(null)
   const [loadingUnmapped, setLoadingUnmapped] = useState(false)
+  const unmappedRef = useRef<HTMLDivElement | null>(null)
 
   const addLog = (s: string) => setLog(l => [`${new Date().toLocaleTimeString('es-PY')} · ${s}`, ...l].slice(0, 60))
 
@@ -98,15 +99,23 @@ export default function SincronizacionPage() {
     finally { setBusy('') }
   }
 
-  // Marcaciones sin empleado (staging).
+  // Marcaciones sin empleado (staging). Sin rango = TODAS las pendientes.
   const loadUnmapped = useCallback(async () => {
     setLoadingUnmapped(true)
     try {
-      const r = await api.get('/api/devices/unmapped', { params: { from: readFrom, to: readTo } })
+      const r = await api.get('/api/devices/unmapped')   // status=unmapped, todas las pendientes
       setUnmapped(r.data.items || [])
     } catch (e: any) { addLog(`✖ Sin empleado: ${e?.response?.data?.error || e.message}`) }
     finally { setLoadingUnmapped(false) }
-  }, [readFrom, readTo])
+  }, [])
+
+  // Deep-link desde el dashboard (?unmapped=1): cargar y desplazarse solo.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('unmapped') === '1') {
+      loadUnmapped()
+      setTimeout(() => unmappedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 400)
+    }
+  }, [loadUnmapped])
 
   async function linkEmployee(row: UnmappedRow, employeeId: number) {
     if (!employeeId) return
@@ -155,10 +164,13 @@ export default function SincronizacionPage() {
         </div>
         {diag ? (
           <>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
               <Stat label="att2000 (origen)" value={diag.att2000?.ok ? `${diag.att2000.total ?? 0}` : 'sin conexión'} sub={diag.att2000?.last_mark ? `última: ${diag.att2000.last_mark}` : diag.att2000?.error} warn={!diag.att2000?.ok} />
               <Stat label="attendance_logs (destino)" value={`${diag.local?.total ?? 0}`} sub={diag.local?.last_mark ? `última: ${diag.local.last_mark}` : '—'} good />
-              <Stat label="USERID sin empleado" value={`${diag.unmapped_count ?? 0}`} sub={diag.unmapped_count ? `ej: ${(diag.unmapped_userids || []).slice(0, 6).join(', ')}` : 'todos mapeados'} warn={!!diag.unmapped_count} />
+              <Stat label="att2000: USERID sin empleado" value={`${diag.unmapped_count ?? 0}`} sub={diag.unmapped_count ? `ej: ${(diag.unmapped_userids || []).slice(0, 6).join(', ')}` : 'todos mapeados'} warn={!!diag.unmapped_count} />
+              <button onClick={() => { loadUnmapped(); setTimeout(() => unmappedRef.current?.scrollIntoView({ behavior: 'smooth' }), 300) }} className="text-left">
+                <Stat label="ZKTeco: pendientes de vinculación" value={`${(unmapped || []).length || '—'}`} sub="clic para ver y vincular" warn={(unmapped || []).length > 0} />
+              </button>
             </div>
             {diag.per_day && diag.per_day.length > 0 && (
               <div className="overflow-x-auto max-h-56 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
@@ -210,7 +222,7 @@ export default function SincronizacionPage() {
       </FlowCard>
 
       {/* Marcaciones sin empleado (staging) */}
-      <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <section ref={unmappedRef} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06] scroll-mt-4">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2">
             <MapPinOff size={18} className="text-amber-500" />
@@ -282,14 +294,56 @@ export default function SincronizacionPage() {
 }
 
 function LinkCell({ row, onLink, busy }: { row: UnmappedRow; onLink: (r: UnmappedRow, id: number) => void; busy: boolean }) {
-  const [manual, setManual] = useState('')
-  if (row.candidate && row.candidate.status === 'active') {
-    return <button onClick={() => onLink(row, row.candidate!.id)} disabled={busy} className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs disabled:opacity-50">Vincular a #{row.candidate.id}</button>
-  }
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [results, setResults] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+
+  useEffect(() => {
+    if (!open || q.trim().length < 2) { setResults([]); return }
+    let alive = true
+    setSearching(true)
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.get('/api/employees', { params: { search: q.trim(), status: 'all', limit: 8 } })
+        if (alive) setResults(r.data?.data || [])
+      } catch { if (alive) setResults([]) }
+      finally { if (alive) setSearching(false) }
+    }, 300)
+    return () => { alive = false; clearTimeout(t) }
+  }, [q, open])
+
   return (
-    <div className="flex items-center gap-1">
-      <input value={manual} onChange={e => setManual(e.target.value.replace(/\D/g, ''))} placeholder="ID empleado" className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-xs dark:border-white/[0.08] bg-transparent" />
-      <button onClick={() => onLink(row, parseInt(manual, 10))} disabled={busy || !manual} className="px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs disabled:opacity-50">Vincular</button>
+    <div className="relative">
+      <div className="flex items-center gap-1">
+        {row.candidate && row.candidate.status === 'active' && (
+          <button onClick={() => onLink(row, row.candidate!.id)} disabled={busy} className="px-2 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs disabled:opacity-50">Sugerido #{row.candidate.id}</button>
+        )}
+        <button onClick={() => setOpen(o => !o)} disabled={busy} className="px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-xs disabled:opacity-50 flex items-center gap-1">
+          <Search size={12} /> Vincular a empleado
+        </button>
+      </div>
+      {open && (
+        <div className="absolute right-0 z-20 mt-1 w-72 rounded-xl border border-slate-200 dark:border-white/[0.1] bg-white dark:bg-slate-900 shadow-lg p-2">
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="nombre, código, legajo o documento…"
+            className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs dark:border-white/[0.08] bg-transparent" />
+          <div className="mt-1 max-h-56 overflow-y-auto">
+            {searching && <p className="text-[11px] text-slate-400 px-1 py-2">Buscando…</p>}
+            {!searching && q.trim().length >= 2 && results.length === 0 && (
+              <div className="px-1 py-2 text-[11px] text-slate-400">
+                Sin resultados. <a href="/empleados/nuevo" className="text-blue-600 hover:underline">Crear empleado</a> y volvé a vincular.
+              </div>
+            )}
+            {results.map(e => (
+              <button key={e.id} onClick={() => { onLink(row, e.id); setOpen(false) }} disabled={busy}
+                className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-white/[0.05] text-xs disabled:opacity-50">
+                <div className="font-semibold text-slate-700 dark:text-white/80">{e.full_name} {e.status !== 'active' && <span className="text-[10px] text-amber-500">({e.status})</span>}</div>
+                <div className="text-[10px] text-slate-400">#{e.id} · code {e.code || '—'} · legajo {e.employee_number || '—'}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

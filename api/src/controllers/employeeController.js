@@ -21,8 +21,14 @@ async function getAll(req, res) {
     if (deptVal) { where += ' AND e.department_id = ?'; params.push(deptVal); }
     if (branch_id) { where += ' AND e.branch_id = ?'; params.push(branch_id); }
     if (search) {
-      where += ' AND (e.first_name LIKE ? OR e.last_name LIKE ? OR e.code LIKE ? OR CONCAT(e.first_name," ",e.last_name) LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+      // Búsqueda por nombre/apellido/código/employee_number(legajo)/documento.
+      // (device_user_id se busca aparte vía employee_device_map, no acá — no se
+      //  confunde con employees.code.)
+      where += ' AND (e.first_name LIKE ? OR e.last_name LIKE ? OR e.code LIKE ?'
+        + ' OR e.employee_number LIKE ? OR e.document_number LIKE ?'
+        + ' OR CONCAT(e.first_name," ",e.last_name) LIKE ?)';
+      const like = `%${search}%`;
+      params.push(like, like, like, like, like, like);
     }
 
     const [employees] = await sequelize.query(`

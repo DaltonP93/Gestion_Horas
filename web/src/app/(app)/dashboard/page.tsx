@@ -167,9 +167,9 @@ export default function DashboardPage() {
         <MiniStat label="Presentes únicos" value={stats.present_today ?? 0} tone="emerald" />
         <MiniStat label="Marcaciones crudas hoy" value={stats.raw_today ?? 0} sub="recibidas de relojes" tone="slate" />
         <MiniStat label="Vinculadas hoy" value={stats.mapped_today ?? 0} sub="con empleado" tone="cyan" />
-        <Link href="/configuracion/sincronizacion" className="block">
-          <MiniStat label="Sin empleado" value={stats.unmapped_pending ?? 0}
-            sub={(stats.unmapped_pending ?? 0) > 0 ? 'pendientes → vincular' : 'sin pendientes'}
+        <Link href="/configuracion/sincronizacion?unmapped=1" className="block">
+          <MiniStat label="Pendientes sin empleado" value={stats.unmapped_pending ?? 0}
+            sub={`${stats.unmapped_today ?? 0} recibidas hoy · ${(stats.unmapped_pending ?? 0) > 0 ? 'clic para vincular' : 'sin pendientes'}`}
             tone={(stats.unmapped_pending ?? 0) > 0 ? 'amber' : 'slate'} clickable />
         </Link>
       </div>
