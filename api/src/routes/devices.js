@@ -646,7 +646,17 @@ router.get('/unmapped', authorize('admin','gestor','hr'), async (req, res) => {
       const alt = matcher.any.get(String(r.device_user_id));
       return { ...r, candidate: alt ? { id: alt.id, via: alt.via, status: alt.status } : null };
     });
-    res.json({ ok: true, count: items.length, items });
+    // Totales para la cabecera: acumuladas vs recibidas HOY (hora Paraguay).
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(new Date());
+    const [[tot]] = await sequelize.query(
+      `SELECT COUNT(*) AS marks, SUM(LEFT(r.record_time_py, 10) = ?) AS today_marks
+       FROM raw_device_punches r WHERE ${where.join(' AND ')}`,
+      { replacements: [today, ...repl] }
+    );
+    res.json({
+      ok: true, count: items.length, items,
+      totals: { marks: Number(tot?.marks) || 0, today: Number(tot?.today_marks) || 0 },
+    });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
   }

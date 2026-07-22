@@ -33,7 +33,7 @@ async function getAll(req, res) {
 
     const [employees] = await sequelize.query(`
       SELECT
-        e.id, e.code, e.employee_number,
+        e.id, e.code, e.employee_number, e.document_number,
         CONCAT(e.first_name, ' ', e.last_name) AS full_name,
         e.first_name, e.last_name, e.email, e.phone,
         e.position, e.hire_date, e.status, e.photo_url,
