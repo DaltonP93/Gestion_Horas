@@ -559,7 +559,46 @@ router.get('/:id/users', authorize('admin','gestor'), async (req, res) => {
       const { data } = await zk.getUsers();
       return data;
     }, { maxAttempts: 3, delayMs: 3000 });
-    res.json({ device: device.name, users, total: users.length });
+
+    // Enriquecer: vínculo con empleado (employee_device_map → code/employee_number)
+    // y marcas pendientes (raw_device_punches unmapped) por usuario del reloj.
+    const { buildEmployeeMatcher, tableExists } = require('../services/zktecoReader');
+    const matcher = await buildEmployeeMatcher();
+    let pendingByUid = new Map();
+    if (await tableExists('raw_device_punches')) {
+      const [pend] = await sequelize.query(
+        `SELECT device_user_id, COUNT(*) AS n FROM raw_device_punches
+         WHERE mapping_status = 'unmapped' AND device_id = ? GROUP BY device_user_id`,
+        { replacements: [device.id] }
+      );
+      pendingByUid = new Map(pend.map(p => [String(p.device_user_id), Number(p.n)]));
+    }
+    const empIds = new Set();
+    const enriched = users.map(u => {
+      const uid = String(u.userId ?? u.uid ?? '').trim();
+      const empId = uid ? matcher.resolve(device.id, uid) : null;
+      if (empId) empIds.add(empId);
+      return {
+        uid: u.uid, userId: uid, name: (u.name || '').trim() || null, cardno: u.cardno || null, role: u.role,
+        linked: !!empId, employee_id: empId || null,
+        pending: pendingByUid.get(uid) || 0,
+      };
+    });
+    // Nombres de los empleados vinculados (una sola query).
+    if (empIds.size) {
+      const [emps] = await sequelize.query(
+        `SELECT id, CONCAT(first_name, ' ', last_name) AS full_name, code FROM employees WHERE id IN (${[...empIds].map(() => '?').join(',')})`,
+        { replacements: [...empIds] }
+      );
+      const byId = new Map(emps.map(e => [e.id, e]));
+      for (const u of enriched) {
+        if (u.employee_id && byId.has(u.employee_id)) {
+          const e = byId.get(u.employee_id);
+          u.employee_name = e.full_name; u.employee_code = e.code;
+        }
+      }
+    }
+    res.json({ device: device.name, users: enriched, total: enriched.length });
   } catch (err) {
     res.status(503).json({ ok: false, error: fmtErr(err) });
   }

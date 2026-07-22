@@ -21,14 +21,23 @@ async function getAll(req, res) {
     if (deptVal) { where += ' AND e.department_id = ?'; params.push(deptVal); }
     if (branch_id) { where += ' AND e.branch_id = ?'; params.push(branch_id); }
     if (search) {
-      // Búsqueda por nombre/apellido/código/employee_number(legajo)/documento.
-      // (device_user_id se busca aparte vía employee_device_map, no acá — no se
-      //  confunde con employees.code.)
-      where += ' AND (e.first_name LIKE ? OR e.last_name LIKE ? OR e.code LIKE ?'
-        + ' OR e.employee_number LIKE ? OR e.document_number LIKE ?'
-        + ' OR CONCAT(e.first_name," ",e.last_name) LIKE ?)';
+      // Búsqueda por nombre/apellido/código/employee_number(legajo)/documento,
+      // y por device_user_id vía employee_device_map (coincidencia EXACTA, como
+      // vínculo explícito — no se confunde con employees.code).
+      const clauses = [
+        'e.first_name LIKE ?', 'e.last_name LIKE ?', 'e.code LIKE ?',
+        'e.employee_number LIKE ?', 'e.document_number LIKE ?',
+        'CONCAT(e.first_name," ",e.last_name) LIKE ?',
+      ];
       const like = `%${search}%`;
-      params.push(like, like, like, like, like, like);
+      const searchParams = [like, like, like, like, like, like];
+      const { tableExists } = require('../services/zktecoReader');
+      if (await tableExists('employee_device_map')) {
+        clauses.push('e.id IN (SELECT employee_id FROM employee_device_map WHERE device_user_id = ? AND active = 1)');
+        searchParams.push(String(search).trim());
+      }
+      where += ` AND (${clauses.join(' OR ')})`;
+      params.push(...searchParams);
     }
 
     const [employees] = await sequelize.query(`
