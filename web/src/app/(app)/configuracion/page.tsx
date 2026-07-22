@@ -651,6 +651,11 @@ function RelojesTab() {
                               ⚠️ Conectado, pero lectura parcial: no cubrió el rango. Recibido {run?.first_valid || '?'} → {run?.last_valid || '?'}. Reintentá con más intentos/cooldown.
                             </p>
                           )}
+                          {run && run.unmapped > 0 && (
+                            <p className="text-[11px] text-sky-700/80 dark:text-sky-300/70 mt-0.5">
+                              🔗 {run.unmapped} marca(s) sin empleado en la última lectura (vinculá en “Marcaciones sin empleado”). No afecta el estado de lectura.
+                            </p>
+                          )}
                           {s.recommendation && <p className="text-[11px] text-amber-700/80 dark:text-amber-300/70 mt-0.5">💡 {s.recommendation}</p>}
                         </>
                       )
