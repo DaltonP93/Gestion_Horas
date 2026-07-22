@@ -7,6 +7,7 @@ import {
   Users, Clock, AlertTriangle, UserCheck, Activity, RefreshCw,
   Calendar, ArrowDownLeft, ArrowUpRight,
 } from 'lucide-react'
+import Link from 'next/link'
 import { attendanceApi, api } from '@/lib/api'
 import { getSocket, reconnectSocket } from '@/lib/socket'
 import { useI18n } from '@/i18n/I18nProvider'
@@ -44,11 +45,12 @@ export default function DashboardPage() {
     refetchInterval: 30_000,
   })
 
-  // Cobertura por reloj: para avisar si el día puede estar incompleto porque
-  // algún reloj no se leyó (0 marcas, error o last_sync viejo).
+  // Cobertura/estado por reloj (marcas de hoy + estado de última lectura:
+  // completo/parcial/error). Alimenta el aviso de datos parciales y el panel
+  // de relojes.
   const { data: coverage } = useQuery({
-    queryKey: ['device-coverage-today'],
-    queryFn: async () => (await api.get('/api/devices/coverage-today')).data,
+    queryKey: ['device-sync-status'],
+    queryFn: async () => (await api.get('/api/devices/sync-status')).data,
     refetchInterval: 60_000,
   })
 
@@ -74,6 +76,17 @@ export default function DashboardPage() {
 
   const stats = data?.stats || {}
   const recentLogs: AttendanceEvent[] = [...liveEvents, ...(data?.recentLogs || [])].slice(0, 20)
+
+  // Estado por reloj (completo / parcial / error / sin datos).
+  const clocks: any[] = coverage?.items || []
+  const clockState = (c: any) => (c.failing || c.status === 'error') ? 'error'
+    : c.partial ? 'partial'
+    : (c.marks_today > 0 ? 'complete' : 'nodata')
+  const clocksError = clocks.filter(c => clockState(c) === 'error').length
+  const clocksPartial = clocks.filter(c => clockState(c) === 'partial').length
+  const clocksNoData = clocks.filter(c => clockState(c) === 'nodata').length
+  const clocksComplete = clocks.filter(c => clockState(c) === 'complete').length
+  const suspectCount = clocks.filter(c => c.suspect).length
 
   // Presentes hoy = EMPLEADOS ÚNICOS con marca válida del día (no cantidad de
   // marcas). Cobertura = presentes únicos / empleados activos. Ambos vienen ya
@@ -136,15 +149,61 @@ export default function DashboardPage() {
           <div className="flex items-start gap-2">
             <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm text-amber-800 dark:text-amber-300">
-              <b>Datos parciales:</b> {coverage.devices_suspect} de {coverage.total_devices} relojes no reportaron marcas hoy, tienen error o no sincronizan hace tiempo. El total de presentes puede estar incompleto.
+              <b>Datos parciales:</b> {suspectCount} de {clocks.length} relojes no reportaron marcas hoy, tienen error o no sincronizan hace tiempo. El total de presentes puede estar incompleto.
               <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-amber-700/80 dark:text-amber-300/70">
-                {coverage.devices.map((d: any) => (
+                {clocks.map((d: any) => (
                   <span key={d.id} className={d.suspect ? 'font-semibold' : ''}>
                     {d.suspect ? '⚠️' : '✓'} {d.name}: {d.marks_today} marcas{d.stale ? ' · sync viejo' : ''}{d.status === 'error' ? ' · error' : ''}
                   </span>
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Indicadores de marcaciones (crudas / vinculadas / sin empleado) */}
+      <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+        <MiniStat label="Presentes únicos" value={stats.present_today ?? 0} tone="emerald" />
+        <MiniStat label="Marcaciones crudas hoy" value={stats.raw_today ?? 0} sub="recibidas de relojes" tone="slate" />
+        <MiniStat label="Vinculadas hoy" value={stats.mapped_today ?? 0} sub="con empleado" tone="cyan" />
+        <Link href="/configuracion/sincronizacion" className="block">
+          <MiniStat label="Sin empleado" value={stats.unmapped_pending ?? 0}
+            sub={(stats.unmapped_pending ?? 0) > 0 ? 'pendientes → vincular' : 'sin pendientes'}
+            tone={(stats.unmapped_pending ?? 0) > 0 ? 'amber' : 'slate'} clickable />
+        </Link>
+      </div>
+
+      {/* Estado por reloj */}
+      {clocks.length > 0 && (
+        <div className="mb-4 rounded-2xl border border-slate-100 bg-white p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Relojes hoy</h3>
+            <div className="flex items-center gap-2 text-[11px] font-semibold">
+              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">{clocksComplete} completos</span>
+              {clocksPartial > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300">{clocksPartial} parciales</span>}
+              {clocksError > 0 && <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 dark:bg-rose-400/10 dark:text-rose-300">{clocksError} error</span>}
+              {clocksNoData > 0 && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-white/[0.06] dark:text-white/40">{clocksNoData} sin datos</span>}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {clocks.map((c: any) => {
+              const st = clockState(c)
+              const dot = st === 'error' ? 'bg-rose-500' : st === 'partial' ? 'bg-amber-500' : st === 'complete' ? 'bg-emerald-500' : 'bg-slate-300'
+              const lbl = st === 'error' ? 'error' : st === 'partial' ? 'parcial' : st === 'complete' ? 'completo' : 'sin datos'
+              return (
+                <div key={c.id} className="flex items-center justify-between rounded-xl border border-slate-100 dark:border-white/[0.06] px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${dot}`} />
+                      <span className="text-sm font-semibold text-slate-700 dark:text-white/80 truncate">{c.name}</span>
+                      <span className="text-[10px] text-slate-400 dark:text-white/30">{lbl}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 dark:text-white/30">{c.marks_today} marcas · {c.employees_today} empleados{c.last_run?.error ? ` · ${String(c.last_run.error).slice(0, 40)}` : ''}</div>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
@@ -277,6 +336,22 @@ export default function DashboardPage() {
           </div>
         </Bento>
       </div>
+    </div>
+  )
+}
+
+function MiniStat({ label, value, sub, tone = 'slate', clickable }: { label: string; value: number | string; sub?: string; tone?: 'emerald' | 'cyan' | 'amber' | 'slate'; clickable?: boolean }) {
+  const tones: Record<string, string> = {
+    emerald: 'border-emerald-100 dark:border-emerald-400/20',
+    cyan: 'border-cyan-100 dark:border-cyan-400/20',
+    amber: 'border-amber-200 bg-amber-50/40 dark:border-amber-400/30 dark:bg-amber-400/[0.05]',
+    slate: 'border-slate-100 dark:border-white/[0.06]',
+  }
+  return (
+    <div className={`rounded-2xl border bg-white dark:bg-white/[0.04] px-4 py-3 ${tones[tone]} ${clickable ? 'hover:shadow-sm transition-shadow cursor-pointer' : ''}`}>
+      <div className="text-[11px] text-slate-500 dark:text-white/40">{label}</div>
+      <div className="text-2xl font-extrabold tabular-nums text-slate-800 dark:text-white/90">{value}</div>
+      {sub && <div className="text-[11px] text-slate-400 dark:text-white/30 truncate">{sub}</div>}
     </div>
   )
 }
