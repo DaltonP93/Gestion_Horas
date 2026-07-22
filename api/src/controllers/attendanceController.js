@@ -272,6 +272,22 @@ async function getDashboardStats(req, res) {
       coverage_pct: active ? Math.round((presentToday / active) * 100) : 0,
     };
 
+    // Indicadores de marcaciones crudas / vinculadas / sin empleado (best-effort:
+    // raw_device_punches existe desde la migración 056). Nunca rompe el dashboard.
+    stats.raw_today = 0; stats.mapped_today = 0; stats.unmapped_pending = 0;
+    try {
+      const [[rp]] = await sequelize.query(`
+        SELECT
+          SUM(LEFT(record_time_py, 10) = ?)                             AS raw_today,
+          SUM(LEFT(record_time_py, 10) = ? AND mapping_status = 'mapped') AS mapped_today,
+          SUM(mapping_status = 'unmapped')                             AS unmapped_pending
+        FROM raw_device_punches
+      `, { replacements: [today, today] });
+      stats.raw_today = Number(rp?.raw_today) || 0;
+      stats.mapped_today = Number(rp?.mapped_today) || 0;
+      stats.unmapped_pending = Number(rp?.unmapped_pending) || 0;
+    } catch { /* raw_device_punches puede no existir en instalaciones viejas */ }
+
     const [recentLogs] = await sequelize.query(`
       SELECT
         al.id, al.timestamp, al.type, al.source,
