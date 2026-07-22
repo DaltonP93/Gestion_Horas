@@ -13,6 +13,7 @@ import {
   Cpu, MemoryStick, Fingerprint
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import VincularEmpleadoModal from '@/components/VincularEmpleadoModal'
 
 // ─── Tipos ──────────────────────────────────────────────────────
 interface Device {
@@ -334,6 +335,9 @@ function RelojesTab() {
   const [opLog, setOpLog]           = useState<Record<number, string[]>>({})
 
   const [syncStatus, setSyncStatus] = useState<Record<number, any>>({})
+  // Buscador de usuarios del reloj + modal de vinculación.
+  const [userSearch, setUserSearch] = useState<Record<number, string>>({})
+  const [linkUser, setLinkUser] = useState<{ deviceId: number; deviceName: string; userId: string; name: string | null; pending: number } | null>(null)
 
   async function loadDevices() {
     setLoading(true)
@@ -501,6 +505,22 @@ function RelojesTab() {
 
   return (
     <div className="space-y-4">
+      {/* Modal de vinculación de usuario del reloj → empleado */}
+      {linkUser && (
+        <VincularEmpleadoModal
+          deviceUserId={linkUser.userId}
+          deviceId={linkUser.deviceId}
+          deviceName={linkUser.deviceName}
+          deviceUserName={linkUser.name}
+          marcas={linkUser.pending}
+          onClose={() => setLinkUser(null)}
+          onDone={(s) => {
+            addLog(linkUser.deviceId, `🔗 ${linkUser.userId} vinculado: importadas ${s.mapped || 0}, duplicadas ${s.duplicate || 0}.`)
+            const dev = devices.find(dd => dd.id === linkUser.deviceId)
+            if (dev) loadUsers(dev)
+            loadSyncStatus()
+          }} />
+      )}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="font-semibold text-slate-800 dark:text-white/90">Relojes Biométricos ZKTeco</h2>
@@ -922,34 +942,59 @@ function RelojesTab() {
                                   </div>
                                 </div>
                               )}
-                              {data.users?.users && (
+                              {data.users?.users && (() => {
+                                const q = (userSearch[d.id] || '').toLowerCase().trim()
+                                const list = (data.users.users as any[]).filter(u =>
+                                  !q || String(u.userId).toLowerCase().includes(q) || (u.name || '').toLowerCase().includes(q))
+                                return (
                                 <div className="space-y-3">
-                                  <div className="flex items-center justify-between">
+                                  <div className="flex items-center justify-between gap-2 flex-wrap">
                                     <p className="text-sm font-semibold text-slate-700 dark:text-white/80">
                                       {data.users.total} usuario{data.users.total !== 1 ? 's' : ''} enrolado{data.users.total !== 1 ? 's' : ''}
+                                      {q && ` · ${list.length} coinciden`}
                                     </p>
-                                    <button onClick={() => loadUsers(d)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">
-                                      <RefreshCw size={12}/> Actualizar
-                                    </button>
+                                    <div className="flex items-center gap-2">
+                                      <input value={userSearch[d.id] || ''} onChange={e => setUserSearch(p => ({ ...p, [d.id]: e.target.value }))}
+                                        placeholder="Buscar por ID o nombre…"
+                                        className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs w-48 dark:border-white/[0.08] bg-transparent" />
+                                      <button onClick={() => loadUsers(d)} className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                                        <RefreshCw size={12}/> Actualizar
+                                      </button>
+                                    </div>
                                   </div>
-                                  <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
+                                  <div className="max-h-72 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
                                     <table className="w-full text-xs">
                                       <thead className="bg-slate-50 sticky top-0 dark:bg-white/[0.03]">
                                         <tr>
                                           <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">ID</th>
-                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Nombre</th>
-                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Rol</th>
+                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Nombre en el reloj</th>
+                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Empleado</th>
+                                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Pendientes</th>
+                                          <th className="px-3 py-2"></th>
                                         </tr>
                                       </thead>
                                       <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
-                                        {data.users.users.map((u: any, i: number) => (
+                                        {list.map((u: any, i: number) => (
                                           <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
                                             <td className="px-3 py-2 font-mono text-slate-600 dark:text-white/60">{u.userId}</td>
                                             <td className="px-3 py-2 text-slate-800 dark:text-white/90">{u.name || <span className="text-slate-400 italic dark:text-white/30">sin nombre</span>}</td>
                                             <td className="px-3 py-2">
-                                              <span className={`px-1.5 py-0.5 rounded font-medium ${u.privilege === 14 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
-                                                {u.privilege === 14 ? 'Admin' : 'Usuario'}
-                                              </span>
+                                              {u.linked
+                                                ? <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300 font-medium">✓ {u.employee_name || `emp#${u.employee_id}`}</span>
+                                                : <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-white/[0.06] dark:text-white/40">no vinculado</span>}
+                                            </td>
+                                            <td className="px-3 py-2">
+                                              {u.pending > 0
+                                                ? <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300 font-semibold">{u.pending}</span>
+                                                : <span className="text-slate-300 dark:text-white/20">0</span>}
+                                            </td>
+                                            <td className="px-3 py-2 text-right">
+                                              {!u.linked && (
+                                                <button onClick={() => setLinkUser({ deviceId: d.id, deviceName: d.name, userId: String(u.userId), name: u.name || null, pending: u.pending || 0 })}
+                                                  className="px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-800 text-white text-[11px] whitespace-nowrap">
+                                                  Vincular a empleado
+                                                </button>
+                                              )}
                                             </td>
                                           </tr>
                                         ))}
@@ -957,7 +1002,8 @@ function RelojesTab() {
                                     </table>
                                   </div>
                                 </div>
-                              )}
+                                )
+                              })()}
                               {!deviceLoading[d.id] && !data.users && (
                                 <button onClick={() => loadUsers(d)} className="flex items-center gap-2 text-sm text-blue-600 hover:underline">
                                   <Users size={14}/> Cargar usuarios del reloj
