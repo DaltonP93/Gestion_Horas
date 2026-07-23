@@ -3,6 +3,7 @@ import { Moon, Sun } from 'lucide-react'
 import NotificationBell from './NotificationBell'
 import GlobalSearch from './GlobalSearch'
 import LanguageSwitcher from './LanguageSwitcher'
+import AccountMenu from './AccountMenu'
 import { useTheme } from '@/components/theme/ThemeProvider'
 
 export default function TopBar() {
@@ -25,6 +26,9 @@ export default function TopBar() {
         </button>
         <LanguageSwitcher />
         <NotificationBell />
+        <div className="ml-1 pl-1 border-l border-slate-200 dark:border-white/10">
+          <AccountMenu variant="avatar" />
+        </div>
       </div>
     </div>
   )
