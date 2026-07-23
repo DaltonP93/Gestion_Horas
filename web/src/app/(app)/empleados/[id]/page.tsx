@@ -7,7 +7,7 @@ import { es } from 'date-fns/locale'
 import {
   ArrowLeft, User, Mail, Phone, Building2, Clock,
   Calendar, Edit2, Save, X, CheckCircle, XCircle,
-  AlertCircle, Briefcase
+  AlertCircle, Briefcase, UserX, UserCheck, ShieldAlert
 } from 'lucide-react'
 import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
@@ -140,6 +140,32 @@ export default function EmpleadoDetallePage() {
     qc.invalidateQueries({ queryKey: ['employees'] })
   }
 
+  // Baja / reactivación robusta (con motivo y auditoría en el backend).
+  const [bajaOpen, setBajaOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [statusBusy, setStatusBusy] = useState(false)
+
+  async function doDeactivate() {
+    setStatusBusy(true)
+    try {
+      await api.post(`/api/employees/${id}/deactivate`, { reason })
+      setBajaOpen(false); setReason('')
+      qc.invalidateQueries({ queryKey: ['employee', id] })
+      qc.invalidateQueries({ queryKey: ['employees'] })
+    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
+    finally { setStatusBusy(false) }
+  }
+  async function doReactivate() {
+    if (!confirm('¿Reactivar a este empleado? Volverá a las vistas operativas.')) return
+    setStatusBusy(true)
+    try {
+      await api.post(`/api/employees/${id}/reactivate`, {})
+      qc.invalidateQueries({ queryKey: ['employee', id] })
+      qc.invalidateQueries({ queryKey: ['employees'] })
+    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
+    finally { setStatusBusy(false) }
+  }
+
   if (isLoading) return <div className="p-6 text-slate-400 dark:text-white/30">Cargando...</div>
   if (error || !emp) return <div className="p-6 text-red-500">Empleado no encontrado</div>
 
@@ -178,14 +204,76 @@ export default function EmpleadoDetallePage() {
             )}
           </div>
         </div>
-        <span className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
-          emp.status === 'active'
-            ? 'bg-green-50 text-green-700'
-            : 'bg-slate-100 text-slate-600'
-        }`}>
-          {emp.status === 'active' ? 'Activo' : 'Inactivo'}
-        </span>
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          <span className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
+            emp.status === 'active'
+              ? 'bg-green-50 text-green-700'
+              : emp.status === 'suspended'
+                ? 'bg-amber-50 text-amber-700'
+                : 'bg-slate-100 text-slate-600'
+          }`}>
+            {emp.status === 'active' ? 'Activo' : emp.status === 'suspended' ? 'Suspendido' : 'Inactivo'}
+          </span>
+          {emp.status === 'active'
+            ? <button onClick={() => setBajaOpen(true)} disabled={statusBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-xl bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60">
+                <UserX size={14} /> Dar de baja
+              </button>
+            : <button onClick={doReactivate} disabled={statusBusy}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60">
+                <UserCheck size={14} /> Reactivar
+              </button>}
+        </div>
       </div>
+
+      {/* Banner de baja: motivo, fecha y estado de deshabilitación en reloj */}
+      {emp.status !== 'active' && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-3 dark:border-amber-500/20 dark:bg-amber-500/[0.06]">
+          <ShieldAlert size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="text-sm text-amber-900 dark:text-amber-200/90 space-y-1">
+            <p className="font-medium">
+              Empleado {emp.status === 'suspended' ? 'suspendido' : 'dado de baja'}. El histórico se conserva y queda excluido de las vistas operativas.
+            </p>
+            {emp.deactivation_reason && <p><strong>Motivo:</strong> {emp.deactivation_reason}</p>}
+            {emp.deactivated_at && <p><strong>Fecha de baja:</strong> {format(parseISO(emp.deactivated_at), "d 'de' MMMM yyyy, HH:mm", { locale: es })}</p>}
+            {emp.device_disable_pending ? (
+              <p className="text-amber-700 dark:text-amber-300/80">⏳ Deshabilitación en el reloj <strong>pendiente</strong> — se aplicará con la sincronización inversa empleados → reloj.</p>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: motivo de la baja */}
+      {bajaOpen && (
+        <div role="dialog" aria-modal="true" aria-labelledby="baja-title"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+          onKeyDown={e => { if (e.key === 'Escape') setBajaOpen(false) }}>
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4 dark:bg-[#0d0d0f]">
+            <div className="flex items-center justify-between">
+              <h3 id="baja-title" className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <UserX size={18} className="text-red-600" /> Dar de baja
+              </h3>
+              <button aria-label="Cerrar" onClick={() => setBajaOpen(false)} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"><X size={18} /></button>
+            </div>
+            <p className="text-sm text-slate-500 dark:text-white/40">
+              Se conserva todo el histórico. El empleado se excluye de las vistas operativas y la deshabilitación en el reloj queda pendiente hasta la sincronización inversa.
+            </p>
+            <div>
+              <label htmlFor="baja-reason" className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Motivo (opcional)</label>
+              <textarea id="baja-reason" value={reason} onChange={e => setReason(e.target.value)} rows={3} autoFocus
+                placeholder="ej: renuncia, fin de contrato, traslado…"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 dark:border-white/[0.08] dark:bg-white/[0.03]" />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setBajaOpen(false)} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
+              <button onClick={doDeactivate} disabled={statusBusy}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium disabled:opacity-60">
+                <UserX size={14} /> {statusBusy ? 'Procesando…' : 'Confirmar baja'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Info personal */}

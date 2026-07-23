@@ -5,7 +5,7 @@ const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const {
-  getAll, getById, create, update, deactivate, getAttendanceHistory
+  getAll, getById, create, update, deactivate, reactivate, getInactiveMarks, getAttendanceHistory
 } = require('../controllers/employeeController');
 
 // DTO de alta de empleado: campos requeridos + formatos válidos.
@@ -33,11 +33,16 @@ router.get('/departments', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
+// Alerta: empleados inactivos que siguen marcando. ANTES de '/:id'.
+router.get('/inactive-marks',      requirePermission('empleados', 'view'), getInactiveMarks);
+
 router.get('/',                    requirePermission('empleados', 'view'), getAll);
 router.get('/:id',                 requirePermission('empleados', 'view'), getById);
 router.post('/',                   authorize('admin','hr'), requirePermission('empleados', 'create'), validate(createEmployeeSchema), create);
 router.put('/:id',                 authorize('admin','hr'), requirePermission('empleados', 'update'), update);
 router.delete('/:id',              authorize('admin'), requirePermission('empleados', 'delete'), deactivate);
+router.post('/:id/deactivate',     authorize('admin','hr'), requirePermission('empleados', 'delete'), deactivate);
+router.post('/:id/reactivate',     authorize('admin','hr'), requirePermission('empleados', 'update'), reactivate);
 router.get('/:id/attendance',      requirePermission('empleados', 'view'), getAttendanceHistory);
 
 // Helper: normalizar fecha de hire_date aceptando "DD/MM/YYYY", "YYYY-MM-DD", etc.
