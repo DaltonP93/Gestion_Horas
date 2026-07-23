@@ -120,6 +120,18 @@ async function initRedis() {
     }
   });
 
+  // Resultado de cada corrida del worker de sincronización automática
+  // (sishoras-sync-worker) → dashboard en vivo.
+  await subscriber.subscribe('sync:completed', async (message) => {
+    try {
+      const data = JSON.parse(message);
+      const { getIO } = require('../socket/socketServer');
+      try { getIO().to('role:admin').to('role:gestor').to('role:hr').emit('sync:completed', data); } catch {}
+    } catch (err) {
+      logger.error('Error en sync:completed:', err);
+    }
+  });
+
   // Alertas del Bridge (heartbeat perdido / recuperado)
   await subscriber.subscribe('device:alert', async (message) => {
     try {

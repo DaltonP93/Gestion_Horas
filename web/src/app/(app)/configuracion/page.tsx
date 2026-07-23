@@ -313,6 +313,223 @@ function SistemaTab() {
   )
 }
 
+// ─── Panel: Sincronización automática (FASE 2 · worker PM2) ──────
+interface AutoSyncDevice {
+  id: number; name: string; ip_address: string; connection_mode?: string
+  auto_sync_enabled: number; auto_sync_paused: number
+  auto_sync_interval_min: number; auto_sync_offset_min: number
+  auto_sync_attempts: number; auto_sync_cooldown_sec: number; auto_sync_timeout_sec: number
+  last_auto_sync_at: string | null; next_auto_sync_at: string | null
+}
+interface AutoSyncConfig {
+  ok: boolean; enabled: boolean; window: string
+  worker: { alive: boolean; heartbeat: string | null }
+  devices: AutoSyncDevice[]
+}
+
+const fmtDT = (v: string | null) => {
+  if (!v) return '—'
+  const d = new Date(v)
+  return isNaN(d.getTime()) ? '—' : d.toLocaleString('es-PY', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function AutoSyncPanel() {
+  const [cfg, setCfg]         = useState<AutoSyncConfig | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [open, setOpen]       = useState(false)
+  const [savingGlobal, setSavingGlobal] = useState(false)
+  const [win, setWin]         = useState('04:00-23:59')
+  // Draft por reloj (para editar antes de guardar).
+  const [draft, setDraft]     = useState<Record<number, Partial<AutoSyncDevice>>>({})
+  const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({})
+
+  async function load() {
+    try {
+      const r = await api.get('/api/devices/auto-sync-config')
+      if (r.data?.ok !== false) { setCfg(r.data); setWin(r.data.window || '04:00-23:59') }
+    } catch { /* opcional */ }
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+  // Refresco liviano del estado del worker mientras el panel está abierto.
+  useEffect(() => {
+    if (!open) return
+    const t = setInterval(load, 20000)
+    return () => clearInterval(t)
+  }, [open])
+
+  async function saveGlobal(enabled: boolean, window = win) {
+    setSavingGlobal(true)
+    try {
+      const r = await api.post('/api/devices/auto-sync-global', { enabled, window })
+      if (r.data?.ok === false) alert('Error: ' + r.data.error)
+      await load()
+    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
+    setSavingGlobal(false)
+  }
+
+  function fieldOf(d: AutoSyncDevice, k: keyof AutoSyncDevice) {
+    const dv = draft[d.id]
+    return (dv && dv[k] !== undefined ? dv[k] : d[k]) as any
+  }
+  function setField(id: number, k: keyof AutoSyncDevice, v: any) {
+    setDraft(p => ({ ...p, [id]: { ...p[id], [k]: v } }))
+  }
+  async function saveDevice(d: AutoSyncDevice, overrides: Partial<AutoSyncDevice> = {}) {
+    setRowBusy(p => ({ ...p, [d.id]: true }))
+    const payload = {
+      enabled:      Number(overrides.auto_sync_enabled      ?? fieldOf(d, 'auto_sync_enabled')) ? true : false,
+      paused:       Number(overrides.auto_sync_paused       ?? fieldOf(d, 'auto_sync_paused'))  ? true : false,
+      interval_min: Number(overrides.auto_sync_interval_min ?? fieldOf(d, 'auto_sync_interval_min')),
+      offset_min:   Number(overrides.auto_sync_offset_min   ?? fieldOf(d, 'auto_sync_offset_min')),
+      attempts:     Number(overrides.auto_sync_attempts     ?? fieldOf(d, 'auto_sync_attempts')),
+      cooldown_sec: Number(overrides.auto_sync_cooldown_sec ?? fieldOf(d, 'auto_sync_cooldown_sec')),
+      timeout_sec:  Number(overrides.auto_sync_timeout_sec  ?? fieldOf(d, 'auto_sync_timeout_sec')),
+    }
+    try {
+      const r = await api.put(`/api/devices/${d.id}/auto-sync`, payload)
+      if (r.data?.ok === false) alert('Error: ' + r.data.error)
+      setDraft(p => { const n = { ...p }; delete n[d.id]; return n })
+      await load()
+    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
+    setRowBusy(p => ({ ...p, [d.id]: false }))
+  }
+
+  const enabled = cfg?.enabled ?? false
+  const alive   = cfg?.worker?.alive ?? false
+  const devices = cfg?.devices || []
+  const activeCount = devices.filter(d => d.auto_sync_enabled && !d.auto_sync_paused).length
+
+  return (
+    <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/60 to-white dark:border-indigo-500/20 dark:from-indigo-500/[0.06] dark:to-transparent">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-3 p-4 text-left">
+        <RefreshCw size={18} className={`text-indigo-500 ${enabled && alive ? 'animate-spin' : ''}`} />
+        <div className="flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-slate-800 dark:text-white/90">Sincronización automática</h3>
+            {enabled
+              ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Activada</span>
+              : <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 font-medium">Desactivada</span>}
+            {enabled && (alive
+              ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Worker en ejecución</span>
+              : <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Worker sin señal</span>)}
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5 dark:text-white/40">
+            {loading ? 'Cargando…' : enabled
+              ? `${activeCount} reloj(es) participando · ventana ${cfg?.window}`
+              : 'El worker lee los relojes sin navegador abierto. Actívalo para programar lecturas.'}
+          </p>
+        </div>
+        {open ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-4 border-t border-indigo-100/70 dark:border-white/[0.06] pt-4">
+          {/* Controles globales */}
+          <div className="flex flex-wrap items-end gap-4">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={enabled} disabled={savingGlobal}
+                onChange={e => saveGlobal(e.target.checked)} className="w-4 h-4 accent-indigo-600" />
+              <span className="text-sm font-medium text-slate-700 dark:text-white/80">Activar sincronización automática</span>
+            </label>
+            <div>
+              <label className={labelCls}>Ventana horaria (Paraguay)</label>
+              <div className="flex items-center gap-2">
+                <input value={win} onChange={e => setWin(e.target.value)} placeholder="04:00-23:59"
+                  className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-32 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] dark:bg-white/[0.04]" />
+                <button onClick={() => saveGlobal(enabled, win)} disabled={savingGlobal}
+                  className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08]">
+                  Guardar ventana
+                </button>
+              </div>
+            </div>
+            {enabled && (
+              <button onClick={() => { if (confirm('¿Detener TODAS las sincronizaciones automáticas? El worker dejará de leer los relojes.')) saveGlobal(false) }}
+                disabled={savingGlobal}
+                className="flex items-center gap-2 px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50">
+                <PowerOff size={14} /> Detener todas
+              </button>
+            )}
+          </div>
+
+          <p className="text-xs text-slate-400 dark:text-white/30 leading-relaxed">
+            El kill switch <code className="px-1 bg-slate-100 rounded dark:bg-white/[0.06]">ZKTECO_AUTO_POLL</code> del servidor manda por encima de esta pantalla:
+            si está en <strong>false</strong>, el worker no lee ningún reloj aunque aquí figure activado.
+            Con el interruptor en <strong>true</strong>, esta configuración decide qué relojes se leen y cuándo.
+          </p>
+
+          {/* Config por reloj */}
+          {devices.length === 0 ? (
+            <p className="text-sm text-slate-400 dark:text-white/30">No hay relojes con IP configurada.</p>
+          ) : (
+            <div className="space-y-3">
+              {devices.map(d => {
+                const dirty = !!draft[d.id]
+                const busy  = rowBusy[d.id]
+                const participa = !!Number(fieldOf(d, 'auto_sync_enabled'))
+                const pausado   = !!Number(fieldOf(d, 'auto_sync_paused'))
+                return (
+                  <div key={d.id} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800 dark:text-white/90">{d.name}</span>
+                        <span className="text-xs text-slate-400 dark:text-white/30">{d.ip_address}</span>
+                        {participa && !pausado && <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700">Participa</span>}
+                        {participa && pausado && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Pausado</span>}
+                        {!participa && <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Fuera</span>}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-white/40">
+                        <span>Última: <strong className="text-slate-700 dark:text-white/70">{fmtDT(d.last_auto_sync_at)}</strong></span>
+                        <span>Próxima: <strong className="text-slate-700 dark:text-white/70">{participa && !pausado ? fmtDT(d.next_auto_sync_at) : '—'}</strong></span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-2">
+                      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={participa}
+                          onChange={e => saveDevice(d, { auto_sync_enabled: e.target.checked ? 1 : 0 })}
+                          className="w-4 h-4 accent-indigo-600" />
+                        <span className="text-xs font-medium text-slate-700 dark:text-white/80">Participa</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={pausado} disabled={!participa}
+                          onChange={e => saveDevice(d, { auto_sync_paused: e.target.checked ? 1 : 0 })}
+                          className="w-4 h-4 accent-amber-600 disabled:opacity-40" />
+                        <span className="text-xs font-medium text-slate-700 dark:text-white/80">Pausar</span>
+                      </label>
+                      {([
+                        ['auto_sync_interval_min', 'Intervalo (min)'],
+                        ['auto_sync_offset_min',   'Offset (min)'],
+                        ['auto_sync_attempts',     'Intentos'],
+                        ['auto_sync_cooldown_sec', 'Cooldown (s)'],
+                        ['auto_sync_timeout_sec',  'Timeout (s)'],
+                      ] as const).map(([k, lbl]) => (
+                        <div key={k}>
+                          <label className="text-[11px] text-slate-500 block mb-0.5 dark:text-white/40">{lbl}</label>
+                          <input type="number" min={0} value={fieldOf(d, k) ?? 0}
+                            onChange={e => setField(d.id, k, e.target.value)}
+                            className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] dark:bg-white/[0.04]" />
+                        </div>
+                      ))}
+                      {dirty && (
+                        <button onClick={() => saveDevice(d)} disabled={busy}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                          <Save size={12} /> {busy ? 'Guardando…' : 'Guardar'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Tab: Relojes ZKTeco ─────────────────────────────────────
 function RelojesTab() {
   const [devices, setDevices]       = useState<Device[]>([])
@@ -541,6 +758,9 @@ function RelojesTab() {
           </button>
         </div>
       </div>
+
+      {/* Sincronización automática (worker PM2) */}
+      <AutoSyncPanel />
 
       {/* Formulario add/edit */}
       {showForm && (
