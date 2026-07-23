@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard, Users, BarChart2, Settings, Clock, Calendar,
-  LogOut, Shield, Server, Building2, CheckSquare, UserCircle2,
+  Shield, Server, Building2, CheckSquare, UserCircle2,
   Menu, X, FileText, TrendingUp, QrCode, DollarSign, ChevronDown, Activity,
   Cake, Plane, PiggyBank, Megaphone, GraduationCap, ClipboardList, Star, UserCheck, CalendarRange, AlertTriangle,
   SlidersHorizontal, FileSignature, Baby, MapPinOff, RefreshCw,
@@ -14,6 +14,7 @@ import clsx from 'clsx'
 import { useCurrentUser, hasRole, isSuperAdmin, type Role } from '@/lib/useCurrentUser'
 import { useI18n } from '@/i18n/I18nProvider'
 import { apiUrl } from '@/lib/api'
+import AccountMenu from './AccountMenu'
 
 type NavItem = {
   href: string
@@ -31,7 +32,6 @@ const NAV: NavItem[] = [
   { href: '/mi-asistencia', icon: Clock,           i18nKey: 'nav.my_attendance', section: 'portal', roles: ['employee'], module: 'mi_asistencia' },
   { href: '/marcar',        icon: QrCode,          i18nKey: 'nav.punch_qr_gps',  section: 'portal', roles: ['employee'], module: 'marcar' },
   { href: '/mis-permisos',  icon: Calendar,        i18nKey: 'nav.my_permissions',section: 'portal', roles: ['employee'], module: 'mis_permisos' },
-  { href: '/seguridad',     icon: Shield,          i18nKey: 'nav.security',      section: 'portal' },
 
   // Gestión
   { href: '/dashboard',     icon: LayoutDashboard, i18nKey: 'nav.dashboard',    section: 'gestion', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'dashboard' },
@@ -131,7 +131,7 @@ export default function Sidebar() {
   const items = NAV.filter(item => {
     if (item.superOnly) return isSuperAdmin(user)
     // admin/super_admin siempre ven todo (salvo portal del empleado, que no es su espacio)
-    if (isAdminLike) return item.section !== 'portal' || item.href === '/seguridad'
+    if (isAdminLike) return item.section !== 'portal'
     // Si hay permisos granulares, mandan sobre el rol
     if (perms && item.module && perms[item.module]) return perms[item.module].can_view
     if (!item.roles) return true
@@ -144,13 +144,6 @@ export default function Sidebar() {
     const sec = it.section || 'gestion'
     if (!sections[sec]) sections[sec] = []
     sections[sec].push(it)
-  }
-
-  function handleLogout() {
-    const refresh = localStorage.getItem('refresh_token')
-    if (refresh) fetch('/api/auth/logout', { method: 'POST', body: JSON.stringify({ refreshToken: refresh }) })
-    localStorage.clear()
-    window.location.href = '/login'
   }
 
   const bg         = theme.system_sidebar_bg     || '#0f172a'
@@ -233,21 +226,9 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* User + Logout */}
-      <div className="px-3 py-4 border-t border-white/10 space-y-2">
-        {user && (
-          <div className="px-3 py-2 text-xs" style={{ color: textColor }}>
-            <p className="text-white font-medium truncate">{user.fullName || user.username}</p>
-            <p className="truncate capitalize">{user.role.replace('_', ' ')}</p>
-          </div>
-        )}
-        <button onClick={handleLogout}
-          className="flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-colors hover:bg-white/5 hover:text-white"
-          style={{ color: textColor }}
-        >
-          <LogOut size={18} />
-          {t('nav.logout')}
-        </button>
+      {/* Menú de cuenta (perfil, preferencias, seguridad personal, cerrar sesión) */}
+      <div className="px-3 py-4 border-t border-white/10">
+        <AccountMenu variant="card" />
       </div>
     </>
   )

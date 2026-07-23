@@ -8,6 +8,17 @@ const totp = require('../services/totp');
 
 const SALT_ROUNDS = 12;
 
+// Metadata de sesión (IP / dispositivo) para "Seguridad de mi cuenta".
+// Nunca registra credenciales; sólo cabeceras de red del request.
+function reqIp(req) {
+  return String(req?.headers?.['x-forwarded-for'] || '').split(',')[0].trim()
+      || req?.ip || req?.connection?.remoteAddress || null;
+}
+function reqUA(req) {
+  return req?.headers?.['user-agent']?.slice(0, 255) || null;
+}
+function sha256(v) { return crypto.createHash('sha256').update(v).digest('hex'); }
+
 function generateTokens(user) {
   const payload = {
     id: user.id,
@@ -70,9 +81,14 @@ async function login(req, res) {
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     await sequelize.query(
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip_address, user_agent, last_used_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      { replacements: [user.id, tokenHash, expiresAt, reqIp(req), reqUA(req)] }
+    ).catch(() => sequelize.query(
+      // Fallback si la migración 062 aún no corrió (columnas de metadata ausentes).
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)',
       { replacements: [user.id, tokenHash, expiresAt] }
-    );
+    ));
 
     // Actualizar último login
     await sequelize.query('UPDATE users SET last_login = NOW() WHERE id = ?', { replacements: [user.id] });
@@ -116,14 +132,18 @@ async function refresh(req, res) {
 
     const { accessToken, refreshToken: newRefreshToken } = generateTokens(users[0]);
 
-    // Rotar refresh token
+    // Rotar refresh token conservando la metadata de la sesión (misma IP/UA).
     await sequelize.query('DELETE FROM refresh_tokens WHERE token_hash = ?', { replacements: [tokenHash] });
-    const newHash = crypto.createHash('sha256').update(newRefreshToken).digest('hex');
+    const newHash = sha256(newRefreshToken);
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     await sequelize.query(
+      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at, ip_address, user_agent, last_used_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      { replacements: [users[0].id, newHash, expiresAt, reqIp(req), reqUA(req)] }
+    ).catch(() => sequelize.query(
       'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)',
       { replacements: [users[0].id, newHash, expiresAt] }
-    );
+    ));
 
     res.json({ accessToken, refreshToken: newRefreshToken });
   } catch {
@@ -141,9 +161,16 @@ async function logout(req, res) {
   res.json({ message: 'Sesión cerrada' });
 }
 
-// POST /api/auth/change-password — cambiar password del usuario actual
+// POST /api/auth/change-password — cambiar password del usuario actual.
+// Body: { currentPassword, newPassword, closeOtherSessions?, refreshToken? }
+//  - closeOtherSessions (default true): revoca las demás sesiones. Si se envía
+//    el refreshToken actual, ESA sesión se conserva (no cierra la del propio
+//    usuario); sin él, revoca todas (fallback seguro).
+//  - Nunca se registran contraseñas en logs ni en audit_events: sólo el evento.
 async function changePassword(req, res) {
   const { currentPassword, newPassword } = req.body;
+  const closeOtherSessions = req.body.closeOtherSessions !== false; // default: true
+  const currentRefresh = req.body.refreshToken || null;
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ error: 'currentPassword y newPassword son requeridos' });
   }
@@ -154,6 +181,9 @@ async function changePassword(req, res) {
   if (!/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
     return res.status(400).json({ error: 'La contraseña debe contener letras y números' });
   }
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ error: 'La nueva contraseña debe ser distinta a la actual' });
+  }
 
   try {
     const [rows] = await sequelize.query(
@@ -163,7 +193,10 @@ async function changePassword(req, res) {
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     const valid = await bcrypt.compare(currentPassword, rows[0].password_hash);
-    if (!valid) return res.status(401).json({ error: 'Contraseña actual incorrecta' });
+    if (!valid) {
+      audit.log({ req, user: req.user, action: 'password.change_fail', entity: 'user', entity_id: req.user.id, details: { reason: 'bad_current_password' } });
+      return res.status(401).json({ error: 'Contraseña actual incorrecta' });
+    }
 
     const newHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
     await sequelize.query(
@@ -174,11 +207,30 @@ async function changePassword(req, res) {
       { replacements: [newHash, req.user.id] }
     ));
 
-    // Revocar todos los refresh tokens del usuario (forzar re-login en otros dispositivos)
-    await sequelize.query('DELETE FROM refresh_tokens WHERE user_id = ?', { replacements: [req.user.id] });
+    // Revocar sesiones. Conservar la actual si el cliente envió su refresh token.
+    let closedOthers = 0;
+    if (closeOtherSessions) {
+      if (currentRefresh) {
+        const keepHash = sha256(currentRefresh);
+        const [r] = await sequelize.query(
+          'DELETE FROM refresh_tokens WHERE user_id = ? AND token_hash <> ?',
+          { replacements: [req.user.id, keepHash] }
+        );
+        closedOthers = r?.affectedRows ?? 0;
+      } else {
+        const [r] = await sequelize.query('DELETE FROM refresh_tokens WHERE user_id = ?', { replacements: [req.user.id] });
+        closedOthers = r?.affectedRows ?? 0;
+      }
+    }
 
     logger.info(`Password cambiada: user_id=${req.user.id} (${req.user.username})`);
-    res.json({ message: 'Contraseña actualizada. Se cerraron todas las otras sesiones.' });
+    audit.log({ req, user: req.user, action: 'password.change', entity: 'user', entity_id: req.user.id, details: { closed_other_sessions: closeOtherSessions ? closedOthers : 0 } });
+    res.json({
+      message: closeOtherSessions
+        ? 'Contraseña actualizada. Se cerraron las otras sesiones.'
+        : 'Contraseña actualizada.',
+      closed_other_sessions: closeOtherSessions ? closedOthers : 0,
+    });
   } catch (err) {
     logger.error('Error cambiando password:', err);
     res.status(500).json({ error: 'Error del servidor' });

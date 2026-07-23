@@ -14,11 +14,20 @@ const pwdResetLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Esperá 1 hora.' },
 });
 
+// Protección contra intentos repetidos al cambiar la contraseña.
+const changePwdLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiados intentos de cambio de contraseña. Esperá unos minutos.' },
+});
+
 router.post('/login',           login);
 router.post('/refresh',         refresh);
 router.post('/logout',          authenticate, logout);
 router.get('/me',               authenticate, me);
-router.post('/change-password', authenticate, changePassword);
+router.post('/change-password', authenticate, changePwdLimiter, changePassword);
 
 // ─── 2FA TOTP (usuario autenticado) ────────────────────────────
 router.get ('/2fa/status',  authenticate, status2fa);

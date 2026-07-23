@@ -768,10 +768,47 @@ const help: Record<string, HelpContent> = {
     ],
   },
 
-  '/seguridad': {
-    title: 'Seguridad',
-    intro: 'Configuración de autenticación de dos factores (2FA) y sesiones activas.',
+  '/cuenta/perfil': {
+    title: 'Mi perfil',
+    intro: 'Editá tus datos personales autorizados.',
     sections: [
+      {
+        heading: 'Qué podés editar',
+        items: [
+          'Nombre, apellido, correo, teléfono, domicilio y foto de perfil.',
+          'Tu rol, permisos, estado, sucursal y grupos de seguridad los gestiona RR.HH.',
+        ],
+      },
+    ],
+  },
+
+  '/cuenta/preferencias': {
+    title: 'Preferencias',
+    intro: 'Idioma, zona horaria y apariencia de la aplicación.',
+    sections: [
+      {
+        heading: 'Opciones',
+        items: [
+          'Idioma: español, inglés o portugués.',
+          'Zona horaria: usada para mostrar fechas y horas.',
+          'Apariencia: tema claro u oscuro.',
+        ],
+      },
+    ],
+  },
+
+  '/cuenta/seguridad': {
+    title: 'Seguridad de mi cuenta',
+    intro: 'Contraseña, sesiones activas y verificación en dos pasos (2FA).',
+    sections: [
+      {
+        heading: 'Contraseña y sesiones',
+        items: [
+          'Cambiar contraseña: requiere la contraseña actual y cumplir los requisitos.',
+          'Podés cerrar tus otras sesiones al cambiar la contraseña o desde el panel de sesiones.',
+          'Último acceso y dispositivos/IP recientes se muestran para tu control.',
+        ],
+      },
       {
         heading: 'Autenticación 2FA',
         items: [
