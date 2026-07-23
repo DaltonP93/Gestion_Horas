@@ -614,6 +614,9 @@ export default function EmpleadosPage() {
         </div>
       </div>
 
+      {/* Alerta: inactivos que siguen marcando */}
+      <InactiveMarksAlert />
+
       {/* Stats rápidas */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
@@ -779,6 +782,45 @@ export default function EmpleadosPage() {
           onDone={() => qc.invalidateQueries({ queryKey: ['employees'] })}
         />
       )}
+    </div>
+  )
+}
+
+// ─── Alerta: empleados inactivos que siguen marcando ─────────────
+function InactiveMarksAlert() {
+  const { data } = useQuery({
+    queryKey: ['inactive-marks'],
+    queryFn: () => api.get('/api/employees/inactive-marks', { params: { days: 7 } }).then(r => r.data),
+    staleTime: 60_000,
+  })
+  const items: any[] = data?.items || []
+  if (!items.length) return null
+
+  const fmt = (v?: string | null) => v ? new Date(v).toLocaleString('es-PY', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'
+
+  return (
+    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-500/20 dark:bg-amber-500/[0.06]">
+      <div className="flex items-start gap-3">
+        <AlertCircle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold text-amber-900 dark:text-amber-200">
+            {items.length} empleado(s) inactivo(s) siguieron marcando (últimos 7 días)
+          </p>
+          <p className="text-xs text-amber-700 dark:text-amber-300/80 mb-2">
+            Las marcas se conservan pero no cuentan como asistencia. Revisá y reactivá o gestioná la baja en el reloj.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {items.slice(0, 12).map(it => (
+              <Link key={it.employee_id} href={`/empleados/${it.employee_id}`}
+                className="inline-flex items-center gap-2 bg-white border border-amber-200 rounded-lg px-2.5 py-1 text-xs hover:bg-amber-100 dark:bg-white/[0.04] dark:border-amber-500/20">
+                <span className="font-medium text-slate-800 dark:text-white/90">{it.full_name}</span>
+                <span className="text-amber-700 dark:text-amber-300/80">{it.marks} marca(s) · última {fmt(it.last_mark)}</span>
+              </Link>
+            ))}
+            {items.length > 12 && <span className="text-xs text-amber-700 self-center dark:text-amber-300/80">y {items.length - 12} más…</span>}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

@@ -1,5 +1,22 @@
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
+const audit = require('../services/audit');
+
+// Columnas de inactivación (migración 063). Se detectan una vez para degradar
+// con gracia si la migración aún no corrió.
+let _inactCols = null;
+async function hasInactivationCols() {
+  if (_inactCols !== null) return _inactCols;
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employees'
+          AND COLUMN_NAME IN ('deactivated_at','device_disable_pending')`
+    );
+    _inactCols = rows.length >= 2;
+  } catch { _inactCols = false; }
+  return _inactCols;
+}
 
 // GET /api/employees
 async function getAll(req, res) {
@@ -159,16 +176,114 @@ async function update(req, res) {
   }
 }
 
-// DELETE /api/employees/:id (desactivar)
+// DELETE /api/employees/:id · POST /api/employees/:id/deactivate
+// Baja robusta: conserva el histórico, registra motivo/quién/cuándo y deja
+// pendiente la deshabilitación en el reloj (device_disable_pending) hasta que
+// exista la sincronización inversa empleados → reloj. NO escribe al reloj aquí.
 async function deactivate(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const reason = String(req.body?.reason || '').trim().slice(0, 255) || null;
   try {
-    await sequelize.query(
-      'UPDATE employees SET status = ? WHERE id = ?',
-      { replacements: ['inactive', req.params.id] }
+    const [[emp]] = await sequelize.query(
+      'SELECT id, code, first_name, last_name, status FROM employees WHERE id = ?',
+      { replacements: [id] }
     );
-    res.json({ message: 'Empleado desactivado' });
+    if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+    if (await hasInactivationCols()) {
+      await sequelize.query(
+        `UPDATE employees
+            SET status = 'inactive', deactivated_at = NOW(), deactivated_by = ?,
+                deactivation_reason = ?, reactivated_at = NULL, reactivated_by = NULL,
+                device_disable_pending = 1
+          WHERE id = ?`,
+        { replacements: [req.user?.id || null, reason, id] }
+      );
+    } else {
+      await sequelize.query('UPDATE employees SET status = ? WHERE id = ?', { replacements: ['inactive', id] });
+    }
+
+    audit.log({ req, user: req.user, action: 'employee.deactivate', entity: 'employee', entity_id: id,
+      details: { code: emp.code, name: `${emp.first_name} ${emp.last_name}`, reason, was: emp.status } });
+    logger.info(`Empleado dado de baja: ${emp.code} (${emp.first_name} ${emp.last_name})`);
+    res.json({
+      message: 'Empleado dado de baja. El histórico se conserva.',
+      device_disable_pending: true,
+      note: 'La deshabilitación en el reloj queda pendiente hasta la sincronización inversa.',
+    });
   } catch (err) {
+    logger.error('Error al desactivar empleado:', err);
     res.status(500).json({ error: 'Error al desactivar empleado' });
+  }
+}
+
+// POST /api/employees/:id/reactivate — reactivar con auditoría.
+async function reactivate(req, res) {
+  const id = parseInt(req.params.id, 10);
+  try {
+    const [[emp]] = await sequelize.query(
+      'SELECT id, code, first_name, last_name, status FROM employees WHERE id = ?',
+      { replacements: [id] }
+    );
+    if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+    if (await hasInactivationCols()) {
+      await sequelize.query(
+        `UPDATE employees
+            SET status = 'active', reactivated_at = NOW(), reactivated_by = ?,
+                device_disable_pending = 0
+          WHERE id = ?`,
+        { replacements: [req.user?.id || null, id] }
+      );
+    } else {
+      await sequelize.query('UPDATE employees SET status = ? WHERE id = ?', { replacements: ['active', id] });
+    }
+
+    audit.log({ req, user: req.user, action: 'employee.reactivate', entity: 'employee', entity_id: id,
+      details: { code: emp.code, name: `${emp.first_name} ${emp.last_name}`, was: emp.status } });
+    logger.info(`Empleado reactivado: ${emp.code} (${emp.first_name} ${emp.last_name})`);
+    res.json({ message: 'Empleado reactivado.' });
+  } catch (err) {
+    logger.error('Error al reactivar empleado:', err);
+    res.status(500).json({ error: 'Error al reactivar empleado' });
+  }
+}
+
+// GET /api/employees/inactive-marks?days=7 — empleados inactivos que siguen
+// marcando (alerta). Recorre attendance_logs recientes de empleados no activos.
+async function getInactiveMarks(req, res) {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 7, 1), 90);
+  try {
+    const [rows] = await sequelize.query(`
+      SELECT e.id AS employee_id, e.code,
+             CONCAT(e.first_name, ' ', e.last_name) AS full_name,
+             e.status, e.deactivated_at,
+             COUNT(al.id) AS marks,
+             MAX(al.timestamp) AS last_mark
+        FROM attendance_logs al
+        JOIN employees e ON e.id = al.employee_id
+       WHERE e.status <> 'active'
+         AND al.timestamp >= (NOW() - INTERVAL ? DAY)
+       GROUP BY e.id, e.code, full_name, e.status, e.deactivated_at
+       ORDER BY last_mark DESC
+       LIMIT 200
+    `, { replacements: [days] }).catch(async () => {
+      // Fallback si deactivated_at no existe aún.
+      return sequelize.query(`
+        SELECT e.id AS employee_id, e.code,
+               CONCAT(e.first_name, ' ', e.last_name) AS full_name,
+               e.status, NULL AS deactivated_at,
+               COUNT(al.id) AS marks, MAX(al.timestamp) AS last_mark
+          FROM attendance_logs al
+          JOIN employees e ON e.id = al.employee_id
+         WHERE e.status <> 'active' AND al.timestamp >= (NOW() - INTERVAL ? DAY)
+         GROUP BY e.id, e.code, full_name, e.status
+         ORDER BY last_mark DESC LIMIT 200`, { replacements: [days] });
+    });
+    res.json({ ok: true, days, count: rows.length, items: rows });
+  } catch (err) {
+    logger.error('Error en inactive-marks:', err);
+    res.status(500).json({ ok: false, error: 'Error al obtener marcas de inactivos' });
   }
 }
 
@@ -193,4 +308,4 @@ async function getAttendanceHistory(req, res) {
   }
 }
 
-module.exports = { getAll, getById, create, update, deactivate, getAttendanceHistory };
+module.exports = { getAll, getById, create, update, deactivate, reactivate, getInactiveMarks, getAttendanceHistory };

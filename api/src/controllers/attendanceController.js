@@ -11,9 +11,9 @@ async function processAttendanceEvent(data) {
   const { employeeCode, timestamp, deviceId, deviceIp, deviceSn, type = 'unknown', raw } = data;
 
   try {
-    // Buscar empleado por código ZKTeco
+    // Buscar empleado por código ZKTeco (cualquier estado: no perdemos marcas).
     const [[emp]] = await sequelize.query(
-      'SELECT id, first_name, last_name, schedule_id FROM employees WHERE code = ? AND status = "active"',
+      'SELECT id, first_name, last_name, schedule_id, status FROM employees WHERE code = ?',
       { replacements: [employeeCode] }
     );
 
@@ -35,11 +35,31 @@ async function processAttendanceEvent(data) {
       resolvedDeviceId = dev?.id || null;
     }
 
-    // Insertar log (INSERT IGNORE — idempotente por clave única)
+    // Insertar log (INSERT IGNORE — idempotente por clave única).
+    // Se conserva SIEMPRE, incluso para inactivos, para no perder el histórico.
     await sequelize.query(`
       INSERT IGNORE INTO attendance_logs (employee_id, device_id, timestamp, type, source, raw_data)
       VALUES (?, ?, ?, ?, 'device', ?)
     `, { replacements: [emp.id, resolvedDeviceId, ts, detectedType, JSON.stringify(raw || {})] });
+
+    // Empleado inactivo/suspendido que sigue marcando → alerta, sin procesar
+    // como asistencia operativa (no recalc, no att2000, no retardo). La marca
+    // ya quedó guardada arriba para trazabilidad.
+    if (emp.status && emp.status !== 'active') {
+      logger.warn(`⚠️ Marcaje de empleado NO activo (${emp.status}): ${emp.first_name} ${emp.last_name} [${employeeCode}]`);
+      try {
+        const audit = require('../services/audit');
+        audit.log({ req: null, user: null, action: 'attendance.inactive_mark', entity: 'employee', entity_id: emp.id,
+          details: { code: employeeCode, name: `${emp.first_name} ${emp.last_name}`, status: emp.status, timestamp: ts.toISOString(), device_id: resolvedDeviceId } });
+      } catch { /* auditoría best-effort */ }
+      try {
+        getIO().to('role:admin').to('role:gestor').to('role:hr').emit('attendance:inactive_mark', {
+          employeeId: emp.id, employeeName: `${emp.first_name} ${emp.last_name}`,
+          employeeCode, status: emp.status, timestamp: ts.toISOString(), deviceId: resolvedDeviceId,
+        });
+      } catch { /* socket opcional */ }
+      return;
+    }
 
     // Replicar el marcaje en att2000.CHECKINOUT si está habilitado
     if (process.env.ATT2000_WRITE_ENABLED === 'true' && writeCheckinOut) {
