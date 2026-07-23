@@ -24,6 +24,27 @@ module.exports = {
       max_memory_restart: '512M',
     },
     {
+      // Worker de sincronización automática de relojes ZKTeco (FASE 2).
+      // ARRANCA BLOQUEADO: ZKTECO_AUTO_POLL=false es kill switch absoluto —
+      // el worker corre pero no lee relojes hasta ponerlo en true Y activar
+      // la sincronización desde Configuración → Relojes.
+      name: 'sishoras-sync-worker',
+      cwd: './api',
+      script: 'src/workers/syncWorker.js',
+      instances: 1,
+      exec_mode: 'fork',
+      watch: false,
+      env: {
+        NODE_ENV: 'production',
+        TZ: 'America/Asuncion',
+        ZKTECO_AUTO_POLL: 'false',
+      },
+      error_file: '../logs/sync-worker-error.log',
+      out_file:   '../logs/sync-worker-out.log',
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      max_memory_restart: '256M',
+    },
+    {
       name: 'sishoras-web',
       cwd: './web',
       script: 'node_modules/.bin/next',

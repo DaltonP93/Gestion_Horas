@@ -945,4 +945,80 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
   }
 });
 
+// ─── Sincronización automática (FASE 2 — worker sishoras-sync-worker) ───
+// El worker corre como proceso PM2 aparte; acá sólo se lee/guarda la config.
+// ZKTECO_AUTO_POLL=false en el entorno del worker es kill switch ABSOLUTO.
+
+// GET /api/devices/auto-sync-config — config global + estado del worker + por reloj.
+router.get('/auto-sync-config', authorize('admin','gestor','hr'), async (req, res) => {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT setting_key, setting_value FROM notification_settings
+       WHERE setting_key IN ('zkteco_auto_sync_enabled','zkteco_auto_sync_window','sync_worker_heartbeat')`
+    );
+    const kv = Object.fromEntries(rows.map(r => [r.setting_key, r.setting_value]));
+    const hb = kv.sync_worker_heartbeat ? new Date(kv.sync_worker_heartbeat) : null;
+    const workerAlive = !!(hb && !isNaN(hb.getTime()) && (Date.now() - hb.getTime()) < 120000);
+    const [devices] = await sequelize.query(`
+      SELECT id, name, ip_address, connection_mode,
+             auto_sync_enabled, auto_sync_paused, auto_sync_interval_min, auto_sync_offset_min,
+             auto_sync_attempts, auto_sync_cooldown_sec, auto_sync_timeout_sec,
+             last_auto_sync_at, next_auto_sync_at
+      FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id`);
+    res.json({
+      ok: true,
+      enabled: kv.zkteco_auto_sync_enabled === '1',
+      window: kv.zkteco_auto_sync_window || '04:00-23:59',
+      worker: { alive: workerAlive, heartbeat: kv.sync_worker_heartbeat || null },
+      devices,
+    });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// POST /api/devices/auto-sync-global — master on/off + ventana horaria (Super Admin).
+router.post('/auto-sync-global', requireSuperAdmin, async (req, res) => {
+  try {
+    const enabled = req.body.enabled ? '1' : '0';
+    const window = /^\d{2}:\d{2}\s*-\s*\d{2}:\d{2}$/.test(req.body.window || '') ? req.body.window : '04:00-23:59';
+    for (const [k, v] of [['zkteco_auto_sync_enabled', enabled], ['zkteco_auto_sync_window', window]]) {
+      await sequelize.query(
+        `INSERT INTO notification_settings (setting_key, setting_value) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+        { replacements: [k, v] }
+      );
+    }
+    audit.log({ req, user: req.user, action: 'auto_sync.global', entity: 'settings', details: { enabled, window } });
+    res.json({ ok: true, enabled: enabled === '1', window });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// PUT /api/devices/:id/auto-sync — config por reloj (Super Admin).
+router.put('/:id/auto-sync', requireSuperAdmin, async (req, res) => {
+  const FIELDS = {
+    enabled: 'auto_sync_enabled', paused: 'auto_sync_paused',
+    interval_min: 'auto_sync_interval_min', offset_min: 'auto_sync_offset_min',
+    attempts: 'auto_sync_attempts', cooldown_sec: 'auto_sync_cooldown_sec',
+    timeout_sec: 'auto_sync_timeout_sec',
+  };
+  const sets = [], vals = [];
+  for (const [k, col] of Object.entries(FIELDS)) {
+    if (req.body[k] === undefined) continue;
+    if (k === 'enabled' || k === 'paused') { sets.push(`\`${col}\` = ?`); vals.push(req.body[k] ? 1 : 0); }
+    else { sets.push(`\`${col}\` = ?`); vals.push(Math.max(0, parseInt(req.body[k], 10) || 0)); }
+  }
+  if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
+  sets.push('next_auto_sync_at = NULL');   // el worker reprograma con la nueva config
+  try {
+    await sequelize.query(`UPDATE devices SET ${sets.join(', ')} WHERE id = ?`, { replacements: [...vals, req.params.id] });
+    audit.log({ req, user: req.user, action: 'auto_sync.device', entity: 'device', entity_id: req.params.id, details: req.body });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
 module.exports = router;
