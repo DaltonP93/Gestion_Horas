@@ -37,7 +37,9 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         TZ: 'America/Asuncion',
-        ZKTECO_AUTO_POLL: 'false',
+        // Kill switch: respeta la variable del entorno si está definida; por
+        // defecto 'false' (auto-polling BLOQUEADO). La cola manual funciona igual.
+        ZKTECO_AUTO_POLL: process.env.ZKTECO_AUTO_POLL || 'false',
       },
       error_file: '../logs/sync-worker-error.log',
       out_file:   '../logs/sync-worker-out.log',

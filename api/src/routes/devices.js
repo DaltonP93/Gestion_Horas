@@ -636,9 +636,15 @@ router.post('/:id/backup', authorize('admin','gestor'), async (req, res) => {
   const pushAtt2000 = req.query.push_att2000 === 'true' || req.body.push_att2000 === true;
   const { from, to } = readRange(req);
   try {
-    const report = await backupDeviceDirect(device, { from, to, pushAtt2000, recalc: true, attempts: readAttempts(req) });
+    const report = await backupDeviceDirect(device, {
+      from, to, pushAtt2000, recalc: true, attempts: readAttempts(req),
+      lock: { origin: 'manual', owner: `api:${process.pid}` },
+    });
     res.json({ ok: true, from, to, ...report });
   } catch (err) {
+    if (err.code === 'DEVICE_BUSY') {
+      return res.status(409).json({ ok: false, busy: true, device_id: device.id, device: device.name, error: err.message });
+    }
     // Siempre JSON, incluso ante error/timeout del reloj.
     res.status(200).json({ ok: false, device_id: device.id, device: device.name, from, to, error: fmtErr(err) });
   }
@@ -949,28 +955,57 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
 // El worker corre como proceso PM2 aparte; acá sólo se lee/guarda la config.
 // ZKTECO_AUTO_POLL=false en el entorno del worker es kill switch ABSOLUTO.
 
+const { inWindow: scheduleInWindow, pyHHMM: schedulePyHHMM, computeNextRun } = require('../services/syncSchedule');
+
 // GET /api/devices/auto-sync-config — config global + estado del worker + por reloj.
+// Incluye estados claros para la UI: worker vivo, kill switch del entorno,
+// master global, dentro/fuera de ventana, y el trabajo/lock en curso por reloj.
 router.get('/auto-sync-config', authorize('admin','gestor','hr'), async (req, res) => {
   try {
     const [rows] = await sequelize.query(
       `SELECT setting_key, setting_value FROM notification_settings
-       WHERE setting_key IN ('zkteco_auto_sync_enabled','zkteco_auto_sync_window','sync_worker_heartbeat')`
+       WHERE setting_key IN ('zkteco_auto_sync_enabled','zkteco_auto_sync_window','sync_worker_heartbeat','sync_worker_killswitch')`
     );
     const kv = Object.fromEntries(rows.map(r => [r.setting_key, r.setting_value]));
     const hb = kv.sync_worker_heartbeat ? new Date(kv.sync_worker_heartbeat) : null;
     const workerAlive = !!(hb && !isNaN(hb.getTime()) && (Date.now() - hb.getTime()) < 120000);
+    const window = kv.zkteco_auto_sync_window || '04:00-23:59';
+    const masterEnabled = kv.zkteco_auto_sync_enabled === '1';
+    // El worker es quien conoce ZKTECO_AUTO_POLL (proceso aparte); lo publica en settings.
+    const killSwitchBlocking = kv.sync_worker_killswitch === '0';
+    const withinWindow = scheduleInWindow(window, schedulePyHHMM());
+
     const [devices] = await sequelize.query(`
       SELECT id, name, ip_address, connection_mode,
              auto_sync_enabled, auto_sync_paused, auto_sync_interval_min, auto_sync_offset_min,
              auto_sync_attempts, auto_sync_cooldown_sec, auto_sync_timeout_sec,
              last_auto_sync_at, next_auto_sync_at
       FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id`);
+
+    // Trabajo activo por reloj (running/queued) para "trabajo en curso".
+    let activeJobs = {};
+    try {
+      const [jobs] = await sequelize.query(
+        `SELECT device_id, status, progress, id AS job_id FROM sync_jobs WHERE status IN ('queued','running') ORDER BY id`);
+      for (const j of jobs) if (!activeJobs[j.device_id]) activeJobs[j.device_id] = j;
+    } catch { /* tabla puede no existir aún */ }
+
+    // Estado global legible para la UI.
+    let worker_state = 'unknown';
+    if (!workerAlive) worker_state = 'no_signal';
+    else if (killSwitchBlocking) worker_state = 'blocked_env';
+    else if (!masterEnabled) worker_state = 'master_off';
+    else if (!withinWindow) worker_state = 'out_of_window';
+    else worker_state = 'enabled';
+
     res.json({
       ok: true,
-      enabled: kv.zkteco_auto_sync_enabled === '1',
-      window: kv.zkteco_auto_sync_window || '04:00-23:59',
-      worker: { alive: workerAlive, heartbeat: kv.sync_worker_heartbeat || null },
-      devices,
+      enabled: masterEnabled,
+      window,
+      within_window: withinWindow,
+      kill_switch_blocking: killSwitchBlocking,
+      worker: { alive: workerAlive, heartbeat: kv.sync_worker_heartbeat || null, state: worker_state },
+      devices: devices.map(d => ({ ...d, active_job: activeJobs[d.id] || null })),
     });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
@@ -988,6 +1023,18 @@ router.post('/auto-sync-global', requireSuperAdmin, async (req, res) => {
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
         { replacements: [k, v] }
       );
+    }
+    // Al activar el master, programar next_auto_sync_at de inmediato (sin NULL)
+    // para los relojes participantes, respetando su offset.
+    if (enabled === '1') {
+      const [parts] = await sequelize.query(
+        `SELECT id, auto_sync_interval_min, auto_sync_offset_min FROM devices
+          WHERE auto_sync_enabled = 1 AND COALESCE(auto_sync_paused,0) = 0
+            AND ip_address IS NOT NULL AND TRIM(ip_address) <> ''`);
+      for (const d of parts) {
+        const next = computeNextRun(d.auto_sync_interval_min, d.auto_sync_offset_min);
+        await sequelize.query('UPDATE devices SET next_auto_sync_at = ? WHERE id = ?', { replacements: [next, d.id] }).catch(() => {});
+      }
     }
     audit.log({ req, user: req.user, action: 'auto_sync.global', entity: 'settings', details: { enabled, window } });
     res.json({ ok: true, enabled: enabled === '1', window });
@@ -1011,11 +1058,80 @@ router.put('/:id/auto-sync', requireSuperAdmin, async (req, res) => {
     else { sets.push(`\`${col}\` = ?`); vals.push(Math.max(0, parseInt(req.body[k], 10) || 0)); }
   }
   if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
-  sets.push('next_auto_sync_at = NULL');   // el worker reprograma con la nueva config
   try {
     await sequelize.query(`UPDATE devices SET ${sets.join(', ')} WHERE id = ?`, { replacements: [...vals, req.params.id] });
+
+    // Programar next_auto_sync_at de inmediato (sin dejar NULL): si queda
+    // participando y sin pausar, se calcula con la nueva config/offset.
+    const [[d]] = await sequelize.query(
+      `SELECT auto_sync_enabled, auto_sync_paused, auto_sync_interval_min, auto_sync_offset_min
+         FROM devices WHERE id = ?`, { replacements: [req.params.id] });
+    const nextVal = (d && d.auto_sync_enabled && !d.auto_sync_paused)
+      ? computeNextRun(d.auto_sync_interval_min, d.auto_sync_offset_min) : null;
+    await sequelize.query('UPDATE devices SET next_auto_sync_at = ? WHERE id = ?', { replacements: [nextVal, req.params.id] });
+
     audit.log({ req, user: req.user, action: 'auto_sync.device', entity: 'device', entity_id: req.params.id, details: req.body });
-    res.json({ ok: true });
+    res.json({ ok: true, next_auto_sync_at: nextVal });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// ─── Cola de trabajos de lectura manual (asíncrona) ─────────────
+// La API encola y responde 202; el worker procesa sin bloquear la petición.
+const syncJobs = require('../services/syncJobs');
+
+// POST /api/devices/sync-jobs — crear trabajo(s). Body: { device_ids?, from?, to?, mode?, recalc?, attempts? }
+// Sin device_ids → todos los relojes con IP. Usado por "Sincronizar ahora" y "Leer relojes del rango".
+router.post('/sync-jobs', authorize('admin', 'gestor'), async (req, res) => {
+  try {
+    let ids = req.body.device_ids;
+    if (!Array.isArray(ids) || !ids.length) {
+      const [rows] = await sequelize.query("SELECT id FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id");
+      ids = rows.map(r => r.id);
+    }
+    if (!ids.length) return res.status(400).json({ error: 'No hay relojes con IP configurada' });
+    const { from, to } = readRange(req);
+    const mode = ['auto', 'tcp', 'udp'].includes(String(req.body.mode).toLowerCase()) ? String(req.body.mode).toLowerCase() : null;
+    const out = await syncJobs.enqueue({
+      deviceIds: ids, from, to, mode, recalc: req.body.recalc !== false,
+      attempts: req.body.attempts != null ? Math.min(5, Math.max(1, parseInt(req.body.attempts, 10) || 1)) : null,
+      origin: 'manual', userId: req.user?.id || null,
+    });
+    audit.log({ req, user: req.user, action: 'sync_job.enqueue', entity: 'device', details: { batch_id: out.batch_id, devices: ids, from, to, mode } });
+    res.status(202).json({ ok: true, ...out, from, to });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// GET /api/devices/sync-jobs — trabajos recientes.
+router.get('/sync-jobs', authorize('admin', 'gestor', 'hr'), async (req, res) => {
+  try {
+    const items = await syncJobs.list({ limit: req.query.limit, status: req.query.status, batchId: req.query.batch_id });
+    res.json({ ok: true, items });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// GET /api/devices/sync-jobs/:id — estado de un trabajo.
+router.get('/sync-jobs/:id', authorize('admin', 'gestor', 'hr'), async (req, res) => {
+  try {
+    const job = await syncJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Trabajo no encontrado' });
+    res.json({ ok: true, job });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// POST /api/devices/sync-jobs/:id/cancel — solicitar cancelación.
+router.post('/sync-jobs/:id/cancel', authorize('admin', 'gestor'), async (req, res) => {
+  try {
+    const ok = await syncJobs.requestCancel(req.params.id);
+    if (ok) audit.log({ req, user: req.user, action: 'sync_job.cancel', entity: 'device', entity_id: req.params.id, details: {} });
+    res.json({ ok, message: ok ? 'Cancelación solicitada' : 'El trabajo ya no está activo' });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
   }
