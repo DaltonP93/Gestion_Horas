@@ -431,8 +431,32 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
  * el resultado en device_sync_runs (salvo dry-run).
  * opts: { from, to, recalc, pushAtt2000, readTimeoutMs, dryRun, attempts, createdBy }
  */
+// Lock por reloj: ningún camino de lectura puede superponerse con otro.
+// opts.lock === false → sin lock (sólo para diagnósticos que no leen marcas).
+// opts.lock objeto  → metadata { owner, jobId, origin, ttlMs }.
+const deviceLock = require('./deviceLock');
+
 async function backupDeviceDirect(device, opts = {}) {
   const startedAt = new Date();
+  const wantLock = opts.lock !== false;
+  const lockMeta = (opts.lock && typeof opts.lock === 'object') ? opts.lock : {};
+  let handle = null, renewTimer = null;
+
+  if (wantLock) {
+    const ttlMs = lockMeta.ttlMs || ((opts.readTimeoutMs || 45000) + 5 * 60 * 1000);
+    handle = await deviceLock.acquire(device.id, {
+      ttlMs, owner: lockMeta.owner, jobId: lockMeta.jobId, origin: lockMeta.origin || 'direct',
+    });
+    if (!handle) {
+      const e = new Error('El reloj está ocupado por otra sincronización en curso');
+      e.code = 'DEVICE_BUSY';
+      throw e;   // no se registra como corrida: no llegó a leer
+    }
+    // Renovar mientras la lectura sigue viva (recupera TTL en lecturas largas).
+    renewTimer = setInterval(() => { deviceLock.renew(handle).catch(() => {}); }, Math.max(5000, Math.floor(ttlMs / 3)));
+    if (renewTimer.unref) renewTimer.unref();
+  }
+
   try {
     const report = await _backupDeviceDirectImpl(device, opts);
     if (!opts.dryRun) await recordSyncRun(device, { startedAt, report, opts });
@@ -440,6 +464,9 @@ async function backupDeviceDirect(device, opts = {}) {
   } catch (err) {
     if (!opts.dryRun) await recordSyncRun(device, { startedAt, error: err, opts });
     throw err;
+  } finally {
+    if (renewTimer) clearInterval(renewTimer);
+    if (handle) await deviceLock.release(handle).catch(() => {});
   }
 }
 

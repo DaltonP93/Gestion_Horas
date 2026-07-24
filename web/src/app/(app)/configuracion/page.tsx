@@ -314,17 +314,31 @@ function SistemaTab() {
 }
 
 // ─── Panel: Sincronización automática (FASE 2 · worker PM2) ──────
+interface ActiveJob { job_id: number; status: string; progress?: string | null }
 interface AutoSyncDevice {
   id: number; name: string; ip_address: string; connection_mode?: string
   auto_sync_enabled: number; auto_sync_paused: number
   auto_sync_interval_min: number; auto_sync_offset_min: number
   auto_sync_attempts: number; auto_sync_cooldown_sec: number; auto_sync_timeout_sec: number
   last_auto_sync_at: string | null; next_auto_sync_at: string | null
+  active_job?: ActiveJob | null
 }
+type WorkerState = 'no_signal' | 'blocked_env' | 'master_off' | 'out_of_window' | 'enabled' | 'unknown'
 interface AutoSyncConfig {
   ok: boolean; enabled: boolean; window: string
-  worker: { alive: boolean; heartbeat: string | null }
+  within_window?: boolean; kill_switch_blocking?: boolean
+  worker: { alive: boolean; heartbeat: string | null; state?: WorkerState }
   devices: AutoSyncDevice[]
+}
+
+// Estado global legible del worker para la UI.
+const WORKER_STATE: Record<WorkerState, { label: string; cls: string }> = {
+  no_signal:     { label: 'Worker sin señal',            cls: 'bg-red-100 text-red-700' },
+  blocked_env:   { label: 'Bloqueado por entorno',       cls: 'bg-slate-200 text-slate-700' },
+  master_off:    { label: 'Master global apagado',       cls: 'bg-slate-200 text-slate-600' },
+  out_of_window: { label: 'Fuera de horario',            cls: 'bg-amber-100 text-amber-700' },
+  enabled:       { label: 'Habilitado',                  cls: 'bg-green-100 text-green-700' },
+  unknown:       { label: 'Estado desconocido',          cls: 'bg-slate-200 text-slate-600' },
 }
 
 const fmtDT = (v: string | null) => {
@@ -343,6 +357,8 @@ function AutoSyncPanel() {
   const [draft, setDraft]     = useState<Record<number, Partial<AutoSyncDevice>>>({})
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({})
 
+  const [syncBusy, setSyncBusy] = useState<Record<number, boolean>>({})
+
   async function load() {
     try {
       const r = await api.get('/api/devices/auto-sync-config')
@@ -351,12 +367,30 @@ function AutoSyncPanel() {
     setLoading(false)
   }
   useEffect(() => { load() }, [])
-  // Refresco liviano del estado del worker mientras el panel está abierto.
+  // Refresco del estado del worker mientras el panel está abierto. Si hay un
+  // trabajo en curso, refresca más seguido para mostrar el progreso.
+  const hasActiveJob = (cfg?.devices || []).some(d => d.active_job)
   useEffect(() => {
     if (!open) return
-    const t = setInterval(load, 20000)
+    const t = setInterval(load, hasActiveJob ? 4000 : 20000)
     return () => clearInterval(t)
-  }, [open])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, hasActiveJob])
+
+  // "Sincronizar ahora" — encola un trabajo (no bloquea la petición) y refresca.
+  async function syncNow(deviceId: number) {
+    setSyncBusy(p => ({ ...p, [deviceId]: true }))
+    try {
+      const r = await api.post('/api/devices/sync-jobs', { device_ids: [deviceId] })
+      if (r.data?.ok === false) alert('Error: ' + r.data.error)
+      await load()
+    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
+    setSyncBusy(p => ({ ...p, [deviceId]: false }))
+  }
+  async function cancelJob(jobId: number) {
+    try { await api.post(`/api/devices/sync-jobs/${jobId}/cancel`, {}); await load() }
+    catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
+  }
 
   async function saveGlobal(enabled: boolean, window = win) {
     setSavingGlobal(true)
@@ -409,15 +443,16 @@ function AutoSyncPanel() {
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-semibold text-slate-800 dark:text-white/90">Sincronización automática</h3>
             {enabled
-              ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Activada</span>
-              : <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 font-medium">Desactivada</span>}
-            {enabled && (alive
-              ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Worker en ejecución</span>
-              : <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Worker sin señal</span>)}
+              ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Master activado</span>
+              : <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 font-medium">Master desactivado</span>}
+            {!loading && (() => {
+              const st = WORKER_STATE[cfg?.worker?.state || 'unknown']
+              return <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
+            })()}
           </div>
           <p className="text-xs text-slate-500 mt-0.5 dark:text-white/40">
             {loading ? 'Cargando…' : enabled
-              ? `${activeCount} reloj(es) participando · ventana ${cfg?.window}`
+              ? `${activeCount} reloj(es) participando · ventana ${cfg?.window}${cfg?.within_window === false ? ' (fuera de horario ahora)' : ''}`
               : 'El worker lee los relojes sin navegador abierto. Actívalo para programar lecturas.'}
           </p>
         </div>
@@ -482,8 +517,26 @@ function AutoSyncPanel() {
                       <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-white/40">
                         <span>Última: <strong className="text-slate-700 dark:text-white/70">{fmtDT(d.last_auto_sync_at)}</strong></span>
                         <span>Próxima: <strong className="text-slate-700 dark:text-white/70">{participa && !pausado ? fmtDT(d.next_auto_sync_at) : '—'}</strong></span>
+                        {d.active_job
+                          ? <button onClick={() => cancelJob(d.active_job!.job_id)}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200">
+                              <X size={12} /> Cancelar
+                            </button>
+                          : <button onClick={() => syncNow(d.id)} disabled={syncBusy[d.id]}
+                              className="flex items-center gap-1 px-2 py-1 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 dark:border-indigo-500/30 dark:hover:bg-indigo-500/10">
+                              <RefreshCw size={12} className={syncBusy[d.id] ? 'animate-spin' : ''} /> Sincronizar ahora
+                            </button>}
                       </div>
                     </div>
+
+                    {/* Trabajo en curso (cola manual) */}
+                    {d.active_job && (
+                      <div className="mt-2 flex items-center gap-2 text-xs rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-1.5 text-indigo-700 dark:bg-indigo-500/[0.08] dark:border-indigo-500/20 dark:text-indigo-300">
+                        <RefreshCw size={12} className="animate-spin" />
+                        {d.active_job.status === 'queued' ? 'En cola…' : (d.active_job.progress || 'Ejecutando…')}
+                        <span className="opacity-60">· trabajo #{d.active_job.job_id}</span>
+                      </div>
+                    )}
 
                     <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-2">
                       <label className="flex items-center gap-1.5 cursor-pointer select-none">
