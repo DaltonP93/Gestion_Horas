@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  UserCircle2, Pencil, KeyRound, SlidersHorizontal, ShieldCheck, LogOut, ChevronDown,
+  UserCircle2, KeyRound, SlidersHorizontal, ShieldCheck, LogOut,
 } from 'lucide-react'
 import { useCurrentUser, type Role } from '@/lib/useCurrentUser'
 import { apiUrl } from '@/lib/api'
@@ -29,22 +29,20 @@ function initialsOf(name?: string, username?: string) {
 
 type MenuItem = { href: string; label: string; icon: typeof UserCircle2 }
 const ITEMS: MenuItem[] = [
-  { href: '/cuenta/perfil',            label: 'Mi perfil',                 icon: UserCircle2 },
-  { href: '/cuenta/perfil#editar',     label: 'Editar información personal', icon: Pencil },
-  { href: '/cuenta/seguridad#password',label: 'Cambiar contraseña',        icon: KeyRound },
-  { href: '/cuenta/preferencias',      label: 'Preferencias',              icon: SlidersHorizontal },
-  { href: '/cuenta/seguridad',         label: 'Seguridad de mi cuenta',    icon: ShieldCheck },
+  { href: '/cuenta/perfil',            label: 'Mi perfil',              icon: UserCircle2 },
+  { href: '/cuenta/seguridad#password',label: 'Cambiar contraseña',     icon: KeyRound },
+  { href: '/cuenta/preferencias',      label: 'Preferencias',           icon: SlidersHorizontal },
+  { href: '/cuenta/seguridad',         label: 'Seguridad de mi cuenta', icon: ShieldCheck },
 ]
 
 /**
- * Menú de cuenta compartido. Se usa desde el avatar del TopBar (variant="avatar")
- * y desde la tarjeta de usuario del Sidebar (variant="card"). Una sola fuente de
- * verdad: sin duplicar opciones ni lógica.
+ * Menú de cuenta ÚNICO. Vive sólo en el avatar del TopBar (arriba a la derecha),
+ * accesible tanto en escritorio como en móvil. No se duplica en el sidebar.
  *
  * Accesible: botón con aria-haspopup, menú con roles ARIA, navegación por teclado
- * (Escape / flechas), cierra al hacer clic fuera. Funciona en escritorio y móvil.
+ * (Escape / flechas), cierra al hacer clic fuera.
  */
-export default function AccountMenu({ variant = 'avatar' }: { variant?: 'avatar' | 'card' }) {
+export default function AccountMenu() {
   const user = useCurrentUser()
   const router = useRouter()
   const [open, setOpen] = useState(false)
@@ -139,37 +137,18 @@ export default function AccountMenu({ variant = 'avatar' }: { variant?: 'avatar'
 
   return (
     <div className="relative" ref={rootRef}>
-      {variant === 'avatar' ? (
-        <button
-          ref={btnRef}
-          type="button"
-          onClick={() => setOpen(o => !o)}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-label="Menú de cuenta"
-          className="w-9 h-9 rounded-full flex items-center justify-center hover:ring-2 hover:ring-blue-400/50
-            focus-visible:outline-2 focus-visible:outline focus-visible:outline-blue-500 transition"
-        >
-          <Avatar size={32} />
-        </button>
-      ) : (
-        <button
-          ref={btnRef}
-          type="button"
-          onClick={() => setOpen(o => !o)}
-          aria-haspopup="menu"
-          aria-expanded={open}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-xl hover:bg-white/5 transition-colors text-left
-            focus-visible:outline-2 focus-visible:outline focus-visible:outline-white"
-        >
-          <Avatar size={36} />
-          <span className="min-w-0 flex-1">
-            <span className="block text-white font-medium text-sm truncate">{displayName}</span>
-            <span className="block text-xs truncate text-white/50">{roleLabel}</span>
-          </span>
-          <ChevronDown size={16} className={`text-white/50 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
-        </button>
-      )}
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Menú de cuenta"
+        className="w-9 h-9 rounded-full flex items-center justify-center hover:ring-2 hover:ring-blue-400/50
+          focus-visible:outline-2 focus-visible:outline focus-visible:outline-blue-500 transition"
+      >
+        <Avatar size={32} />
+      </button>
 
       {open && (
         <div
@@ -177,11 +156,7 @@ export default function AccountMenu({ variant = 'avatar' }: { variant?: 'avatar'
           role="menu"
           aria-label="Cuenta del usuario"
           onKeyDown={onMenuKeyDown}
-          className={[
-            'absolute z-50 w-64 rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden',
-            'dark:border-white/10 dark:bg-[#0d0d0f]',
-            variant === 'avatar' ? 'right-0 mt-2 top-full' : 'bottom-full mb-2 left-0',
-          ].join(' ')}
+          className="absolute z-50 w-64 right-0 mt-2 top-full rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden dark:border-white/10 dark:bg-[#0d0d0f]"
         >
           {/* Cabecera con identidad */}
           <div className="flex items-center gap-3 p-4 border-b border-slate-100 dark:border-white/10">

@@ -331,15 +331,17 @@ interface AutoSyncConfig {
   devices: AutoSyncDevice[]
 }
 
-// Estado global legible del worker para la UI.
-const WORKER_STATE: Record<WorkerState, { label: string; cls: string }> = {
-  no_signal:     { label: 'Worker sin señal',            cls: 'bg-red-100 text-red-700' },
-  blocked_env:   { label: 'Bloqueado por entorno',       cls: 'bg-slate-200 text-slate-700' },
-  master_off:    { label: 'Master global apagado',       cls: 'bg-slate-200 text-slate-600' },
-  out_of_window: { label: 'Fuera de horario',            cls: 'bg-amber-100 text-amber-700' },
-  enabled:       { label: 'Habilitado',                  cls: 'bg-green-100 text-green-700' },
-  unknown:       { label: 'Estado desconocido',          cls: 'bg-slate-200 text-slate-600' },
+// Estado de la sincronización en lenguaje funcional (sin jerga técnica).
+const WORKER_STATE: Record<WorkerState, { title: string; cls: string; dot: string }> = {
+  no_signal:     { title: 'Servicio de sincronización sin conexión',                              cls: 'bg-red-50 border-red-200 text-red-800 dark:bg-red-500/[0.06] dark:border-red-500/20 dark:text-red-300',       dot: 'bg-red-500' },
+  blocked_env:   { title: 'Sincronización automática bloqueada por la configuración del servidor', cls: 'bg-slate-100 border-slate-200 text-slate-700 dark:bg-white/[0.04] dark:border-white/10 dark:text-white/70', dot: 'bg-slate-400' },
+  master_off:    { title: 'Sincronización automática disponible, pero desactivada',               cls: 'bg-slate-50 border-slate-200 text-slate-600 dark:bg-white/[0.03] dark:border-white/10 dark:text-white/60',  dot: 'bg-slate-400' },
+  out_of_window: { title: 'Servicio activo, próxima lectura dentro del horario configurado',      cls: 'bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-500/[0.06] dark:border-amber-500/20 dark:text-amber-300', dot: 'bg-amber-500' },
+  enabled:       { title: 'Sincronización automática activa',                                     cls: 'bg-green-50 border-green-200 text-green-800 dark:bg-green-500/[0.06] dark:border-green-500/20 dark:text-green-300', dot: 'bg-green-500' },
+  unknown:       { title: 'Estado de sincronización desconocido',                                 cls: 'bg-slate-100 border-slate-200 text-slate-600 dark:bg-white/[0.04] dark:border-white/10 dark:text-white/60', dot: 'bg-slate-400' },
 }
+
+const CONN_MODE_LABEL: Record<string, string> = { auto: 'Automático', tcp: 'TCP (moderno)', udp: 'UDP (antiguo)' }
 
 const fmtDT = (v: string | null) => {
   if (!v) return '—'
@@ -358,6 +360,7 @@ function AutoSyncPanel() {
   const [rowBusy, setRowBusy] = useState<Record<number, boolean>>({})
 
   const [syncBusy, setSyncBusy] = useState<Record<number, boolean>>({})
+  const [confirmEnable, setConfirmEnable] = useState(false)   // modal de confirmación al activar general
 
   async function load() {
     try {
@@ -411,7 +414,7 @@ function AutoSyncPanel() {
   }
   async function saveDevice(d: AutoSyncDevice, overrides: Partial<AutoSyncDevice> = {}) {
     setRowBusy(p => ({ ...p, [d.id]: true }))
-    const payload = {
+    const payload: any = {
       enabled:      Number(overrides.auto_sync_enabled      ?? fieldOf(d, 'auto_sync_enabled')) ? true : false,
       paused:       Number(overrides.auto_sync_paused       ?? fieldOf(d, 'auto_sync_paused'))  ? true : false,
       interval_min: Number(overrides.auto_sync_interval_min ?? fieldOf(d, 'auto_sync_interval_min')),
@@ -419,6 +422,7 @@ function AutoSyncPanel() {
       attempts:     Number(overrides.auto_sync_attempts     ?? fieldOf(d, 'auto_sync_attempts')),
       cooldown_sec: Number(overrides.auto_sync_cooldown_sec ?? fieldOf(d, 'auto_sync_cooldown_sec')),
       timeout_sec:  Number(overrides.auto_sync_timeout_sec  ?? fieldOf(d, 'auto_sync_timeout_sec')),
+      connection_mode: String(overrides.connection_mode ?? fieldOf(d, 'connection_mode') ?? 'auto'),
     }
     try {
       const r = await api.put(`/api/devices/${d.id}/auto-sync`, payload)
@@ -431,29 +435,29 @@ function AutoSyncPanel() {
 
   const enabled = cfg?.enabled ?? false
   const alive   = cfg?.worker?.alive ?? false
+  const blocked = cfg?.kill_switch_blocking ?? false      // permiso del servidor bloqueado
   const devices = cfg?.devices || []
   const activeCount = devices.filter(d => d.auto_sync_enabled && !d.auto_sync_paused).length
+  const state = WORKER_STATE[cfg?.worker?.state || 'unknown']
+  // Próxima lectura: la más cercana entre los relojes activos.
+  const nextRead = devices
+    .filter(d => d.auto_sync_enabled && !d.auto_sync_paused && d.next_auto_sync_at)
+    .map(d => new Date(d.next_auto_sync_at as string).getTime())
+    .filter(t => !isNaN(t))
+    .sort((a, b) => a - b)[0]
+  // Relojes que participarán al activar (para la confirmación).
+  const participating = devices.filter(d => d.auto_sync_enabled && !d.auto_sync_paused)
+
+  const canToggleGlobal = alive && !blocked && !savingGlobal
 
   return (
     <div className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/60 to-white dark:border-indigo-500/20 dark:from-indigo-500/[0.06] dark:to-transparent">
-      <button onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 p-4 text-left">
-        <RefreshCw size={18} className={`text-indigo-500 ${enabled && alive ? 'animate-spin' : ''}`} />
-        <div className="flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="font-semibold text-slate-800 dark:text-white/90">Sincronización automática</h3>
-            {enabled
-              ? <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Master activado</span>
-              : <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 font-medium">Master desactivado</span>}
-            {!loading && (() => {
-              const st = WORKER_STATE[cfg?.worker?.state || 'unknown']
-              return <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${st.cls}`}>{st.label}</span>
-            })()}
-          </div>
-          <p className="text-xs text-slate-500 mt-0.5 dark:text-white/40">
-            {loading ? 'Cargando…' : enabled
-              ? `${activeCount} reloj(es) participando · ventana ${cfg?.window}${cfg?.within_window === false ? ' (fuera de horario ahora)' : ''}`
-              : 'El worker lee los relojes sin navegador abierto. Actívalo para programar lecturas.'}
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center gap-3 p-4 text-left">
+        <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${state.dot}`} />
+        <div className="flex-1 min-w-0">
+          <h3 className="font-semibold text-slate-800 dark:text-white/90">Sincronización automática</h3>
+          <p className="text-xs text-slate-500 mt-0.5 dark:text-white/40 truncate">
+            {loading ? 'Cargando…' : state.title}
           </p>
         </div>
         {open ? <ChevronUp size={18} className="text-slate-400" /> : <ChevronDown size={18} className="text-slate-400" />}
@@ -461,40 +465,54 @@ function AutoSyncPanel() {
 
       {open && (
         <div className="px-4 pb-4 space-y-4 border-t border-indigo-100/70 dark:border-white/[0.06] pt-4">
-          {/* Controles globales */}
+          {/* Resumen superior */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            <SummaryTile label="Servicio" value={alive ? 'Conectado' : 'Sin señal'} tone={alive ? 'ok' : 'bad'} />
+            <SummaryTile label="Permiso del servidor" value={blocked ? 'Bloqueado' : 'Habilitado'} tone={blocked ? 'warn' : 'ok'} />
+            <SummaryTile label="Sincronización general" value={enabled ? 'Activada' : 'Desactivada'} tone={enabled ? 'ok' : 'muted'} />
+            <SummaryTile label="Relojes activos" value={`${activeCount} de ${devices.length}`} tone="muted" />
+            <SummaryTile label="Próxima lectura" value={nextRead ? fmtDT(new Date(nextRead).toISOString()) : '—'} tone="muted" />
+          </div>
+
+          {/* Banner de estado funcional */}
+          <div className={`rounded-xl border px-4 py-3 text-sm flex items-center gap-2 ${state.cls}`}>
+            <span className={`w-2 h-2 rounded-full ${state.dot}`} /> {state.title}
+          </div>
+
+          {/* Controles generales */}
           <div className="flex flex-wrap items-end gap-4">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={enabled} disabled={savingGlobal}
-                onChange={e => saveGlobal(e.target.checked)} className="w-4 h-4 accent-indigo-600" />
+            <label className={`flex items-center gap-2 select-none ${canToggleGlobal ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+              <input type="checkbox" checked={enabled} disabled={!canToggleGlobal}
+                onChange={e => { if (e.target.checked) setConfirmEnable(true); else { if (confirm('¿Desactivar la sincronización automática de todos los relojes?')) saveGlobal(false) } }}
+                className="w-4 h-4 accent-indigo-600" />
               <span className="text-sm font-medium text-slate-700 dark:text-white/80">Activar sincronización automática</span>
             </label>
             <div>
-              <label className={labelCls}>Ventana horaria (Paraguay)</label>
+              <label className={labelCls}>Horario permitido</label>
               <div className="flex items-center gap-2">
                 <input value={win} onChange={e => setWin(e.target.value)} placeholder="04:00-23:59"
                   className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm w-32 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] dark:bg-white/[0.04]" />
                 <button onClick={() => saveGlobal(enabled, win)} disabled={savingGlobal}
                   className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08]">
-                  Guardar ventana
+                  Guardar horario
                 </button>
               </div>
             </div>
             {enabled && (
-              <button onClick={() => { if (confirm('¿Detener TODAS las sincronizaciones automáticas? El worker dejará de leer los relojes.')) saveGlobal(false) }}
+              <button onClick={() => { if (confirm('¿Detener la sincronización automática de todos los relojes?')) saveGlobal(false) }}
                 disabled={savingGlobal}
                 className="flex items-center gap-2 px-3 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50">
-                <PowerOff size={14} /> Detener todas
+                <PowerOff size={14} /> Detener todo
               </button>
             )}
           </div>
+          {blocked && (
+            <p className="text-xs text-slate-500 dark:text-white/40">
+              La configuración del servidor no permite la sincronización automática. Pedí a la administración del servidor que la habilite; la lectura manual sigue disponible.
+            </p>
+          )}
 
-          <p className="text-xs text-slate-400 dark:text-white/30 leading-relaxed">
-            El kill switch <code className="px-1 bg-slate-100 rounded dark:bg-white/[0.06]">ZKTECO_AUTO_POLL</code> del servidor manda por encima de esta pantalla:
-            si está en <strong>false</strong>, el worker no lee ningún reloj aunque aquí figure activado.
-            Con el interruptor en <strong>true</strong>, esta configuración decide qué relojes se leen y cuándo.
-          </p>
-
-          {/* Config por reloj */}
+          {/* Configuración por reloj */}
           {devices.length === 0 ? (
             <p className="text-sm text-slate-400 dark:text-white/30">No hay relojes con IP configurada.</p>
           ) : (
@@ -504,15 +522,17 @@ function AutoSyncPanel() {
                 const busy  = rowBusy[d.id]
                 const participa = !!Number(fieldOf(d, 'auto_sync_enabled'))
                 const pausado   = !!Number(fieldOf(d, 'auto_sync_paused'))
+                const estado = d.active_job ? 'Sincronizando…' : !participa ? 'No sincroniza' : pausado ? 'En pausa' : 'Programado'
                 return (
                   <div key={d.id} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.02]">
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-slate-800 dark:text-white/90">{d.name}</span>
                         <span className="text-xs text-slate-400 dark:text-white/30">{d.ip_address}</span>
-                        {participa && !pausado && <span className="text-[11px] px-2 py-0.5 rounded-full bg-green-100 text-green-700">Participa</span>}
-                        {participa && pausado && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">Pausado</span>}
-                        {!participa && <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">Fuera</span>}
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full ${
+                          d.active_job ? 'bg-indigo-100 text-indigo-700'
+                          : !participa ? 'bg-slate-100 text-slate-500'
+                          : pausado ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>{estado}</span>
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-white/40">
                         <span>Última: <strong className="text-slate-700 dark:text-white/70">{fmtDT(d.last_auto_sync_at)}</strong></span>
@@ -529,56 +549,123 @@ function AutoSyncPanel() {
                       </div>
                     </div>
 
-                    {/* Trabajo en curso (cola manual) */}
                     {d.active_job && (
                       <div className="mt-2 flex items-center gap-2 text-xs rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-1.5 text-indigo-700 dark:bg-indigo-500/[0.08] dark:border-indigo-500/20 dark:text-indigo-300">
                         <RefreshCw size={12} className="animate-spin" />
                         {d.active_job.status === 'queued' ? 'En cola…' : (d.active_job.progress || 'Ejecutando…')}
-                        <span className="opacity-60">· trabajo #{d.active_job.job_id}</span>
                       </div>
                     )}
 
-                    <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-2">
-                      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <div className="mt-3 space-y-2">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
                         <input type="checkbox" checked={participa}
                           onChange={e => saveDevice(d, { auto_sync_enabled: e.target.checked ? 1 : 0 })}
                           className="w-4 h-4 accent-indigo-600" />
-                        <span className="text-xs font-medium text-slate-700 dark:text-white/80">Participa</span>
+                        <span className="text-sm font-medium text-slate-700 dark:text-white/80">Sincronizar automáticamente este reloj</span>
+                        {participa && (
+                          <span className="text-xs text-slate-400 ml-2">
+                            <input type="checkbox" checked={pausado}
+                              onChange={e => saveDevice(d, { auto_sync_paused: e.target.checked ? 1 : 0 })}
+                              className="w-3.5 h-3.5 accent-amber-600 align-middle mr-1" />
+                            Pausar temporalmente
+                          </span>
+                        )}
                       </label>
-                      <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                        <input type="checkbox" checked={pausado} disabled={!participa}
-                          onChange={e => saveDevice(d, { auto_sync_paused: e.target.checked ? 1 : 0 })}
-                          className="w-4 h-4 accent-amber-600 disabled:opacity-40" />
-                        <span className="text-xs font-medium text-slate-700 dark:text-white/80">Pausar</span>
-                      </label>
-                      {([
-                        ['auto_sync_interval_min', 'Intervalo (min)'],
-                        ['auto_sync_offset_min',   'Offset (min)'],
-                        ['auto_sync_attempts',     'Intentos'],
-                        ['auto_sync_cooldown_sec', 'Cooldown (s)'],
-                        ['auto_sync_timeout_sec',  'Timeout (s)'],
-                      ] as const).map(([k, lbl]) => (
-                        <div key={k}>
-                          <label className="text-[11px] text-slate-500 block mb-0.5 dark:text-white/40">{lbl}</label>
-                          <input type="number" min={0} value={fieldOf(d, k) ?? 0}
-                            onChange={e => setField(d.id, k, e.target.value)}
-                            className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] dark:bg-white/[0.04]" />
+
+                      <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                        <NumField label="Intervalo (min)" value={fieldOf(d, 'auto_sync_interval_min')} onChange={v => setField(d.id, 'auto_sync_interval_min', v)} />
+                        <NumField label="Minuto de inicio" hint="Evita que todos los relojes se conecten al mismo tiempo"
+                          value={fieldOf(d, 'auto_sync_offset_min')} onChange={v => setField(d.id, 'auto_sync_offset_min', v)} />
+                        <div>
+                          <label className="text-[11px] text-slate-500 block mb-0.5 dark:text-white/40">Modo de conexión</label>
+                          <select value={fieldOf(d, 'connection_mode') || 'auto'} onChange={e => setField(d.id, 'connection_mode', e.target.value)}
+                            className="border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] dark:bg-white/[0.04]">
+                            {['auto','tcp','udp'].map(m => <option key={m} value={m}>{CONN_MODE_LABEL[m]}</option>)}
+                          </select>
                         </div>
-                      ))}
-                      {dirty && (
-                        <button onClick={() => saveDevice(d)} disabled={busy}
-                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
-                          <Save size={12} /> {busy ? 'Guardando…' : 'Guardar'}
-                        </button>
-                      )}
+                        <NumField label="Intentos" value={fieldOf(d, 'auto_sync_attempts')} onChange={v => setField(d.id, 'auto_sync_attempts', v)} />
+                        <NumField label="Espera entre intentos (s)" value={fieldOf(d, 'auto_sync_cooldown_sec')} onChange={v => setField(d.id, 'auto_sync_cooldown_sec', v)} />
+                        <NumField label="Tiempo máximo (s)" value={fieldOf(d, 'auto_sync_timeout_sec')} onChange={v => setField(d.id, 'auto_sync_timeout_sec', v)} />
+                        {dirty && (
+                          <button onClick={() => saveDevice(d)} disabled={busy}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                            <Save size={12} /> {busy ? 'Guardando…' : 'Guardar configuración'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )
               })}
             </div>
           )}
+
+          {/* Detalles técnicos (colapsado; fuera de la vista principal) */}
+          <details className="text-xs text-slate-400 dark:text-white/30">
+            <summary className="cursor-pointer">Detalles técnicos</summary>
+            <div className="mt-1 space-y-0.5 font-mono">
+              <div>Servicio (heartbeat): {cfg?.worker?.heartbeat ? fmtDT(cfg.worker.heartbeat) : '—'}</div>
+              <div>Permiso del servidor (ZKTECO_AUTO_POLL): {blocked ? 'bloqueado' : 'habilitado'}</div>
+              <div>Estado interno: {cfg?.worker?.state}</div>
+            </div>
+          </details>
         </div>
       )}
+
+      {/* Confirmación al activar la sincronización general */}
+      {confirmEnable && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4 dark:bg-[#0d0d0f]">
+            <h3 className="font-bold text-slate-900 dark:text-white">Activar sincronización automática</h3>
+            {participating.length === 0 ? (
+              <p className="text-sm text-amber-700">Ningún reloj está marcado para sincronizar automáticamente. Activá al menos uno antes de encender la sincronización general.</p>
+            ) : (
+              <>
+                <p className="text-sm text-slate-500 dark:text-white/50">Se sincronizarán automáticamente estos relojes dentro del horario {cfg?.window}:</p>
+                <ul className="text-sm space-y-1 max-h-56 overflow-y-auto">
+                  {participating.map(d => (
+                    <li key={d.id} className="flex items-center justify-between gap-3 border-b border-slate-50 dark:border-white/[0.06] py-1">
+                      <span className="font-medium text-slate-800 dark:text-white/90">{d.name}</span>
+                      <span className="text-xs text-slate-500 dark:text-white/40">cada {d.auto_sync_interval_min} min · próxima {fmtDT(d.next_auto_sync_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setConfirmEnable(false)} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
+              <button onClick={() => { setConfirmEnable(false); saveGlobal(true) }} disabled={participating.length === 0 || savingGlobal}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium disabled:opacity-50">
+                Confirmar y activar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SummaryTile({ label, value, tone }: { label: string; value: string; tone: 'ok' | 'warn' | 'bad' | 'muted' }) {
+  const cls = tone === 'ok' ? 'text-green-700 dark:text-green-400'
+    : tone === 'warn' ? 'text-amber-700 dark:text-amber-400'
+    : tone === 'bad' ? 'text-red-700 dark:text-red-400'
+    : 'text-slate-700 dark:text-white/80'
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white px-3 py-2 dark:bg-white/[0.03] dark:border-white/[0.06]">
+      <div className="text-[10px] uppercase tracking-wide text-slate-400 dark:text-white/30">{label}</div>
+      <div className={`text-sm font-semibold ${cls}`}>{value}</div>
+    </div>
+  )
+}
+
+function NumField({ label, value, onChange, hint }: { label: string; value: any; onChange: (v: string) => void; hint?: string }) {
+  return (
+    <div>
+      <label className="text-[11px] text-slate-500 block mb-0.5 dark:text-white/40" title={hint}>{label}{hint && <span className="ml-0.5 text-slate-300" title={hint}>ⓘ</span>}</label>
+      <input type="number" min={0} value={value ?? 0} onChange={e => onChange(e.target.value)}
+        className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] dark:bg-white/[0.04]" />
+      {hint && <p className="text-[10px] text-slate-400 mt-0.5 max-w-[10rem] leading-tight dark:text-white/30">{hint}</p>}
     </div>
   )
 }
@@ -693,9 +780,9 @@ function RelojesTab() {
     try {
       const r = await api.get(`/api/devices/${d.id}/info`)
       setDeviceData(p => ({ ...p, [d.id]: { ...p[d.id], info: r.data } }))
-    } catch (e: any) {
-      const msg = e.response?.data?.error || e.response?.data?.message || e.message
-      setDeviceData(p => ({ ...p, [d.id]: { ...p[d.id], info: { error: msg } } }))
+    } catch {
+      // Detalle técnico no se muestra: mensaje neutro + reintento manual.
+      setDeviceData(p => ({ ...p, [d.id]: { ...p[d.id], info: { unavailable: true, message: 'Información temporalmente no disponible.' } } }))
     }
     setBusy(d.id, '')
   }
@@ -1061,42 +1148,29 @@ function RelojesTab() {
                       </div>
                     )}
 
-                    {/* Error de conexión */}
-                    {data.info?.error && (
-                      <div className="p-4 space-y-3">
-                        <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
-                          <XCircle size={18} className="text-red-500 flex-shrink-0 mt-0.5"/>
+                    {/* Información en vivo no disponible (neutro, con reintento manual).
+                        No se muestran detalles técnicos ni se confunde con el estado
+                        del servicio de sincronización: sólo la info de este reloj. */}
+                    {data.info?.unavailable && (
+                      <div className="p-4">
+                        <div className="flex items-start gap-3 p-4 bg-slate-50 border border-slate-200 rounded-xl dark:bg-white/[0.03] dark:border-white/[0.08]">
+                          <AlertCircle size={18} className="text-slate-400 flex-shrink-0 mt-0.5"/>
                           <div className="flex-1">
-                            <p className="font-semibold text-red-700 text-sm">No se pudo conectar al reloj</p>
-                            <p className="text-xs text-red-600 mt-1 font-mono">{data.info.error}</p>
-                            <p className="text-xs text-red-500 mt-2">
-                              Verifique que el Attendance Management (Windows) esté cerrado y que el reloj esté encendido.
+                            <p className="font-semibold text-slate-700 text-sm dark:text-white/80">{data.info.message || 'Información temporalmente no disponible.'}</p>
+                            <p className="text-xs text-slate-500 mt-1 dark:text-white/40">
+                              Los datos en vivo del reloj no están disponibles en este momento. Podés reintentar.
                             </p>
+                            <button onClick={() => loadInfo(d)} disabled={deviceLoading[d.id] === 'info'}
+                              className="mt-2 flex items-center gap-2 text-sm text-blue-600 hover:underline disabled:opacity-50">
+                              <RefreshCw size={13} className={deviceLoading[d.id] === 'info' ? 'animate-spin' : ''}/> Reintentar
+                            </button>
                           </div>
-                        </div>
-                        <button onClick={() => { setDeviceData(p => ({...p, [d.id]: {}})); loadInfo(d) }}
-                          className="flex items-center gap-2 text-sm text-blue-600 hover:underline">
-                          <RefreshCw size={13}/> Reintentar conexión
-                        </button>
-                      </div>
-                    )}
-
-                    {/* Reloj ocupado (datos en caché) */}
-                    {data.info?._warning && !data.info?.error && (
-                      <div className="px-4 pt-4">
-                        <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-700 text-xs">
-                          <AlertCircle size={14} className="flex-shrink-0 mt-0.5"/>
-                          <div className="flex-1">
-                            <p className="font-semibold">Reloj ocupado — datos en caché</p>
-                            <p className="mt-0.5 text-amber-600">{data.info._warning}</p>
-                          </div>
-                          <button onClick={() => loadInfo(d)} className="underline whitespace-nowrap">Reintentar</button>
                         </div>
                       </div>
                     )}
 
                     {/* ── Conectado: mostrar tabs ── */}
-                    {data.info && !data.info.error && (
+                    {data.info && !data.info.unavailable && (
                       <>
                         {/* Header: conectado + botón reconectar */}
                         <div className="flex items-center justify-between px-4 pt-3 pb-2">
