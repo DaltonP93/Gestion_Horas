@@ -1,6 +1,9 @@
 {
   "name": "asistencia-api",
   "version": "1.0.0",
+  "engines": {
+    "node": ">=20"
+  },
   "description": "Core API - Sistema de Asistencia",
   "main": "src/index.js",
   "scripts": {
