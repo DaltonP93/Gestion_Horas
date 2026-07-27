@@ -533,20 +533,21 @@ router.get('/:id/info', authorize('admin','gestor','hr'), async (req, res) => {
     res.json({ ...baseInfo, ...result, _source: 'live' });
 
   } catch (err) {
+    // El detalle técnico va SOLO a los logs; al cliente se le devuelve un
+    // mensaje neutro con los datos base de la BD. No se responde 503 para no
+    // confundirlo con un fallo del servicio (worker/auto-polling): es sólo la
+    // información en vivo del reloj la que no está disponible ahora.
     const msg = fmtErr(err);
     const isBusy = msg.includes('ocupado') || msg.includes('att2000') || msg.includes('TIMEOUT');
-
-    // Si el reloj está ocupado, devolver 200 con datos parciales de la BD
-    // para que el frontend pueda mostrar algo útil
-    if (isBusy) {
-      return res.json({
-        ...baseInfo,
-        _source: 'db',
-        _warning: msg,
-      });
-    }
-
-    res.status(503).json({ ok: false, error: msg });
+    try { require('../config/logger').warn(`GET /devices/${device.id}/info sin datos en vivo: ${msg}`); } catch {}
+    return res.json({
+      ...baseInfo,
+      _source: 'db',
+      unavailable: true,
+      message: isBusy
+        ? 'El reloj está ocupado. Intentá de nuevo en unos segundos.'
+        : 'Información temporalmente no disponible.',
+    });
   }
 });
 
@@ -1056,6 +1057,11 @@ router.put('/:id/auto-sync', requireSuperAdmin, async (req, res) => {
     if (req.body[k] === undefined) continue;
     if (k === 'enabled' || k === 'paused') { sets.push(`\`${col}\` = ?`); vals.push(req.body[k] ? 1 : 0); }
     else { sets.push(`\`${col}\` = ?`); vals.push(Math.max(0, parseInt(req.body[k], 10) || 0)); }
+  }
+  // Modo de conexión (columna del reloj, no de auto-sync): validado a auto/tcp/udp.
+  if (req.body.connection_mode !== undefined) {
+    const m = String(req.body.connection_mode).toLowerCase();
+    if (['auto', 'tcp', 'udp'].includes(m)) { sets.push('connection_mode = ?'); vals.push(m); }
   }
   if (!sets.length) return res.status(400).json({ error: 'Nada para actualizar' });
   try {

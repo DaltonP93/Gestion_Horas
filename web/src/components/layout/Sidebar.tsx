@@ -14,7 +14,6 @@ import clsx from 'clsx'
 import { useCurrentUser, hasRole, isSuperAdmin, type Role } from '@/lib/useCurrentUser'
 import { useI18n } from '@/i18n/I18nProvider'
 import { apiUrl } from '@/lib/api'
-import AccountMenu from './AccountMenu'
 
 type NavItem = {
   href: string
@@ -226,10 +225,17 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Menú de cuenta (perfil, preferencias, seguridad personal, cerrar sesión) */}
-      <div className="px-3 py-4 border-t border-white/10">
-        <AccountMenu variant="card" />
-      </div>
+      {/* Identidad (solo lectura). El menú de cuenta vive en el avatar del TopBar. */}
+      {user && (
+        <div className="px-4 py-4 border-t border-white/10">
+          <p className="text-white font-medium text-sm truncate">{user.fullName || user.username}</p>
+          <p className="text-xs truncate" style={{ color: textColor }}>
+            {user.role === 'super_admin' ? 'Super Admin'
+             : user.role === 'employee' ? 'Empleado'
+             : user.role.replace('_', ' ')}
+          </p>
+        </div>
+      )}
     </>
   )
 

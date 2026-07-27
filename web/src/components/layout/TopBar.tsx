@@ -27,7 +27,7 @@ export default function TopBar() {
         <LanguageSwitcher />
         <NotificationBell />
         <div className="ml-1 pl-1 border-l border-slate-200 dark:border-white/10">
-          <AccountMenu variant="avatar" />
+          <AccountMenu />
         </div>
       </div>
     </div>
