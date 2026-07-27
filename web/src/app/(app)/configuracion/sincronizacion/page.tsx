@@ -370,6 +370,9 @@ export default function SincronizacionPage() {
         </details>
       )}
 
+      {/* Sincronización inversa empleados → reloj (vista previa) — Super Admin */}
+      {isSuper && <ReverseSyncPreview />}
+
       {/* Log */}
       {log.length > 0 && (
         <section className="bg-slate-900 text-slate-100 rounded-2xl p-4 text-xs font-mono max-h-64 overflow-y-auto">
@@ -377,6 +380,120 @@ export default function SincronizacionPage() {
         </section>
       )}
     </div>
+  )
+}
+
+// ─── Sincronización inversa empleados → reloj (VISTA PREVIA / dry-run) ──────
+function ReverseSyncPreview() {
+  const [devices, setDevices] = useState<{ id: number; name: string; ip_address: string | null }[]>([])
+  const [deviceId, setDeviceId] = useState<number | ''>('')
+  const [plan, setPlan] = useState<any | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    api.get('/api/devices').then(r => {
+      const list = (r.data || []).filter((d: any) => d.ip_address)
+      setDevices(list)
+      if (list[0]) setDeviceId(list[0].id)
+    }).catch(() => {})
+  }, [])
+
+  async function runPreview() {
+    if (!deviceId) return
+    setLoading(true); setError(''); setPlan(null)
+    try {
+      const r = await api.post(`/api/devices/${deviceId}/reverse-sync/preview`, {}, { timeout: 60000 })
+      if (r.data?.ok === false) setError(r.data.error || 'No se pudo leer el reloj')
+      else setPlan(r.data)
+    } catch (e: any) { setError(e.response?.data?.error || e.message) }
+    setLoading(false)
+  }
+
+  const ACTION_META: Record<string, { label: string; cls: string }> = {
+    create:  { label: 'Crear',        cls: 'bg-blue-100 text-blue-700' },
+    update:  { label: 'Actualizar',   cls: 'bg-amber-100 text-amber-700' },
+    disable: { label: 'Deshabilitar', cls: 'bg-red-100 text-red-700' },
+    ok:      { label: 'Sin cambios',  cls: 'bg-slate-100 text-slate-500' },
+    skip:    { label: 'Omitir',       cls: 'bg-slate-100 text-slate-400' },
+  }
+
+  return (
+    <section className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="w-8 h-8 rounded-xl flex items-center justify-center text-white bg-violet-500"><RefreshCw size={15} /></span>
+        <h2 className="font-bold text-slate-900 dark:text-white">Sincronización inversa empleados → reloj</h2>
+        <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-400/10 dark:text-violet-300">Vista previa</span>
+      </div>
+      <p className="text-xs text-slate-500 dark:text-white/40 mb-3">
+        Calcula el plan de cambios (crear / actualizar / deshabilitar) comparando los empleados con los usuarios del reloj.
+        Prioridad de <code>device_user_id</code>: vínculo explícito → legajo → código (este último requiere confirmación).
+        <b> No escribe nada en el equipo</b> — la escritura real es una etapa posterior validada en campo.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-3 mb-4">
+        <div>
+          <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Reloj</label>
+          <select value={deviceId} onChange={e => setDeviceId(Number(e.target.value))}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent min-w-[180px]">
+            {devices.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        <button onClick={runPreview} disabled={loading || !deviceId}
+          className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
+          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> {loading ? 'Leyendo reloj…' : 'Ver plan (dry-run)'}
+        </button>
+      </div>
+
+      {error && <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">{error}</div>}
+
+      {plan && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+            <Stat label="Crear" value={String(plan.counts.create)} />
+            <Stat label="Actualizar" value={String(plan.counts.update)} warn={plan.counts.update > 0} />
+            <Stat label="Deshabilitar" value={String(plan.counts.disable)} warn={plan.counts.disable > 0} />
+            <Stat label="Sin cambios" value={String(plan.counts.ok)} good />
+            <Stat label="Omitidos" value={String(plan.counts.skipped)} />
+            <Stat label="Requieren confirmación" value={String(plan.counts.needs_confirmation)} warn={plan.counts.needs_confirmation > 0} />
+          </div>
+
+          <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-50 dark:bg-white/[0.04]">
+                <tr className="text-left text-slate-500 dark:text-white/40">
+                  <th className="px-3 py-2">Empleado</th>
+                  <th className="px-3 py-2">device_user_id</th>
+                  <th className="px-3 py-2">Origen</th>
+                  <th className="px-3 py-2">Acción</th>
+                  <th className="px-3 py-2">Motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.actions.filter((a: any) => a.action !== 'ok').slice(0, 300).map((a: any, i: number) => {
+                  const m = ACTION_META[a.action] || ACTION_META.skip
+                  return (
+                    <tr key={i} className="border-t border-slate-50 dark:border-white/[0.04]">
+                      <td className="px-3 py-1.5 text-slate-800 dark:text-white/90">{a.name} <span className="text-slate-400">#{a.code}</span></td>
+                      <td className="px-3 py-1.5 font-mono">{a.target_user_id || '—'}</td>
+                      <td className="px-3 py-1.5">{a.source || '—'}{a.needs_confirmation && <span className="ml-1 text-amber-600">⚠</span>}</td>
+                      <td className="px-3 py-1.5"><span className={`px-2 py-0.5 rounded-full ${m.cls}`}>{m.label}</span></td>
+                      <td className="px-3 py-1.5 text-slate-500 dark:text-white/40">{a.reason}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          {plan.device_only?.length > 0 && (
+            <p className="text-xs text-slate-500 dark:text-white/40">
+              {plan.device_only.length} usuario(s) en el reloj sin empleado asociado (no se tocan).
+            </p>
+          )}
+          <p className="text-[11px] text-slate-400 dark:text-white/30">{plan.note}</p>
+        </div>
+      )}
+    </section>
   )
 }
 

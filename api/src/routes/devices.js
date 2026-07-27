@@ -1137,4 +1137,20 @@ router.post('/sync-jobs/:id/cancel', authorize('admin', 'gestor'), async (req, r
   }
 });
 
+// ─── Sincronización inversa empleados → reloj (VISTA PREVIA / dry-run) ──────
+// Solo lectura: calcula el plan (crear/actualizar/deshabilitar/sin cambios) sin
+// escribir nada en el equipo. La escritura real es una etapa posterior.
+const { previewDeviceSync } = require('../services/reverseSyncPreview');
+
+router.post('/:id/reverse-sync/preview', authorize('admin', 'gestor'), async (req, res) => {
+  try {
+    const plan = await previewDeviceSync(parseInt(req.params.id, 10), {});
+    audit.log({ req, user: req.user, action: 'reverse_sync.preview', entity: 'device', entity_id: req.params.id,
+      details: { counts: plan.counts, device_users: plan.device_users } });
+    res.json(plan);
+  } catch (err) {
+    res.status(200).json({ ok: false, device_id: parseInt(req.params.id, 10), error: fmtErr(err) });
+  }
+});
+
 module.exports = router;
