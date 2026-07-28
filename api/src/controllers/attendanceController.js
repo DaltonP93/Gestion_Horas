@@ -2,6 +2,7 @@ const { sequelize } = require('../config/database');
 const { getIO, emitAttendance } = require('../socket/socketServer');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('../services/recalcLock');
+const { LINKED_SQL } = require('../services/rawPunchStats');
 let fireWebhooks;
 try { ({ fireWebhooks } = require('../routes/webhooks')); } catch {}
 let writeCheckinOut;
@@ -309,10 +310,14 @@ async function getDashboardStats(req, res) {
     // raw_device_punches existe desde la migración 056). Nunca rompe el dashboard.
     stats.raw_today = 0; stats.mapped_today = 0; stats.unmapped_pending = 0; stats.unmapped_today = 0;
     try {
+      // "Vinculadas" = marcas asociadas a un empleado: mapping_status 'mapped'
+      // O 'duplicate' (LINKED_SQL). El auto-polling relee el buffer del reloj en
+      // cada ciclo, así que las marcas ya importadas quedan como 'duplicate';
+      // igual están vinculadas y deben contarse (antes se omitían).
       const [[rp]] = await sequelize.query(`
         SELECT
           SUM(LEFT(record_time_py, 10) = ?)                              AS raw_today,
-          SUM(LEFT(record_time_py, 10) = ? AND mapping_status = 'mapped') AS mapped_today,
+          SUM(LEFT(record_time_py, 10) = ? AND ${LINKED_SQL})            AS mapped_today,
           SUM(mapping_status = 'unmapped')                              AS unmapped_pending,
           SUM(LEFT(record_time_py, 10) = ? AND mapping_status = 'unmapped') AS unmapped_today
         FROM raw_device_punches
