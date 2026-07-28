@@ -910,6 +910,13 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
     const [devices] = await sequelize.query(
       "SELECT id, name, ip_address, status, last_sync FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id"
     );
+
+    // Relojes con un trabajo de lectura en curso (para el estado 'reading').
+    let activeJobDev = new Set();
+    try {
+      const [aj] = await sequelize.query("SELECT DISTINCT device_id FROM sync_jobs WHERE status IN ('queued','running')");
+      activeJobDev = new Set(aj.map(r => r.device_id));
+    } catch { /* tabla puede no existir */ }
     // Recomendación operativa según el error de la última lectura.
     const recommendFor = (msg) => {
       const m = String(msg || '');
@@ -930,8 +937,26 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
       const stale = !lastSyncMs || (now - lastSyncMs) > STALE_MS;
       const failing = run && (run.status === 'error' || run.status === 'timeout');
       const partialRun = run && run.status === 'partial';
+
+      // ── Estado de LECTURA separado de la conectividad ──────────────
+      // No confundir "todavía no se leyó hoy" con "error". Distingue:
+      // pending_first_read / reading / complete / partial / error / no_data.
+      const runToday = run?.finished_at
+        ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(new Date(run.finished_at)) === today
+        : false;
+      const readToday = runToday || marks_today > 0;
+      let read_state;
+      if (activeJobDev.has(d.id)) read_state = 'reading';
+      else if (!readToday) read_state = 'pending_first_read';
+      else if (failing) read_state = 'error';
+      else if (partialRun) read_state = 'partial';
+      else if (marks_today > 0) read_state = 'complete';
+      else read_state = 'no_data';
+      const connectivity = d.status === 'online' ? 'online' : 'offline';
+
       return {
         id: d.id, name: d.name, ip: d.ip_address, status: d.status,
+        connectivity, read_state,
         last_sync: d.last_sync, last_mark: m.last_mark || null,
         marks_today, employees_today: Number(m.employees_today) || 0,
         stale, failing: !!failing, partial: !!partialRun,
@@ -947,6 +972,24 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
       };
     });
     res.json({ ok: true, date: today, complete: items.every(i => !i.suspect), items });
+  } catch (err) {
+    res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// GET /api/devices/:id/sync-runs — historial de corridas de un reloj (read-only).
+router.get('/:id/sync-runs', authorize('admin', 'gestor', 'hr'), async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    const [rows] = await sequelize.query(
+      `SELECT id, status, started_at, finished_at,
+              imported_count, in_range_count, unmapped_count,
+              attempts, attempts_requested, duration_ms, error_message,
+              first_valid_time, last_valid_time
+         FROM device_sync_runs WHERE device_id = ? ORDER BY id DESC LIMIT ?`,
+      { replacements: [parseInt(req.params.id, 10), limit] }
+    );
+    res.json({ ok: true, items: rows });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
   }
