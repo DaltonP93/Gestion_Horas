@@ -1,6 +1,7 @@
 const { sequelize } = require('../config/database');
 const { getIO, emitAttendance } = require('../socket/socketServer');
 const logger = require('../config/logger');
+const { withDayRecalcLock, dayBounds } = require('../services/recalcLock');
 let fireWebhooks;
 try { ({ fireWebhooks } = require('../routes/webhooks')); } catch {}
 let writeCheckinOut;
@@ -126,11 +127,15 @@ async function recalcDailySummary(employeeId, timestamp) {
     timestamp instanceof Date ? timestamp : new Date(timestamp)
   );
 
+  // Rango SARGABLE [inicio, díaSiguiente): usa el índice idx_ts/idx_emp_ts y
+  // acota los locks de rango (a diferencia de DATE(timestamp), que fuerza
+  // scan del índice funcional y amplía los next-key locks → deadlocks).
+  const { start, next } = dayBounds(date);
   const [logs] = await sequelize.query(`
     SELECT timestamp, type FROM attendance_logs
-    WHERE employee_id = ? AND DATE(timestamp) = ?
+    WHERE employee_id = ? AND timestamp >= ? AND timestamp < ?
     ORDER BY timestamp ASC
-  `, { replacements: [employeeId, date] });
+  `, { replacements: [employeeId, start, next] });
 
   // ¿Es feriado o fin de semana? Marcar estado aunque no haya marcajes
   const [[holiday]] = await sequelize.query(
@@ -144,11 +149,15 @@ async function recalcDailySummary(employeeId, timestamp) {
     // Sin marcajes: si es feriado o fin de semana, registrar como tal (no absent)
     if (holiday || isWeekend) {
       const fallbackStatus = holiday ? 'holiday' : 'weekend';
-      await sequelize.query(`
-        INSERT INTO daily_summary (employee_id, date, worked_minutes, late_minutes, status)
-        VALUES (?, ?, 0, 0, ?)
-        ON DUPLICATE KEY UPDATE status = VALUES(status)
-      `, { replacements: [employeeId, date, fallbackStatus] });
+      // Bajo el lock por fecha: se serializa con el recálculo en bloque del
+      // mismo día (worker/cron) y se reintenta ante deadlock/lock-wait.
+      await withDayRecalcLock(date, async (t) => {
+        await sequelize.query(`
+          INSERT INTO daily_summary (employee_id, date, worked_minutes, late_minutes, status)
+          VALUES (?, ?, 0, 0, ?)
+          ON DUPLICATE KEY UPDATE status = VALUES(status)
+        `, { replacements: [employeeId, date, fallbackStatus], transaction: t });
+      }, { label: `recalcEmp:${date}:${employeeId}` });
     }
     return;
   }
@@ -186,21 +195,25 @@ async function recalcDailySummary(employeeId, timestamp) {
     }
   }
 
-  await sequelize.query(`
-    INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, late_minutes, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      first_in        = COALESCE(VALUES(first_in), first_in),
-      last_out        = VALUES(last_out),
-      worked_minutes  = VALUES(worked_minutes),
-      late_minutes    = VALUES(late_minutes),
-      status          = VALUES(status)
-  `, { replacements: [
-    employeeId, date,
-    firstIn  ? firstIn.timestamp  : null,
-    lastOut  ? lastOut.timestamp  : null,
-    workedMinutes, lateMinutes, status
-  ]});
+  // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
+  // y con reintento acotado ante deadlock/lock-wait.
+  await withDayRecalcLock(date, async (t) => {
+    await sequelize.query(`
+      INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, late_minutes, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        first_in        = COALESCE(VALUES(first_in), first_in),
+        last_out        = VALUES(last_out),
+        worked_minutes  = VALUES(worked_minutes),
+        late_minutes    = VALUES(late_minutes),
+        status          = VALUES(status)
+    `, { replacements: [
+      employeeId, date,
+      firstIn  ? firstIn.timestamp  : null,
+      lastOut  ? lastOut.timestamp  : null,
+      workedMinutes, lateMinutes, status
+    ], transaction: t });
+  }, { label: `recalcEmp:${date}:${employeeId}` });
 }
 
 async function checkAndAlertLate(emp, inTime, io) {

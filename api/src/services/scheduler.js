@@ -8,6 +8,7 @@ const cron = require('node-cron');
 const { sequelize } = require('../config/database');
 const { sendMail, buildReportEmailHtml } = require('./emailService');
 const logger = require('../config/logger');
+const { withDayRecalcLock, dayBounds } = require('./recalcLock');
 
 const _jobs = new Map(); // scheduleId → tarea cron activa
 
@@ -301,6 +302,10 @@ async function bulkRecalcDailySummary(date) {
   // Insertar/actualizar daily_summary para todos los empleados
   // con registros en attendance_logs para la fecha dada.
   // late_minutes se calcula comparando primer IN con el horario del empleado.
+  // Rango SARGABLE (>= inicio, < díaSiguiente) + lock lógico por fecha para que
+  // dos procesos no recalculen el mismo día a la vez (elimina el deadlock).
+  const { start, next } = dayBounds(date);
+  const { retries } = await withDayRecalcLock(date, async (t) => {
   await sequelize.query(`
     INSERT INTO daily_summary
       (employee_id, date, first_in, last_out, worked_minutes, late_minutes, overtime_minutes, status)
@@ -368,8 +373,9 @@ async function bulkRecalcDailySummary(date) {
         ELSE 'absent'
       END AS status
     FROM attendance_logs al
-    WHERE DATE(al.timestamp) = ?
+    WHERE al.timestamp >= ? AND al.timestamp < ?
     GROUP BY al.employee_id
+    ORDER BY al.employee_id
     ON DUPLICATE KEY UPDATE
       first_in         = COALESCE(VALUES(first_in),       daily_summary.first_in),
       last_out         = COALESCE(VALUES(last_out),        daily_summary.last_out),
@@ -384,9 +390,10 @@ async function bulkRecalcDailySummary(date) {
         WHEN daily_summary.status IN ('holiday','weekend','permission') THEN daily_summary.status
         ELSE VALUES(status)
       END
-  `, { replacements: [date, date, date, date, date] });
+  `, { replacements: [date, date, date, date, start, next], transaction: t });
+  }, { label: `bulkRecalc:${date}` });
 
-  logger.info(`♻️  daily_summary recalculado para ${date}`);
+  logger.info(`♻️  daily_summary recalculado para ${date}${retries ? ` (tras ${retries} reintento(s) por bloqueo)` : ''}`);
 }
 
 // Materializar ausentes: inserta filas 'absent' para empleados activos que,
@@ -394,18 +401,22 @@ async function bulkRecalcDailySummary(date) {
 // debían trabajar ese día, no es feriado, y no tienen ya una fila. No pisa
 // filas existentes. Empleados sin horario asignado se omiten.
 async function materializeAbsents(date) {
-  const [res] = await sequelize.query(`
-    INSERT INTO daily_summary (employee_id, date, status)
-    SELECT e.id, ?, 'absent'
-    FROM employees e
-    JOIN schedules s ON e.schedule_id = s.id
-    WHERE e.status = 'active'
-      AND FIND_IN_SET(DAYOFWEEK(?), REPLACE(s.work_days, ' ', ''))
-      AND NOT EXISTS (SELECT 1 FROM daily_summary ds WHERE ds.employee_id = e.id AND ds.date = ?)
-      AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.date = ?)
-    ON DUPLICATE KEY UPDATE status = daily_summary.status
-  `, { replacements: [date, date, date, date] });
-  const n = res?.affectedRows ?? 0;
+  let n = 0;
+  // Bajo el mismo lock por fecha: nunca choca con un recálculo del mismo día.
+  await withDayRecalcLock(date, async (t) => {
+    const [res] = await sequelize.query(`
+      INSERT INTO daily_summary (employee_id, date, status)
+      SELECT e.id, ?, 'absent'
+      FROM employees e
+      JOIN schedules s ON e.schedule_id = s.id
+      WHERE e.status = 'active'
+        AND FIND_IN_SET(DAYOFWEEK(?), REPLACE(s.work_days, ' ', ''))
+        AND NOT EXISTS (SELECT 1 FROM daily_summary ds WHERE ds.employee_id = e.id AND ds.date = ?)
+        AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.date = ?)
+      ON DUPLICATE KEY UPDATE status = daily_summary.status
+    `, { replacements: [date, date, date, date], transaction: t });
+    n = res?.affectedRows ?? 0;
+  }, { label: `materialize:${date}` });
   if (n > 0) logger.info(`🚫 ${n} ausente(s) materializado(s) para ${date}`);
   return n;
 }
