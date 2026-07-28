@@ -15,6 +15,27 @@
  *  - Timeout de lectura por reloj (no cuelga indefinidamente).
  */
 const { sequelize } = require('../config/database');
+const logger = require('../config/logger');
+const { withDeadlockRetry, isRetryable, mysqlErrno } = require('../utils/mysqlRetry');
+
+// ─── Instrumentación por fase ───────────────────────────────────
+// Traza estructurada por fase de la sincronización (SIN SQL, sin stack, sin
+// datos sensibles): job_id, device_id, sync_run_id, fase, duración, código
+// MySQL e intento de transacción. Sólo a logs (nunca a la UI).
+function logPhase(ctx, phase, ms, extra = {}) {
+  const parts = [
+    `phase=${phase}`,
+    ctx.jobId ? `job=${ctx.jobId}` : null,
+    `device=${ctx.deviceId}`,
+    ctx.syncRunId ? `run=${ctx.syncRunId}` : null,
+    `ms=${Math.max(0, Math.round(ms))}`,
+  ];
+  if (extra.attempt) parts.push(`attempt=${extra.attempt}`);
+  if (extra.retries) parts.push(`retries=${extra.retries}`);
+  if (extra.mysqlCode) parts.push(`mysql=${extra.mysqlCode}`);
+  if (extra.note) parts.push(extra.note);
+  logger.info(`[sync] ${parts.filter(Boolean).join(' ')}`);
+}
 
 // ─── Conexión ZKTeco (según connection_mode del device) ─────────
 async function openZK(device) {
@@ -384,8 +405,14 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     const now = new Date();
     let status = 'success';
     let note = null;
+    // Un deadlock/lock-wait al PERSISTIR o RECALCULAR es un error de
+    // PROCESAMIENTO en base de datos, no de conectividad con el reloj: la
+    // lectura física funcionó. Se muestra con un mensaje amable (sin SQL ni
+    // stack) y el siguiente ciclo recupera por idempotencia.
+    const isDbLockErr = error && isRetryable(error);
     if (error) {
-      status = /timeout/i.test(String(error?.message || error)) ? 'timeout' : 'error';
+      if (isDbLockErr) status = 'error';
+      else status = /timeout/i.test(String(error?.message || error)) ? 'timeout' : 'error';
     } else if (report) {
       // 'partial' es SÓLO estado de LECTURA: buffer truncado o rango no cubierto.
       // Las marcas sin empleado (warn_unmapped) o la inestabilidad entre intentos
@@ -397,15 +424,23 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
       else if (report.notFound > 0) note = `Lectura OK; ${report.notFound} marca(s) sin empleado vinculado.`;
       else if (report.read_unstable) note = 'Lectura OK tras reintentos (algún intento llegó truncado).';
     }
-    const errMsg = error ? String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500) : note;
+    const errMsg = error
+      ? (isDbLockErr
+          ? 'Error de procesamiento: bloqueo temporal en la base de datos al calcular el resumen. La lectura del reloj fue correcta; el próximo ciclo lo completa automáticamente.'
+          : String((sanitizeErr ? sanitizeErr(error) : (error.message || error))).slice(0, 500))
+      : note;
+    // retry_count: reintentos por bloqueo acumulados (persistencia + recálculo).
+    const retryCount = (report && typeof report.retry_count === 'number') ? report.retry_count
+      : (error && typeof error.retryCount === 'number') ? error.retryCount : 0;
     // attempts = intentos REALMENTE ejecutados (early-stop puede cortar antes);
     // attempts_requested = los pedidos. Antes `attempts` guardaba los pedidos.
     const executed = report?.read_attempts_detail?.length || (report ? 1 : (opts.attempts || 1));
     const requested = opts.attempts || executed;
     const detailJson = report?.read_attempts_detail?.length ? JSON.stringify(report.read_attempts_detail).slice(0, 4000) : null;
-    const extraCols = await getExistingColumns('device_sync_runs', ['attempts_detail', 'attempts_requested']);
+    const extraCols = await getExistingColumns('device_sync_runs', ['attempts_detail', 'attempts_requested', 'retry_count']);
     const hasDetailCol = extraCols.includes('attempts_detail');
     const hasReqCol = extraCols.includes('attempts_requested');
+    const hasRetryCol = extraCols.includes('retry_count');
     const cols = ['device_id', 'started_at', 'finished_at', 'status', 'raw_count', 'valid_count', 'in_range_count',
       'imported_count', 'duplicate_count', 'unmapped_count', 'garbage_count', 'first_valid_time',
       'last_valid_time', 'attempts', 'duration_ms', 'from_date', 'to_date', 'error_message', 'created_by'];
@@ -419,6 +454,7 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     ];
     if (hasReqCol) { cols.push('attempts_requested'); vals.push(requested); }
     if (hasDetailCol) { cols.push('attempts_detail'); vals.push(detailJson); }
+    if (hasRetryCol) { cols.push('retry_count'); vals.push(retryCount); }
     await sequelize.query(
       `INSERT INTO device_sync_runs (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`,
       { replacements: vals }
@@ -440,10 +476,12 @@ async function backupDeviceDirect(device, opts = {}) {
   const startedAt = new Date();
   const wantLock = opts.lock !== false;
   const lockMeta = (opts.lock && typeof opts.lock === 'object') ? opts.lock : {};
+  const ctx = { jobId: lockMeta.jobId || null, deviceId: device.id, syncRunId: null };
   let handle = null, renewTimer = null;
 
   if (wantLock) {
     const ttlMs = lockMeta.ttlMs || ((opts.readTimeoutMs || 45000) + 5 * 60 * 1000);
+    const tLock = Date.now();
     handle = await deviceLock.acquire(device.id, {
       ttlMs, owner: lockMeta.owner, jobId: lockMeta.jobId, origin: lockMeta.origin || 'direct',
     });
@@ -452,6 +490,7 @@ async function backupDeviceDirect(device, opts = {}) {
       e.code = 'DEVICE_BUSY';
       throw e;   // no se registra como corrida: no llegó a leer
     }
+    logPhase(ctx, 'acquire_device_lock', Date.now() - tLock);
     // Renovar mientras la lectura sigue viva (recupera TTL en lecturas largas).
     renewTimer = setInterval(() => { deviceLock.renew(handle).catch(() => {}); }, Math.max(5000, Math.floor(ttlMs / 3)));
     if (renewTimer.unref) renewTimer.unref();
@@ -465,8 +504,14 @@ async function backupDeviceDirect(device, opts = {}) {
     if (!opts.dryRun) await recordSyncRun(device, { startedAt, error: err, opts });
     throw err;
   } finally {
+    // Liberar SIEMPRE el lock del reloj (aunque falle la persistencia/recálculo)
+    // → no quedan device_locks huérfanos y el próximo ciclo puede volver a leer.
     if (renewTimer) clearInterval(renewTimer);
-    if (handle) await deviceLock.release(handle).catch(() => {});
+    if (handle) {
+      const tRel = Date.now();
+      await deviceLock.release(handle).catch(() => {});
+      logPhase(ctx, 'release_device_lock', Date.now() - tRel);
+    }
   }
 }
 
@@ -483,7 +528,13 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
     match_columns: [], read_unstable: false, read_truncated: false, partial: false,
     read_attempts_detail: [], dates: [], att2000: null,
     duration_ms: 0, sample: [], debug: null,
+    retry_count: 0,
   };
+
+  // Contexto de instrumentación por fase (job/device/run). sync_run_id se
+  // conoce recién al registrar la corrida; aquí puede ir nulo.
+  const lockMeta = (opts.lock && typeof opts.lock === 'object') ? opts.lock : {};
+  const ctx = { jobId: lockMeta.jobId || null, deviceId: device.id, syncRunId: null };
 
   // Lectura estable (varios intentos con cooldown, mejor lectura por
   // completa/en-rango/fecha/válidos; detecta buffers truncados del GT200).
@@ -616,6 +667,7 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
   }
 
   // 1) STAGING idempotente de TODAS las marcas en rango (mapeadas o no).
+  const tRaw = Date.now();
   const hasRaw = await tableExists('raw_device_punches');
   if (hasRaw) {
     const rawRows = punches.map(p => [
@@ -627,7 +679,9 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
     for (let i = 0; i < rawRows.length; i += RCHUNK) {
       const chunk = rawRows.slice(i, i + RCHUNK);
       const vals = chunk.map(() => '(?,?,?,?,?,?,?,?,?,?)').join(',');
-      await sequelize.query(
+      // El staging es idempotente (ON DUPLICATE KEY UPDATE): reintentar un chunk
+      // ante deadlock/lock-wait NO duplica filas. No se vuelve a leer el reloj.
+      const { retries } = await withDeadlockRetry(() => sequelize.query(
         `INSERT INTO raw_device_punches
            (device_id, device_user_id, user_sn, record_time, record_time_py, ip, raw_json, source, mapping_status, employee_id)
          VALUES ${vals}
@@ -636,22 +690,33 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
            user_sn = VALUES(user_sn), record_time_py = VALUES(record_time_py), ip = VALUES(ip),
            updated_at = NOW()`,
         { replacements: chunk.flat() }
-      );
+      ), { label: `persist_raw:dev${device.id}` });
+      report.retry_count += retries;
     }
     report.staged = rawRows.length;
   }
+  if (hasRaw) logPhase(ctx, 'persist_raw', Date.now() - tRaw, { retries: report.retry_count || undefined, note: `rows=${report.staged}` });
 
   // 2) Insertar attendance_logs de las marcas mapeadas nuevas.
+  const tAtt = Date.now();
+  let attRetries = 0;
   const CHUNK = 500;
   for (let i = 0; i < toInsert.length; i += CHUNK) {
     const chunk = toInsert.slice(i, i + CHUNK);
     const vals = chunk.map(() => '(?,?,?,?,?)').join(',');
-    const [r] = await sequelize.query(
+    // INSERT IGNORE es idempotente por la clave única (employee_id, timestamp,
+    // source): reintentar ante deadlock/lock-wait no crea duplicados y no
+    // requiere releer el reloj (las marcas ya están en memoria/staging).
+    const { result, retries } = await withDeadlockRetry(() => sequelize.query(
       `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES ${vals}`,
       { replacements: chunk.flat() }
-    );
+    ), { label: `persist_attendance:dev${device.id}` });
+    const [r] = result;
     report.imported += (r?.affectedRows ?? 0);
+    attRetries += retries;
   }
+  report.retry_count += attRetries;
+  if (toInsert.length) logPhase(ctx, 'persist_attendance', Date.now() - tAtt, { retries: attRetries || undefined, note: `imported=${report.imported}` });
   report.dates = [...dates].sort();
 
   // 3) Enlazar raw → attendance_logs (idempotente, set-based).
@@ -671,8 +736,31 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
 
   if (recalc && report.dates.length) {
     const { bulkRecalcDailySummary, materializeAbsents } = require('./scheduler');
+    const tRecalc = Date.now();
+    // bulkRecalcDailySummary/materializeAbsents ya serializan por fecha
+    // (GET_LOCK) y reintentan ante deadlock. Recorremos TODAS las fechas para
+    // avanzar lo máximo posible (recuperación idempotente en el próximo ciclo)
+    // y, si alguna queda con deadlock tras los reintentos, propagamos el error
+    // como "error de procesamiento": NO es un fallo de conectividad. Las marcas
+    // ya quedaron en attendance_logs, así que el siguiente ciclo recalcula.
+    let recalcErr = null;
     for (const d of report.dates) {
-      try { await bulkRecalcDailySummary(d); await materializeAbsents(d); } catch (e) { /* seguir */ }
+      try {
+        await bulkRecalcDailySummary(d);
+        await materializeAbsents(d);
+      } catch (e) {
+        if (!recalcErr) recalcErr = e;
+        const code = mysqlErrno(e);
+        logPhase(ctx, 'recalc_daily_summary', 0, { mysqlCode: code || undefined, note: `date=${d} ERROR` });
+      }
+    }
+    logPhase(ctx, 'recalc_daily_summary', Date.now() - tRecalc, { note: `dates=${report.dates.length}` });
+    if (recalcErr) {
+      // Marcar como error de PROCESAMIENTO (no de lectura/conexión). Se
+      // adjunta retry_count acumulado para que la auditoría lo registre.
+      recalcErr.phase = 'recalc_daily_summary';
+      recalcErr.retryCount = report.retry_count;
+      throw recalcErr;
     }
   }
 
