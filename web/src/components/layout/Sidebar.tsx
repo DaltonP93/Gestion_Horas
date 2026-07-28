@@ -39,15 +39,18 @@ export default function Sidebar() {
   const located = locateByPath(pathname)
   const activeGroupId = located?.group.id || null
 
-  // Acordeón: el grupo de la ruta actual se abre solo; si no, el recordado en sesión.
+  // Acordeón: la ruta actual SIEMPRE manda. En cada navegación se expande el
+  // módulo correspondiente y se colapsan los demás. sessionStorage es sólo un
+  // fallback inicial (rutas que no mapean a ningún módulo) y nunca prevalece
+  // sobre la ruta actual. Se deriva de `pathname` para evitar el desfasaje que
+  // requería dos clics.
   useEffect(() => {
-    if (activeGroupId) { setExpanded(activeGroupId); return }
-    try {
-      const saved = sessionStorage.getItem(EXPANDED_KEY)
-      if (saved) setExpanded(saved)
-    } catch {}
-  }, [activeGroupId])
+    const gid = locateByPath(pathname)?.group.id || null
+    if (gid) { setExpanded(gid); return }
+    try { setExpanded(sessionStorage.getItem(EXPANDED_KEY) || null) } catch { setExpanded(null) }
+  }, [pathname])
 
+  // Toggle manual con el chevron (no navega). Persiste sólo como fallback.
   function toggleGroup(id: string) {
     setExpanded(prev => {
       const next = prev === id ? null : id

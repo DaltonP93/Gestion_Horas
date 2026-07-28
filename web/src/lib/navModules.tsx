@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { useCurrentUser, hasRole, isSuperAdmin, type Role } from '@/lib/useCurrentUser'
 import { apiUrl } from '@/lib/api'
+import { locateGroupIdByPath } from '@/lib/navRouting'
 
 export type NavItem = {
   href: string
@@ -75,7 +76,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: 'talento', label: 'Talento y desarrollo', icon: Sparkles, desc: 'Capacitaciones, encuestas y evaluaciones.',
+    id: 'talento-desarrollo', label: 'Talento y desarrollo', icon: Sparkles, desc: 'Capacitaciones, encuestas y evaluaciones.',
     items: [
       { href: '/capacitaciones', icon: GraduationCap, i18nKey: 'nav.training',    desc: 'Cursos y formación del personal.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'capacitaciones', color: 'bg-violet-500' },
       { href: '/encuestas',      icon: ClipboardList, i18nKey: 'nav.surveys',     desc: 'Encuestas internas y clima laboral.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'encuestas', color: 'bg-teal-500' },
@@ -155,16 +156,20 @@ export function visibleGroups(canSee: (i: NavItem) => boolean): (NavGroup & { vi
 
 export function groupById(id: string) { return NAV_GROUPS.find(g => g.id === id) || null }
 
-// Encuentra el grupo y el ítem que corresponden a una ruta (para breadcrumbs / auto-expand).
-export function locateByPath(pathname: string): { group: NavGroup; item: NavItem } | null {
-  let best: { group: NavGroup; item: NavItem; len: number } | null = null
-  for (const g of NAV_GROUPS) {
-    for (const it of g.items) {
-      const base = it.href.split('?')[0]
-      if (pathname === base || pathname.startsWith(base + '/')) {
-        if (!best || base.length > best.len) best = { group: g, item: it, len: base.length }
-      }
+// Encuentra el grupo (y el ítem, si aplica) de una ruta — para breadcrumbs y
+// auto-expand del sidebar. Reutiliza el enrutamiento puro (incluye /m/<slug>).
+// item es null en la página principal del módulo (/m/<slug>).
+export function locateByPath(pathname: string): { group: NavGroup; item: NavItem | null } | null {
+  const gid = locateGroupIdByPath(pathname)
+  if (!gid) return null
+  const group = NAV_GROUPS.find(g => g.id === gid)
+  if (!group) return null
+  let item: NavItem | null = null, len = -1
+  for (const it of group.items) {
+    const base = it.href.split('?')[0]
+    if (pathname === base || pathname.startsWith(base + '/')) {
+      if (base.length > len) { item = it; len = base.length }
     }
   }
-  return best ? { group: best.group, item: best.item } : null
+  return { group, item }
 }
