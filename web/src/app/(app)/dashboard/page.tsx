@@ -77,16 +77,30 @@ export default function DashboardPage() {
   const stats = data?.stats || {}
   const recentLogs: AttendanceEvent[] = [...liveEvents, ...(data?.recentLogs || [])].slice(0, 20)
 
-  // Estado por reloj (completo / parcial / error / sin datos).
+  // Estado de LECTURA por reloj (separado de la conectividad). Un reloj que
+  // todavía no fue leído hoy NO es un error: es "pendiente de primera lectura".
   const clocks: any[] = coverage?.items || []
-  const clockState = (c: any) => (c.failing || c.status === 'error') ? 'error'
-    : c.partial ? 'partial'
-    : (c.marks_today > 0 ? 'complete' : 'nodata')
-  const clocksError = clocks.filter(c => clockState(c) === 'error').length
-  const clocksPartial = clocks.filter(c => clockState(c) === 'partial').length
-  const clocksNoData = clocks.filter(c => clockState(c) === 'nodata').length
+  const clockState = (c: any) => {
+    const rs = c.read_state
+    if (rs === 'error' || c.failing || c.status === 'error') return 'error'
+    if (rs === 'partial' || c.partial) return 'partial'
+    if (rs === 'reading') return 'reading'
+    if (rs === 'complete' || c.marks_today > 0) return 'complete'
+    if (rs === 'pending_first_read') return 'pending'
+    return 'nodata'
+  }
+  const CLOCK_LABEL: Record<string, string> = {
+    error: 'error de lectura', partial: 'lectura parcial', reading: 'lectura en curso',
+    complete: 'lectura completada', pending: 'todavía no se realizaron lecturas hoy', nodata: 'sin datos todavía',
+  }
+  // "Problema" real = error / parcial / sincronización vieja. Pendiente de
+  // primera lectura no cuenta como problema.
+  const problemClocks = clocks.filter(c => ['error', 'partial'].includes(clockState(c)) || c.stale)
+  const pendingClocks = clocks.filter(c => clockState(c) === 'pending')
   const clocksComplete = clocks.filter(c => clockState(c) === 'complete').length
-  const suspectCount = clocks.filter(c => c.suspect).length
+  const clocksPartial  = clocks.filter(c => clockState(c) === 'partial').length
+  const clocksError    = clocks.filter(c => clockState(c) === 'error').length
+  const clocksPending  = pendingClocks.length
 
   // Presentes hoy = EMPLEADOS ÚNICOS con marca válida del día (no cantidad de
   // marcas). Cobertura = presentes únicos / empleados activos. Ambos vienen ya
@@ -143,22 +157,34 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Aviso de cobertura parcial de relojes */}
-      {coverage && coverage.ok && coverage.complete === false && (
+      {/* Aviso: solo cuando hay un problema REAL (error / parcial / sync viejo).
+          Un reloj todavía no leído hoy no cuenta como problema. */}
+      {coverage && coverage.ok && problemClocks.length > 0 && (
         <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 dark:bg-amber-400/[0.06] dark:border-amber-400/30">
           <div className="flex items-start gap-2">
             <AlertTriangle size={16} className="text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm text-amber-800 dark:text-amber-300">
-              <b>Datos parciales:</b> {suspectCount} de {clocks.length} relojes no reportaron marcas hoy, tienen error o no sincronizan hace tiempo. El total de presentes puede estar incompleto.
+              <b>Revisar relojes:</b> {problemClocks.length} de {clocks.length} relojes con incidencias de lectura. El total de presentes puede estar incompleto.
               <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-amber-700/80 dark:text-amber-300/70">
-                {clocks.map((d: any) => (
-                  <span key={d.id} className={d.suspect ? 'font-semibold' : ''}>
-                    {d.suspect ? '⚠️' : '✓'} {d.name}: {d.marks_today} marcas{d.stale ? ' · sync viejo' : ''}{d.status === 'error' ? ' · error' : ''}
-                  </span>
-                ))}
+                {clocks.map((c: any) => {
+                  const stt = clockState(c)
+                  const bad = ['error', 'partial'].includes(stt) || c.stale
+                  return (
+                    <span key={c.id} className={bad ? 'font-semibold' : ''}>
+                      {bad ? '⚠️' : '✓'} {c.name}: {CLOCK_LABEL[stt]}{c.stale && stt !== 'error' ? ' · sincronización vieja' : ''}
+                    </span>
+                  )
+                })}
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Aviso informativo (no alarmante): todavía no se leyó ningún reloj hoy. */}
+      {coverage && coverage.ok && problemClocks.length === 0 && clocksComplete === 0 && clocksPending > 0 && (
+        <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:bg-white/[0.03] dark:border-white/[0.08] dark:text-white/60">
+          Todavía no se realizaron lecturas hoy. Las marcaciones aparecerán a medida que se lean los relojes (automáticamente o con "Sincronizar ahora").
         </div>
       )}
 
@@ -180,17 +206,17 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-slate-900 dark:text-white">Relojes hoy</h3>
             <div className="flex items-center gap-2 text-[11px] font-semibold">
-              <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">{clocksComplete} completos</span>
+              {clocksComplete > 0 && <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300">{clocksComplete} completos</span>}
               {clocksPartial > 0 && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300">{clocksPartial} parciales</span>}
               {clocksError > 0 && <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 dark:bg-rose-400/10 dark:text-rose-300">{clocksError} error</span>}
-              {clocksNoData > 0 && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-white/[0.06] dark:text-white/40">{clocksNoData} sin datos</span>}
+              {clocksPending > 0 && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-white/[0.06] dark:text-white/40">{clocksPending} sin leer hoy</span>}
             </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {clocks.map((c: any) => {
               const st = clockState(c)
-              const dot = st === 'error' ? 'bg-rose-500' : st === 'partial' ? 'bg-amber-500' : st === 'complete' ? 'bg-emerald-500' : 'bg-slate-300'
-              const lbl = st === 'error' ? 'error' : st === 'partial' ? 'parcial' : st === 'complete' ? 'completo' : 'sin datos'
+              const dot = st === 'error' ? 'bg-rose-500' : st === 'partial' ? 'bg-amber-500' : st === 'complete' ? 'bg-emerald-500' : st === 'reading' ? 'bg-indigo-500' : 'bg-slate-300'
+              const lbl = st === 'error' ? 'error' : st === 'partial' ? 'parcial' : st === 'complete' ? 'completo' : st === 'reading' ? 'leyendo' : st === 'pending' ? 'sin leer hoy' : 'sin datos'
               return (
                 <div key={c.id} className="flex items-center justify-between rounded-xl border border-slate-100 dark:border-white/[0.06] px-3 py-2">
                   <div className="min-w-0">
@@ -199,7 +225,10 @@ export default function DashboardPage() {
                       <span className="text-sm font-semibold text-slate-700 dark:text-white/80 truncate">{c.name}</span>
                       <span className="text-[10px] text-slate-400 dark:text-white/30">{lbl}</span>
                     </div>
-                    <div className="text-[11px] text-slate-400 dark:text-white/30">{c.marks_today} marcas · {c.employees_today} empleados{c.last_run?.error ? ` · ${String(c.last_run.error).slice(0, 40)}` : ''}</div>
+                    <div className="text-[11px] text-slate-400 dark:text-white/30">
+                      {st === 'pending' ? 'Todavía no se realizaron lecturas hoy'
+                        : `${c.marks_today} marcas · ${c.employees_today} empleados${st === 'error' && c.last_run?.error ? ` · ${String(c.last_run.error).slice(0, 40)}` : ''}`}
+                    </div>
                   </div>
                 </div>
               )
