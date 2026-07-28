@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { useI18n } from '@/i18n/I18nProvider'
 import { groupById, useNavPermissions } from '@/lib/navModules'
+import { normalizeGroupSlug } from '@/lib/navRouting'
 
 /**
  * Página principal de un módulo: tarjetas hacia cada submódulo (referencia
@@ -10,7 +11,9 @@ import { groupById, useNavPermissions } from '@/lib/navModules'
 export default function ModuleLanding({ groupId }: { groupId: string }) {
   const { t } = useI18n()
   const { canSee } = useNavPermissions()
-  const group = groupById(groupId)
+  // Normaliza el slug (acepta alias como talento-desarrollo → talento) antes de
+  // buscar el módulo, para no mostrar "Módulo no encontrado" en rutas alias.
+  const group = groupById(normalizeGroupSlug(groupId))
 
   if (!group) {
     return <div className="p-6 text-slate-400 dark:text-white/30">Módulo no encontrado.</div>

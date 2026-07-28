@@ -1,12 +1,15 @@
-import { locateGroupIdByPath, NAV_ROUTES } from '../navRouting'
+import { locateGroupIdByPath, NAV_ROUTES, normalizeGroupSlug, MODULE_ALIASES } from '../navRouting'
 
 describe('navRouting.locateGroupIdByPath', () => {
   // Rutas /m/<slug> → su módulo (páginas principales de módulo)
   test('/m/administracion → administracion', () => {
     expect(locateGroupIdByPath('/m/administracion')).toBe('administracion')
   })
-  test('/m/talento-desarrollo → talento-desarrollo', () => {
-    expect(locateGroupIdByPath('/m/talento-desarrollo')).toBe('talento-desarrollo')
+  test('/m/talento → talento (canónico)', () => {
+    expect(locateGroupIdByPath('/m/talento')).toBe('talento')
+  })
+  test('/m/talento-desarrollo → talento (alias normalizado)', () => {
+    expect(locateGroupIdByPath('/m/talento-desarrollo')).toBe('talento')
   })
   test('/m/mi-equipo → mi-equipo', () => {
     expect(locateGroupIdByPath('/m/mi-equipo')).toBe('mi-equipo')
@@ -42,4 +45,33 @@ describe('navRouting.locateGroupIdByPath', () => {
       expect(g.paths.length).toBeGreaterThan(0)
     }
   })
+})
+
+describe('normalizeGroupSlug (alias de módulos)', () => {
+  test('talento-desarrollo → talento', () => {
+    expect(normalizeGroupSlug('talento-desarrollo')).toBe('talento')
+  })
+  test('slug canónico se devuelve igual', () => {
+    expect(normalizeGroupSlug('talento')).toBe('talento')
+    expect(normalizeGroupSlug('administracion')).toBe('administracion')
+  })
+  test('slug desconocido se devuelve tal cual', () => {
+    expect(normalizeGroupSlug('no-existe')).toBe('no-existe')
+  })
+  test('todo alias apunta a un id real de NAV_ROUTES', () => {
+    for (const target of Object.values(MODULE_ALIASES)) {
+      expect(NAV_ROUTES.some(g => g.id === target)).toBe(true)
+    }
+  })
+  test('ningún alias colisiona con un id canónico existente', () => {
+    for (const alias of Object.keys(MODULE_ALIASES)) {
+      expect(NAV_ROUTES.some(g => g.id === alias)).toBe(false)
+    }
+  })
+})
+
+describe('submódulos de Talento → talento', () => {
+  test.each(['/capacitaciones', '/encuestas', '/evaluaciones', '/capacitaciones/5'])(
+    '%s → talento', (p) => { expect(locateGroupIdByPath(p)).toBe('talento') },
+  )
 })

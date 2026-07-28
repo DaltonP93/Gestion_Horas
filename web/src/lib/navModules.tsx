@@ -76,7 +76,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: 'talento-desarrollo', label: 'Talento y desarrollo', icon: Sparkles, desc: 'Capacitaciones, encuestas y evaluaciones.',
+    id: 'talento', label: 'Talento y desarrollo', icon: Sparkles, desc: 'Capacitaciones, encuestas y evaluaciones.',
     items: [
       { href: '/capacitaciones', icon: GraduationCap, i18nKey: 'nav.training',    desc: 'Cursos y formación del personal.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'capacitaciones', color: 'bg-violet-500' },
       { href: '/encuestas',      icon: ClipboardList, i18nKey: 'nav.surveys',     desc: 'Encuestas internas y clima laboral.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor','employee'], module: 'encuestas', color: 'bg-teal-500' },
