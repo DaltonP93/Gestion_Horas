@@ -25,7 +25,7 @@ export default function Breadcrumbs() {
         <li>
           <Link href={`/m/${group.id}`} className="hover:text-slate-600 dark:hover:text-white/60">{group.label}</Link>
         </li>
-        {!onModuleLanding && (
+        {!onModuleLanding && item && (
           <>
             <ChevronRight size={12} aria-hidden="true" />
             <li className="text-slate-600 font-medium dark:text-white/60" aria-current="page">{t(item.i18nKey)}</li>

@@ -1,8 +1,9 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   RefreshCw, Save, X, ChevronDown, Check, Play, Pause, History, ArrowLeft, ArrowRight,
-  CheckCircle2, AlertCircle, Wifi, WifiOff, Clock3, ShieldCheck,
+  CheckCircle2, AlertCircle, Wifi, WifiOff, Clock3, ShieldCheck, PowerOff,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 
@@ -61,6 +62,7 @@ function computeNext(interval: number, offset: number, from = new Date()): Date 
 type Draft = { interval?: number; offset?: number; mode?: string; attempts?: number; cooldown?: number; timeout?: number; paused?: boolean }
 
 export default function SyncWizard() {
+  const router = useRouter()
   const [cfg, setCfg]       = useState<Cfg | null>(null)
   const [status, setStatus] = useState<Record<number, StatusItem>>({})
   const [loading, setLoading] = useState(true)
@@ -72,6 +74,7 @@ export default function SyncWizard() {
   const [busy, setBusy]     = useState<Record<number, boolean>>({})
   const [saving, setSaving] = useState(false)
   const [confirm, setConfirm] = useState(false)
+  const [confirmOff, setConfirmOff] = useState(false)
   const [msg, setMsg]       = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
   const [historyFor, setHistoryFor] = useState<Device | null>(null)
   const [showTech, setShowTech] = useState(false)
@@ -167,6 +170,20 @@ export default function SyncWizard() {
     setSaving(false); setConfirm(false)
   }
 
+  // Desactivar la programación general: detiene sólo las FUTURAS lecturas
+  // (el master pasa a off); no cancela una lectura en curso y CONSERVA la
+  // selección de relojes (no toca auto_sync_enabled por reloj).
+  async function deactivate() {
+    setSaving(true); setMsg(null)
+    try {
+      const r = await api.post('/api/devices/auto-sync-global', { enabled: false, window: win })
+      if (r.data?.ok === false) throw new Error(r.data.error)
+      setMsg({ tone: 'ok', text: 'Sincronización automática desactivada. No se programarán nuevas lecturas; una lectura en curso termina normalmente.' })
+      await load(false)
+    } catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }) }
+    setSaving(false); setConfirmOff(false)
+  }
+
   // Acciones por reloj.
   async function syncNow(id: number) {
     setBusy(p => ({ ...p, [id]: true })); setMsg(null)
@@ -228,8 +245,9 @@ export default function SyncWizard() {
                   <p className="text-sm text-amber-700 dark:text-amber-300/80 mt-1">
                     Las lecturas manuales continúan disponibles. Un administrador técnico debe habilitar una vez el servicio antes de programar lecturas automáticas.
                   </p>
-                  <div className="mt-3 flex gap-2">
-                    <button onClick={() => setStep(2)} className="px-4 py-2 rounded-xl bg-slate-700 text-white text-sm hover:bg-slate-800">Continuar con lecturas manuales</button>
+                  <div className="mt-3 flex gap-2 flex-wrap">
+                    <button onClick={() => router.push('/configuracion/sincronizacion')} className="px-4 py-2 rounded-xl bg-slate-700 text-white text-sm hover:bg-slate-800">Continuar con lecturas manuales</button>
+                    <button onClick={() => setStep(2)} className="px-4 py-2 rounded-xl border border-amber-300 text-amber-800 text-sm hover:bg-amber-100 dark:border-amber-500/30 dark:text-amber-300 dark:hover:bg-amber-500/10">Configurar para más adelante</button>
                   </div>
                 </div>
               ) : (
@@ -343,6 +361,11 @@ export default function SyncWizard() {
                 <p className="text-xs text-slate-500 dark:text-white/40 flex items-center gap-1.5"><Clock3 size={13} /> Las lecturas se ejecutan aunque el navegador esté cerrado.</p>
               </div>
 
+              {enabled && !blocked && (
+                <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-500/20 dark:bg-green-500/[0.06] dark:text-green-300 flex items-center gap-2">
+                  <CheckCircle2 size={16} /> <span><strong>Sincronización automática activa.</strong> Las lecturas se ejecutan según lo programado{nextRead ? ` · próxima ${fmtDT(new Date(nextRead).toISOString())}` : ''}.</span>
+                </div>
+              )}
               {blocked && (
                 <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/[0.06] dark:text-amber-300">
                   El servicio automático todavía no está habilitado en el servidor. Al confirmar, la selección quedará <strong>guardada como pendiente</strong>: no se ejecutarán lecturas automáticas hasta que un administrador técnico habilite el servicio.
@@ -351,10 +374,17 @@ export default function SyncWizard() {
 
               <div className="flex justify-between">
                 <button onClick={() => setStep(2)} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 text-sm hover:bg-slate-50 dark:border-white/[0.08]"><ArrowLeft size={15} /> Atrás</button>
-                <button onClick={() => setConfirm(true)} disabled={saving || selected.size === 0}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
-                  <ShieldCheck size={15} /> {blocked ? 'Guardar configuración' : 'Activar sincronización automática'}
-                </button>
+                {enabled && !blocked ? (
+                  <button onClick={() => setConfirmOff(true)} disabled={saving}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+                    <PowerOff size={15} /> Desactivar sincronización automática
+                  </button>
+                ) : (
+                  <button onClick={() => setConfirm(true)} disabled={saving || selected.size === 0}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+                    <ShieldCheck size={15} /> {blocked ? 'Guardar configuración' : 'Activar sincronización automática'}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -386,6 +416,24 @@ export default function SyncWizard() {
               <button onClick={() => setConfirm(false)} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
               <button onClick={activate} disabled={saving} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
                 <Check size={15} /> {saving ? 'Guardando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmación de desactivación */}
+      {confirmOff && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 space-y-4 dark:bg-[#0d0d0f]">
+            <h3 className="font-bold text-slate-900 dark:text-white">Desactivar sincronización automática</h3>
+            <p className="text-sm text-slate-500 dark:text-white/50">
+              No se programarán nuevas lecturas automáticas. Una lectura que ya esté en curso terminará normalmente. La selección de relojes se conserva, así podés reactivarla cuando quieras.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setConfirmOff(false)} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
+              <button onClick={deactivate} disabled={saving} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+                <PowerOff size={15} /> {saving ? 'Desactivando…' : 'Desactivar'}
               </button>
             </div>
           </div>
