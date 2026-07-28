@@ -6,6 +6,9 @@ import {
   CheckCircle2, AlertCircle, Wifi, WifiOff, Clock3, ShieldCheck, PowerOff,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import {
+  enabledIds, devicePayload, hasPendingChanges, reviewState, type ReviewState,
+} from './syncWizardState'
 
 // ── Tipos ──────────────────────────────────────────────────────────
 interface ActiveJob { job_id: number; status: string; progress?: string | null }
@@ -79,7 +82,11 @@ export default function SyncWizard() {
   const [historyFor, setHistoryFor] = useState<Device | null>(null)
   const [showTech, setShowTech] = useState(false)
 
-  async function load(first = false) {
+  // resync = re-derivar la selección (y limpiar el draft) desde el backend.
+  // Se usa en la carga inicial y DESPUÉS de guardar/activar/desactivar o de un
+  // error, para no conservar una selección local distinta de la real. El
+  // sondeo de fondo (load()) NO resincroniza, así no pisa la edición en curso.
+  async function load({ resync = false }: { resync?: boolean } = {}) {
     try {
       const [c, s] = await Promise.all([
         api.get('/api/devices/auto-sync-config'),
@@ -87,7 +94,7 @@ export default function SyncWizard() {
       ])
       if (c.data?.ok !== false) {
         setCfg(c.data); setWin(c.data.window || '04:00-23:59')
-        if (first) setSelected(new Set((c.data.devices || []).filter((d: Device) => d.auto_sync_enabled).map((d: Device) => d.id)))
+        if (resync) { setSelected(enabledIds(c.data.devices || [])); setDraft({}) }
       }
       const map: Record<number, StatusItem> = {}
       for (const it of (s.data?.items || [])) map[it.id] = it
@@ -95,10 +102,10 @@ export default function SyncWizard() {
     } catch { /* opcional */ }
     setLoading(false)
   }
-  useEffect(() => { load(true) }, [])
+  useEffect(() => { load({ resync: true }) }, [])
   const hasActiveJob = (cfg?.devices || []).some(d => d.active_job)
   useEffect(() => {
-    const t = setInterval(() => load(false), hasActiveJob ? 4000 : 25000)
+    const t = setInterval(() => load(), hasActiveJob ? 4000 : 25000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveJob])
@@ -114,6 +121,10 @@ export default function SyncWizard() {
 
   const dval = (d: Device, k: keyof Draft, fallback: any) => (draft[d.id]?.[k] ?? fallback)
   const setD = (id: number, k: keyof Draft, v: any) => setDraft(p => ({ ...p, [id]: { ...p[id], [k]: v } }))
+
+  // ¿Hay cambios sin guardar? (inclusión/exclusión, pausa, parámetros o ventana)
+  const windowChanged = String(win ?? '').trim() !== String(cfg?.window ?? '').trim()
+  const pending = hasPendingChanges(devices, selected, draft, win, cfg?.window)
 
   function applyRecommended() {
     const next: Record<number, Draft> = { ...draft }
@@ -132,22 +143,21 @@ export default function SyncWizard() {
     setSelected(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
 
-  // Guardar la config por reloj (incluir/excluir + parámetros). Devuelve true si OK.
+  // Guardar la config por reloj (incluir/excluir + parámetros), en orden por id
+  // para un orden de escritura determinista. Es SECUENCIAL: si un PUT falla, los
+  // relojes anteriores ya quedaron guardados (guardado parcial, sin rollback
+  // compensatorio). Por eso, ante un fallo, el llamador identifica el reloj y
+  // RESINCRONIZA desde el backend para que la UI refleje lo realmente guardado.
+  // Devuelve true si TODOS los PUT fueron correctos.
   async function persistDevices(): Promise<boolean> {
-    for (const d of devices) {
-      const inc = selected.has(d.id)
+    const ordered = [...devices].sort((a, b) => a.id - b.id)
+    for (const d of ordered) {
       try {
-        await api.put(`/api/devices/${d.id}/auto-sync`, {
-          enabled: inc,
-          paused: dval(d, 'paused', !!d.auto_sync_paused) ? true : false,
-          interval_min: Number(dval(d, 'interval', d.auto_sync_interval_min)),
-          offset_min:   Number(dval(d, 'offset',   d.auto_sync_offset_min)),
-          attempts:     Number(dval(d, 'attempts', d.auto_sync_attempts)),
-          cooldown_sec: Number(dval(d, 'cooldown', d.auto_sync_cooldown_sec)),
-          timeout_sec:  Number(dval(d, 'timeout',  d.auto_sync_timeout_sec)),
-          connection_mode: String(dval(d, 'mode', d.connection_mode || 'auto')),
-        })
-      } catch (e: any) { setMsg({ tone: 'err', text: `No se pudo guardar ${d.name}: ${e.response?.data?.error || e.message}` }); return false }
+        await api.put(`/api/devices/${d.id}/auto-sync`, devicePayload(d, selected, draft))
+      } catch (e: any) {
+        setMsg({ tone: 'err', text: `No se pudo guardar ${d.name}: ${e.response?.data?.error || e.message}` })
+        return false
+      }
     }
     return true
   }
@@ -155,7 +165,7 @@ export default function SyncWizard() {
   async function activate() {
     setSaving(true); setMsg(null)
     const ok = await persistDevices()
-    if (!ok) { setSaving(false); setConfirm(false); return }
+    if (!ok) { await load({ resync: true }); setSaving(false); setConfirm(false); return }
     try {
       if (!blocked) {
         const r = await api.post('/api/devices/auto-sync-global', { enabled: true, window: win })
@@ -165,9 +175,29 @@ export default function SyncWizard() {
         // No se activa el servicio (falta el permiso del servidor). Solo queda la selección guardada.
         setMsg({ tone: 'ok', text: 'Configuración guardada como pendiente. Falta que un administrador técnico habilite el servicio en el servidor para que comience a leer.' })
       }
-      await load(false)
-    } catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }) }
+      await load({ resync: true })
+    } catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }); await load({ resync: true }) }
     setSaving(false); setConfirm(false)
+  }
+
+  // Guardar cambios con la programación general YA activa: persiste la selección
+  // por reloj SIN desactivar ni reiniciar el master (no toca Gerencia ni las
+  // demás lecturas en curso). Sólo re-emite la ventana global si cambió. Muestra
+  // éxito recién tras confirmar la respuesta real y resincroniza con el backend.
+  async function saveChanges() {
+    setSaving(true); setMsg(null)
+    const ok = await persistDevices()
+    if (!ok) { await load({ resync: true }); setSaving(false); return }
+    try {
+      // La ventana sólo se reescribe si cambió; se mantiene master enabled=true.
+      if (!blocked && windowChanged) {
+        const r = await api.post('/api/devices/auto-sync-global', { enabled: true, window: win })
+        if (r.data?.ok === false) throw new Error(r.data.error)
+      }
+      setMsg({ tone: 'ok', text: 'Cambios guardados. La programación automática sigue activa; los relojes incluidos se leerán según lo programado.' })
+      await load({ resync: true })
+    } catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }); await load({ resync: true }) }
+    setSaving(false)
   }
 
   // Desactivar la programación general: detiene sólo las FUTURAS lecturas
@@ -179,7 +209,7 @@ export default function SyncWizard() {
       const r = await api.post('/api/devices/auto-sync-global', { enabled: false, window: win })
       if (r.data?.ok === false) throw new Error(r.data.error)
       setMsg({ tone: 'ok', text: 'Sincronización automática desactivada. No se programarán nuevas lecturas; una lectura en curso termina normalmente.' })
-      await load(false)
+      await load({ resync: true })
     } catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }) }
     setSaving(false); setConfirmOff(false)
   }
@@ -191,18 +221,20 @@ export default function SyncWizard() {
       const r = await api.post('/api/devices/sync-jobs', { device_ids: [id] })
       if (r.data?.ok === false) setMsg({ tone: 'err', text: r.data.error })
       else setMsg({ tone: 'ok', text: 'Lectura encolada. Se ejecuta en segundo plano.' })
-      await load(false)
+      await load()
     } catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }) }
     setBusy(p => ({ ...p, [id]: false }))
   }
   async function setPaused(id: number, paused: boolean) {
     setBusy(p => ({ ...p, [id]: true }))
-    try { await api.put(`/api/devices/${id}/auto-sync`, { paused }); await load(false) }
+    try { await api.put(`/api/devices/${id}/auto-sync`, { paused }); await load() }
     catch (e: any) { setMsg({ tone: 'err', text: e.response?.data?.error || e.message }) }
     setBusy(p => ({ ...p, [id]: false }))
   }
 
-  const selectedDevices = devices.filter(d => selected.has(d.id))
+  // Para el resumen del Paso 3: relojes seleccionados + los que estaban
+  // habilitados y ahora se desmarcan (para mostrar la baja pendiente).
+  const reviewDevices = devices.filter(d => selected.has(d.id) || d.auto_sync_enabled)
 
   // ── Render ───────────────────────────────────────────────────────
   return (
@@ -340,30 +372,53 @@ export default function SyncWizard() {
             </div>
           )}
 
-          {/* ── PASO 3 — Revisar y activar ── */}
+          {/* ── PASO 3 — Revisar y guardar/activar ── */}
           {step === 3 && (
             <div className="space-y-4">
-              <p className="text-sm text-slate-500 dark:text-white/50">Revisá antes de activar:</p>
+              <p className="text-sm text-slate-500 dark:text-white/50">
+                {enabled && !blocked ? 'Revisá los cambios antes de guardar:' : 'Revisá antes de activar:'}
+              </p>
               <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
                 <ul className="space-y-1 text-sm">
-                  {selectedDevices.map(d => {
+                  {reviewDevices.map(d => {
                     const iv = Number(dval(d, 'interval', d.auto_sync_interval_min))
                     const off = Number(dval(d, 'offset', d.auto_sync_offset_min))
+                    const rs = reviewState(d, selected, draft)
+                    const badge: Record<ReviewState, { label: string; cls: string }> = {
+                      saved:          { label: 'Guardado',           cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300' },
+                      pending_add:    { label: 'Se activará al guardar', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300' },
+                      pending_update: { label: 'Cambios sin guardar', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300' },
+                      pending_remove: { label: 'Se quitará al guardar', cls: 'bg-red-100 text-red-700 dark:bg-red-400/10 dark:text-red-300' },
+                    }
+                    // "próxima lectura" REAL sólo si ya está activa y guardada;
+                    // en pendientes se muestra la estimación, no un dato activo.
+                    const detail = rs === 'pending_remove'
+                      ? 'dejará de leerse'
+                      : rs === 'saved'
+                        ? (d.auto_sync_enabled && !d.auto_sync_paused && d.next_auto_sync_at
+                            ? `cada ${iv} min · próxima ${fmtHM(d.next_auto_sync_at)}` : `cada ${iv} min`)
+                        : `cada ${iv} min · primera lectura ≈ ${fmtHM(computeNext(iv, off).toISOString())}`
                     return (
                       <li key={d.id} className="flex items-center justify-between gap-3 border-b border-slate-50 dark:border-white/[0.06] py-1">
-                        <span className="font-medium text-slate-800 dark:text-white/90">{d.name}</span>
-                        <span className="text-xs text-slate-500 dark:text-white/40">cada {iv} min · primera lectura ≈ {fmtHM(computeNext(iv, off).toISOString())}</span>
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span className="font-medium text-slate-800 dark:text-white/90 truncate">{d.name}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${badge[rs].cls}`}>{badge[rs].label}</span>
+                        </span>
+                        <span className="text-xs text-slate-500 dark:text-white/40 text-right">{detail}</span>
                       </li>
                     )
                   })}
                 </ul>
-                <p className="text-xs text-slate-500 dark:text-white/40 pt-1">Horario operativo: <strong>{win}</strong></p>
+                <p className="text-xs text-slate-500 dark:text-white/40 pt-1">Horario operativo: <strong>{win}</strong>{windowChanged && <span className="ml-1 text-amber-600 dark:text-amber-400">(sin guardar)</span>}</p>
                 <p className="text-xs text-slate-500 dark:text-white/40 flex items-center gap-1.5"><Clock3 size={13} /> Las lecturas se ejecutan aunque el navegador esté cerrado.</p>
               </div>
 
               {enabled && !blocked && (
                 <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-500/20 dark:bg-green-500/[0.06] dark:text-green-300 flex items-center gap-2">
-                  <CheckCircle2 size={16} /> <span><strong>Sincronización automática activa.</strong> Las lecturas se ejecutan según lo programado{nextRead ? ` · próxima ${fmtDT(new Date(nextRead).toISOString())}` : ''}.</span>
+                  <CheckCircle2 size={16} /> <span>
+                    <strong>Sincronización automática activa.</strong> Las lecturas se ejecutan según lo programado{nextRead ? ` · próxima ${fmtDT(new Date(nextRead).toISOString())}` : ''}.
+                    {pending ? ' Hay cambios sin guardar: usá “Guardar cambios” para aplicarlos.' : ''}
+                  </span>
                 </div>
               )}
               {blocked && (
@@ -372,13 +427,21 @@ export default function SyncWizard() {
                 </div>
               )}
 
-              <div className="flex justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <button onClick={() => setStep(2)} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 text-sm hover:bg-slate-50 dark:border-white/[0.08]"><ArrowLeft size={15} /> Atrás</button>
                 {enabled && !blocked ? (
-                  <button onClick={() => setConfirmOff(true)} disabled={saving}
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50">
-                    <PowerOff size={15} /> Desactivar sincronización automática
-                  </button>
+                  // Programación general activa: Guardar cambios (principal) +
+                  // Desactivar (secundario, separado). Nunca se reemplazan.
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setConfirmOff(true)} disabled={saving}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl border border-red-200 text-red-600 text-sm hover:bg-red-50 disabled:opacity-50 dark:border-red-500/30 dark:text-red-300 dark:hover:bg-red-500/10">
+                      <PowerOff size={15} /> Desactivar
+                    </button>
+                    <button onClick={saveChanges} disabled={saving || !pending}
+                      className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
+                      <Save size={15} /> {saving ? 'Guardando…' : pending ? 'Guardar cambios' : 'Configuración actualizada'}
+                    </button>
+                  </div>
                 ) : (
                   <button onClick={() => setConfirm(true)} disabled={saving || selected.size === 0}
                     className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50">
