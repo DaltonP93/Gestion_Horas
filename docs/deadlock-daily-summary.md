@@ -167,7 +167,7 @@ GROUP BY al.employee_id;
 git pull origin main
 
 # 2) Aplicar migración 065 (idempotente: se puede correr varias veces)
-node database/run-migrations.js        # o el runner del proyecto
+cd api && node scripts/migrate.js      # runner de migraciones del repo
 
 # 3) Reiniciar API y worker (no requiere rebuild del front)
 pm2 reload api
