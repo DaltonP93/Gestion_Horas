@@ -5,6 +5,7 @@ import { Lock, User, Clock as ClockIcon, Shield } from 'lucide-react'
 import Link from 'next/link'
 import { authApi, apiUrl } from '@/lib/api'
 import { landingFor } from '@/lib/useCurrentUser'
+import { loginError, hasAccessToken, isTwofaRequired } from '@/lib/loginError'
 
 interface SiteSettings {
   system_name: string
@@ -62,7 +63,15 @@ export default function LoginPage() {
   const [needsOtp, setNeedsOtp] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [cooldown, setCooldown] = useState(0)   // segundos restantes tras un 429
   const [settings, setSettings] = useState<SiteSettings>(DEFAULT)
+
+  // Cuenta regresiva del bloqueo por rate limit (Retry-After).
+  useEffect(() => {
+    if (cooldown <= 0) return
+    const t = setInterval(() => setCooldown(c => (c <= 1 ? 0 : c - 1)), 1000)
+    return () => clearInterval(t)
+  }, [cooldown])
 
   useEffect(() => {
     fetch(apiUrl('/api/settings'))
@@ -91,27 +100,37 @@ export default function LoginPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    // Evitar doble clic / envíos simultáneos y respetar el bloqueo por 429.
+    if (loading || cooldown > 0) return
     setLoading(true)
     setError('')
     try {
       const data = await authApi.login(form.username, form.password, needsOtp ? otp : undefined)
 
       // Backend indica que se necesita 2FA
-      if (data?.twofaRequired) {
+      if (isTwofaRequired(data)) {
         setNeedsOtp(true)
         if (needsOtp) setError('Código 2FA incorrecto')
         return
       }
+      if (!hasAccessToken(data)) { setError('Usuario o contraseña incorrectos'); return }
       localStorage.setItem('access_token', data.accessToken)
       localStorage.setItem('refresh_token', data.refreshToken)
       localStorage.setItem('user', JSON.stringify(data.user))
       router.push(landingFor(data.user.role))
     } catch (e: any) {
-      if (e?.response?.data?.twofaRequired) {
+      const info = loginError(e)
+      if (info.kind === 'twofa') {
         setNeedsOtp(true)
-        setError(e.response.data.error || 'Código 2FA requerido')
+        setError(info.message)
+      } else if (info.kind === 'rate_limited') {
+        // 429: mensaje distinto al de credenciales + respeta Retry-After. Si no
+        // vino Retry-After, se aplica un bloqueo prudente de 30s en el cliente.
+        setCooldown(info.retryAfterSec && info.retryAfterSec > 0 ? info.retryAfterSec : 30)
+        setError(info.message)
       } else {
-        setError('Usuario o contraseña incorrectos')
+        // 401 y demás: mensaje genérico (no revela si el usuario existe).
+        setError(info.message)
       }
     } finally {
       setLoading(false)
@@ -265,18 +284,23 @@ export default function LoginPage() {
             <div role="alert" aria-live="assertive"
                  className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
               {error}
+              {cooldown > 0 && (
+                <span className="block mt-1 text-red-600/80">Podés reintentar en {cooldown}s.</span>
+              )}
             </div>
           )}
 
           <button
             type="submit"
-            disabled={loading}
-            className="w-full text-white font-semibold py-3 rounded-xl transition-all hover:brightness-110 hover:shadow-lg disabled:opacity-60"
+            disabled={loading || cooldown > 0}
+            className="w-full text-white font-semibold py-3 rounded-xl transition-all hover:brightness-110 hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
             style={{
               background: `linear-gradient(135deg, ${settings.system_primary_color}, ${settings.system_secondary_color})`,
             }}
           >
-            {loading ? 'Iniciando sesión...' : needsOtp ? 'Verificar código' : 'Iniciar sesión'}
+            {loading ? 'Iniciando sesión...'
+              : cooldown > 0 ? `Esperá ${cooldown}s`
+              : needsOtp ? 'Verificar código' : 'Iniciar sesión'}
           </button>
 
           {!needsOtp && (
