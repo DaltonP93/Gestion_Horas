@@ -3,8 +3,12 @@
 // Reglas:
 // - NUNCA cachear /api/*, /socket.io/*, /uploads/* (datos sensibles).
 // - Rutas /marcar y /mi-asistencia NO se cachean para evitar mostrar marcajes desactualizados.
-// - El cache name versionado (sishoras-v2) fuerza invalidación tras deploy.
-const CACHE = 'sishoras-v2'
+// - El cache name versionado fuerza invalidación tras deploy (se sube a v3 para
+//   PURGAR el cache viejo: la versión anterior guardaba assets de /_next/static
+//   con cache-first bajo un nombre fijo, así que los chunks de builds anteriores
+//   quedaban atrapados y podían mezclarse con el HTML nuevo → warnings de CSS
+//   "preloaded but not used". Ahora /_next/static NO lo maneja el SW.
+const CACHE = 'sishoras-v3'
 const STATIC_ASSETS = ['/manifest.webmanifest', '/icons/icon.svg']
 
 self.addEventListener('install', e => {
@@ -26,6 +30,11 @@ self.addEventListener('fetch', e => {
   if (url.pathname.startsWith('/api/'))         return
   if (url.pathname.startsWith('/socket.io/'))   return
   if (url.pathname.startsWith('/uploads/'))     return
+  // Assets de build de Next: inmutables y con hash en el nombre. Los maneja la
+  // caché HTTP del navegador (Cache-Control: immutable). El SW NO los cachea:
+  // así un deploy no deja chunks/CSS de builds anteriores atrapados en la caché
+  // (causa raíz de los warnings de CSS "preloaded but not used").
+  if (url.pathname.startsWith('/_next/static/')) return
   // Páginas con datos sensibles en tiempo real
   if (url.pathname === '/marcar')               return
   if (url.pathname === '/mi-asistencia')        return
