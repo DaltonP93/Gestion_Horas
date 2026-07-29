@@ -234,7 +234,7 @@ function GeofenceConfig() {
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
-    api.get('/api/settings').then(r => {
+    api.get('/api/settings/admin').then(r => {
       const s = r.data || {}
       if (s.geofence_mode) setMode(s.geofence_mode)
       if (s.geofence_default_radius_m) setRadius(String(s.geofence_default_radius_m))

@@ -117,6 +117,21 @@ const SETTING_KEYS = [
   ...EMPLOYER_KEYS,
 ];
 
+// ─── Allowlist PÚBLICA (endpoint sin autenticación) ─────────────
+// SÓLO lo que el login/branding necesita ANTES de autenticar: nombre público,
+// nombre comercial, logo, favicon, icono PWA, colores/tema, estilo de UI,
+// layout/textos del login e idioma/formatos de visualización.
+// EXCLUYE explícitamente SIGNATURE_KEYS y EMPLOYER_KEYS (firma, datos fiscales
+// del empleador, parámetros de liquidación, geocerca, etc.) y cualquier otro
+// dato interno/operativo. El filtrado ocurre acá, en el backend.
+const PUBLIC_KEYS = Object.freeze([
+  ...BRANDING_KEYS,
+  ...THEME_KEYS,
+  ...LOGIN_KEYS,
+  ...DISPLAY_KEYS,
+]);
+const PUBLIC_KEY_SET = new Set(PUBLIC_KEYS);
+
 // ─── Defaults ───────────────────────────────────────────────────
 const DEFAULTS = {
   system_name: 'Sistema de Asistencia',
@@ -152,8 +167,35 @@ const DEFAULTS = {
   system_locale: 'es-PY',
 };
 
-// ─── GET /api/settings ──────────────────────────────────────────
+// Defaults acotados a la allowlist pública (nunca incluye firma/empleador).
+const PUBLIC_DEFAULTS = Object.fromEntries(
+  Object.entries(DEFAULTS).filter(([k]) => PUBLIC_KEY_SET.has(k))
+);
+
+// ─── GET /api/settings ── PÚBLICO (sin auth): sólo branding del login ──
+// Devuelve EXCLUSIVAMENTE la allowlist pública. Aunque llegue con token, no
+// expone configuración interna: para eso está GET /api/settings/admin.
 router.get('/', async (req, res) => {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT setting_key, setting_value FROM notification_settings
+       WHERE setting_key IN (${PUBLIC_KEYS.map(() => '?').join(',')})`,
+      { replacements: PUBLIC_KEYS }
+    );
+    const settings = { ...PUBLIC_DEFAULTS };
+    // Doble resguardo: aunque la query ya filtra, sólo copiamos claves públicas.
+    for (const row of rows) if (PUBLIC_KEY_SET.has(row.setting_key)) settings[row.setting_key] = row.setting_value;
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/settings/admin ── AUTENTICADO: config completa ──
+// Endpoint separado para la pantalla de Configuración. Requiere sesión y rol de
+// administración (los mismos que ya pueden EDITAR settings vía PUT). Incluye
+// firma y datos del empleador; nunca se expone en el endpoint público.
+router.get('/admin', authenticate, authorize('admin', 'gth', 'gestor'), requirePermission('configuracion', 'view'), async (req, res) => {
   try {
     const [rows] = await sequelize.query(
       `SELECT setting_key, setting_value FROM notification_settings
@@ -388,3 +430,8 @@ router.post('/webhooks/test',
 );
 
 module.exports = router;
+// Exportados para pruebas / referencia del contrato del endpoint.
+module.exports.PUBLIC_KEYS = PUBLIC_KEYS;
+module.exports.SETTING_KEYS = SETTING_KEYS;
+module.exports.SIGNATURE_KEYS = SIGNATURE_KEYS;
+module.exports.EMPLOYER_KEYS = EMPLOYER_KEYS;

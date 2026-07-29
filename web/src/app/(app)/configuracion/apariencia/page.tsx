@@ -61,7 +61,7 @@ export default function AparienciaPage() {
   async function load() {
     setLoading(true); setErr('')
     try {
-      const res = await api.get('/api/settings')
+      const res = await api.get('/api/settings/admin')
       setS(res.data)
     } catch (e: any) {
       setErr(e?.response?.data?.error || 'Error al cargar configuración')
