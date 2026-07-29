@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCurrentUser, isSuperAdmin } from '@/lib/useCurrentUser'
 import {
@@ -25,7 +25,6 @@ interface Device {
   timeout_ms?: number
 }
 interface Webhook  { id: number; name: string; url: string; events: string[]; active: number; last_called: string; last_status: number }
-interface DbConn   { host: string; port: string; database: string; user: string; password: string; label: string }
 interface SystemSettings {
   system_name: string; system_logo_url: string; system_favicon_url: string
   system_login_bg: string; system_primary_color: string
@@ -33,15 +32,8 @@ interface SystemSettings {
   employee_display_mode: 'full_name' | 'code_name' | 'code_only'
 }
 
-const CONN_KEY = 'sishoras_db_conn'
-function loadConn(): DbConn {
-  if (typeof window === 'undefined') return defaultConn()
-  try { const s = localStorage.getItem(CONN_KEY); if (s) return JSON.parse(s) } catch {}
-  return defaultConn()
-}
-function defaultConn(): DbConn {
-  return { host: '10.81.28.8', port: '1433', database: 'att2000', user: 'sa', password: '', label: 'ZKTeco Attendance Management' }
-}
+// La integración att2000 (antes pestaña "Sincronización BD") se movió a su
+// ubicación canónica: /sistema/legado-att2000 (integración legada, super_admin).
 
 const inputCls = "w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
 const labelCls = "text-xs font-medium text-slate-600 block mb-1"
@@ -49,15 +41,23 @@ const labelCls = "text-xs font-medium text-slate-600 block mb-1"
 // ─── Componente principal ─────────────────────────────────────
 function ConfiguracionPageInner() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const user = useCurrentUser()
   const canTech = isSuperAdmin(user)
 
-  // Tabs técnicos (relojes / sync) solo para super_admin.
+  // Compatibilidad: /configuracion?tab=sync (integración att2000) se movió a su
+  // ubicación canónica. Redirige a /sistema/legado-att2000 (esa página gatea
+  // super_admin y muestra una página segura si no está autorizado).
+  useEffect(() => {
+    if (searchParams.get('tab') === 'sync') router.replace('/sistema/legado-att2000')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Tabs técnicos (relojes) solo para super_admin.
   // Resto de roles ven únicamente Sistema / Webhooks / API.
   const allTabs = [
     { id: 'sistema',   label: '🖥️ Sistema',              show: true },
     { id: 'relojes',   label: '⌚ Relojes ZKTeco',         show: canTech },
-    { id: 'sync',      label: '🔄 Sincronización BD',      show: canTech },
     { id: 'webhooks',  label: '🔗 Webhooks',               show: true },
     { id: 'api',       label: '📖 API & Integración',      show: true },
   ] as const
@@ -69,7 +69,7 @@ function ConfiguracionPageInner() {
     return canTech ? 'relojes' : 'sistema'
   })()
 
-  const [tab, setTab] = useState<'sistema'|'relojes'|'sync'|'webhooks'|'api'>(initialTab)
+  const [tab, setTab] = useState<'sistema'|'relojes'|'webhooks'|'api'>(initialTab)
 
   // Si el rol cambia y el tab actual ya no está permitido, resetear
   useEffect(() => {
@@ -129,7 +129,6 @@ function ConfiguracionPageInner() {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {tab === 'sistema'  && <SistemaTab />}
         {tab === 'relojes'  && <RelojesTab />}
-        {tab === 'sync'     && <SyncTab />}
         {tab === 'webhooks' && <WebhooksTab />}
         {tab === 'api'      && <ApiTab />}
       </div>
@@ -1069,373 +1068,6 @@ function RelojesTab() {
         <p>② <strong>Descargar → att2000 + MySQL local</strong> — baja las marcaciones al servidor</p>
         <p>③ <strong>Sincronización BD</strong> (otra pestaña) — procesa att2000 y genera reportes</p>
         <p className="text-xs text-slate-400 pt-1 dark:text-white/30">⚠️ Cerrá el software Attendance Management (Windows) antes de conectar.</p>
-      </div>
-    </div>
-  )
-}
-
-// ─── Tab: Sincronización BD ───────────────────────────────────
-interface ConnResult {
-  ok: boolean; totalRecords?: number; totalEmployees?: number
-  machines?: { MACHINE_ALIAS: string; IP_ADDRESS: string }[]
-  recentRecords?: { USERID: number; nombre: string; CHECKTIME: string; CHECKTYPE: string }[]
-  error?: string
-}
-
-function SyncTab() {
-  const [log, setLog]           = useState<string[]>([])
-  const [testing, setTesting]   = useState(false)
-  const [syncing, setSyncing]   = useState(false)
-  const [pushing, setPushing]   = useState(false)
-  const [previewing, setPreviewing] = useState(false)
-  const [pushPreview, setPushPreview] = useState<{ total: number } | null>(null)
-  const [showPass, setShowPass] = useState(false)
-  const [saved, setSaved]       = useState(false)
-  const [connResult, setConnResult] = useState<ConnResult | null>(null)
-
-  const today    = new Date().toISOString().split('T')[0]
-  const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-  const [dateFrom, setDateFrom] = useState(firstDay)
-  const [dateTo, setDateTo]     = useState(today)
-  const [pushFrom, setPushFrom] = useState(firstDay)
-  const [pushTo, setPushTo]     = useState(today)
-
-  const [conn, setConn] = useState<DbConn>(defaultConn)
-  useEffect(() => { setConn(loadConn()) }, [])
-
-  const addLog   = (msg: string) => setLog(prev => [new Date().toLocaleTimeString() + ' — ' + msg, ...prev])
-  const setField = (k: keyof DbConn) => (e: React.ChangeEvent<HTMLInputElement>) => setConn(c => ({ ...c, [k]: e.target.value }))
-
-  function saveConn() {
-    localStorage.setItem(CONN_KEY, JSON.stringify(conn))
-    setSaved(true); setTimeout(() => setSaved(false), 2000)
-  }
-
-  async function testConnection() {
-    setTesting(true); setConnResult(null)
-    addLog(`🔌 Probando conexión a ${conn.host}:${conn.port}/${conn.database}...`)
-    try {
-      const r = await api.post('/api/sync/test-conn', conn)
-      setConnResult(r.data)
-      addLog(r.data.ok
-        ? `✅ Conexión exitosa — ${r.data.totalRecords?.toLocaleString()} marcajes, ${r.data.totalEmployees?.toLocaleString()} empleados`
-        : `❌ Error: ${r.data.error}`)
-    } catch (e: any) {
-      const err = e.response?.data?.error || e.message
-      setConnResult({ ok: false, error: err })
-      addLog(`❌ Error: ${err}`)
-    }
-    setTesting(false)
-  }
-
-  async function runSync() {
-    setSyncing(true)
-    addLog(`🔄 Sincronizando ${dateFrom} → ${dateTo} desde ${conn.host}/${conn.database}...`)
-    try {
-      const r = await api.post('/api/sync/full', { dateFrom, dateTo, conn })
-      const res = r.data.result
-      addLog('✅ Sincronización completada:')
-      if (res?.departments) addLog(`   📁 Departamentos: ${res.departments.synced} sincronizados`)
-      if (res?.employees)   addLog(`   👥 Empleados: ${res.employees.synced} sincronizados (${res.employees.errors ?? 0} errores)`)
-      if (res?.attendance)  addLog(`   🕐 Marcajes: ${res.attendance.imported} importados`)
-      if (res?.machines)    addLog(`   ⌚ Relojes: ${res.machines.synced} sincronizados`)
-    } catch (e: any) {
-      addLog(`❌ Error: ${e.response?.data?.error || e.message}`)
-    }
-    setSyncing(false)
-  }
-
-  async function previewPush() {
-    setPreviewing(true); setPushPreview(null)
-    try {
-      const r = await api.get('/api/sync/push-to-att2000/preview', { params: { dateFrom: pushFrom, dateTo: pushTo } })
-      setPushPreview(r.data)
-      addLog(`🔍 Vista previa: ${r.data.total?.toLocaleString()} registros locales listos para enviar a att2000 (${pushFrom} → ${pushTo})`)
-    } catch (e: any) {
-      addLog(`❌ Error en vista previa: ${e.response?.data?.error || e.message}`)
-    }
-    setPreviewing(false)
-  }
-
-  async function pushToAtt2000() {
-    if (!pushPreview) return
-    if (!confirm(`¿Enviar ${pushPreview.total?.toLocaleString()} marcajes a att2000?\nSolo se insertarán registros que no existan todavía (no hay duplicados).`)) return
-    setPushing(true)
-    addLog(`📤 Enviando marcajes locales → att2000 (${pushFrom} → ${pushTo})...`)
-    try {
-      const r = await api.post('/api/sync/push-to-att2000', { dateFrom: pushFrom, dateTo: pushTo })
-      addLog(`✅ Enviado a att2000: ${r.data.inserted} insertados, ${r.data.skipped} ya existían, ${r.data.errors} errores`)
-      if (r.data.errList?.length) {
-        addLog(`   ⚠️ Primeros errores: ${r.data.errList.slice(0, 3).map((e: any) => e.error).join('; ')}`)
-      }
-      setPushPreview(null)
-    } catch (e: any) {
-      addLog(`❌ Error: ${e.response?.data?.error || e.message}`)
-    }
-    setPushing(false)
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="font-semibold text-slate-800 dark:text-white/90">Sincronización con Base de Datos Externa</h2>
-        <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Importa empleados y marcajes desde SQL Server</p>
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-6">
-        {/* Columna izquierda: Configuración */}
-        <div className="space-y-4">
-          <div className="border border-slate-200 rounded-2xl p-5 space-y-4 dark:border-white/[0.08]">
-            <div className="flex items-center gap-2">
-              <Server size={16} className="text-blue-600" />
-              <h3 className="font-medium text-slate-800 dark:text-white/90">Configuración de Conexión</h3>
-            </div>
-            <div>
-              <label className={labelCls}>Nombre / Etiqueta</label>
-              <input value={conn.label} onChange={setField('label')} placeholder="ej: ZKTeco Attendance Management" className={inputCls} />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2">
-                <label className={labelCls}>Host / IP del servidor</label>
-                <input value={conn.host} onChange={setField('host')} placeholder="ej: 10.81.28.8" className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Puerto</label>
-                <input value={conn.port} onChange={setField('port')} placeholder="1433" className={inputCls} />
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>Base de Datos</label>
-              <input value={conn.database} onChange={setField('database')} placeholder="att2000" className={inputCls} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Usuario</label>
-                <input value={conn.user} onChange={setField('user')} placeholder="sa" className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Contraseña</label>
-                <div className="relative">
-                  <input type={showPass ? 'text' : 'password'} value={conn.password} onChange={setField('password')}
-                    placeholder="••••••••" className={inputCls + ' pr-10'} />
-                  <button onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-white/30">
-                    {showPass ? <EyeOff size={16}/> : <Eye size={16}/>}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Período */}
-          <div className="border border-slate-200 rounded-2xl p-5 space-y-3 dark:border-white/[0.08]">
-            <div className="flex items-center gap-2">
-              <Database size={16} className="text-blue-600" />
-              <h3 className="font-medium text-slate-800 dark:text-white/90">Período a Sincronizar</h3>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={labelCls}>Desde</label><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className={inputCls} /></div>
-              <div><label className={labelCls}>Hasta</label><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className={inputCls} /></div>
-            </div>
-          </div>
-
-          {/* Acciones */}
-          <div className="flex gap-3 flex-wrap">
-            <button onClick={saveConn}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                saved ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-slate-800 text-white hover:bg-slate-700'
-              }`}>
-              <Save size={16}/>{saved ? '✓ Guardado' : 'Guardar'}
-            </button>
-            <button onClick={testConnection} disabled={testing || !conn.host}
-              className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
-              <Zap size={16} className="text-yellow-500"/>
-              {testing ? 'Probando...' : 'Probar conexión'}
-            </button>
-            <button onClick={runSync} disabled={syncing || !conn.host}
-              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50">
-              <RefreshCw size={16} className={syncing ? 'animate-spin' : ''}/>
-              {syncing ? 'Sincronizando...' : 'Sincronizar ahora'}
-            </button>
-          </div>
-        </div>
-
-        {/* Columna derecha: Resultado de la conexión */}
-        <div className="space-y-4">
-          {!connResult && (
-            <div className="border border-dashed border-slate-200 rounded-2xl p-8 flex flex-col items-center justify-center text-center text-slate-400 h-full min-h-48 dark:text-white/30 dark:border-white/[0.08]">
-              <Database size={32} className="mb-3 opacity-30"/>
-              <p className="text-sm">Haz clic en <strong className="text-slate-600 dark:text-white/60">Probar conexión</strong> para ver la información de la base de datos</p>
-            </div>
-          )}
-          {connResult && !connResult.ok && (
-            <div className="border border-red-200 bg-red-50 rounded-2xl p-5">
-              <div className="flex items-start gap-3">
-                <XCircle size={20} className="text-red-500 flex-shrink-0 mt-0.5"/>
-                <div>
-                  <p className="font-semibold text-red-700">Error de conexión</p>
-                  <p className="text-sm text-red-600 mt-1">{connResult.error}</p>
-                </div>
-              </div>
-            </div>
-          )}
-          {connResult?.ok && (
-            <div className="space-y-4">
-              {/* Stats */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="border border-green-100 bg-green-50 rounded-2xl p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <CheckCircle size={14} className="text-green-600"/>
-                    <span className="text-xs text-green-700 font-medium">Marcajes totales</span>
-                  </div>
-                  <p className="text-2xl font-bold text-green-800">{connResult.totalRecords?.toLocaleString()}</p>
-                </div>
-                <div className="border border-blue-100 bg-blue-50 rounded-2xl p-4">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Users size={14} className="text-blue-600"/>
-                    <span className="text-xs text-blue-700 font-medium">Empleados</span>
-                  </div>
-                  <p className="text-2xl font-bold text-blue-800">{connResult.totalEmployees?.toLocaleString()}</p>
-                </div>
-              </div>
-
-              {/* Relojes */}
-              {connResult.machines && connResult.machines.length > 0 && (
-                <div className="border border-slate-200 rounded-2xl p-4 space-y-2 dark:border-white/[0.08]">
-                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5 dark:text-white/40">
-                    <Clock size={12}/> Relojes en la base de datos
-                  </p>
-                  {connResult.machines.map((m, i) => (
-                    <div key={i} className="flex items-center gap-3 text-sm">
-                      <Wifi size={13} className="text-green-500 flex-shrink-0"/>
-                      <span className="text-slate-700 font-medium dark:text-white/80">{m.MACHINE_ALIAS}</span>
-                      <span className="font-mono text-slate-400 text-xs dark:text-white/30">{m.IP_ADDRESS}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Últimas marcadas */}
-              {connResult.recentRecords && connResult.recentRecords.length > 0 && (
-                <div className="border border-slate-200 rounded-2xl overflow-hidden dark:border-white/[0.08]">
-                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide dark:text-white/40">Últimas marcadas registradas</p>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50 sticky top-0 dark:bg-white/[0.03]">
-                        <tr>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">ID</th>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Nombre</th>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Fecha/Hora</th>
-                          <th className="text-left px-3 py-2 text-slate-500 font-medium dark:text-white/40">Tipo</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
-                        {connResult.recentRecords.map((rec, i) => (
-                          <tr key={i} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
-                            <td className="px-3 py-1.5 font-mono text-slate-600 dark:text-white/60">{rec.USERID}</td>
-                            <td className="px-3 py-1.5 text-slate-800 dark:text-white/90">{rec.nombre || <span className="text-slate-400 italic dark:text-white/30">—</span>}</td>
-                            <td className="px-3 py-1.5 text-slate-500 dark:text-white/40">{new Date(rec.CHECKTIME).toLocaleString()}</td>
-                            <td className="px-3 py-1.5">
-                              <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${rec.CHECKTYPE === 'I' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'}`}>
-                                {rec.CHECKTYPE === 'I' ? 'Entrada' : 'Salida'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {log.length > 0 && (
-        <div className="bg-slate-900 rounded-xl p-4 font-mono text-xs text-green-400 space-y-1 max-h-48 overflow-y-auto">
-          {log.map((line, i) => <div key={i}>{line}</div>)}
-        </div>
-      )}
-
-      {/* ── Sección: Enviar marcajes locales → att2000 ─────────── */}
-      <div className="border border-slate-200 rounded-2xl overflow-hidden dark:border-white/[0.08]">
-        <div className="bg-gradient-to-r from-indigo-50 to-blue-50 px-5 py-3 border-b border-slate-200 flex items-center gap-3 dark:border-white/[0.08]">
-          <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0">
-            <Database size={16} className="text-indigo-600"/>
-          </div>
-          <div>
-            <p className="font-semibold text-slate-800 text-sm dark:text-white/90">Enviar marcajes locales → att2000</p>
-            <p className="text-xs text-slate-500 dark:text-white/40">Publica en att2000 los registros almacenados en SisHoras (marcajes manuales o desde relojes).</p>
-          </div>
-        </div>
-        <div className="p-5 space-y-4">
-          {/* Info del protocolo ZKTeco */}
-          <div className="flex items-start gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-700">
-            <AlertCircle size={15} className="flex-shrink-0 mt-0.5"/>
-            <div>
-              <p className="font-semibold">Conexión directa a relojes — protocolo ZKTeco</p>
-              <p className="mt-0.5 text-amber-600">
-                El protocolo ZKTeco solo permite <strong>una conexión TCP a la vez</strong>. Mientras el software
-                att2000 ADMS (Windows) esté activo, los intentos de conectarse directamente al reloj desde
-                SisHoras darán error 503. Esta sección envía los registros que ya están en el MySQL local
-                a att2000, sin necesitar conexión directa al reloj.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={labelCls}>Desde</label>
-              <input type="date" value={pushFrom} onChange={e => { setPushFrom(e.target.value); setPushPreview(null) }} className={inputCls} />
-            </div>
-            <div><label className={labelCls}>Hasta</label>
-              <input type="date" value={pushTo} onChange={e => { setPushTo(e.target.value); setPushPreview(null) }} className={inputCls} />
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 flex-wrap">
-            <button onClick={previewPush} disabled={previewing || pushing}
-              className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
-              <Eye size={15}/> {previewing ? 'Verificando...' : 'Vista previa'}
-            </button>
-
-            {pushPreview && (
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-slate-600 dark:text-white/60">
-                  <strong className="text-slate-900 dark:text-white">{pushPreview.total?.toLocaleString()}</strong> registros listos
-                </span>
-                <button onClick={pushToAtt2000} disabled={pushing || pushPreview.total === 0}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm hover:bg-indigo-700 disabled:opacity-50 font-medium">
-                  <Download size={15} className={pushing ? 'animate-bounce' : ''}/>
-                  {pushing ? 'Enviando...' : `Enviar ${pushPreview.total?.toLocaleString()} registros → att2000`}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Flujo visual */}
-          <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap dark:text-white/30">
-            <span className="px-2 py-1 bg-slate-100 rounded text-slate-600 font-medium dark:bg-white/[0.06] dark:text-white/60">MySQL local</span>
-            <span>→ SisHoras procesa →</span>
-            <span className="px-2 py-1 bg-indigo-100 rounded text-indigo-700 font-medium">att2000.CHECKINOUT</span>
-            <span>→ att2000 genera reportes →</span>
-            <span className="px-2 py-1 bg-blue-100 rounded text-blue-700 font-medium">SisHoras lee att2000</span>
-          </div>
-        </div>
-      </div>
-
-      {log.length > 0 && (
-        <div className="bg-slate-900 rounded-xl p-4 font-mono text-xs text-green-400 space-y-1 max-h-48 overflow-y-auto">
-          {log.map((line, i) => <div key={i}>{line}</div>)}
-        </div>
-      )}
-
-      <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-blue-700 space-y-1">
-        <p className="font-medium">Flujo de datos del sistema</p>
-        <p>① Relojes ZKTeco → att2000 ADMS (automático, por el software Windows)</p>
-        <p>② att2000 → SisHoras MySQL local (sincronización manual o programada)</p>
-        <p>③ SisHoras MySQL local → att2000 (este panel — para marcajes manuales o recuperación)</p>
       </div>
     </div>
   )
