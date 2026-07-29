@@ -95,6 +95,9 @@ export const employeesApi = {
   get: (id: number)       => api.get(`/api/employees/${id}`).then(r => r.data),
   create: (data: object)  => api.post('/api/employees', data).then(r => r.data),
   update: (id: number, data: object) => api.put(`/api/employees/${id}`, data).then(r => r.data),
+  // Edición inline campo a campo. `value` puede ser null/'' para limpiar.
+  quickUpdate: (id: number, field: string, value: unknown) =>
+    api.patch(`/api/employees/${id}/quick`, { field, value }).then(r => r.data),
   history: (id: number, params?: object) =>
     api.get(`/api/employees/${id}/attendance`, { params }).then(r => r.data),
 }

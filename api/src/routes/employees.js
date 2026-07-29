@@ -7,6 +7,9 @@ const { sequelize } = require('../config/database');
 const {
   getAll, getById, create, update, deactivate, reactivate, getInactiveMarks, getAttendanceHistory
 } = require('../controllers/employeeController');
+const { capsForRole, classifyField } = require('../services/employeeCaps');
+const { validate: validateField, auditValueOf, SENSITIVE_VALUE } = require('../services/employeeFieldValidation');
+const audit = require('../services/audit');
 
 // DTO de alta de empleado: campos requeridos + formatos válidos.
 const createEmployeeSchema = Joi.object({
@@ -25,6 +28,28 @@ const createEmployeeSchema = Joi.object({
 
 router.use(authenticate);
 
+// ─── Guards de sub-acciones (PR 1: edición de ficha) ────────────
+// Complementan al catálogo plano `requirePermission` con capacidades
+// diferenciadas por campo. El catálogo global (submódulos) llega en PR 3.
+function guardLegalOnPut(req, res, next) {
+  const caps = capsForRole(req.user?.role);
+  const legalIn = Object.keys(req.body || {}).some(k => classifyField(k) === 'legal');
+  const personalIn = Object.keys(req.body || {}).some(k => classifyField(k) === 'personal' && QUICK_EDIT_COLS[k]);
+  if (personalIn && !caps.personal_update) return res.status(403).json({ error: 'Sin permiso (empleados.personal.update)' });
+  if (legalIn && !caps.legal_update)       return res.status(403).json({ error: 'Sin permiso (empleados.legal.update)' });
+  next();
+}
+function guardStatusChange(req, res, next) {
+  const caps = capsForRole(req.user?.role);
+  if (!caps.status_change) return res.status(403).json({ error: 'Sin permiso (empleados.status.change)' });
+  next();
+}
+function guardBiometricsLink(req, res, next) {
+  const caps = capsForRole(req.user?.role);
+  if (!caps.biometrics_link) return res.status(403).json({ error: 'Sin permiso (empleados.biometrics.link)' });
+  next();
+}
+
 // Listado de departamentos activos (para selectores en formularios)
 router.get('/departments', asyncHandler(async (req, res) => {
   const [rows] = await sequelize.query(
@@ -38,11 +63,11 @@ router.get('/inactive-marks',      requirePermission('empleados', 'view'), getIn
 
 router.get('/',                    requirePermission('empleados', 'view'), getAll);
 router.get('/:id',                 requirePermission('empleados', 'view'), getById);
-router.post('/',                   authorize('admin','hr'), requirePermission('empleados', 'create'), validate(createEmployeeSchema), create);
-router.put('/:id',                 authorize('admin','hr'), requirePermission('empleados', 'update'), update);
+router.post('/',                   authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'create'), validate(createEmployeeSchema), create);
+router.put('/:id',                 authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), guardLegalOnPut, update);
 router.delete('/:id',              authorize('admin'), requirePermission('empleados', 'delete'), deactivate);
-router.post('/:id/deactivate',     authorize('admin','hr'), requirePermission('empleados', 'delete'), deactivate);
-router.post('/:id/reactivate',     authorize('admin','hr'), requirePermission('empleados', 'update'), reactivate);
+router.post('/:id/deactivate',     authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'delete'), guardStatusChange, deactivate);
+router.post('/:id/reactivate',     authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), guardStatusChange, reactivate);
 router.get('/:id/attendance',      requirePermission('empleados', 'view'), getAttendanceHistory);
 
 // Helper: normalizar fecha de hire_date aceptando "DD/MM/YYYY", "YYYY-MM-DD", etc.
@@ -208,38 +233,76 @@ router.patch('/bulk', authorize('admin','hr'), requirePermission('empleados', 'u
   }
 });
 
-// PATCH /api/employees/:id/quick — edición inline rápida (nombre, apellido, etc.)
+// PATCH /api/employees/:id/quick — edición inline rápida.
 // Map explícito: la clave recibida del cliente nunca toca el SQL directamente.
+// Los campos legales (MTESS/IPS) usan sub-permiso `legal.update`; el resto,
+// `personal.update`. Nunca se guarda el valor de salario en la auditoría.
 const QUICK_EDIT_COLS = {
   first_name: 'first_name', last_name: 'last_name',
   employee_number: 'employee_number', email: 'email',
   phone: 'phone', position: 'position',
   birth_date: 'birth_date', hire_date: 'hire_date',
+  schedule_id: 'schedule_id',
   // Datos para planillas legales (MTESS / IPS)
   document_number: 'document_number', ips_number: 'ips_number',
   salary_base: 'salary_base', gender: 'gender', pay_type: 'pay_type',
   children_count: 'children_count', antiguedad_rate: 'antiguedad_rate',
+  // `status` NO se edita por /quick a propósito: los cambios de estado van
+  // por /deactivate y /reactivate (motivo + auditoría + deshabilitación
+  // pendiente en el reloj). Ver `guardStatusChange`.
 };
-router.patch('/:id/quick', authorize('admin','hr'), requirePermission('empleados', 'update'), async (req, res) => {
-  const id = parseInt(req.params.id);
+router.patch('/:id/quick', authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), asyncHandler(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
   const { field, value } = req.body || {};
   const col = QUICK_EDIT_COLS[field];
   if (!col) return res.status(400).json({ error: 'Campo no permitido para edición rápida' });
-  try {
-    await sequelize.query(
-      `UPDATE employees SET \`${col}\` = ? WHERE id = ?`,
-      { replacements: [value === '' ? null : value, id] }
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+
+  const kind = classifyField(field);           // 'personal' | 'legal'
+  const caps = capsForRole(req.user?.role);
+  const needed = kind === 'legal' ? 'legal_update' : 'personal_update';
+  if (!caps[needed]) {
+    return res.status(403).json({ error: `Sin permiso (empleados.${kind}.update)` });
   }
-});
+
+  const parsed = validateField(field, value);
+  if (!parsed.ok) return res.status(400).json({ error: parsed.error, field });
+
+  const [[prev]] = await sequelize.query(
+    `SELECT \`${col}\` AS v FROM employees WHERE id = ?`, { replacements: [id] }
+  );
+  if (!prev) return res.status(404).json({ error: 'Empleado no encontrado' });
+  const before = prev.v;
+  const after = parsed.value;
+
+  // No-op si el valor efectivo no cambió (evita eventos ruidosos).
+  const same = (before === after) || (before == null && after == null) ||
+               (before != null && after != null && String(before) === String(after));
+  if (same) return res.json({ ok: true, changed: false });
+
+  await sequelize.query(
+    `UPDATE employees SET \`${col}\` = ? WHERE id = ?`,
+    { replacements: [after, id] }
+  );
+
+  audit.log({
+    req, user: req.user,
+    action: `employee.update.${kind}`,
+    entity: 'employee', entity_id: id,
+    details: {
+      field,
+      from: auditValueOf(field, before),
+      to:   auditValueOf(field, after),
+      sensitive: SENSITIVE_VALUE.has(field) || undefined,
+    },
+  });
+
+  res.json({ ok: true, changed: true });
+}));
 
 // ─── Biometría / Relojes (Fase C) ─────────────────────────────
 const { linkEmployeeDevice, unlinkEmployeeDevice } = require('../services/deviceMapping');
 const { tableExists } = require('../services/zktecoReader');
-const audit = require('../services/audit');
 
 // GET /api/employees/:id/biometrics — vínculos del empleado + sugerencias +
 // última marca por reloj. No pierde nada: sólo lectura.
@@ -292,7 +355,7 @@ router.get('/:id/biometrics', requirePermission('empleados', 'view'), asyncHandl
 
 // POST /api/employees/:id/biometrics — vincular un device_user_id al empleado
 // (permite resolver casos como 5404 desde el perfil) y reprocesar sus marcas.
-router.post('/:id/biometrics', authorize('admin', 'hr'), requirePermission('empleados', 'update'), asyncHandler(async (req, res) => {
+router.post('/:id/biometrics', authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), guardBiometricsLink, asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id);
   const deviceUserId = String(req.body.device_user_id || '').trim();
   const deviceId = req.body.device_id != null && req.body.device_id !== '' ? parseInt(req.body.device_id, 10) : null;
@@ -311,7 +374,7 @@ router.post('/:id/biometrics', authorize('admin', 'hr'), requirePermission('empl
 
 // DELETE /api/employees/:id/biometrics/:mapId — desvincular (active=0). NO borra
 // attendance_logs históricos.
-router.delete('/:id/biometrics/:mapId', authorize('admin', 'hr'), requirePermission('empleados', 'update'), asyncHandler(async (req, res) => {
+router.delete('/:id/biometrics/:mapId', authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), guardBiometricsLink, asyncHandler(async (req, res) => {
   try {
     const r = await unlinkEmployeeDevice({ mapId: parseInt(req.params.mapId), employeeId: parseInt(req.params.id) });
     audit.log({ req, user: req.user, action: 'biometric.unlink', entity: 'employee', entity_id: parseInt(req.params.id), details: r });

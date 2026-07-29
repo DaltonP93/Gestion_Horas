@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useParams, useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
@@ -12,6 +12,7 @@ import {
 import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
 import { fmtTimePy } from '@/lib/datetime'
+import { validateEmployeeField, isLegalField } from '@/lib/employeeFieldValidation'
 import EmployeeNotes from '@/components/EmployeeNotes'
 import BiometriaRelojes from '@/components/BiometriaRelojes'
 import dynamic from 'next/dynamic'
@@ -37,9 +38,16 @@ const STATUS_ROW: Record<string, { label: string; cls: string; icon: React.React
   permission: { label: 'Permiso',   cls: 'bg-purple-50 text-purple-700', icon: <Calendar size={14} />    },
 }
 
+// ─── Feedback inline (banner ligero, sin dependencias) ────────────
+type FeedbackState = { kind: 'ok' | 'err'; msg: string } | null
+
 // ─── Formulario de edición inline ─────────────────────────────────
+// Cada fila lleva su propia clase `group`, para que el lápiz aparezca
+// consistentemente al hacer hover/focus en cualquier sección (personal
+// o legal), sin depender del contenedor externo. En móvil el lápiz
+// está siempre visible; en desktop aparece con hover o focus dentro.
 function EditField({
-  label, value, name, type = 'text', options, onSave,
+  label, value, name, type = 'text', options, onSave, readOnly = false, onFeedback,
 }: {
   label: string
   value: string
@@ -47,57 +55,113 @@ function EditField({
   type?: string
   options?: { value: string; label: string }[]
   onSave: (name: string, value: string) => Promise<void>
+  readOnly?: boolean
+  onFeedback?: (f: FeedbackState) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [val, setVal]         = useState(value || '')
   const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState<string | null>(null)
+
+  useEffect(() => { setVal(value || '') }, [value])
 
   async function handleSave() {
+    // Validación cliente antes del round-trip.
+    const check = validateEmployeeField(name, val)
+    if (!check.ok) {
+      setError(check.error)
+      onFeedback?.({ kind: 'err', msg: `${label}: ${check.error}` })
+      return
+    }
+    setError(null)
     setSaving(true)
-    await onSave(name, val)
-    setSaving(false)
-    setEditing(false)
+    try {
+      await onSave(name, val)
+      setEditing(false)
+      onFeedback?.({ kind: 'ok', msg: `${label} actualizado.` })
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e?.message || 'Error al guardar'
+      setError(msg)
+      onFeedback?.({ kind: 'err', msg: `${label}: ${msg}` })
+    } finally {
+      setSaving(false)
+    }
   }
 
+  const displayValue = value
+    ? value
+    : <span className="text-slate-400 dark:text-white/30">—</span>
+
   return (
-    <div className="flex items-center justify-between py-3 border-b border-slate-50 last:border-0">
+    <div className="group flex items-center justify-between py-3 border-b border-slate-50 last:border-0 dark:border-white/[0.05]">
       <span className="text-sm text-slate-500 w-36 shrink-0 dark:text-white/40">{label}</span>
       {editing ? (
-        <div className="flex items-center gap-2 flex-1">
-          {options ? (
-            <select
-              value={val}
-              onChange={e => setVal(e.target.value)}
-              className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
+        <div className="flex flex-col items-stretch gap-1 flex-1">
+          <div className="flex items-center gap-2 flex-1">
+            {options ? (
+              <select
+                aria-label={label}
+                value={val}
+                onChange={e => setVal(e.target.value)}
+                className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white"
+              >
+                {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            ) : (
+              <input
+                aria-label={label}
+                type={type}
+                value={val}
+                onChange={e => setVal(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); handleSave() }
+                  if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(value || ''); setError(null) }
+                }}
+                className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white"
+                autoFocus
+              />
+            )}
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              aria-label={`Guardar ${label}`}
+              className="text-green-600 hover:text-green-700 disabled:opacity-50"
             >
-              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          ) : (
-            <input
-              type={type}
-              value={val}
-              onChange={e => setVal(e.target.value)}
-              className="flex-1 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
-              autoFocus
-            />
-          )}
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="text-green-600 hover:text-green-700 disabled:opacity-50"
-          >
-            <Save size={16} />
-          </button>
-          <button onClick={() => { setEditing(false); setVal(value || '') }} className="text-slate-400 hover:text-slate-600 dark:text-white/30">
-            <X size={16} />
-          </button>
+              <Save size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => { setEditing(false); setVal(value || ''); setError(null) }}
+              aria-label={`Cancelar edición de ${label}`}
+              className="text-slate-400 hover:text-slate-600 dark:text-white/30"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{error}</p>}
         </div>
       ) : (
         <div className="flex items-center gap-2 flex-1 justify-between">
-          <span className="text-sm font-medium text-slate-900 dark:text-white">{value || <span className="text-slate-400 dark:text-white/30">—</span>}</span>
-          <button onClick={() => setEditing(true)} className="text-slate-300 hover:text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity">
-            <Edit2 size={14} />
-          </button>
+          <span className="text-sm font-medium text-slate-900 dark:text-white">
+            {displayValue}
+          </span>
+          {!readOnly && (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              aria-label={`Editar ${label}`}
+              className={
+                'text-slate-400 hover:text-blue-600 focus-visible:text-blue-600 ' +
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded ' +
+                // Siempre visible en móvil; aparece con hover/focus en ≥sm.
+                'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 ' +
+                'transition-opacity'
+              }
+            >
+              <Edit2 size={14} />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -114,6 +178,14 @@ export default function EmpleadoDetallePage() {
     const d = new Date(); d.setDate(1); return format(d, 'yyyy-MM-dd')
   })
   const [histTo, setHistTo] = useState(format(new Date(), 'yyyy-MM-dd'))
+
+  // Feedback inline (auto-clear a los 3.5s).
+  const [feedback, setFeedback] = useState<FeedbackState>(null)
+  useEffect(() => {
+    if (!feedback) return
+    const t = setTimeout(() => setFeedback(null), 3500)
+    return () => clearTimeout(t)
+  }, [feedback])
 
   const { data: emp, isLoading, error } = useQuery({
     queryKey: ['employee', id],
@@ -133,9 +205,16 @@ export default function EmpleadoDetallePage() {
     enabled: !!id,
   })
 
-  // Actualizar campo individual
+  // Capacidades del rol actual sobre esta ficha. Vienen embebidas en getById
+  // como `_caps`. Nunca son la única defensa: el backend siempre valida.
+  const caps = (emp?._caps || {}) as Partial<Record<
+    'personal_update' | 'legal_view' | 'legal_update' | 'biometrics_link' | 'status_change',
+    boolean
+  >>
+
+  // Actualizar campo individual — usa /quick para permitir clear real y auditar.
   async function onSaveField(fieldName: string, value: string) {
-    await employeesApi.update(+id, { [fieldName]: value })
+    await employeesApi.quickUpdate(+id, fieldName, value)
     qc.invalidateQueries({ queryKey: ['employee', id] })
     qc.invalidateQueries({ queryKey: ['employees'] })
   }
@@ -152,8 +231,10 @@ export default function EmpleadoDetallePage() {
       setBajaOpen(false); setReason('')
       qc.invalidateQueries({ queryKey: ['employee', id] })
       qc.invalidateQueries({ queryKey: ['employees'] })
-    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
-    finally { setStatusBusy(false) }
+      setFeedback({ kind: 'ok', msg: 'Empleado dado de baja.' })
+    } catch (e: any) {
+      setFeedback({ kind: 'err', msg: 'Error: ' + (e.response?.data?.error || e.message) })
+    } finally { setStatusBusy(false) }
   }
   async function doReactivate() {
     if (!confirm('¿Reactivar a este empleado? Volverá a las vistas operativas.')) return
@@ -162,12 +243,19 @@ export default function EmpleadoDetallePage() {
       await api.post(`/api/employees/${id}/reactivate`, {})
       qc.invalidateQueries({ queryKey: ['employee', id] })
       qc.invalidateQueries({ queryKey: ['employees'] })
-    } catch (e: any) { alert('Error: ' + (e.response?.data?.error || e.message)) }
-    finally { setStatusBusy(false) }
+      setFeedback({ kind: 'ok', msg: 'Empleado reactivado.' })
+    } catch (e: any) {
+      setFeedback({ kind: 'err', msg: 'Error: ' + (e.response?.data?.error || e.message) })
+    } finally { setStatusBusy(false) }
   }
 
   if (isLoading) return <div className="p-6 text-slate-400 dark:text-white/30">Cargando...</div>
   if (error || !emp) return <div className="p-6 text-red-500">Empleado no encontrado</div>
+
+  const canEditPersonal = !!caps.personal_update
+  const canViewLegal    = !!caps.legal_view
+  const canEditLegal    = !!caps.legal_update
+  const canChangeStatus = !!caps.status_change
 
   const schedOpts = [{ value: '', label: 'Sin horario' },
     ...(schedules || []).map((s: any) => ({ value: String(s.id), label: s.name }))]
@@ -184,6 +272,26 @@ export default function EmpleadoDetallePage() {
       <Link href="/empleados" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 dark:text-white/40">
         <ArrowLeft size={16} /> Volver a empleados
       </Link>
+
+      {/* Feedback flotante inline */}
+      {feedback && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={
+            'sticky top-2 z-30 rounded-xl border px-4 py-2 text-sm shadow-sm flex items-center gap-2 ' +
+            (feedback.kind === 'ok'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-200'
+              : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-500/10 dark:border-red-500/30 dark:text-red-200')
+          }
+        >
+          {feedback.kind === 'ok' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+          <span className="flex-1">{feedback.msg}</span>
+          <button onClick={() => setFeedback(null)} aria-label="Cerrar aviso" className="opacity-70 hover:opacity-100">
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Header empleado */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex items-center gap-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
@@ -214,7 +322,7 @@ export default function EmpleadoDetallePage() {
           }`}>
             {emp.status === 'active' ? 'Activo' : emp.status === 'suspended' ? 'Suspendido' : 'Inactivo'}
           </span>
-          {emp.status === 'active'
+          {canChangeStatus && (emp.status === 'active'
             ? <button onClick={() => setBajaOpen(true)} disabled={statusBusy}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-xl bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60">
                 <UserX size={14} /> Dar de baja
@@ -222,7 +330,7 @@ export default function EmpleadoDetallePage() {
             : <button onClick={doReactivate} disabled={statusBusy}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60">
                 <UserCheck size={14} /> Reactivar
-              </button>}
+              </button>)}
         </div>
       </div>
 
@@ -281,67 +389,65 @@ export default function EmpleadoDetallePage() {
           <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
             <User size={16} className="text-blue-500" /> Información
           </h2>
-          <div className="group">
-            <EditField label="Nombre"      value={emp.first_name}    name="first_name"    onSave={onSaveField} />
-            <EditField label="Apellido"    value={emp.last_name}     name="last_name"     onSave={onSaveField} />
-            <EditField label="Email"       value={emp.email || ''}   name="email"         type="email" onSave={onSaveField} />
-            <EditField label="Teléfono"    value={emp.phone || ''}   name="phone"         type="tel" onSave={onSaveField} />
-            <EditField label="Cargo"       value={emp.position || ''} name="position"      onSave={onSaveField} />
-            <EditField label="Ingreso"     value={emp.hire_date ? emp.hire_date.split('T')[0] : ''} name="hire_date" type="date" onSave={onSaveField} />
-            <EditField label="Nacimiento"  value={emp.birth_date ? emp.birth_date.split('T')[0] : ''} name="birth_date" type="date" onSave={onSaveField} />
-            <EditField
-              label="Horario"
-              value={emp.schedule_name || ''}
-              name="schedule_id"
-              options={schedOpts}
-              onSave={async (name, val) => onSaveField(name, val)}
-            />
-            <EditField
-              label="Estado"
-              value={emp.status}
-              name="status"
-              options={[
-                { value: 'active',    label: 'Activo' },
-                { value: 'inactive',  label: 'Inactivo' },
-                { value: 'suspended', label: 'Suspendido' },
-              ]}
-              onSave={onSaveField}
-            />
-          </div>
+          <EditField label="Nombre"      value={emp.first_name}    name="first_name"    readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField label="Apellido"    value={emp.last_name}     name="last_name"     readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField label="Email"       value={emp.email || ''}   name="email"         type="email" readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField label="Teléfono"    value={emp.phone || ''}   name="phone"         type="tel"   readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField label="Cargo"       value={emp.position || ''} name="position"     readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField label="Ingreso"     value={emp.hire_date ? emp.hire_date.split('T')[0] : ''} name="hire_date" type="date" readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField label="Nacimiento"  value={emp.birth_date ? emp.birth_date.split('T')[0] : ''} name="birth_date" type="date" readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
+          <EditField
+            label="Horario"
+            value={emp.schedule_name || ''}
+            name="schedule_id"
+            options={schedOpts}
+            readOnly={!canEditPersonal}
+            onSave={async (name, val) => onSaveField(name, val)}
+            onFeedback={setFeedback}
+          />
+          {/* El estado NO se cambia inline: para dar de baja se usa el botón
+              del header (motivo + auditoría + deshabilitación pendiente en el
+              reloj). Cambiarlo con un select saltearía ese flujo. */}
 
           {/* Datos legales MTESS / IPS */}
-          <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
-            <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-              <Briefcase size={15} className="text-cyan-500" /> Datos legales (MTESS / IPS)
-            </h3>
-            <EditField label="C.I."         value={emp.document_number || ''} name="document_number" onSave={onSaveField} />
-            <EditField label="N° IPS"       value={emp.ips_number || ''}      name="ips_number"      onSave={onSaveField} />
-            <EditField label="Salario base" value={emp.salary_base != null ? String(emp.salary_base) : ''} name="salary_base" type="number" onSave={onSaveField} />
-            <EditField
-              label="Tipo de pago"
-              value={emp.pay_type || 'mensualizado'}
-              name="pay_type"
-              options={[
-                { value: 'mensualizado', label: 'Mensualizado' },
-                { value: 'jornalero',    label: 'Jornalero' },
-              ]}
-              onSave={onSaveField}
-            />
-            <EditField
-              label="Género"
-              value={emp.gender || ''}
-              name="gender"
-              options={[
-                { value: '',  label: '—' },
-                { value: 'M', label: 'Masculino' },
-                { value: 'F', label: 'Femenino' },
-                { value: 'O', label: 'Otro' },
-              ]}
-              onSave={onSaveField}
-            />
-            <EditField label="N° de hijos" value={emp.children_count != null ? String(emp.children_count) : '0'} name="children_count" type="number" onSave={onSaveField} />
-            <EditField label="Antigüedad (%)" value={emp.antiguedad_rate != null ? String(emp.antiguedad_rate) : '0'} name="antiguedad_rate" type="number" onSave={onSaveField} />
-          </div>
+          {canViewLegal ? (
+            <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
+              <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+                <Briefcase size={15} className="text-cyan-500" /> Datos legales (MTESS / IPS)
+              </h3>
+              <EditField label="C.I."         value={emp.document_number || ''} name="document_number" readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
+              <EditField label="N° IPS"       value={emp.ips_number || ''}      name="ips_number"      readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
+              <EditField label="Salario base" value={emp.salary_base != null ? String(emp.salary_base) : ''} name="salary_base" type="number" readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
+              <EditField
+                label="Tipo de pago"
+                value={emp.pay_type || 'mensualizado'}
+                name="pay_type"
+                readOnly={!canEditLegal}
+                options={[
+                  { value: 'mensualizado', label: 'Mensualizado' },
+                  { value: 'jornalero',    label: 'Jornalero' },
+                ]}
+                onSave={onSaveField}
+                onFeedback={setFeedback}
+              />
+              <EditField
+                label="Género"
+                value={emp.gender || ''}
+                name="gender"
+                readOnly={!canEditLegal}
+                options={[
+                  { value: '',  label: '—' },
+                  { value: 'M', label: 'Masculino' },
+                  { value: 'F', label: 'Femenino' },
+                  { value: 'O', label: 'Otro' },
+                ]}
+                onSave={onSaveField}
+                onFeedback={setFeedback}
+              />
+              <EditField label="N° de hijos" value={emp.children_count != null ? String(emp.children_count) : '0'} name="children_count" type="number" readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
+              <EditField label="Antigüedad (%)" value={emp.antiguedad_rate != null ? String(emp.antiguedad_rate) : '0'} name="antiguedad_rate" type="number" readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
+            </div>
+          ) : null}
         </div>
 
         {/* Historial */}
