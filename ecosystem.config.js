@@ -44,7 +44,12 @@ module.exports = {
       error_file: '../logs/sync-worker-error.log',
       out_file:   '../logs/sync-worker-out.log',
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      max_memory_restart: '256M',
+      // Lecturas de relojes con buffers grandes (Comedor ~82k registros) pueden
+      // superar brevemente 256M durante la lectura multi-intento y disparar el
+      // reinicio por memoria de PM2. Se sube a 512M SÓLO para este proceso.
+      // ANTES de aplicarlo en producción, verificar memoria disponible:
+      //   free -h   (debe haber holgura suficiente para +256M en este proceso)
+      max_memory_restart: '512M',
     },
     {
       name: 'sishoras-web',
