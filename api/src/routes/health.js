@@ -84,6 +84,8 @@ router.get('/detailed', authenticate, authorize('admin', 'gth'), async (req, res
     node: process.version,
     host: os.hostname(),
     checks: { mysql, redis, att2000, bridge },
+    // Integración LEGADA att2000: disponible, pull automático on/off, última corrida.
+    att2000_legacy: require('../services/att2000Legacy').getStatus(),
     memory: {
       rss_mb: Math.round(mem.rss / 1024 / 1024),
       heap_used_mb: Math.round(mem.heapUsed / 1024 / 1024),
