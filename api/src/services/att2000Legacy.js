@@ -52,7 +52,56 @@ function getStatus() {
   };
 }
 
-// Sólo para pruebas: reinicia el estado en memoria.
-function _reset() { _lastRun = null; }
+// ─── Estado de conexión para el panel legado (frontend) ──────────────
+// Enmascara el host para mostrarlo sin revelarlo por completo.
+function maskHost(h) {
+  const s = String(h || '').trim();
+  if (!s) return '—';
+  const parts = s.split('.');
+  if (parts.length === 4) return `${parts[0]}.•••.•••.${parts[3]}`;
+  return s.length <= 4 ? '•••' : `${s.slice(0, 2)}•••${s.slice(-2)}`;
+}
 
-module.exports = { autoPullEnabled, available, recordRun, getStatus, _reset };
+// La conexión legada está configurada si hay host att2000 (ATT_HOST, el que
+// usa realmente config/att2000.js para conectarse).
+function connectionConfigured() {
+  return !!(process.env.ATT_HOST && String(process.env.ATT_HOST).trim());
+}
+
+// Última comprobación (test de conexión). Sólo el resultado, sin credenciales.
+let _lastCheck = null; // { at, ok, error }
+
+/** Registra el resultado de un test de conexión. No incluye datos sensibles. */
+function recordCheck(r = {}) {
+  _lastCheck = {
+    at: new Date().toISOString(),
+    ok: r.ok !== false,
+    error: r.error ? String(r.error).slice(0, 300) : null,
+  };
+  return _lastCheck;
+}
+
+/**
+ * Estado de conexión para el panel legado del frontend.
+ * NUNCA expone credenciales: sólo disponibilidad, host ENMASCARADO, base
+ * (nombre lógico), última comprobación, último resultado y pull automático.
+ */
+function getConnectionStatus() {
+  return {
+    available: connectionConfigured(),
+    auto_pull_enabled: autoPullEnabled(),
+    host_masked: maskHost(process.env.ATT_HOST),
+    database: String(process.env.ATT_DATABASE || 'att2000'),
+    last_check: _lastCheck,
+    last_run: _lastRun,
+  };
+}
+
+// Sólo para pruebas: reinicia el estado en memoria.
+function _reset() { _lastRun = null; _lastCheck = null; }
+
+module.exports = {
+  autoPullEnabled, available, recordRun, getStatus,
+  maskHost, connectionConfigured, recordCheck, getConnectionStatus,
+  _reset,
+};

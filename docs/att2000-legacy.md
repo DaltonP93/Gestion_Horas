@@ -69,8 +69,41 @@ persiste secretos.
 No apaga el cron en caliente, no elimina endpoints/tablas/migraciones, no modifica
 auto-polling ZKTeco ni el worker, no inicia USER_WRQ, no toca datos de producción.
 
+## Credenciales exclusivamente en el backend
+
+Las credenciales de att2000 (**host, puerto, base, usuario y contraseña**) viven
+**sólo** en el servidor, en variables de entorno protegidas:
+
+```bash
+ATT_HOST= ATT_PORT=1433 ATT_DATABASE=att2000 ATT_USER=sa ATT_PASSWORD=
+```
+
+- El navegador **no** conoce ni transmite credenciales, host ni connection
+  strings. Los endpoints usan **siempre** el `.env` del servidor.
+- El frontend (`/sistema/legado-att2000`) sólo envía **parámetros funcionales no
+  sensibles** (rango de fechas). Ya **no** hay campos de usuario/contraseña.
+- `POST /api/sync/test-conn` y `POST /api/sync/full` **ignoran** cualquier
+  `user`/`password`/`host`/`conn` que llegue en el body: no altera el `.env`.
+- Al abrir el panel, el navegador **purga una sola vez** la clave heredada
+  `sishoras_db_conn` (posibles contraseñas guardadas por versiones anteriores).
+
+### `GET /api/sync/status` — estado sin secretos
+
+Devuelve únicamente: `available`, `host_masked` (host enmascarado, ej.
+`10.•••.•••.40`), `database` (nombre lógico), `auto_pull_enabled`, `last_check`
+(última comprobación) y `last_run` (último resultado). Nunca credenciales.
+
+La auditoría de cada ejecución manual **no** registra el request body, el usuario
+SQL ni la contraseña: sólo la acción, el rango de fechas y contadores.
+
 ## Pruebas
 
-`api/tests/att2000Legacy.test.js`: kill switch `false`/`true` (con y sin
-expresión) sobre `startAtt2000PullCron`, `autoPullEnabled`, `available`, y
-`recordRun`/`getStatus` (contadores/fuente, sin credenciales en el estado).
+- `api/tests/att2000Legacy.test.js`: kill switch `false`/`true` (con y sin
+  expresión) sobre `startAtt2000PullCron`, `autoPullEnabled`, `available`, y
+  `recordRun`/`getStatus` (contadores/fuente, sin credenciales en el estado).
+- `api/tests/att2000Creds.test.js`: `/status` (host enmascarado, sin
+  credenciales), `/test-conn` y `/full` usando el `.env` e **ignorando**
+  `user`/`password`/`conn` del body; gate super_admin.
+- `web/src/lib/__tests__/att2000Creds.test.ts`: purga única de
+  `sishoras_db_conn`, builders de petición sin credenciales, y verificación de
+  que la página no renderiza campos de usuario/contraseña ni envía `conn`.
