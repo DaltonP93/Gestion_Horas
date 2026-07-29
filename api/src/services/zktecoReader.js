@@ -38,8 +38,8 @@ function logPhase(ctx, phase, ms, extra = {}) {
 }
 
 // Snapshot de memoria del proceso worker (sólo números; nunca datos biométricos
-// ni credenciales). En MB para lectura humana.
-const _mb = (b) => Math.round((b || 0) / 1048576);
+// ni credenciales). En MiB (1 MiB = 1048576 bytes) para lectura humana.
+const _mib = (b) => Math.round((b || 0) / 1048576);
 function memSnapshot() {
   const m = process.memoryUsage();
   return { rss: m.rss, heapUsed: m.heapUsed, heapTotal: m.heapTotal, external: m.external, arrayBuffers: m.arrayBuffers || 0 };
@@ -54,8 +54,8 @@ function logMem(ctx, phase, extra = {}) {
     ctx && ctx.syncRunId ? `run=${ctx.syncRunId}` : null,
     extra.attempt != null ? `attempt=${extra.attempt}` : null,
     extra.records != null ? `records=${extra.records}` : null,
-    `rss=${_mb(m.rss)}MB`, `heapUsed=${_mb(m.heapUsed)}MB`, `heapTotal=${_mb(m.heapTotal)}MB`,
-    `external=${_mb(m.external)}MB`, `arrayBuffers=${_mb(m.arrayBuffers)}MB`,
+    `rss=${_mib(m.rss)}MiB`, `heapUsed=${_mib(m.heapUsed)}MiB`, `heapTotal=${_mib(m.heapTotal)}MiB`,
+    `external=${_mib(m.external)}MiB`, `arrayBuffers=${_mib(m.arrayBuffers)}MiB`,
   ];
   logger.info(`[sync] ${parts.filter(Boolean).join(' ')}`);
 }

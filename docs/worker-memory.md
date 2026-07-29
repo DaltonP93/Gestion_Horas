@@ -42,6 +42,9 @@ Dos factores sumaban RSS durante la lectura:
   biométricos ni credenciales.
 - **`ecosystem.config.js`:** `sishoras-sync-worker` sube `max_memory_restart` de
   `256M` a **`512M`** (sólo ese proceso). No se cambia ningún otro límite.
+  `max_memory_restart` es un **umbral de reinicio de PM2, no memoria reservada**:
+  el proceso usa lo que necesita (normalmente ~110–160 MiB) y PM2 lo reinicia
+  sólo si el RSS supera ese valor. No preasigna 512 MiB.
 - **No** se usa `global.gc` ni `--expose-gc` como solución; el arreglo es reducir
   el pico real de retención.
 
