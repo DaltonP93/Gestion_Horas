@@ -421,10 +421,20 @@ async function materializeAbsents(date) {
   return n;
 }
 
-// ─── Cron respaldo: pull att2000 → MySQL ─────────────────────────
-// Activar con ATT2000_PULL_CRON="*/10 * * * *" (sintaxis node-cron)
+// ─── Cron respaldo: pull att2000 → MySQL (integración LEGADA, opcional) ───
+// Requiere DOS condiciones:
+//   1) kill switch ATT2000_AUTO_PULL_ENABLED=true (por defecto false), y
+//   2) ATT2000_PULL_CRON="*/10 * * * *" (expresión node-cron).
+// Con el kill switch en false el cron NO se registra (att2000 queda como
+// integración legada disponible sólo por acciones manuales). No apaga el cron
+// en caliente ni elimina endpoints: sólo decide si programar el pull automático.
+const { autoPullEnabled, recordRun } = require('./att2000Legacy');
 let _att2000PullJob = null;
 function startAtt2000PullCron() {
+  if (!autoPullEnabled()) {
+    logger.info('⏸️  att2000 pull automático DESHABILITADO (ATT2000_AUTO_PULL_ENABLED != true). Integración legada disponible por acciones manuales.');
+    return;
+  }
   const expr = process.env.ATT2000_PULL_CRON;
   if (!expr) return;
   if (_att2000PullJob) _att2000PullJob.stop();
@@ -436,6 +446,7 @@ function startAtt2000PullCron() {
         const dateFrom = pyDateStr(new Date(Date.now() - 24 * 3600 * 1000));
         const result = await syncAttendance({ dateFrom, limit: 5000 });
         logger.info(`⏱️  Cron att2000 pull: ${JSON.stringify(result)}`);
+        recordRun({ source: 'auto', ok: true, imported: result?.imported, duplicate: result?.duplicate ?? result?.skipped, unmapped: result?.unmapped ?? result?.notFound });
 
         // Recalcular daily_summary para hoy y ayer (Paraguay) después del sync
         const today     = pyDateStr(new Date());
@@ -450,9 +461,10 @@ function startAtt2000PullCron() {
         }
       } catch (err) {
         logger.error('Error en cron att2000 pull:', err.message);
+        recordRun({ source: 'auto', ok: false, error: err.message });
       }
     });
-    logger.info(`📅 Cron respaldo att2000 → MySQL activo: ${expr}`);
+    logger.info(`📅 Cron respaldo att2000 → MySQL (legado) activo: ${expr}`);
   } catch (err) {
     logger.error('No se pudo registrar ATT2000_PULL_CRON:', err.message);
   }

@@ -17,6 +17,16 @@ const router = require('express').Router();
 const { authenticate, requireSuperAdmin } = require('../middleware/auth');
 const { testAtt2000Connection, writeCheckinOut, resetPool, queryAtt2000 } = require('../config/att2000');
 const { sequelize } = require('../config/database');
+const audit = require('../services/audit');
+const { recordRun } = require('../services/att2000Legacy');
+
+// Auditoría de cada ejecución manual de la integración legada att2000.
+// NUNCA registra credenciales (host/usuario/password del body `conn`): sólo
+// la acción, el rango y contadores del resultado.
+function auditLegacy(req, action, details = {}) {
+  try { audit.log({ req, user: req.user, action: `att2000.${action}`, entity: 'att2000', details }); }
+  catch { /* auditoría best-effort */ }
+}
 const {
   fetchCheckInOut, fetchUserInfo, fetchDepartments,
   fetchShifts, fetchMachines,
@@ -113,8 +123,15 @@ router.post('/full', async (req, res) => {
 
   try {
     const result = await fullSync({ dateFrom, dateTo });
+    auditLegacy(req, 'full_sync', { dateFrom: dateFrom || null, dateTo: dateTo || null, dynamic_conn: !!conn });
+    recordRun({ source: 'manual', ok: true,
+      imported: result?.attendance?.imported ?? result?.imported,
+      duplicate: result?.attendance?.duplicate ?? result?.attendance?.skipped ?? result?.duplicate,
+      unmapped: result?.attendance?.unmapped ?? result?.attendance?.notFound ?? result?.unmapped });
     res.json({ ok: true, result });
   } catch (err) {
+    auditLegacy(req, 'full_sync', { dateFrom: dateFrom || null, dateTo: dateTo || null, ok: false, error: err.message });
+    recordRun({ source: 'manual', ok: false, error: err.message });
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -122,7 +139,9 @@ router.post('/full', async (req, res) => {
 // ─── POST /api/sync/departments ──────────────────────────────────
 router.post('/departments', async (req, res) => {
   try {
-    res.json({ ok: true, ...(await syncDepartments()) });
+    const r = await syncDepartments();
+    auditLegacy(req, 'sync_departments', { count: r?.count ?? r?.imported });
+    res.json({ ok: true, ...r });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -131,7 +150,9 @@ router.post('/departments', async (req, res) => {
 // ─── POST /api/sync/employees ────────────────────────────────────
 router.post('/employees', async (req, res) => {
   try {
-    res.json({ ok: true, ...(await syncEmployees()) });
+    const r = await syncEmployees();
+    auditLegacy(req, 'sync_employees', { count: r?.count ?? r?.imported });
+    res.json({ ok: true, ...r });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -151,8 +172,13 @@ router.post('/attendance', async (req, res) => {
   }
   try {
     const result = await syncAttendance({ dateFrom, dateTo, limit });
+    auditLegacy(req, 'sync_attendance', { dateFrom: dateFrom || null, dateTo: dateTo || null, dynamic_conn: !!conn });
+    recordRun({ source: 'manual', ok: true,
+      imported: result?.imported, duplicate: result?.duplicate ?? result?.skipped, unmapped: result?.unmapped ?? result?.notFound });
     res.json({ ok: true, ...result });
   } catch (err) {
+    auditLegacy(req, 'sync_attendance', { dateFrom: dateFrom || null, dateTo: dateTo || null, ok: false, error: err.message });
+    recordRun({ source: 'manual', ok: false, error: err.message });
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -244,6 +270,8 @@ router.post('/push-to-att2000', async (req, res) => {
 
     // Enviar a att2000
     const result = await writeCheckinOut(rows);
+
+    auditLegacy(req, 'push_to_att2000', { dateFrom: dateFrom || null, dateTo: dateTo || null, total: rows.length, inserted: result.inserted, skipped: result.skipped, errors: result.errors });
 
     res.json({
       ok: true,
