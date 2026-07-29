@@ -15,14 +15,14 @@
 
 const router = require('express').Router();
 const { authenticate, requireSuperAdmin } = require('../middleware/auth');
-const { testAtt2000Connection, writeCheckinOut, resetPool, queryAtt2000 } = require('../config/att2000');
+const { testAtt2000Connection, writeCheckinOut, queryAtt2000 } = require('../config/att2000');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
-const { recordRun } = require('../services/att2000Legacy');
+const { recordRun, recordCheck, getConnectionStatus } = require('../services/att2000Legacy');
 
 // Auditoría de cada ejecución manual de la integración legada att2000.
-// NUNCA registra credenciales (host/usuario/password del body `conn`): sólo
-// la acción, el rango y contadores del resultado.
+// NUNCA registra el request body, el usuario SQL ni la contraseña: sólo la
+// acción, el rango de fechas y contadores del resultado.
 function auditLegacy(req, action, details = {}) {
   try { audit.log({ req, user: req.user, action: `att2000.${action}`, entity: 'att2000', details }); }
   catch { /* auditoría best-effort */ }
@@ -44,86 +44,55 @@ router.get('/test', async (req, res) => {
   res.status(result.ok ? 200 : 503).json(result);
 });
 
-// ─── POST /api/sync/test-conn — Probar conexión dinámica ─────────
-// Body: { host, port, database, user, password }
-// Al probar con éxito, actualiza los env vars para que fullSync use esa conexión.
-router.post('/test-conn', async (req, res) => {
-  const { host, port, database, user, password } = req.body;
-  if (!host || !database || !user) {
-    return res.status(400).json({ ok: false, error: 'host, database y user son requeridos' });
-  }
-  const sql = require('mssql');
-  const cfg = {
-    server:   host,
-    port:     parseInt(port || '1433'),
-    user,
-    password: password ?? '',
-    database,
-    options: {
-      encrypt: false,
-      trustServerCertificate: true,
-      connectTimeout: 10000,
-      requestTimeout:  15000,
-    }
-  };
-  let tmpPool = null;
-  try {
-    tmpPool = await new sql.ConnectionPool(cfg).connect();
+// ─── GET /api/sync/status — Estado de la integración legada (sin secretos) ──
+// Devuelve SÓLO: disponible, host ENMASCARADO, base (nombre lógico), última
+// comprobación, último resultado y estado del pull automático. Nunca credenciales.
+router.get('/status', (req, res) => {
+  res.json(getConnectionStatus());
+});
 
+// ─── POST /api/sync/test-conn — Probar conexión (SIEMPRE con el .env) ──
+// La conexión usa EXCLUSIVAMENTE las variables protegidas del servidor
+// (ATT_HOST/ATT_PORT/ATT_DATABASE/ATT_USER/ATT_PASSWORD). El navegador NUNCA
+// envía credenciales ni destino: cualquier host/user/password/conn en el body
+// se IGNORA por completo. No se registra el body en logs ni auditoría.
+router.post('/test-conn', async (req, res) => {
+  try {
     const [rCheckin, rUsers, rMachines, rRecent] = await Promise.all([
-      tmpPool.request().query('SELECT COUNT(*) AS total FROM CHECKINOUT'),
-      tmpPool.request().query('SELECT COUNT(*) AS total FROM USERINFO').catch(() => ({ recordset: [{ total: 0 }] })),
-      tmpPool.request().query('SELECT MACHINE_ALIAS, IP_ADDRESS FROM MACHINES').catch(() => ({ recordset: [] })),
-      tmpPool.request().query(`
+      queryAtt2000('SELECT COUNT(*) AS total FROM CHECKINOUT'),
+      queryAtt2000('SELECT COUNT(*) AS total FROM USERINFO').catch(() => [{ total: 0 }]),
+      queryAtt2000('SELECT MACHINE_ALIAS, IP_ADDRESS FROM MACHINES').catch(() => []),
+      queryAtt2000(`
         SELECT TOP 8 c.USERID, ui.Name AS nombre, c.CHECKTIME, c.CHECKTYPE
         FROM CHECKINOUT c
         LEFT JOIN USERINFO ui ON ui.USERID = c.USERID
         ORDER BY c.CHECKTIME DESC
-      `).catch(() => ({ recordset: [] })),
+      `).catch(() => []),
     ]);
 
-    await tmpPool.close();
-
-    // Guardar parámetros probados para que fullSync los use
-    resetPool();
-    process.env.ATT_HOST     = host;
-    process.env.ATT_PORT     = String(port || '1433');
-    process.env.ATT_DATABASE = database;
-    process.env.ATT_USER     = user;
-    process.env.ATT_PASSWORD = password ?? '';
-
+    recordCheck({ ok: true });
     res.json({
       ok: true,
-      totalRecords:   rCheckin.recordset[0].total,
-      totalEmployees: rUsers.recordset[0].total,
-      machines:       rMachines.recordset,
-      recentRecords:  rRecent.recordset,
+      totalRecords:   rCheckin[0]?.total ?? 0,
+      totalEmployees: rUsers[0]?.total ?? 0,
+      machines:       rMachines,
+      recentRecords:  rRecent,
     });
   } catch (err) {
-    if (tmpPool) try { await tmpPool.close(); } catch {}
+    recordCheck({ ok: false, error: err.message });
     res.status(503).json({ ok: false, error: err.message });
   }
 });
 
 // ─── POST /api/sync/full — Sincronización completa ───────────────
-// Body: { dateFrom, dateTo, conn?: { host, port, database, user, password } }
+// Body: { dateFrom, dateTo } — SÓLO parámetros funcionales no sensibles.
+// La conexión usa siempre el .env del servidor; no se aceptan credenciales.
 router.post('/full', async (req, res) => {
-  const { dateFrom, dateTo, conn } = req.body;
-
-  // Si viene conn dinámico, resetear el pool y actualizar env vars
-  // (el pool cacheado puede apuntar a otro host)
-  if (conn) {
-    resetPool();  // ← fuerza nueva conexión con los parámetros recibidos
-    if (conn.host     !== undefined) process.env.ATT_HOST     = conn.host;
-    if (conn.port     !== undefined) process.env.ATT_PORT     = String(conn.port);
-    if (conn.database !== undefined) process.env.ATT_DATABASE = conn.database;
-    if (conn.user     !== undefined) process.env.ATT_USER     = conn.user;
-    if (conn.password !== undefined) process.env.ATT_PASSWORD = conn.password;
-  }
+  const { dateFrom, dateTo } = req.body;
 
   try {
     const result = await fullSync({ dateFrom, dateTo });
-    auditLegacy(req, 'full_sync', { dateFrom: dateFrom || null, dateTo: dateTo || null, dynamic_conn: !!conn });
+    auditLegacy(req, 'full_sync', { dateFrom: dateFrom || null, dateTo: dateTo || null });
     recordRun({ source: 'manual', ok: true,
       imported: result?.attendance?.imported ?? result?.imported,
       duplicate: result?.attendance?.duplicate ?? result?.attendance?.skipped ?? result?.duplicate,
@@ -159,20 +128,13 @@ router.post('/employees', async (req, res) => {
 });
 
 // ─── POST /api/sync/attendance — Importar marcajes ───────────────
-// Body: { dateFrom: "2026-04-01", dateTo: "2026-04-11", limit: 10000, conn? }
+// Body: { dateFrom: "2026-04-01", dateTo: "2026-04-11", limit: 10000 }
+// SÓLO parámetros funcionales no sensibles; la conexión usa siempre el .env.
 router.post('/attendance', async (req, res) => {
-  const { dateFrom, dateTo, limit = 10000, conn } = req.body;
-  if (conn) {
-    resetPool();
-    if (conn.host     !== undefined) process.env.ATT_HOST     = conn.host;
-    if (conn.port     !== undefined) process.env.ATT_PORT     = String(conn.port);
-    if (conn.database !== undefined) process.env.ATT_DATABASE = conn.database;
-    if (conn.user     !== undefined) process.env.ATT_USER     = conn.user;
-    if (conn.password !== undefined) process.env.ATT_PASSWORD = conn.password;
-  }
+  const { dateFrom, dateTo, limit = 10000 } = req.body;
   try {
     const result = await syncAttendance({ dateFrom, dateTo, limit });
-    auditLegacy(req, 'sync_attendance', { dateFrom: dateFrom || null, dateTo: dateTo || null, dynamic_conn: !!conn });
+    auditLegacy(req, 'sync_attendance', { dateFrom: dateFrom || null, dateTo: dateTo || null });
     recordRun({ source: 'manual', ok: true,
       imported: result?.imported, duplicate: result?.duplicate ?? result?.skipped, unmapped: result?.unmapped ?? result?.notFound });
     res.json({ ok: true, ...result });

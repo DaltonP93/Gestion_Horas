@@ -2,47 +2,37 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import {
-  Server, Database, RefreshCw, Save, Zap, Eye, EyeOff, XCircle, CheckCircle,
-  Users, Clock, Wifi, AlertCircle, Download, ArrowLeft, ShieldAlert, History,
+  Database, RefreshCw, Zap, Eye, XCircle, CheckCircle,
+  Users, Clock, Wifi, AlertCircle, Download, ArrowLeft, ShieldAlert, History, Lock,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser, isSuperAdmin } from '@/lib/useCurrentUser'
-import { TARGET_KEY, sanitizeTarget, parseTarget } from '@/lib/att2000Target'
+import { purgeLegacyConnCreds } from '@/lib/att2000Target'
+import { fullSyncBody, pushBody } from '@/lib/att2000Requests'
 
 /**
  * /sistema/legado-att2000 — Ubicación CANÓNICA de la integración legada att2000.
  * Contingencia, migración y recuperación histórica. NO es el flujo normal de
  * marcaciones. Visible sólo para super_admin.
  *
- * Seguridad: las credenciales NUNCA se persisten en localStorage. Sólo se guarda
- * el destino de conexión (host/puerto/base/etiqueta); usuario y contraseña viven
- * en el backend (variables de entorno) y se ingresan al vuelo si hace falta.
+ * Seguridad: el navegador NO conoce ni envía credenciales ni destino de conexión.
+ * La conexión (host/puerto/base/usuario/contraseña) vive EXCLUSIVAMENTE en el
+ * backend (variables de entorno del servidor). El frontend sólo envía parámetros
+ * funcionales no sensibles (rango de fechas) y muestra el estado enmascarado.
  */
-interface DbConn { host: string; port: string; database: string; user: string; password: string; label: string }
 interface ConnResult {
   ok: boolean; totalRecords?: number; totalEmployees?: number
   machines?: { MACHINE_ALIAS: string; IP_ADDRESS: string }[]
   recentRecords?: { USERID: number; nombre: string; CHECKTIME: string; CHECKTYPE: string }[]
   error?: string
 }
-
-// Sólo destino de conexión (SIN credenciales). Las credenciales quedan en el backend.
-const emptyConn = (): DbConn => ({ host: '', port: '1433', database: 'att2000', user: '', password: '', label: '' })
-function loadConn(): DbConn {
-  const base = emptyConn()
-  if (typeof window === 'undefined') return base
-  try {
-    const s = localStorage.getItem(TARGET_KEY)
-    if (s) return { ...base, ...parseTarget(JSON.parse(s)) }  // nunca user/password desde storage
-  } catch {}
-  return base
-}
-// Enmascara el host para mostrarlo sin revelarlo por completo.
-function maskHost(h: string): string {
-  if (!h) return '—'
-  const parts = h.split('.')
-  if (parts.length === 4) return `${parts[0]}.•••.•••.${parts[3]}`
-  return h.length <= 4 ? '•••' : `${h.slice(0, 2)}•••${h.slice(-2)}`
+interface LegacyStatus {
+  available: boolean
+  auto_pull_enabled: boolean
+  host_masked: string
+  database: string
+  last_check: { at: string; ok: boolean; error: string | null } | null
+  last_run: { at: string; source: string; ok: boolean; imported: number; duplicate: number; unmapped: number; error: string | null } | null
 }
 
 const inputCls = 'w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08] dark:bg-white/[0.04]'
@@ -87,10 +77,8 @@ function Att2000LegacyPanel() {
   const [pushing, setPushing]   = useState(false)
   const [previewing, setPreviewing] = useState(false)
   const [pushPreview, setPushPreview] = useState<{ total: number } | null>(null)
-  const [showPass, setShowPass] = useState(false)
-  const [saved, setSaved]       = useState(false)
   const [connResult, setConnResult] = useState<ConnResult | null>(null)
-  const [lastCheck, setLastCheck] = useState<string | null>(null)
+  const [status, setStatus]     = useState<LegacyStatus | null>(null)
 
   const today    = new Date().toISOString().split('T')[0]
   const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
@@ -99,41 +87,47 @@ function Att2000LegacyPanel() {
   const [pushFrom, setPushFrom] = useState(firstDay)
   const [pushTo, setPushTo]     = useState(today)
 
-  const [conn, setConn] = useState<DbConn>(emptyConn)
-  useEffect(() => { setConn(loadConn()) }, [])
+  const addLog = (msg: string) => setLog(prev => [new Date().toLocaleTimeString() + ' — ' + msg, ...prev])
 
-  const addLog   = (msg: string) => setLog(prev => [new Date().toLocaleTimeString() + ' — ' + msg, ...prev])
-  const setField = (k: keyof DbConn) => (e: React.ChangeEvent<HTMLInputElement>) => setConn(c => ({ ...c, [k]: e.target.value }))
+  // Al montar: purga UNA sola vez cualquier credencial heredada del navegador y
+  // carga el estado (enmascarado) desde el backend.
+  useEffect(() => {
+    purgeLegacyConnCreds()
+    loadStatus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // Guarda SÓLO el destino (host/puerto/base/etiqueta). NUNCA user/password.
-  function saveConn() {
-    try { localStorage.setItem(TARGET_KEY, JSON.stringify(sanitizeTarget(conn))) } catch {}
-    setSaved(true); setTimeout(() => setSaved(false), 2000)
+  async function loadStatus() {
+    try {
+      const r = await api.get('/api/sync/status')
+      setStatus(r.data)
+    } catch { /* estado best-effort */ }
   }
 
   async function testConnection() {
     setTesting(true); setConnResult(null)
-    addLog(`🔌 Probando conexión a ${maskHost(conn.host)}:${conn.port}/${conn.database}...`)
+    addLog('🔌 Probando conexión (credenciales del servidor)…')
     try {
-      const r = await api.post('/api/sync/test-conn', conn)
+      // Sin cuerpo: la conexión usa exclusivamente el .env del backend.
+      const r = await api.post('/api/sync/test-conn')
       setConnResult(r.data)
-      setLastCheck(new Date().toLocaleString())
       addLog(r.data.ok
         ? `✅ Conexión exitosa — ${r.data.totalRecords?.toLocaleString()} marcajes, ${r.data.totalEmployees?.toLocaleString()} empleados`
         : `❌ Error: ${r.data.error}`)
     } catch (e: any) {
       const err = e.response?.data?.error || e.message
-      setConnResult({ ok: false, error: err }); setLastCheck(new Date().toLocaleString())
+      setConnResult({ ok: false, error: err })
       addLog(`❌ Error: ${err}`)
     }
     setTesting(false)
+    loadStatus()
   }
 
   async function runSync() {
     setSyncing(true)
-    addLog(`🔄 Sincronizando ${dateFrom} → ${dateTo} (histórico)...`)
+    addLog(`🔄 Sincronizando ${dateFrom} → ${dateTo} (histórico)…`)
     try {
-      const r = await api.post('/api/sync/full', { dateFrom, dateTo, conn })
+      const r = await api.post('/api/sync/full', fullSyncBody({ dateFrom, dateTo }))
       const res = r.data.result
       addLog('✅ Sincronización completada:')
       if (res?.departments) addLog(`   📁 Departamentos: ${res.departments.synced} sincronizados`)
@@ -144,6 +138,7 @@ function Att2000LegacyPanel() {
       addLog(`❌ Error: ${e.response?.data?.error || e.message}`)
     }
     setSyncing(false)
+    loadStatus()
   }
 
   async function previewPush() {
@@ -162,9 +157,9 @@ function Att2000LegacyPanel() {
     if (!pushPreview) return
     if (!confirm(`¿Enviar ${pushPreview.total?.toLocaleString()} marcajes a att2000?\nSolo se insertarán registros que no existan todavía (no hay duplicados).`)) return
     setPushing(true)
-    addLog(`📤 Enviando marcajes locales → att2000 (${pushFrom} → ${pushTo})...`)
+    addLog(`📤 Enviando marcajes locales → att2000 (${pushFrom} → ${pushTo})…`)
     try {
-      const r = await api.post('/api/sync/push-to-att2000', { dateFrom: pushFrom, dateTo: pushTo })
+      const r = await api.post('/api/sync/push-to-att2000', pushBody({ dateFrom: pushFrom, dateTo: pushTo }))
       addLog(`✅ Enviado a att2000: ${r.data.inserted} insertados, ${r.data.skipped} ya existían, ${r.data.errors} errores`)
       if (r.data.errList?.length) addLog(`   ⚠️ Primeros errores: ${r.data.errList.slice(0, 3).map((e: any) => e.error).join('; ')}`)
       setPushPreview(null)
@@ -174,67 +169,43 @@ function Att2000LegacyPanel() {
     setPushing(false)
   }
 
-  const statusChip = connResult == null
+  const online = connResult?.ok ?? status?.last_check?.ok
+  const statusChip = online == null
     ? { txt: 'Sin comprobar', cls: 'bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-white/50' }
-    : connResult.ok
+    : online
       ? { txt: 'Conectado', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-300' }
       : { txt: 'Desconectado', cls: 'bg-red-100 text-red-700 dark:bg-red-400/10 dark:text-red-300' }
+  const lastCheck = status?.last_check?.at ? new Date(status.last_check.at).toLocaleString() : null
 
   return (
     <div className="space-y-6">
-      {/* Estado de la integración (sin exponer credenciales) */}
+      {/* Estado de la integración — datos ENMASCARADOS provistos por el backend.
+          El navegador nunca conoce host completo, usuario ni contraseña. */}
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 p-4 dark:border-white/[0.08]">
-        <span className="text-sm font-medium text-slate-700 dark:text-white/80">{conn.label || 'Conexión att2000'}</span>
+        <span className="text-sm font-medium text-slate-700 dark:text-white/80">Conexión att2000</span>
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusChip.cls}`}>{statusChip.txt}</span>
-        <span className="text-xs text-slate-400 dark:text-white/30">host {maskHost(conn.host)}</span>
+        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-white/50">
+          {status?.available ? 'Configurada' : 'No configurada'}
+        </span>
+        <span className="text-xs text-slate-400 dark:text-white/30">host {status?.host_masked || '—'}</span>
+        <span className="text-xs text-slate-400 dark:text-white/30">· base {status?.database || '—'}</span>
+        <span className="text-xs text-slate-400 dark:text-white/30">· pull automático {status?.auto_pull_enabled ? 'activo' : 'inactivo'}</span>
         <span className="text-xs text-slate-400 dark:text-white/30">· última comprobación {lastCheck || '—'}</span>
+      </div>
+
+      {/* Aviso de credenciales gestionadas por el servidor */}
+      <div className="flex items-start gap-2.5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white/50">
+        <Lock size={15} className="flex-shrink-0 mt-0.5 text-slate-400" />
+        <div>
+          Las credenciales de att2000 (host, usuario y contraseña) se administran en el
+          servidor mediante variables de entorno protegidas. El navegador no las conoce
+          ni las transmite; aquí sólo se ejecutan operaciones sobre esa conexión.
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
         <div className="space-y-4">
           <div className="border border-slate-200 rounded-2xl p-5 space-y-4 dark:border-white/[0.08]">
-            <div className="flex items-center gap-2">
-              <Server size={16} className="text-blue-600" />
-              <h3 className="font-medium text-slate-800 dark:text-white/90">Configuración de conexión</h3>
-            </div>
-            <div>
-              <label className={labelCls}>Nombre / Etiqueta</label>
-              <input value={conn.label} onChange={setField('label')} placeholder="ej: ZKTeco Attendance Management" className={inputCls} />
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2">
-                <label className={labelCls}>Host / IP del servidor</label>
-                <input value={conn.host} onChange={setField('host')} placeholder="host SQL Server" className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Puerto</label>
-                <input value={conn.port} onChange={setField('port')} placeholder="1433" className={inputCls} />
-              </div>
-            </div>
-            <div>
-              <label className={labelCls}>Base de Datos</label>
-              <input value={conn.database} onChange={setField('database')} placeholder="att2000" className={inputCls} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Usuario</label>
-                <input value={conn.user} onChange={setField('user')} autoComplete="off" placeholder="sa" className={inputCls} />
-              </div>
-              <div>
-                <label className={labelCls}>Contraseña</label>
-                <div className="relative">
-                  <input type={showPass ? 'text' : 'password'} value={conn.password} onChange={setField('password')}
-                    autoComplete="new-password" placeholder="••••••••" className={inputCls + ' pr-10'} />
-                  <button onClick={() => setShowPass(p => !p)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-white/30">
-                    {showPass ? <EyeOff size={16}/> : <Eye size={16}/>}
-                  </button>
-                </div>
-              </div>
-            </div>
-            <p className="text-[11px] text-slate-400 dark:text-white/30">Usuario y contraseña se usan sólo para esta operación y NO se guardan en el navegador.</p>
-          </div>
-
-          <div className="border border-slate-200 rounded-2xl p-5 space-y-3 dark:border-white/[0.08]">
             <div className="flex items-center gap-2">
               <Database size={16} className="text-blue-600" />
               <h3 className="font-medium text-slate-800 dark:text-white/90">Período a sincronizar (histórico)</h3>
@@ -246,15 +217,11 @@ function Att2000LegacyPanel() {
           </div>
 
           <div className="flex gap-3 flex-wrap">
-            <button onClick={saveConn}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${saved ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-slate-800 text-white hover:bg-slate-700'}`}>
-              <Save size={16}/>{saved ? '✓ Guardado' : 'Guardar destino'}
-            </button>
-            <button onClick={testConnection} disabled={testing || !conn.host}
+            <button onClick={testConnection} disabled={testing}
               className="flex items-center gap-2 px-4 py-2.5 border border-slate-200 rounded-xl text-sm hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
               <Zap size={16} className="text-yellow-500"/>{testing ? 'Probando...' : 'Probar conexión'}
             </button>
-            <button onClick={runSync} disabled={syncing || !conn.host}
+            <button onClick={runSync} disabled={syncing}
               className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm hover:bg-blue-700 disabled:opacity-50">
               <RefreshCw size={16} className={syncing ? 'animate-spin' : ''}/>{syncing ? 'Sincronizando...' : 'Sincronizar histórico'}
             </button>
