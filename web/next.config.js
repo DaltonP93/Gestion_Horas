@@ -9,6 +9,21 @@ const nextConfig = {
    * En producción, nginx-sishoras.conf agrega los mismos headers; estos no
    * sobreescriben los de nginx, simplemente actúan como respaldo.
    */
+  /**
+   * Redirecciones a nivel de routing (308), ANTES de renderizar una página.
+   *
+   * /seguridad se movió a /cuenta/seguridad. Antes existía como página que hacía
+   * `redirect()` en el servidor: Next la prerenderizaba con el CSS del layout
+   * como <link rel="preload" as="style"> y, al redirigir de inmediato, ese CSS
+   * quedaba "preloaded but not used" → warning en Chrome. Al redirigir en el
+   * router no se renderiza HTML para /seguridad, así que no se emite ese preload.
+   */
+  async redirects() {
+    return [
+      { source: '/seguridad', destination: '/cuenta/seguridad', permanent: true },
+    ]
+  },
+
   async headers() {
     return [{
       source: '/:path*',
