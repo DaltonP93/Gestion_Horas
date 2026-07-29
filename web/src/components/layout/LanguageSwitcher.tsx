@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Languages, Check } from 'lucide-react'
 import { useI18n, type Locale } from '@/i18n/I18nProvider'
+import { PopoverSurface, popoverItemClass } from '@/components/ui/Popover'
 
 const LANGS: { code: Locale; flag: string; label: string }[] = [
   { code: 'es', flag: '🇪🇸', label: 'Español' },
@@ -28,28 +29,36 @@ export default function LanguageSwitcher() {
     <div ref={ref} className="relative">
       <button
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
-        className="flex items-center gap-1.5 text-slate-500 hover:bg-slate-100 transition-colors rounded-lg px-2.5 py-1.5 dark:text-white/40 dark:hover:bg-white/[0.06]"
+        className="flex items-center gap-1.5 text-slate-600 hover:bg-slate-100 transition-colors rounded-lg px-2.5 py-1.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-white/70 dark:hover:bg-white/[0.06]"
         title="Idioma / Language"
         aria-label="Cambiar idioma"
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         <Languages size={16} />
         <span className="text-xs font-medium uppercase">{current.code}</span>
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-44 bg-white rounded-xl shadow-lg border border-slate-100 py-1 z-50 dark:bg-white/[0.04] dark:border-white/[0.06]">
-          {LANGS.map(l => (
-            <button key={l.code}
-              onClick={() => { setLocale(l.code); setOpen(false) }}
-              className={`w-full flex items-center gap-3 px-3 py-2 text-sm hover:bg-slate-50 transition-colors text-left ${
-                l.code === locale ? 'text-blue-600 font-medium' : 'text-slate-700'
-              }`}>
-              <span className="text-lg">{l.flag}</span>
-              <span className="flex-1">{l.label}</span>
-              {l.code === locale && <Check size={14} />}
-            </button>
-          ))}
-        </div>
+        <PopoverSurface role="menu" aria-label="Idioma" className="right-0 mt-2 w-44 py-1">
+          {LANGS.map(l => {
+            const isCurrent = l.code === locale
+            return (
+              <button key={l.code}
+                role="menuitem"
+                onClick={() => { setLocale(l.code); setOpen(false) }}
+                aria-current={isCurrent ? 'true' : undefined}
+                className={
+                  popoverItemClass('') +
+                  (isCurrent ? ' text-blue-600 font-medium dark:text-blue-300' : '')
+                }>
+                <span className="text-lg" aria-hidden="true">{l.flag}</span>
+                <span className="flex-1">{l.label}</span>
+                {isCurrent && <Check size={14} />}
+              </button>
+            )
+          })}
+        </PopoverSurface>
       )}
     </div>
   )

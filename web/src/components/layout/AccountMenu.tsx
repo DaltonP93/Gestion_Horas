@@ -2,10 +2,11 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  UserCircle2, KeyRound, SlidersHorizontal, ShieldCheck, LogOut,
+  UserCircle2, SlidersHorizontal, ShieldCheck, LogOut,
 } from 'lucide-react'
 import { useCurrentUser, type Role } from '@/lib/useCurrentUser'
 import { apiUrl } from '@/lib/api'
+import { PopoverSurface, popoverItemClass, popoverDividerClass } from '@/components/ui/Popover'
 
 // Etiqueta legible del rol (evita mostrar el enum crudo).
 const ROLE_LABEL: Record<Role, string> = {
@@ -28,9 +29,12 @@ function initialsOf(name?: string, username?: string) {
 }
 
 type MenuItem = { href: string; label: string; icon: typeof UserCircle2 }
+// Un único punto de entrada a la seguridad — la página tiene pestañas
+// internas Contraseña / Sesiones / 2FA. La antigua entrada "Cambiar
+// contraseña" con hash `#password` producía URLs duplicadas al navegar
+// entre pantallas (`#password#password`). Ver PR 2.
 const ITEMS: MenuItem[] = [
   { href: '/cuenta/perfil',            label: 'Mi perfil',              icon: UserCircle2 },
-  { href: '/cuenta/seguridad#password',label: 'Cambiar contraseña',     icon: KeyRound },
   { href: '/cuenta/preferencias',      label: 'Preferencias',           icon: SlidersHorizontal },
   { href: '/cuenta/seguridad',         label: 'Seguridad de mi cuenta', icon: ShieldCheck },
 ]
@@ -151,20 +155,20 @@ export default function AccountMenu() {
       </button>
 
       {open && (
-        <div
+        <PopoverSurface
           ref={menuRef}
           role="menu"
           aria-label="Cuenta del usuario"
           onKeyDown={onMenuKeyDown}
-          className="absolute z-50 w-64 right-0 mt-2 top-full rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden dark:border-white/10 dark:bg-[#0d0d0f]"
+          className="w-64 right-0 mt-2 top-full"
         >
           {/* Cabecera con identidad */}
           <div className="flex items-center gap-3 p-4 border-b border-slate-100 dark:border-white/10">
             <Avatar size={40} />
             <div className="min-w-0">
               <p className="font-semibold text-slate-900 dark:text-white truncate">{displayName}</p>
-              <p className="text-xs text-slate-500 dark:text-white/50 truncate">{roleLabel}</p>
-              {user.email && <p className="text-xs text-slate-400 dark:text-white/40 truncate">{user.email}</p>}
+              <p className="text-xs text-slate-500 dark:text-white/60 truncate">{roleLabel}</p>
+              {user.email && <p className="text-xs text-slate-400 dark:text-white/50 truncate">{user.email}</p>}
             </div>
           </div>
 
@@ -175,30 +179,28 @@ export default function AccountMenu() {
                 role="menuitem"
                 type="button"
                 onClick={() => go(href)}
-                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 dark:text-white/80
-                  hover:bg-slate-50 dark:hover:bg-white/[0.06] focus-visible:bg-slate-50 dark:focus-visible:bg-white/[0.06]
-                  focus:outline-none text-left"
+                className={popoverItemClass('py-2.5 px-4')}
               >
-                <Icon size={16} className="text-slate-400 dark:text-white/40" aria-hidden="true" />
+                <Icon size={16} className="text-slate-400 dark:text-white/60" aria-hidden="true" />
                 {label}
               </button>
             ))}
           </div>
 
-          <div className="py-1 border-t border-slate-100 dark:border-white/10">
+          <div className={`py-1 ${popoverDividerClass()}`}>
             <button
               role="menuitem"
               type="button"
               onClick={handleLogout}
-              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 dark:text-red-400
-                hover:bg-red-50 dark:hover:bg-red-500/10 focus-visible:bg-red-50 dark:focus-visible:bg-red-500/10
+              className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 dark:text-red-300
+                hover:bg-red-50 dark:hover:bg-red-500/15 focus-visible:bg-red-50 dark:focus-visible:bg-red-500/15
                 focus:outline-none text-left"
             >
               <LogOut size={16} aria-hidden="true" />
               Cerrar sesión
             </button>
           </div>
-        </div>
+        </PopoverSurface>
       )}
     </div>
   )
