@@ -150,7 +150,7 @@ function SistemaTab() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api.get('/api/settings').then(r => { setSettings(s => ({ ...s, ...r.data })); setLoading(false) }).catch(() => setLoading(false))
+    api.get('/api/settings/admin').then(r => { setSettings(s => ({ ...s, ...r.data })); setLoading(false) }).catch(() => setLoading(false))
   }, [])
 
   const setField = (k: keyof SystemSettings) => (e: React.ChangeEvent<HTMLInputElement>) =>

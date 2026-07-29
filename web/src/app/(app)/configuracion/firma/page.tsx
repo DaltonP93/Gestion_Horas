@@ -17,7 +17,7 @@ export default function FirmaDigitalPage() {
 
   const { data } = useQuery({
     queryKey: ['settings'],
-    queryFn: () => api.get('/api/settings').then(r => r.data),
+    queryFn: () => api.get('/api/settings/admin').then(r => r.data),
   })
 
   useEffect(() => {
