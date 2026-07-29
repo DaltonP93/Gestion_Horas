@@ -37,6 +37,29 @@ function logPhase(ctx, phase, ms, extra = {}) {
   logger.info(`[sync] ${parts.filter(Boolean).join(' ')}`);
 }
 
+// Snapshot de memoria del proceso worker (sólo números; nunca datos biométricos
+// ni credenciales). En MiB (1 MiB = 1048576 bytes) para lectura humana.
+const _mib = (b) => Math.round((b || 0) / 1048576);
+function memSnapshot() {
+  const m = process.memoryUsage();
+  return { rss: m.rss, heapUsed: m.heapUsed, heapTotal: m.heapTotal, external: m.external, arrayBuffers: m.arrayBuffers || 0 };
+}
+// Traza de memoria por fase (rss/heap/external/arrayBuffers + device/run/records/intento).
+function logMem(ctx, phase, extra = {}) {
+  const m = memSnapshot();
+  const parts = [
+    `mem=${phase}`,
+    ctx && ctx.jobId ? `job=${ctx.jobId}` : null,
+    `device=${ctx ? ctx.deviceId : '?'}`,
+    ctx && ctx.syncRunId ? `run=${ctx.syncRunId}` : null,
+    extra.attempt != null ? `attempt=${extra.attempt}` : null,
+    extra.records != null ? `records=${extra.records}` : null,
+    `rss=${_mib(m.rss)}MiB`, `heapUsed=${_mib(m.heapUsed)}MiB`, `heapTotal=${_mib(m.heapTotal)}MiB`,
+    `external=${_mib(m.external)}MiB`, `arrayBuffers=${_mib(m.arrayBuffers)}MiB`,
+  ];
+  logger.info(`[sync] ${parts.filter(Boolean).join(' ')}`);
+}
+
 // ─── Conexión ZKTeco (según connection_mode del device) ─────────
 async function openZK(device) {
   const timeout = parseInt(device.timeout_ms || 12000);
@@ -241,7 +264,7 @@ function isJunkRaw(l) {
 // prioridad a las lecturas completas.
 // Criterio de "mejor" (en orden): (a) NO truncada, (b) más marcas EN RANGO,
 // (c) fecha válida más reciente, (d) más válidas, (e) menos basura.
-async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1, from = null, to = null, cooldownMs = 0 } = {}) {
+async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1, from = null, to = null, cooldownMs = 0, ctx = null, _readOnce = null } = {}) {
   const scoreOf = (logs, truncated) => {
     let valid = 0, inRange = 0, garbage = 0, maxTs = 0, minTs = 0;
     for (const l of logs) {
@@ -258,27 +281,50 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
     return { total: logs.length, valid, inRange, garbage, maxTs, minTs, truncated: !!truncated };
   };
 
-  const reads = [];
-  const detail = [];
+  // Devuelve la MEJOR de dos lecturas (misma prioridad que el reduce anterior).
+  const better = (a, b) => {
+    if (a.truncated !== b.truncated) return a.truncated ? b : a;   // completa > truncada
+    if (b.inRange !== a.inRange) return b.inRange > a.inRange ? b : a;
+    if (b.maxTs !== a.maxTs) return b.maxTs > a.maxTs ? b : a;
+    if (b.valid !== a.valid) return b.valid > a.valid ? b : a;
+    return b.garbage < a.garbage ? b : a;
+  };
   const covers = r => !r.truncated && (r.inRange > 0 || (!from && !to));
+  const memCtx = ctx || { deviceId: device.id };
+
+  // MEMORIA: retenemos SÓLO la mejor lectura (best.logs). Los `logs` de cada
+  // intento descartado quedan fuera de alcance al terminar la iteración —antes
+  // se guardaban TODOS en `reads`, lo que con ~80k registros × varios intentos
+  // disparaba el RSS y el reinicio por max_memory_restart del worker.
+  const detail = [];
+  const valids = [];
+  const inRanges = [];
+  let best = null;             // { logs, ...score } — única lectura retenida
+  let anyOk = false, lastErr = null, attemptsRun = 0;
+
+  logMem(memCtx, 'read_physical:start', { records: 0 });
   for (let i = 0; i < Math.max(1, attempts); i++) {
     if (i > 0 && cooldownMs > 0) await sleep(cooldownMs);   // enfriar y NO reusar sesión
     const t0 = Date.now();
     let logs = [], truncated = false, err = null;
     try {
-      const res = await withTimeout(
-        withZK(device, async zk => await zk.getAttendances(), { maxAttempts: 2, delayMs: 3000 }),
-        readTimeoutMs, 'lectura del reloj'
-      );
+      // `_readOnce` permite inyectar la lectura en pruebas/benchmark; en
+      // producción se usa siempre el camino real por reloj (withZK).
+      const res = _readOnce
+        ? await _readOnce(i)
+        : await withTimeout(
+            withZK(device, async zk => await zk.getAttendances(), { maxAttempts: 2, delayMs: 3000 }),
+            readTimeoutMs, 'lectura del reloj'
+          );
       logs = (res && Array.isArray(res.data)) ? res.data : (Array.isArray(res) ? res : []);
       truncated = !!(res && res.err);   // buffer incompleto (TIMEOUT WHEN RECEIVING PACKET)
     } catch (e) {
       // Si TODOS los intentos fallan, relanzamos al final; acá seguimos probando.
       err = e?.message || String(e);
     }
+    attemptsRun++;
     const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
       : scoreOf(logs, truncated);
-    reads.push({ logs, err, ...sc });
     detail.push({
       attempt: i + 1, mode: device.connection_mode || 'auto',
       raw: sc.total, valid: sc.valid, in_range: sc.inRange, garbage: sc.garbage,
@@ -287,28 +333,24 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       last_valid: sc.maxTs ? pyDateTimeStr(new Date(sc.maxTs)) : null,
       duration_ms: Date.now() - t0, error: err,
     });
-    // Early-stop: si ya tenemos una lectura COMPLETA que cubre el rango, basta.
-    if (covers(reads[reads.length - 1])) break;
+    logMem(memCtx, 'read_attempt', { attempt: i + 1, records: sc.total });
+
+    if (err) { lastErr = err; logs = null; continue; }
+    anyOk = true;
+    valids.push(sc.valid); inRanges.push(sc.inRange);
+    const cand = { logs, ...sc };
+    // Conservar sólo la mejor: el `logs` del perdedor pierde toda referencia.
+    best = best ? better(best, cand) : cand;
+    logs = null;   // suelta la referencia local (el ganador vive en best.logs)
+    if (covers(cand)) break;   // early-stop: lectura completa que cubre el rango
   }
 
-  const okReads = reads.filter(r => !r.err);
-  if (!okReads.length) {
-    // Ningún intento devolvió datos: relanzar el último error real.
-    throw new Error(reads[reads.length - 1]?.err || 'lectura del reloj falló');
-  }
-  const best = okReads.reduce((a, b) => {
-    if (a.truncated !== b.truncated) return a.truncated ? b : a;   // completa > truncada
-    if (b.inRange !== a.inRange) return b.inRange > a.inRange ? b : a;
-    if (b.maxTs !== a.maxTs) return b.maxTs > a.maxTs ? b : a;
-    if (b.valid !== a.valid) return b.valid > a.valid ? b : a;
-    return b.garbage < a.garbage ? b : a;
-  });
-  const valids = okReads.map(r => r.valid);
+  if (!anyOk) throw new Error(lastErr || 'lectura del reloj falló');
   const spread = valids.length > 1 ? Math.max(...valids) - Math.min(...valids) : 0;
   const unstable = valids.length > 1 && spread > Math.max(20, 0.2 * Math.max(...valids));
   return {
-    logs: best.logs, attempts: reads.length, detail,
-    truncated: best.truncated, valids, inRanges: okReads.map(r => r.inRange), unstable,
+    logs: best.logs, attempts: attemptsRun, detail,
+    truncated: best.truncated, valids, inRanges, unstable,
   };
 }
 
@@ -511,6 +553,7 @@ async function backupDeviceDirect(device, opts = {}) {
       const tRel = Date.now();
       await deviceLock.release(handle).catch(() => {});
       logPhase(ctx, 'release_device_lock', Date.now() - tRel);
+      logMem(ctx, 'release_device_lock');
     }
   }
 }
@@ -538,8 +581,8 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
 
   // Lectura estable (varios intentos con cooldown, mejor lectura por
   // completa/en-rango/fecha/válidos; detecta buffers truncados del GT200).
-  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to, cooldownMs });
-  const rawLogs = stable.logs;
+  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to, cooldownMs, ctx });
+  let rawLogs = stable.logs;
   report.total_read = rawLogs.length;
   report.read_unstable = stable.unstable;
   report.read_truncated = stable.truncated;
@@ -549,12 +592,13 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
   if (!rawLogs.length) { report.duration_ms = Date.now() - t0; return report; }
 
   // Descartar registros basura (relleno del buffer) ANTES de normalizar.
-  const logs = rawLogs.filter(l => !isJunkRaw(l));
+  let logs = rawLogs.filter(l => !isJunkRaw(l));
   report.junk = rawLogs.length - logs.length;
   report.valid = logs.length;
 
   // Normalizar los registros limpios (acepta recordTime/attTime/… y varios uid).
-  const norm = logs.map(normalizeRecord);
+  let norm = logs.map(normalizeRecord);
+  logMem(ctx, 'decode', { records: norm.length });
 
   // Contadores globales de diagnóstico (independientes del rango).
   let minValid = null, maxValid = null;
@@ -579,6 +623,10 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
         .map(n => ({ user: n.userId, ts_py: pyDateTimeStr(n.ts), inout: n.inout ?? null })),
     };
   }
+
+  // Liberar el buffer CRUDO completo: ya se filtró (logs) y normalizó (norm).
+  // Con ~80k registros esto evita mantener 3 copias grandes vivas a la vez.
+  rawLogs = null; stable.logs = null;
 
   // Mapeo deviceUserId → empleado, contra TODAS las columnas disponibles
   // (code, employee_number, …), no sólo `code`.
@@ -607,6 +655,11 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
     if (!minTs || n.ts < minTs) minTs = n.ts;
     if (!maxTs || n.ts > maxTs) maxTs = n.ts;
   }
+
+  // Liberar los arreglos completos: `punches` ya referencia SÓLO las marcas en
+  // rango (mapeadas o no); las copias completas norm/logs ya no se usan.
+  logs = null; norm = null;
+  logMem(ctx, 'in_range_ready', { records: punches.length });
 
   // Diagnóstico de no-mapeados: top 30 con conteo y pista si existe por otra columna/estado.
   report.unmapped_distinct = unmapped.size;
@@ -695,7 +748,7 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
     }
     report.staged = rawRows.length;
   }
-  if (hasRaw) logPhase(ctx, 'persist_raw', Date.now() - tRaw, { retries: report.retry_count || undefined, note: `rows=${report.staged}` });
+  if (hasRaw) { logPhase(ctx, 'persist_raw', Date.now() - tRaw, { retries: report.retry_count || undefined, note: `rows=${report.staged}` }); logMem(ctx, 'persist_raw', { records: report.staged }); }
 
   // 2) Insertar attendance_logs de las marcas mapeadas nuevas.
   const tAtt = Date.now();
@@ -775,6 +828,7 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
   }
 
   report.duration_ms = Date.now() - t0;
+  logMem(ctx, 'finish', { records: report.staged });
   return report;
 }
 
@@ -908,5 +962,5 @@ module.exports = {
   tableExists, getExistingColumns,
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
-  normalizeRecord, resolveTypes, explicitType, detectFields,
+  normalizeRecord, resolveTypes, explicitType, detectFields, memSnapshot,
 };
