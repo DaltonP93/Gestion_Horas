@@ -1,6 +1,12 @@
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 const audit = require('../services/audit');
+const { capsForRole } = require('../services/employeeCaps');
+const {
+  validate: validateField,
+  auditValueOf,
+  SENSITIVE_VALUE,
+} = require('../services/employeeFieldValidation');
 
 // Columnas de inactivación (migración 063). Se detectan una vez para degradar
 // con gracia si la migración aún no corrió.
@@ -101,7 +107,23 @@ async function getById(req, res) {
     `, { replacements: [req.params.id] });
 
     if (!rows.length) return res.status(404).json({ error: 'Empleado no encontrado' });
-    res.json(rows[0]);
+    const row = rows[0];
+
+    // Capacidades del usuario actual sobre esta ficha (PR 1 — edición).
+    // Permite al frontend ocultar controles sin re-implementar la política.
+    const caps = capsForRole(req.user?.role);
+    if (!caps.legal_view) {
+      // Enmascarar campos legales cuando no puede verlos.
+      row.document_number = null;
+      row.ips_number = null;
+      row.salary_base = null;
+      row.pay_type = null;
+      row.gender = null;
+      row.children_count = null;
+      row.antiguedad_rate = null;
+    }
+    row._caps = caps;
+    res.json(row);
   } catch (err) {
     res.status(500).json({ error: 'Error del servidor' });
   }
@@ -135,43 +157,101 @@ async function create(req, res) {
 }
 
 // PUT /api/employees/:id
+// Actualización estándar. Cada campo entrante se valida y normaliza; si un
+// valor viene `null` explícito, se limpia (a diferencia del comportamiento
+// anterior con COALESCE que nunca permitía borrar). Los campos ausentes se
+// dejan intactos. Se auditan solo los cambios reales, con el diff campo a
+// campo (nunca el valor de salario).
 async function update(req, res) {
-  const { first_name, last_name, email, phone, department_id,
-          schedule_id, position, hire_date, birth_date, status,
-          document_number, ips_number, salary_base, gender, pay_type,
-          children_count, antiguedad_rate } = req.body;
-  // Un campo omitido o vacío ('') no debe pisar el valor existente: se pasa
-  // NULL para que COALESCE conserve lo que hay en la BD.
-  const nn = (v) => (v === undefined || v === '' ? null : v);
-  try {
-    await sequelize.query(`
-      UPDATE employees SET
-        first_name = COALESCE(?, first_name),
-        last_name  = COALESCE(?, last_name),
-        email      = COALESCE(?, email),
-        phone      = COALESCE(?, phone),
-        department_id = COALESCE(?, department_id),
-        schedule_id   = COALESCE(?, schedule_id),
-        position   = COALESCE(?, position),
-        hire_date  = COALESCE(?, hire_date),
-        birth_date = COALESCE(?, birth_date),
-        status     = COALESCE(?, status),
-        document_number = COALESCE(?, document_number),
-        ips_number = COALESCE(?, ips_number),
-        salary_base = COALESCE(?, salary_base),
-        gender     = COALESCE(?, gender),
-        pay_type   = COALESCE(?, pay_type),
-        children_count  = COALESCE(?, children_count),
-        antiguedad_rate = COALESCE(?, antiguedad_rate)
-      WHERE id = ?
-    `, { replacements: [first_name, last_name, email, phone, department_id,
-        schedule_id, position, hire_date, birth_date, status,
-        nn(document_number), nn(ips_number), nn(salary_base), nn(gender), nn(pay_type),
-        nn(children_count), nn(antiguedad_rate),
-        req.params.id] });
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
 
-    res.json({ message: 'Empleado actualizado' });
+  // Campos permitidos por PUT (superset de /quick + relaciones).
+  const ALLOWED = new Set([
+    'first_name', 'last_name', 'email', 'phone', 'position',
+    'hire_date', 'birth_date', 'status',
+    'department_id', 'schedule_id',
+    'document_number', 'ips_number', 'salary_base',
+    'gender', 'pay_type', 'children_count', 'antiguedad_rate',
+  ]);
+  // Campos con validador dedicado (el resto solo pasa por allowlist).
+  const VALIDATED = new Set([
+    'first_name', 'last_name', 'email', 'phone', 'position',
+    'hire_date', 'birth_date', 'status',
+    'document_number', 'ips_number', 'salary_base',
+    'gender', 'pay_type', 'children_count', 'antiguedad_rate',
+    'schedule_id',
+  ]);
+
+  try {
+    const changes = {};
+    for (const [k, raw] of Object.entries(req.body || {})) {
+      if (!ALLOWED.has(k)) continue;
+      // `null` explícito y `''` significan "limpiar".
+      const val = raw;
+      if (VALIDATED.has(k)) {
+        const v = validateField(k, val);
+        if (!v.ok) return res.status(400).json({ error: v.error, field: k });
+        changes[k] = v.value;
+      } else {
+        // department_id: entero positivo o null
+        if (val === null || val === '' || val === undefined) changes[k] = null;
+        else {
+          const n = Number(val);
+          if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: `${k} inválido`, field: k });
+          changes[k] = n;
+        }
+      }
+    }
+
+    if (!Object.keys(changes).length) return res.json({ message: 'Sin cambios' });
+
+    // Leer valores previos solo de los campos que van a cambiar (para diff y auditoría).
+    const cols = Object.keys(changes);
+    const [[prev]] = await sequelize.query(
+      `SELECT ${cols.map(c => '`' + c + '`').join(', ')} FROM employees WHERE id = ?`,
+      { replacements: [id] }
+    );
+    if (!prev) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+    // Filtrar los que realmente cambian.
+    const diff = {};
+    for (const c of cols) {
+      const before = prev[c];
+      const after  = changes[c];
+      const same = (before === after) || (before == null && after == null)
+                || (before != null && after != null && String(before) === String(after));
+      if (!same) diff[c] = { from: before, to: after };
+    }
+    if (!Object.keys(diff).length) return res.json({ message: 'Sin cambios' });
+
+    // UPDATE por lista dinámica (columnas provienen de allowlist, no del cliente).
+    const setSql = Object.keys(diff).map(c => `\`${c}\` = ?`).join(', ');
+    const vals   = Object.keys(diff).map(c => diff[c].to);
+    await sequelize.query(
+      `UPDATE employees SET ${setSql} WHERE id = ?`,
+      { replacements: [...vals, id] }
+    );
+
+    // Auditoría campo a campo (sin exponer salario).
+    for (const [field, ba] of Object.entries(diff)) {
+      const kind = require('../services/employeeCaps').classifyField(field);
+      audit.log({
+        req, user: req.user,
+        action: `employee.update.${kind}`,
+        entity: 'employee', entity_id: id,
+        details: {
+          field,
+          from: auditValueOf(field, ba.from),
+          to:   auditValueOf(field, ba.to),
+          sensitive: SENSITIVE_VALUE.has(field) || undefined,
+        },
+      });
+    }
+
+    res.json({ message: 'Empleado actualizado', changed: Object.keys(diff) });
   } catch (err) {
+    logger.error('Error updating employee:', err);
     res.status(500).json({ error: 'Error al actualizar empleado' });
   }
 }
