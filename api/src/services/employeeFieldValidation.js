@@ -24,8 +24,18 @@ const REX_PHONE = /^[+()\d\s\-.]{4,30}$/;
 function isBlank(v) { return v === undefined || v === null || v === ''; }
 function trim(v) { return typeof v === 'string' ? v.trim() : v; }
 
+// Columnas NOT NULL en `employees` (init.sql + migraciones 043/044): no
+// pueden limpiarse. Se rechaza blank aquí para evitar 500 desde el driver.
+const NOT_NULLABLE = new Set([
+  'first_name', 'last_name',
+  'pay_type', 'children_count', 'antiguedad_rate',
+]);
+
 function validate(field, value) {
-  if (isBlank(value)) return { ok: true, value: null };
+  if (isBlank(value)) {
+    if (NOT_NULLABLE.has(field)) return err(`${labelOf(field)} es requerido`);
+    return { ok: true, value: null };
+  }
   const v = typeof value === 'string' ? value.trim() : value;
 
   switch (field) {
@@ -107,6 +117,13 @@ function validate(field, value) {
 
 function err(msg) { return { ok: false, error: msg }; }
 
+const LABELS = {
+  first_name: 'Nombre', last_name: 'Apellido',
+  pay_type: 'Tipo de pago', children_count: 'N° de hijos',
+  antiguedad_rate: 'Antigüedad',
+};
+function labelOf(field) { return LABELS[field] || field; }
+
 // Campo cuyo valor es sensible y NUNCA debe ir a logs con el valor claro.
 const SENSITIVE_VALUE = new Set(['salary_base']);
 function auditValueOf(field, value) {
@@ -114,4 +131,4 @@ function auditValueOf(field, value) {
   return value;
 }
 
-module.exports = { validate, auditValueOf, SENSITIVE_VALUE, trim };
+module.exports = { validate, auditValueOf, SENSITIVE_VALUE, trim, NOT_NULLABLE };

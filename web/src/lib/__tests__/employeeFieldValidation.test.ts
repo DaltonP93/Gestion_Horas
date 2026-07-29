@@ -51,6 +51,17 @@ describe('validateEmployeeField', () => {
   test('campo desconocido → error', () => {
     expect(validateEmployeeField('salario', 100).ok).toBe(false)
   })
+
+  test('campos NOT NULL rechazan blank', () => {
+    for (const f of ['first_name', 'last_name', 'pay_type', 'children_count', 'antiguedad_rate']) {
+      const r = validateEmployeeField(f, '')
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toMatch(/requerido/i)
+    }
+    for (const f of ['phone', 'email', 'position', 'document_number', 'ips_number', 'salary_base', 'gender']) {
+      expect(validateEmployeeField(f, '')).toEqual({ ok: true, value: null })
+    }
+  })
 })
 
 describe('isLegalField', () => {

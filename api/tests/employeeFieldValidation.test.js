@@ -57,6 +57,18 @@ describe('employeeFieldValidation.validate', () => {
   test('campo desconocido → error', () => {
     expect(validate('salario', 100).ok).toBe(false);
   });
+
+  test('campos NOT NULL rechazan blank en lugar de propagar null', () => {
+    for (const f of ['first_name', 'last_name', 'pay_type', 'children_count', 'antiguedad_rate']) {
+      const r = validate(f, '');
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/requerido/i);
+    }
+    // Los NULLables sí aceptan blank como "limpiar".
+    for (const f of ['phone', 'email', 'position', 'document_number', 'ips_number', 'salary_base', 'gender']) {
+      expect(validate(f, '')).toEqual({ ok: true, value: null });
+    }
+  });
 });
 
 describe('employeeFieldValidation.auditValueOf', () => {

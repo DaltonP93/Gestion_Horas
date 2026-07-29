@@ -86,6 +86,13 @@ async function getAll(req, res) {
       { replacements: params }
     );
 
+    // Enmascarar C.I. en el listado si el rol no puede ver datos legales
+    // (mismo criterio que `getById`, evita filtración por el endpoint de lista).
+    const caps = capsForRole(req.user?.role);
+    if (!caps.legal_view) {
+      for (const e of employees) e.document_number = null;
+    }
+
     res.json({ data: employees, total, page: +page, limit: +limit, pages: Math.ceil(total / limit) });
   } catch (err) {
     logger.error('Error getAll employees:', err);

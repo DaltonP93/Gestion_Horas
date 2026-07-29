@@ -242,10 +242,14 @@ const QUICK_EDIT_COLS = {
   employee_number: 'employee_number', email: 'email',
   phone: 'phone', position: 'position',
   birth_date: 'birth_date', hire_date: 'hire_date',
+  schedule_id: 'schedule_id',
   // Datos para planillas legales (MTESS / IPS)
   document_number: 'document_number', ips_number: 'ips_number',
   salary_base: 'salary_base', gender: 'gender', pay_type: 'pay_type',
   children_count: 'children_count', antiguedad_rate: 'antiguedad_rate',
+  // `status` NO se edita por /quick a propósito: los cambios de estado van
+  // por /deactivate y /reactivate (motivo + auditoría + deshabilitación
+  // pendiente en el reloj). Ver `guardStatusChange`.
 };
 router.patch('/:id/quick', authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);

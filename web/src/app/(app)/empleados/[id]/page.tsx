@@ -405,19 +405,9 @@ export default function EmpleadoDetallePage() {
             onSave={async (name, val) => onSaveField(name, val)}
             onFeedback={setFeedback}
           />
-          <EditField
-            label="Estado"
-            value={emp.status}
-            name="status"
-            readOnly={!canChangeStatus}
-            options={[
-              { value: 'active',    label: 'Activo' },
-              { value: 'inactive',  label: 'Inactivo' },
-              { value: 'suspended', label: 'Suspendido' },
-            ]}
-            onSave={onSaveField}
-            onFeedback={setFeedback}
-          />
+          {/* El estado NO se cambia inline: para dar de baja se usa el botón
+              del header (motivo + auditoría + deshabilitación pendiente en el
+              reloj). Cambiarlo con un select saltearía ese flujo. */}
 
           {/* Datos legales MTESS / IPS */}
           {canViewLegal ? (

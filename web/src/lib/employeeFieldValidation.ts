@@ -21,9 +21,27 @@ const REX_DATE  = /^\d{4}-\d{2}-\d{2}$/
 const REX_MAIL  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const REX_PHONE = /^[+()\d\s\-.]{4,30}$/
 
+// Columnas NOT NULL en `employees` (init.sql + migraciones 043/044). Espeja
+// la allowlist del backend para evitar que la UI acepte un blank que luego
+// el driver rechazaría con 500.
+const NOT_NULLABLE = new Set([
+  'first_name', 'last_name',
+  'pay_type', 'children_count', 'antiguedad_rate',
+])
+
+const LABELS: Record<string, string> = {
+  first_name: 'Nombre', last_name: 'Apellido',
+  pay_type: 'Tipo de pago', children_count: 'N° de hijos',
+  antiguedad_rate: 'Antigüedad',
+}
+function labelOf(field: string): string { return LABELS[field] || field }
+
 export function validateEmployeeField(field: string, raw: unknown): ValidationResult {
-  // Cadena vacía y null → limpiar el campo.
-  if (raw === undefined || raw === null || raw === '') return { ok: true, value: null }
+  // Cadena vacía y null → limpiar el campo (salvo NOT NULL).
+  if (raw === undefined || raw === null || raw === '') {
+    if (NOT_NULLABLE.has(field)) return err(`${labelOf(field)} es requerido`)
+    return { ok: true, value: null }
+  }
   const v = typeof raw === 'string' ? raw.trim() : raw
 
   switch (field) {

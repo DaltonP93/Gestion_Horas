@@ -65,3 +65,17 @@ describe('employeeCaps.classifyField', () => {
     }
   });
 });
+
+describe('quick-edit allowlist en el router', () => {
+  test('schedule_id está permitido; status NO (usa /deactivate|/reactivate)', () => {
+    // Se comprueba leyendo el archivo — es una regresión concreta señalada
+    // en el review, y sale más barato que montar Express en un test unitario.
+    const fs = require('fs');
+    const src = fs.readFileSync(require.resolve('../src/routes/employees'), 'utf8');
+    const start = src.indexOf('const QUICK_EDIT_COLS');
+    const end   = src.indexOf('};', start);
+    const block = src.slice(start, end + 2);
+    expect(block).toMatch(/schedule_id:\s*'schedule_id'/);
+    expect(block).not.toMatch(/status:\s*'status'/);
+  });
+});
