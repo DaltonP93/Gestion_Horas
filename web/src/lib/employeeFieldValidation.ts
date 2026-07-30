@@ -32,7 +32,8 @@ const NOT_NULLABLE = new Set([
 const LABELS: Record<string, string> = {
   first_name: 'Nombre', last_name: 'Apellido',
   pay_type: 'Tipo de pago', children_count: 'N° de hijos',
-  antiguedad_rate: 'Antigüedad',
+  antiguedad_rate: 'Antigüedad (años)',
+  salary_base:     'Salario base',
 }
 function labelOf(field: string): string { return LABELS[field] || field }
 
@@ -92,8 +93,11 @@ export function validateEmployeeField(field: string, raw: unknown): ValidationRe
       return { ok: true, value: n }
     }
     case 'antiguedad_rate': {
+      // PR-A: interpretado ahora como AÑOS de antigüedad (entero ≥ 0).
       const n = Number(v)
-      if (!Number.isFinite(n) || n < 0 || n > 100) return err('antigüedad: 0..100')
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 80) {
+        return err('antigüedad (años): entero 0..80')
+      }
       return { ok: true, value: n }
     }
     case 'gender':

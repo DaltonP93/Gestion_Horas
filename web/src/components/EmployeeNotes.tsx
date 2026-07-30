@@ -6,6 +6,7 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
+import { canManageNotes } from '@/lib/employeeNotesRoles'
 
 const TYPES: { value: string; label: string; icon: any; color: string }[] = [
   { value: 'observation',  label: 'Observación',          icon: MessageSquare, color: 'bg-slate-100 text-slate-700' },
@@ -25,7 +26,7 @@ const VISIBILITY_LABELS: Record<string, { label: string; icon: any }> = {
 export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
   const qc = useQueryClient()
   const user = useCurrentUser()
-  const isManager = user && ['admin', 'gth', 'hr', 'manager'].includes(user.role)
+  const isManager = canManageNotes(user?.role)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({
     type: 'observation', visibility: 'hr_only',
@@ -126,9 +127,17 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
 
       {isLoading && <div className="text-center py-8 text-slate-400 text-sm dark:text-white/30">Cargando...</div>}
       {!isLoading && notes.length === 0 && (
-        <div className="text-center py-12 text-slate-400 dark:text-white/30">
+        <div className="text-center py-10 text-slate-400 dark:text-white/30">
           <MessageSquare size={28} className="mx-auto mb-2 opacity-30" />
           <p className="text-sm">Sin notas registradas</p>
+          {isManager && !showForm && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+            >
+              <Plus size={13} /> Agregar la primera nota
+            </button>
+          )}
         </div>
       )}
 
