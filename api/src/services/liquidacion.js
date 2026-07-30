@@ -12,7 +12,10 @@
  *  - Hora extra nocturna: valor hora × 2 (100%).
  *  - Franja nocturna: 20:00–06:00.
  *  - Bonificación familiar: 5% del salario mínimo por hijo.
- *  - Antigüedad: % (según CCT) sobre el básico.
+ *  - Antigüedad: `antiguedadPctPorAno` × años de antigüedad, sobre el básico.
+ *    Los años se leen del campo `antiguedad_rate` del empleado (columna
+ *    legada por compatibilidad; la ficha lo edita como "Antigüedad (años)").
+ *    Por defecto 1%/año — cada instalación ajusta según su CCT.
  *  - Aporte obrero IPS: 9% sobre el imponible (básico + extras + antigüedad).
  *    La bonificación familiar NO es imponible.
  */
@@ -28,6 +31,7 @@ const DEFAULT_RATES = {
   plusNocturnoFeriados: true, // aplicar recargo nocturno también en feriados
   plusNocturnoFinde: true,    // aplicar recargo nocturno también en fin de semana
   bonifFamiliarPct: 5,      // % del salario mínimo por hijo
+  antiguedadPctPorAno: 1,   // % del básico por año de antigüedad (CCT-dependiente)
   salarioMinimo: 0,         // referencia (settings salario_minimo)
   obreroPct: 9,             // % aporte obrero IPS
   baseMensual: 30,          // base de días para prorrateo
@@ -127,7 +131,10 @@ function computeLiquidacion(emp, dias, rates = {}) {
   const recargoNocturno = round(valorHora * (nocturnoOrdMin / 60) * (r.recargoNocturnoPct / 100));
 
   const bonifFamiliar = round((Number(emp.children_count) || 0) * (Number(r.salarioMinimo) || 0) * (r.bonifFamiliarPct / 100));
-  const antiguedad = round(basico * (Number(emp.antiguedad_rate) || 0) / 100);
+  // `antiguedad_rate` almacena AÑOS (renombrado en PR-A). Se multiplica por
+  // el % por año (parametrizable) para obtener el aporte sobre el básico.
+  const antiguedadAnios = Number(emp.antiguedad_rate) || 0;
+  const antiguedad = round(basico * antiguedadAnios * (Number(r.antiguedadPctPorAno) || 0) / 100);
 
   const imponible = basico + montoExtraDiurna + montoExtraNocturna + recargoNocturno + antiguedad;
   const aporteObrero = round(imponible * (r.obreroPct / 100));

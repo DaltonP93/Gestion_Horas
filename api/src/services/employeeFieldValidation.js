@@ -90,8 +90,13 @@ function validate(field, value) {
     }
 
     case 'antiguedad_rate': {
+      // PR-A: la columna se conserva por compatibilidad de DB pero el valor
+      // se interpreta ahora como AÑOS de antigüedad (entero, no-negativo).
+      // La política del CCT se aplica en liquidacion.js × antiguedadPctPorAno.
       const n = Number(v);
-      if (!Number.isFinite(n) || n < 0 || n > 100) return err('antigüedad: 0..100');
+      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 80) {
+        return err('antigüedad (años): entero 0..80');
+      }
       return { ok: true, value: n };
     }
 
@@ -120,7 +125,8 @@ function err(msg) { return { ok: false, error: msg }; }
 const LABELS = {
   first_name: 'Nombre', last_name: 'Apellido',
   pay_type: 'Tipo de pago', children_count: 'N° de hijos',
-  antiguedad_rate: 'Antigüedad',
+  antiguedad_rate: 'Antigüedad (años)',
+  salary_base:     'Salario base',
 };
 function labelOf(field) { return LABELS[field] || field; }
 

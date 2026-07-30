@@ -26,11 +26,13 @@ describe('employeeFieldValidation.validate', () => {
     expect(validate('children_count', 2.5).ok).toBe(false);
   });
 
-  test('antigüedad: 0..100', () => {
-    expect(validate('antiguedad_rate', 0).ok).toBe(true);
-    expect(validate('antiguedad_rate', 15.5).ok).toBe(true);
+  test('antigüedad (años): entero 0..80, no negativo', () => {
+    expect(validate('antiguedad_rate', 0)).toEqual({ ok: true, value: 0 });
+    expect(validate('antiguedad_rate', 15)).toEqual({ ok: true, value: 15 });
+    expect(validate('antiguedad_rate', 80)).toEqual({ ok: true, value: 80 });
     expect(validate('antiguedad_rate', -1).ok).toBe(false);
-    expect(validate('antiguedad_rate', 101).ok).toBe(false);
+    expect(validate('antiguedad_rate', 15.5).ok).toBe(false);   // ya no aceptamos fraccional
+    expect(validate('antiguedad_rate', 81).ok).toBe(false);
   });
 
   test('C.I. y N° IPS: formato numérico con separadores', () => {
