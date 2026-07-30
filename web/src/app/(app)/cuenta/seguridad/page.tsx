@@ -1,10 +1,17 @@
 'use client'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, Suspense } from 'react'
 import {
   ShieldCheck, Lock, Smartphone, Copy, CheckCircle, AlertCircle, KeyRound, X,
   Monitor, LogOut, Clock,
 } from 'lucide-react'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { api } from '@/lib/api'
+import {
+  parseSecuritySection,
+  securitySectionHref,
+  DEFAULT_SECURITY_SECTION,
+  type SecuritySection,
+} from '@/lib/accountSection'
 
 // ── Focus trap para modales (foco cicla, restaura al cerrar, Esc cierra) ──
 function useFocusTrap(active: boolean, onEscape: () => void) {
@@ -43,10 +50,55 @@ interface SecurityData {
   sessions_count: number
 }
 
+const TAB_META: Record<SecuritySection, { label: string; icon: typeof Lock }> = {
+  password: { label: 'Contraseña',                    icon: Lock },
+  sessions: { label: 'Sesiones activas',              icon: Monitor },
+  '2fa':    { label: 'Verificación en dos pasos',     icon: Smartphone },
+}
+const TAB_ORDER: SecuritySection[] = ['password', 'sessions', '2fa']
+
+// El uso de `useSearchParams` obliga a envolver el árbol en <Suspense>
+// para que Next 14 no falle el pre-render estático de la ruta.
 export default function SeguridadCuentaPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-slate-400 dark:text-white/40">Cargando…</div>}>
+      <SeguridadCuentaInner />
+    </Suspense>
+  )
+}
+
+function SeguridadCuentaInner() {
   const [data, setData] = useState<SecurityData | null>(null)
   const [error, setError] = useState('')
   const [msg, setMsg]     = useState('')
+
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  // Sección activa: query param canónico. Si llega el hash legado
+  // (#password / #password#password) se normaliza y se reemplaza la URL
+  // para que las URLs compartidas queden limpias.
+  const [section, setSection] = useState<SecuritySection>(DEFAULT_SECURITY_SECTION)
+  useEffect(() => {
+    const qsSection = searchParams?.get('section') || ''
+    const fromUrl = qsSection
+      ? parseSecuritySection('?section=' + qsSection)
+      : (typeof window !== 'undefined' ? parseSecuritySection(window.location.href) : DEFAULT_SECURITY_SECTION)
+    setSection(fromUrl)
+
+    // Si vino por hash o venía sin query, normalizamos a query param.
+    if (typeof window !== 'undefined' && !qsSection) {
+      const target = securitySectionHref(fromUrl)
+      const currentHref = window.location.pathname + window.location.search + window.location.hash
+      if (currentHref !== target) router.replace(target)
+    }
+  }, [searchParams, router])
+
+  function goSection(s: SecuritySection) {
+    setSection(s)
+    router.replace(`${pathname}?section=${s}`)
+  }
 
   async function load() {
     try {
@@ -57,12 +109,14 @@ export default function SeguridadCuentaPage() {
       setData(data)
     } catch (e: any) { setError(e.response?.data?.error || e.message) }
   }
+  useEffect(() => { load() }, [])
+
+  // Foco automático al abrir "Contraseña".
   useEffect(() => {
-    load()
-    if (typeof window !== 'undefined' && window.location.hash === '#password') {
-      setTimeout(() => document.getElementById('current-password')?.focus(), 300)
-    }
-  }, [])
+    if (section !== 'password') return
+    const t = setTimeout(() => document.getElementById('current-password')?.focus(), 250)
+    return () => clearTimeout(t)
+  }, [section])
 
   return (
     <div className="p-6 space-y-6 max-w-4xl">
@@ -72,16 +126,61 @@ export default function SeguridadCuentaPage() {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Seguridad de mi cuenta</h1>
-          <p className="text-slate-500 text-sm dark:text-white/40">Contraseña, sesiones activas y verificación en dos pasos.</p>
+          <p className="text-slate-500 text-sm dark:text-white/60">Contraseña, sesiones activas y verificación en dos pasos.</p>
         </div>
       </header>
 
-      {error && <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3"><AlertCircle className="text-red-600 shrink-0 mt-0.5" size={20} /><div className="text-sm text-red-900">{error}</div></div>}
-      {msg && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-2 text-sm text-emerald-900"><CheckCircle size={16} /> {msg}</div>}
+      {/* Tabs de navegación interna */}
+      <nav
+        role="tablist"
+        aria-label="Secciones de seguridad"
+        className="flex flex-wrap gap-1 border-b border-slate-200 dark:border-white/10"
+      >
+        {TAB_ORDER.map(s => {
+          const meta = TAB_META[s]
+          const active = section === s
+          const Icon = meta.icon
+          return (
+            <button
+              key={s}
+              role="tab"
+              aria-selected={active}
+              aria-controls={`section-${s}`}
+              id={`tab-${s}`}
+              onClick={() => goSection(s)}
+              className={
+                'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition ' +
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-t ' +
+                (active
+                  ? 'border-blue-600 text-blue-700 dark:text-blue-300 dark:border-blue-400'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300 dark:text-white/60 dark:hover:text-white dark:hover:border-white/20')
+              }
+            >
+              <Icon size={15} aria-hidden="true" />
+              {meta.label}
+            </button>
+          )
+        })}
+      </nav>
 
-      <ChangePasswordCard onDone={(m) => { setMsg(m); setError(''); load() }} setError={setError} />
-      <SessionsCard data={data} reload={load} setMsg={setMsg} setError={setError} />
-      <TwoFaCard status={data?.twofa || null} reload={load} setError={setError} setMsg={setMsg} />
+      {error && <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 dark:bg-red-500/10 dark:border-red-500/30"><AlertCircle className="text-red-600 dark:text-red-300 shrink-0 mt-0.5" size={20} /><div className="text-sm text-red-900 dark:text-red-200">{error}</div></div>}
+      {msg && <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-2 text-sm text-emerald-900 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-200"><CheckCircle size={16} /> {msg}</div>}
+
+      <div role="tabpanel" id="section-password" aria-labelledby="tab-password" hidden={section !== 'password'}>
+        {section === 'password' && (
+          <ChangePasswordCard onDone={(m) => { setMsg(m); setError(''); load() }} setError={setError} />
+        )}
+      </div>
+      <div role="tabpanel" id="section-sessions" aria-labelledby="tab-sessions" hidden={section !== 'sessions'}>
+        {section === 'sessions' && (
+          <SessionsCard data={data} reload={load} setMsg={setMsg} setError={setError} />
+        )}
+      </div>
+      <div role="tabpanel" id="section-2fa" aria-labelledby="tab-2fa" hidden={section !== '2fa'}>
+        {section === '2fa' && (
+          <TwoFaCard status={data?.twofa || null} reload={load} setError={setError} setMsg={setMsg} />
+        )}
+      </div>
     </div>
   )
 }

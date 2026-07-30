@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Bell, Check, X } from 'lucide-react'
 import { api, apiUrl } from '@/lib/api'
 import { io, Socket } from 'socket.io-client'
+import { PopoverSurface, popoverHeaderClass, popoverUnreadBgClass } from '@/components/ui/Popover'
 
 interface Notif {
   id: number; type: string; title: string; body: string | null
@@ -84,37 +85,53 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-96 max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-xl border border-slate-100 z-50 dark:bg-white/[0.04] dark:border-white/[0.06]">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 dark:border-white/[0.06]">
+        <PopoverSurface
+          role="dialog"
+          aria-label="Panel de notificaciones"
+          className="right-0 mt-2 w-96 max-w-[calc(100vw-2rem)]"
+        >
+          <div className={popoverHeaderClass()}>
             <h3 className="font-semibold text-slate-900 text-sm dark:text-white">Notificaciones</h3>
             <div className="flex items-center gap-2">
               {unread > 0 && (
-                <button onClick={markAll} className="text-xs text-indigo-600 hover:text-indigo-700 flex items-center gap-1">
+                <button
+                  onClick={markAll}
+                  className="text-xs text-indigo-600 hover:text-indigo-700 dark:text-indigo-300 dark:hover:text-indigo-200 flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
+                >
                   <Check size={12} /> Marcar todas
                 </button>
               )}
-              <button onClick={() => setOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 dark:text-white/30">
+              <button
+                onClick={() => setOpen(false)}
+                aria-label="Cerrar panel de notificaciones"
+                className="p-1 text-slate-500 hover:text-slate-700 dark:text-white/60 dark:hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
+              >
                 <X size={14} />
               </button>
             </div>
           </div>
           <div className="max-h-96 overflow-auto">
             {items.length === 0 ? (
-              <div className="py-10 text-center text-slate-400 text-sm dark:text-white/30">Sin notificaciones</div>
+              <div className="py-10 text-center text-slate-500 text-sm dark:text-white/60">Sin notificaciones</div>
             ) : items.map(n => (
               <a key={n.id} href={n.link || '#'}
                 onClick={() => !n.read_at && markRead(n.id)}
-                className={`block px-4 py-3 border-b border-slate-50 hover:bg-slate-50 ${n.read_at ? '' : 'bg-indigo-50/40'}`}>
+                className={
+                  'block px-4 py-3 border-b border-slate-100 dark:border-white/[0.06] ' +
+                  'hover:bg-slate-50 dark:hover:bg-white/[0.06] ' +
+                  'focus:outline-none focus-visible:bg-slate-100 dark:focus-visible:bg-white/[0.08] ' +
+                  (n.read_at ? '' : popoverUnreadBgClass())
+                }>
                 <div className="flex items-start justify-between gap-2">
                   <div className="text-sm font-medium text-slate-900 dark:text-white">{n.title}</div>
-                  {!n.read_at && <span className="w-2 h-2 rounded-full bg-indigo-500 mt-1.5 shrink-0" />}
+                  {!n.read_at && <span className="w-2 h-2 rounded-full bg-indigo-500 dark:bg-indigo-300 mt-1.5 shrink-0" />}
                 </div>
-                {n.body && <div className="text-xs text-slate-500 mt-0.5 dark:text-white/40">{n.body}</div>}
-                <div className="text-[10px] text-slate-400 mt-1 dark:text-white/30">{new Date(n.created_at).toLocaleString()}</div>
+                {n.body && <div className="text-xs text-slate-600 mt-0.5 dark:text-white/70">{n.body}</div>}
+                <div className="text-[10px] text-slate-500 mt-1 dark:text-white/50">{new Date(n.created_at).toLocaleString()}</div>
               </a>
             ))}
           </div>
-        </div>
+        </PopoverSurface>
       )}
     </div>
   )
