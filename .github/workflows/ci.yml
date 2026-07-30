@@ -39,8 +39,14 @@ jobs:
       - run: npm ci || npm install
       - name: Syntax check
         run: node --check src/index.js
-      - name: Unit tests
+      - name: Unit tests (TZ=UTC)
         run: npm test
+        env:
+          TZ: UTC
+      - name: Unit tests (TZ=America/Asuncion)
+        run: npm test
+        env:
+          TZ: America/Asuncion
 
   web-build:
     name: Web — build Next.js

@@ -13,6 +13,7 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const wf = require('../services/permissionWorkflow');
 const audit = require('../services/audit');
+const { todayInCompanyTZ } = require('../utils/civilDate');
 
 const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
 
@@ -502,7 +503,7 @@ router.post('/notifications/read-all', async (req, res) => {
 router.get('/vacation-balance', asyncHandler(async (req, res) => {
   const employeeId = await getEmployeeId(req);
   if (!employeeId) return res.status(400).json({ error: 'Tu usuario no está vinculado a un empleado' });
-  const year = parseInt(req.query.year || new Date().getFullYear(), 10);
+  const year = parseInt(req.query.year || todayInCompanyTZ().slice(0, 4), 10);
   const { computeBalance } = require('../services/vacationBalance');
   const balance = await computeBalance({ sequelize, employeeId, year });
   if (!balance) return res.status(404).json({ error: 'Empleado no encontrado' });
@@ -550,7 +551,7 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
   if (employeeId) {
     try {
       const { computeBalance } = require('../services/vacationBalance');
-      vacation = await computeBalance({ sequelize, employeeId, year: new Date().getFullYear() });
+      vacation = await computeBalance({ sequelize, employeeId, year: parseInt(todayInCompanyTZ().slice(0, 4), 10) });
     } catch { vacation = null; }
   }
 

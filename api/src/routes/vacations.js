@@ -13,6 +13,7 @@ const router = require('express').Router();
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const vbal = require('../services/vacationBalance');
+const { todayInCompanyTZ } = require('../utils/civilDate');
 
 router.use(authenticate);
 router.use(authorize('admin', 'gth', 'hr', 'manager', 'coordinator', 'gestor', 'supervisor'));
@@ -34,8 +35,9 @@ function monthBounds(year, month) {
 
 router.get('/plan', requirePermission('reportes', 'view'), async (req, res) => {
   try {
-    const year   = parseInt(req.query.year  || new Date().getFullYear(), 10);
-    const month  = parseInt(req.query.month || (new Date().getMonth() + 1), 10);
+    const today  = todayInCompanyTZ();
+    const year   = parseInt(req.query.year  || today.slice(0, 4), 10);
+    const month  = parseInt(req.query.month || today.slice(5, 7), 10);
     const deptId = req.query.deptId ? parseInt(req.query.deptId, 10) : null;
     const { from, to } = monthBounds(year, month);
 
@@ -196,10 +198,12 @@ router.put('/policy', canManage, requirePermission('configuracion', 'update'), a
 // ── Saldos por empleado y año ──────────────────────────────────
 router.get('/balances', async (req, res) => {
   try {
-    const year = parseInt(req.query.year || new Date().getFullYear(), 10);
+    const today = todayInCompanyTZ();
+    const currentYear = parseInt(today.slice(0, 4), 10);
+    const year = parseInt(req.query.year || currentYear, 10);
     const deptId = req.query.deptId ? parseInt(req.query.deptId, 10) : null;
     const yearStart = `${year}-01-01`, yearEnd = `${year}-12-31`;
-    const cutoff = year >= new Date().getFullYear() ? new Date() : new Date(year, 11, 31);
+    const cutoff = year >= currentYear ? today : `${year}-12-31`;
     const dayType = await getDayType();
 
     const [brackets] = await sequelize.query(
