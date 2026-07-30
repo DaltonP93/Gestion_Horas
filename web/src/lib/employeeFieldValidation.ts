@@ -1,44 +1,53 @@
 /**
  * employeeFieldValidation.ts — validaciones cliente para la ficha del
- * empleado. Espeja las reglas del backend (api/src/services/employeeFieldValidation.js)
- * para dar feedback inmediato sin depender del round-trip. El backend
- * sigue siendo la fuente de verdad.
+ * empleado. Espeja las reglas del backend
+ * (api/src/services/employeeFieldValidation.js) para dar feedback
+ * inmediato sin depender del round-trip. El backend sigue siendo la
+ * fuente de verdad y además valida `pay_type` contra el catálogo.
+ *
+ * PR-B:
+ *   - `antiguedad_rate` deja de ser editable: se muestra derivada de
+ *     `hire_date`. Cualquier intento aquí devuelve error.
+ *   - `salary_base` exige entero no-negativo (sin decimales ni separadores).
+ *   - `pay_type` valida el slug; el backend verifica activo en el catálogo.
  */
 
-// Ambas variantes llevan las dos claves opcionales; permite discriminar el
-// `ok` incluso cuando el proyecto compila sin `strict: true`.
 export type ValidationResult =
   | { ok: true;  value: string | number | null; error?: undefined }
   | { ok: false; error: string; value?: undefined }
 
-const GENDERS  = new Set(['', 'M', 'F', 'O'])
-const PAYTYPES = new Set(['mensualizado', 'jornalero'])
-const STATUSES = new Set(['active', 'inactive', 'suspended'])
+const GENDERS   = new Set(['', 'M', 'F', 'O'])
+const STATUSES  = new Set(['active', 'inactive', 'suspended'])
 
-const REX_DOC   = /^[0-9.\-\s]{4,20}$/
-const REX_IPS   = /^[0-9\-\s]{3,20}$/
-const REX_DATE  = /^\d{4}-\d{2}-\d{2}$/
-const REX_MAIL  = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const REX_PHONE = /^[+()\d\s\-.]{4,30}$/
+const REX_DOC       = /^[0-9.\-\s]{4,20}$/
+const REX_IPS       = /^[0-9\-\s]{3,20}$/
+const REX_DATE      = /^\d{4}-\d{2}-\d{2}$/
+const REX_MAIL      = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const REX_PHONE     = /^[+()\d\s\-.]{4,30}$/
+const REX_PAY_CODE  = /^[a-z][a-z0-9_]{0,39}$/
+const REX_INT_ONLY  = /^-?\d+$/
 
-// Columnas NOT NULL en `employees` (init.sql + migraciones 043/044). Espeja
-// la allowlist del backend para evitar que la UI acepte un blank que luego
-// el driver rechazaría con 500.
 const NOT_NULLABLE = new Set([
   'first_name', 'last_name',
-  'pay_type', 'children_count', 'antiguedad_rate',
+  'pay_type', 'children_count',
+])
+
+const READ_ONLY_FIELDS = new Set([
+  'antiguedad_rate',
 ])
 
 const LABELS: Record<string, string> = {
   first_name: 'Nombre', last_name: 'Apellido',
   pay_type: 'Tipo de pago', children_count: 'N° de hijos',
-  antiguedad_rate: 'Antigüedad (años)',
+  antiguedad_rate: 'Antigüedad',
   salary_base:     'Salario base',
 }
 function labelOf(field: string): string { return LABELS[field] || field }
 
 export function validateEmployeeField(field: string, raw: unknown): ValidationResult {
-  // Cadena vacía y null → limpiar el campo (salvo NOT NULL).
+  if (READ_ONLY_FIELDS.has(field)) {
+    return err(`${labelOf(field)} se calcula automáticamente desde la fecha de ingreso`)
+  }
   if (raw === undefined || raw === null || raw === '') {
     if (NOT_NULLABLE.has(field)) return err(`${labelOf(field)} es requerido`)
     return { ok: true, value: null }
@@ -81,8 +90,13 @@ export function validateEmployeeField(field: string, raw: unknown): ValidationRe
       if (!REX_IPS.test(String(v))) return err('N° IPS inválido')
       return { ok: true, value: String(v).replace(/\s+/g, '') }
     case 'salary_base': {
-      const n = Number(v)
-      if (!Number.isFinite(n) || n < 0) return err('salario debe ser ≥ 0')
+      let raw2 = v as string | number
+      if (typeof raw2 === 'string') {
+        if (!REX_INT_ONLY.test(raw2)) return err('salario: entero sin separadores (≥ 0)')
+      }
+      const n = Number(raw2)
+      if (!Number.isFinite(n) || !Number.isInteger(n)) return err('salario: entero sin separadores (≥ 0)')
+      if (n < 0) return err('salario debe ser ≥ 0')
       if (n > 1e12) return err('salario fuera de rango')
       return { ok: true, value: n }
     }
@@ -92,19 +106,11 @@ export function validateEmployeeField(field: string, raw: unknown): ValidationRe
         return err('hijos: entero 0..30')
       return { ok: true, value: n }
     }
-    case 'antiguedad_rate': {
-      // PR-A: interpretado ahora como AÑOS de antigüedad (entero ≥ 0).
-      const n = Number(v)
-      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 80) {
-        return err('antigüedad (años): entero 0..80')
-      }
-      return { ok: true, value: n }
-    }
     case 'gender':
       if (!GENDERS.has(String(v))) return err('género inválido')
       return { ok: true, value: String(v) || null }
     case 'pay_type':
-      if (!PAYTYPES.has(String(v))) return err('tipo de pago inválido')
+      if (!REX_PAY_CODE.test(String(v))) return err('tipo de pago inválido')
       return { ok: true, value: String(v) }
     case 'schedule_id': {
       const n = Number(v)
@@ -118,7 +124,7 @@ export function validateEmployeeField(field: string, raw: unknown): ValidationRe
 
 const LEGAL_FIELDS = new Set([
   'document_number', 'ips_number', 'salary_base',
-  'gender', 'pay_type', 'children_count', 'antiguedad_rate',
+  'gender', 'pay_type', 'children_count',
 ])
 export function isLegalField(field: string): boolean {
   return LEGAL_FIELDS.has(field)

@@ -7,11 +7,22 @@ describe('validateEmployeeField', () => {
     }
   })
 
-  test('salario base rechaza negativos, acepta cero y positivos', () => {
+  test('salario base: entero no-negativo, sin decimales ni separadores', () => {
     expect(validateEmployeeField('salary_base', -1).ok).toBe(false)
     expect(validateEmployeeField('salary_base', 0)).toEqual({ ok: true, value: 0 })
     expect(validateEmployeeField('salary_base', '1500000')).toEqual({ ok: true, value: 1500000 })
+    expect(validateEmployeeField('salary_base', '2899048')).toEqual({ ok: true, value: 2899048 })
+    expect(validateEmployeeField('salary_base', 2500.5).ok).toBe(false)
+    expect(validateEmployeeField('salary_base', '2500.50').ok).toBe(false)
+    expect(validateEmployeeField('salary_base', '2.500,50').ok).toBe(false)
+    expect(validateEmployeeField('salary_base', '1.000').ok).toBe(false)
+    expect(validateEmployeeField('salary_base', '1,000').ok).toBe(false)
     expect(validateEmployeeField('salary_base', 'abc').ok).toBe(false)
+  })
+
+  test('salario base: null / vacío limpia el campo (backend valida permiso)', () => {
+    expect(validateEmployeeField('salary_base', null as any)).toEqual({ ok: true, value: null })
+    expect(validateEmployeeField('salary_base', '')).toEqual({ ok: true, value: null })
   })
 
   test('hijos: entero 0..30', () => {
@@ -21,12 +32,12 @@ describe('validateEmployeeField', () => {
     expect(validateEmployeeField('children_count', 31).ok).toBe(false)
   })
 
-  test('antigüedad (años): entero 0..80, no negativo', () => {
-    expect(validateEmployeeField('antiguedad_rate', 0).ok).toBe(true)
-    expect(validateEmployeeField('antiguedad_rate', 80).ok).toBe(true)
-    expect(validateEmployeeField('antiguedad_rate', -1).ok).toBe(false)
-    expect(validateEmployeeField('antiguedad_rate', 15.5).ok).toBe(false)  // ya no aceptamos fraccional
-    expect(validateEmployeeField('antiguedad_rate', 81).ok).toBe(false)
+  test('antigüedad: no editable — se deriva de hire_date', () => {
+    for (const raw of [0, 5, 80, '10', -1, 15.5, null, '']) {
+      const r = validateEmployeeField('antiguedad_rate', raw as any)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.error).toMatch(/fecha de ingreso|calcula/i)
+    }
   })
 
   test('C.I. e IPS: rechazan basura, aceptan dígitos y separadores', () => {
@@ -35,11 +46,18 @@ describe('validateEmployeeField', () => {
     expect(validateEmployeeField('ips_number', '99-88').ok).toBe(true)
   })
 
-  test('género y pay_type: valores limitados', () => {
+  test('género: valores limitados', () => {
     expect(validateEmployeeField('gender', 'M').ok).toBe(true)
     expect(validateEmployeeField('gender', 'X').ok).toBe(false)
+  })
+
+  test('pay_type: sólo formato del slug (existencia va al backend)', () => {
     expect(validateEmployeeField('pay_type', 'mensualizado').ok).toBe(true)
-    expect(validateEmployeeField('pay_type', 'otro').ok).toBe(false)
+    expect(validateEmployeeField('pay_type', 'jornalero').ok).toBe(true)
+    expect(validateEmployeeField('pay_type', 'contrato_civil').ok).toBe(true)
+    expect(validateEmployeeField('pay_type', 'Mensualizado').ok).toBe(false)
+    expect(validateEmployeeField('pay_type', 'con espacios').ok).toBe(false)
+    expect(validateEmployeeField('pay_type', '123nada').ok).toBe(false)
   })
 
   test('email y fecha: formato estricto', () => {
@@ -54,7 +72,7 @@ describe('validateEmployeeField', () => {
   })
 
   test('campos NOT NULL rechazan blank', () => {
-    for (const f of ['first_name', 'last_name', 'pay_type', 'children_count', 'antiguedad_rate']) {
+    for (const f of ['first_name', 'last_name', 'pay_type', 'children_count']) {
       const r = validateEmployeeField(f, '')
       expect(r.ok).toBe(false)
       if (!r.ok) expect(r.error).toMatch(/requerido/i)
@@ -67,9 +85,11 @@ describe('validateEmployeeField', () => {
 
 describe('isLegalField', () => {
   test('conjunto MTESS/IPS', () => {
-    for (const f of ['document_number', 'ips_number', 'salary_base', 'gender', 'pay_type', 'children_count', 'antiguedad_rate']) {
+    for (const f of ['document_number', 'ips_number', 'salary_base', 'gender', 'pay_type', 'children_count']) {
       expect(isLegalField(f)).toBe(true)
     }
+    // `antiguedad_rate` ya no forma parte del set editable de "legales".
+    expect(isLegalField('antiguedad_rate')).toBe(false)
   })
   test('personales no son legales', () => {
     for (const f of ['first_name', 'last_name', 'email', 'phone', 'position', 'hire_date', 'birth_date']) {

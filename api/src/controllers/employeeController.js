@@ -17,6 +17,9 @@ const {
   maskEmployeeList,
   privacyDescriptor,
 } = require('../services/employeePrivacy');
+const { computeAntiguedad, formatAntiguedad } = require('../services/antiguedad');
+const paymentTypes = require('../services/paymentTypes');
+const { todayInCompanyTZ } = require('../utils/civilDate');
 
 // Columnas de inactivación (migración 063). Se detectan una vez para degradar
 // con gracia si la migración aún no corrió.
@@ -143,6 +146,15 @@ async function getById(req, res) {
     maskEmployeeRow(row, { caps });
     row._caps = caps;
     row._privacy = privacyDescriptor({ caps });
+
+    // Antigüedad derivada de hire_date (única fuente). No se persiste; se
+    // recalcula al leer. La UI la muestra en modo lectura sin controles
+    // de edición.
+    const ant = computeAntiguedad(row.hire_date, todayInCompanyTZ());
+    row.antiguedad_years  = ant ? ant.years  : null;
+    row.antiguedad_months = ant ? ant.months : null;
+    row.antiguedad_label  = formatAntiguedad(ant);
+
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: 'Error del servidor' });
@@ -187,19 +199,20 @@ async function update(req, res) {
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
 
   // Campos permitidos por PUT (superset de /quick + relaciones).
+  // `antiguedad_rate` queda fuera desde PR-B: es derivado de hire_date.
   const ALLOWED = new Set([
     'first_name', 'last_name', 'email', 'phone', 'position',
     'hire_date', 'birth_date', 'status',
     'department_id', 'schedule_id',
     'document_number', 'ips_number', 'salary_base',
-    'gender', 'pay_type', 'children_count', 'antiguedad_rate',
+    'gender', 'pay_type', 'children_count',
   ]);
   // Campos con validador dedicado (el resto solo pasa por allowlist).
   const VALIDATED = new Set([
     'first_name', 'last_name', 'email', 'phone', 'position',
     'hire_date', 'birth_date', 'status',
     'document_number', 'ips_number', 'salary_base',
-    'gender', 'pay_type', 'children_count', 'antiguedad_rate',
+    'gender', 'pay_type', 'children_count',
     'schedule_id',
   ]);
 
@@ -212,6 +225,10 @@ async function update(req, res) {
       if (VALIDATED.has(k)) {
         const v = validateField(k, val);
         if (!v.ok) return res.status(400).json({ error: v.error, field: k });
+        if (k === 'pay_type' && v.value != null) {
+          const ok = await paymentTypes.isActiveCode(v.value);
+          if (!ok) return res.status(400).json({ error: 'Tipo de pago inválido o inactivo', field: k });
+        }
         changes[k] = v.value;
       } else {
         // department_id: entero positivo o null

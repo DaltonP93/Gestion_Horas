@@ -13,12 +13,15 @@
  *  - Franja nocturna: 20:00–06:00.
  *  - Bonificación familiar: 5% del salario mínimo por hijo.
  *  - Antigüedad: `antiguedadPctPorAno` × años de antigüedad, sobre el básico.
- *    Los años se leen del campo `antiguedad_rate` del empleado (columna
- *    legada por compatibilidad; la ficha lo edita como "Antigüedad (años)").
+ *    Desde PR-B los AÑOS se DERIVAN de `hire_date` a la fecha de referencia
+ *    (fin del período). La columna legada `antiguedad_rate` se usa sólo
+ *    como fallback si el empleado no tiene fecha de ingreso.
  *    Por defecto 1%/año — cada instalación ajusta según su CCT.
  *  - Aporte obrero IPS: 9% sobre el imponible (básico + extras + antigüedad).
  *    La bonificación familiar NO es imponible.
  */
+
+const { computeAntiguedad } = require('./antiguedad');
 
 const DEFAULT_RATES = {
   divisorMensual: 240,      // salario mensual / (30 × 8)
@@ -105,9 +108,13 @@ function nightOrdinaryMinutes(days, rates, overtimeNocturnaMin) {
 
 /**
  * Calcula la liquidación de un empleado en el período.
- * @param emp  { pay_type, salary_base, children_count, antiguedad_rate, days:[{otMin,outMinutes}] }
+ * @param emp  { pay_type, salary_base, children_count, hire_date,
+ *               antiguedad_rate (legacy fallback),
+ *               days:[{otMin,outMinutes}] }
  * @param dias días informados (de computeDiasTrabajados)
- * @param rates configuración (mezcla con DEFAULT_RATES)
+ * @param rates configuración (mezcla con DEFAULT_RATES).
+ *              Puede incluir `refDate` (YYYY-MM-DD) para calcular la
+ *              antigüedad al cierre del período; default = hoy.
  */
 function computeLiquidacion(emp, dias, rates = {}) {
   const r = { ...DEFAULT_RATES, ...rates };
@@ -131,9 +138,18 @@ function computeLiquidacion(emp, dias, rates = {}) {
   const recargoNocturno = round(valorHora * (nocturnoOrdMin / 60) * (r.recargoNocturnoPct / 100));
 
   const bonifFamiliar = round((Number(emp.children_count) || 0) * (Number(r.salarioMinimo) || 0) * (r.bonifFamiliarPct / 100));
-  // `antiguedad_rate` almacena AÑOS (renombrado en PR-A). Se multiplica por
-  // el % por año (parametrizable) para obtener el aporte sobre el básico.
-  const antiguedadAnios = Number(emp.antiguedad_rate) || 0;
+  // Antigüedad: preferimos derivarla de hire_date (fuente única desde PR-B).
+  // Fallback al valor legado `antiguedad_rate` si no hay fecha o el cálculo
+  // no fue posible, para no romper empleados históricos hasta que RRHH cargue
+  // la fecha de ingreso. La política CCT se aplica vía `antiguedadPctPorAno`.
+  let antiguedadAnios = 0;
+  if (emp.hire_date) {
+    const a = computeAntiguedad(emp.hire_date, r.refDate);
+    if (a) antiguedadAnios = a.years;
+  }
+  if (!antiguedadAnios && emp.antiguedad_rate != null) {
+    antiguedadAnios = Number(emp.antiguedad_rate) || 0;
+  }
   const antiguedad = round(basico * antiguedadAnios * (Number(r.antiguedadPctPorAno) || 0) / 100);
 
   const imponible = basico + montoExtraDiurna + montoExtraNocturna + recargoNocturno + antiguedad;
