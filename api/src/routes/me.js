@@ -593,6 +593,59 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
   });
 }));
 
+// ─── GET /api/me/documents ──────────────────────────────────────
+// Lista de documentos del empleado logueado (recibos, contratos,
+// certificados) filtrada por `visible_to_employee = 1`. NUNCA expone
+// documentos de otros empleados: filtra por employee_id.
+router.get('/documents', asyncHandler(async (req, res) => {
+  const employeeId = await getEmployeeId(req);
+  if (!employeeId) return res.json({ items: [], count: 0 });
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT id, category, period, title, filename, size_bytes, mime, uploaded_at, note
+         FROM employee_documents
+        WHERE employee_id = ? AND visible_to_employee = 1
+        ORDER BY uploaded_at DESC LIMIT 500`,
+      { replacements: [employeeId] }
+    );
+    res.json({ items: rows, count: rows.length });
+  } catch {
+    // Tabla ausente (pre-067): degradar a lista vacía en vez de 500.
+    res.json({ items: [], count: 0 });
+  }
+}));
+
+// ─── GET /api/me/documents/:id/download ─────────────────────────
+router.get('/documents/:id/download', asyncHandler(async (req, res) => {
+  const employeeId = await getEmployeeId(req);
+  if (!employeeId) return res.status(404).json({ error: 'Documento no encontrado' });
+
+  const [[doc]] = await sequelize.query(
+    `SELECT id, employee_id, filename, path, mime, visible_to_employee
+       FROM employee_documents WHERE id = ? LIMIT 1`,
+    { replacements: [req.params.id] }
+  ).catch(() => [[null]]);
+
+  const { canEmployeeAccess } = require('../services/employeeDocuments');
+  if (!canEmployeeAccess(doc, employeeId)) {
+    return res.status(404).json({ error: 'Documento no encontrado' });
+  }
+
+  const path = require('path');
+  const fs   = require('fs');
+  const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '..', '..', 'uploads'));
+  const full = path.join(UPLOAD_DIR, doc.path);
+  if (!fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
+
+  audit.log({
+    req, user: req.user, action: 'me.document.download',
+    entity: 'employee_document', entity_id: doc.id, details: {},
+  });
+  res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${doc.filename.replace(/"/g, '')}"`);
+  fs.createReadStream(full).pipe(res);
+}));
+
 // ─── GET /api/me/data-export ─────────────────────────────────────
 // "Portabilidad de datos personales" (Ley Nº 6534/2020 de PY): entrega
 // al titular, en formato estructurado, todos sus datos personales
