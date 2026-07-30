@@ -495,4 +495,64 @@ router.post('/notifications/read-all', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ─── GET /api/me/data-export ─────────────────────────────────────
+// "Portabilidad de datos personales" (Ley Nº 6534/2020 de PY): entrega
+// al titular, en formato estructurado, todos sus datos personales
+// registrados por el sistema. Filtra por su propio user_id / employee_id.
+// No incluye datos de terceros ni información derivada agregada.
+router.get('/data-export', asyncHandler(async (req, res) => {
+  const employeeId = await getEmployeeId(req);
+
+  const [[user]] = await sequelize.query(
+    `SELECT id, username, email, full_name, role, employee_id, active,
+            last_login, created_at, language, timezone, ui_prefs
+       FROM users WHERE id = ?`,
+    { replacements: [req.user.id] }
+  ).catch(async () => sequelize.query(
+    `SELECT id, username, email, full_name, role, employee_id, active,
+            last_login, created_at
+       FROM users WHERE id = ?`,
+    { replacements: [req.user.id] }
+  ));
+
+  let employee = null;
+  let attendance = [];
+  let permissions = [];
+  if (employeeId) {
+    const [[emp]] = await sequelize.query(
+      `SELECT id, code, employee_number, first_name, last_name, email, phone,
+              position, hire_date, status, department_id, address, birth_date
+         FROM employees WHERE id = ?`,
+      { replacements: [employeeId] }
+    ).catch(() => [[null]]);
+    employee = emp || null;
+
+    const [att] = await sequelize.query(
+      `SELECT timestamp, type, source, device_id
+         FROM attendance_logs WHERE employee_id = ?
+         ORDER BY timestamp DESC LIMIT 5000`,
+      { replacements: [employeeId] }
+    );
+    attendance = att;
+
+    const [perms] = await sequelize.query(
+      `SELECT id, type, date_from, date_to, reason, status, approval_state, created_at
+         FROM permissions WHERE employee_id = ?
+         ORDER BY created_at DESC LIMIT 1000`,
+      { replacements: [employeeId] }
+    );
+    permissions = perms;
+  }
+
+  audit.log({ req, user: req.user, action: 'privacy.data_export', entity: 'user', entity_id: req.user.id, details: {} });
+
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="mis-datos-${req.user.id}.json"`);
+  res.json({
+    exported_at: new Date().toISOString(),
+    legal_basis: 'Ley 6534/2020 (Paraguay) — Portabilidad de Datos Personales',
+    user, employee, attendance, permissions,
+  });
+}));
+
 module.exports = router;

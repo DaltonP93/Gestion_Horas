@@ -7,6 +7,16 @@ const {
   auditValueOf,
   SENSITIVE_VALUE,
 } = require('../services/employeeFieldValidation');
+const {
+  getVisibleDepartmentIds,
+  applyDepartmentScope,
+  canSeeEmployee,
+} = require('../services/departmentScope');
+const {
+  maskEmployeeRow,
+  maskEmployeeList,
+  privacyDescriptor,
+} = require('../services/employeePrivacy');
 
 // Columnas de inactivación (migración 063). Se detectan una vez para degradar
 // con gracia si la migración aún no corrió.
@@ -34,7 +44,7 @@ async function getAll(req, res) {
     const effectiveStatus = status === undefined ? 'active' : status;
 
     let where = 'WHERE 1=1';
-    const params = [];
+    let params = [];
 
     if (effectiveStatus && effectiveStatus !== 'all') {
       where += ' AND e.status = ?'; params.push(effectiveStatus);
@@ -43,6 +53,10 @@ async function getAll(req, res) {
     const deptVal = dept || department_id;
     if (deptVal) { where += ' AND e.department_id = ?'; params.push(deptVal); }
     if (branch_id) { where += ' AND e.branch_id = ?'; params.push(branch_id); }
+
+    // RBAC jerárquico: los roles scoped ven sólo su depto + descendientes.
+    const scope = await getVisibleDepartmentIds(req.user);
+    ({ where, params } = applyDepartmentScope(where, params, scope, 'e.department_id'));
     if (search) {
       // Búsqueda por nombre/apellido/código/employee_number(legajo)/documento,
       // y por device_user_id vía employee_device_map (coincidencia EXACTA, como
@@ -86,14 +100,15 @@ async function getAll(req, res) {
       { replacements: params }
     );
 
-    // Enmascarar C.I. en el listado si el rol no puede ver datos legales
-    // (mismo criterio que `getById`, evita filtración por el endpoint de lista).
+    // Enmascarar campos legales cuando el rol no puede verlos.
     const caps = capsForRole(req.user?.role);
-    if (!caps.legal_view) {
-      for (const e of employees) e.document_number = null;
-    }
+    maskEmployeeList(employees, { caps });
 
-    res.json({ data: employees, total, page: +page, limit: +limit, pages: Math.ceil(total / limit) });
+    res.json({
+      data: employees, total, page: +page, limit: +limit, pages: Math.ceil(total / limit),
+      _scope: { unrestricted: !!scope.unrestricted, departments: scope.unrestricted ? null : (scope.ids || []).length },
+      _privacy: privacyDescriptor({ caps }),
+    });
   } catch (err) {
     logger.error('Error getAll employees:', err);
     res.status(500).json({ error: 'Error al obtener empleados' });
@@ -116,20 +131,18 @@ async function getById(req, res) {
     if (!rows.length) return res.status(404).json({ error: 'Empleado no encontrado' });
     const row = rows[0];
 
+    // RBAC jerárquico: 403 si el rol scoped no incluye este departamento.
+    const scope = await getVisibleDepartmentIds(req.user);
+    if (!canSeeEmployee(scope, row)) {
+      return res.status(403).json({ error: 'Sin acceso a este empleado (fuera de tu ámbito)' });
+    }
+
     // Capacidades del usuario actual sobre esta ficha (PR 1 — edición).
     // Permite al frontend ocultar controles sin re-implementar la política.
     const caps = capsForRole(req.user?.role);
-    if (!caps.legal_view) {
-      // Enmascarar campos legales cuando no puede verlos.
-      row.document_number = null;
-      row.ips_number = null;
-      row.salary_base = null;
-      row.pay_type = null;
-      row.gender = null;
-      row.children_count = null;
-      row.antiguedad_rate = null;
-    }
+    maskEmployeeRow(row, { caps });
     row._caps = caps;
+    row._privacy = privacyDescriptor({ caps });
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: 'Error del servidor' });
