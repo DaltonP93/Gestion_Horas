@@ -18,14 +18,17 @@
  *       adjustment, taken, available, note, overridden }.
  */
 
+const {
+  parseCivilDate, civilDateISO, addDaysUTC, dayOfWeekUTC, todayInCompanyTZ,
+} = require('../utils/civilDate');
+
 function yearsBetween(hireDate, cutoff) {
-  if (!hireDate) return 0;
-  const h = new Date(hireDate);
-  const c = cutoff instanceof Date ? cutoff : new Date(cutoff);
-  if (isNaN(h.getTime()) || isNaN(c.getTime())) return 0;
-  let y = c.getFullYear() - h.getFullYear();
-  const anniv = new Date(c.getFullYear(), h.getMonth(), h.getDate());
-  if (c < anniv) y -= 1;
+  const h = parseCivilDate(hireDate);
+  const c = parseCivilDate(cutoff);
+  if (!h || !c) return 0;
+  let y = c.getUTCFullYear() - h.getUTCFullYear();
+  const anniv = new Date(Date.UTC(c.getUTCFullYear(), h.getUTCMonth(), h.getUTCDate()));
+  if (c.getTime() < anniv.getTime()) y -= 1;
   return Math.max(0, y);
 }
 
@@ -39,30 +42,30 @@ function entitlementFor(brackets, years) {
   return 0;
 }
 
-function _isoDay(dt) {
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-}
-
 function countDays(from, to, { dayType = 'habiles', holidaysSet = new Set() } = {}) {
-  const start = from instanceof Date ? new Date(from) : new Date(from);
-  const end   = to   instanceof Date ? new Date(to)   : new Date(to);
-  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return 0;
+  const start = parseCivilDate(from);
+  const end   = parseCivilDate(to);
+  if (!start || !end || start.getTime() > end.getTime()) return 0;
   let count = 0;
-  for (const dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
+  for (let dt = start; dt.getTime() <= end.getTime(); dt = addDaysUTC(dt, 1)) {
     if (dayType === 'corridos') { count++; continue; }
-    const dow = dt.getDay(); // 0=Dom … 6=Sáb
-    if (dow !== 0 && dow !== 6 && !holidaysSet.has(_isoDay(dt))) count++;
+    const dow = dayOfWeekUTC(dt); // 0=Dom … 6=Sáb
+    if (dow !== 0 && dow !== 6 && !holidaysSet.has(civilDateISO(dt))) count++;
   }
   return count;
 }
 
 function countTakenIn(vacations, { yearStart, yearEnd, dayType, holidaysSet } = {}) {
-  const ys = new Date(yearStart), ye = new Date(yearEnd);
+  const ys = parseCivilDate(yearStart);
+  const ye = parseCivilDate(yearEnd);
+  if (!ys || !ye) return 0;
   let total = 0;
   for (const v of vacations || []) {
-    let from = new Date(v.date_from), to = new Date(v.date_to);
-    if (from < ys) from = new Date(ys);
-    if (to > ye) to = new Date(ye);
+    let from = parseCivilDate(v.date_from);
+    let to   = parseCivilDate(v.date_to);
+    if (!from || !to) continue;
+    if (from.getTime() < ys.getTime()) from = ys;
+    if (to.getTime()   > ye.getTime()) to   = ye;
     total += countDays(from, to, { dayType, holidaysSet });
   }
   return total;
@@ -76,9 +79,11 @@ async function _getDayType(sequelize) {
 }
 
 async function computeBalance({ sequelize, employeeId, year }) {
-  const y = parseInt(year || new Date().getFullYear(), 10);
+  const today = todayInCompanyTZ();
+  const currentYear = parseInt(today.slice(0, 4), 10);
+  const y = parseInt(year || currentYear, 10);
   const yearStart = `${y}-01-01`, yearEnd = `${y}-12-31`;
-  const cutoff = y >= new Date().getFullYear() ? new Date() : new Date(y, 11, 31);
+  const cutoff = y >= currentYear ? today : `${y}-12-31`;
   const dayType = await _getDayType(sequelize);
 
   const [[emp]] = await sequelize.query(
