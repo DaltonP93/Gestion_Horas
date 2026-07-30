@@ -10,6 +10,7 @@ const MODULES = [
   { key: 'marcar',         label: 'Marcar (QR/GPS)',      section: 'portal'  },
   { key: 'mis_permisos',   label: 'Mis permisos',         section: 'portal'  },
   { key: 'mis_vacaciones', label: 'Mis vacaciones',       section: 'portal'  },
+  { key: 'mis_documentos', label: 'Mis documentos',       section: 'portal'  },
   // Gestión
   { key: 'dashboard',      label: 'Dashboard',            section: 'gestion' },
   { key: 'empleados',      label: 'Empleados',            section: 'gestion' },

@@ -24,6 +24,7 @@ const logger = require('./config/logger');
 // Rutas
 const authRoutes       = require('./routes/auth');
 const employeeRoutes   = require('./routes/employees');
+const employeeDocumentsRoutes = require('./routes/employeeDocuments');
 const attendanceRoutes = require('./routes/attendance');
 const deviceRoutes     = require('./routes/devices');
 const scheduleRoutes   = require('./routes/schedules');
@@ -137,6 +138,7 @@ const authLimiter = rateLimit({
 // y un authLimiter más permisivo a todo lo demás del módulo.
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',        authLimiter, authRoutes);
+app.use('/api/employees/:id/documents', employeeDocumentsRoutes);
 app.use('/api/employees',   employeeRoutes);
 app.use('/api/attendance',  attendanceRoutes);
 app.use('/api/devices',     deviceRoutes);
