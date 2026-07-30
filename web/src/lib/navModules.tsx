@@ -50,6 +50,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: '/mi-asistencia', icon: Clock,           i18nKey: 'nav.my_attendance', desc: 'Tus entradas, salidas y resumen.', portal: true, roles: ['employee'], module: 'mi_asistencia', color: 'bg-emerald-500' },
       { href: '/marcar',        icon: QrCode,          i18nKey: 'nav.punch_qr_gps',  desc: 'Marcar entrada/salida desde el móvil.', portal: true, roles: ['employee'], module: 'marcar', color: 'bg-violet-500' },
       { href: '/mis-permisos',  icon: Calendar,        i18nKey: 'nav.my_permissions',desc: 'Solicitar y ver tus permisos.', portal: true, roles: ['employee'], module: 'mis_permisos', color: 'bg-amber-500' },
+      { href: '/mis-vacaciones',icon: Calendar,        i18nKey: 'nav.my_vacations',  desc: 'Tu saldo de días y el año de vacaciones.', portal: true, roles: ['employee'], module: 'mis_vacaciones', color: 'bg-teal-500' },
     ],
   },
   {

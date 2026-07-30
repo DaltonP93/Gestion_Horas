@@ -12,6 +12,7 @@
 const router = require('express').Router();
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const vbal = require('../services/vacationBalance');
 
 router.use(authenticate);
 router.use(authorize('admin', 'gth', 'hr', 'manager', 'coordinator', 'gestor', 'supervisor'));
@@ -139,25 +140,8 @@ async function getDayType() {
   return String(rows[0]?.setting_value || 'habiles') === 'corridos' ? 'corridos' : 'habiles';
 }
 
-// Derecho a días según antigüedad y los tramos configurados.
-function entitlementFor(brackets, years) {
-  for (const b of brackets) {
-    const okMin = years >= b.min_years;
-    const okMax = b.max_years == null || years < b.max_years;
-    if (okMin && okMax) return b.days;
-  }
-  return 0;
-}
-
-// Años completos de antigüedad a una fecha de corte.
-function yearsBetween(hireDate, cutoff) {
-  if (!hireDate) return 0;
-  const h = new Date(hireDate), c = new Date(cutoff);
-  let y = c.getFullYear() - h.getFullYear();
-  const anniv = new Date(c.getFullYear(), h.getMonth(), h.getDate());
-  if (c < anniv) y -= 1;
-  return Math.max(0, y);
-}
+// Aritmética delegada al servicio central (compartida con /api/me/*).
+const { entitlementFor, yearsBetween } = vbal;
 
 // ── Política: tramos de antigüedad → días ──────────────────────
 router.get('/policy', async (req, res) => {
@@ -255,21 +239,14 @@ router.get('/balances', async (req, res) => {
     );
     const holidays = new Set(hol.map(h => h.d));
 
-    // Contar días tomados por empleado dentro del año.
+    // Contar días tomados por empleado dentro del año (helper compartido).
     const takenByEmp = {};
-    const ys = new Date(yearStart), ye = new Date(yearEnd);
-    for (const v of vacs) {
-      let from = new Date(v.date_from), to = new Date(v.date_to);
-      if (from < ys) from = new Date(ys);
-      if (to > ye) to = new Date(ye);
-      let count = 0;
-      for (let dt = new Date(from); dt <= to; dt.setDate(dt.getDate() + 1)) {
-        if (dayType === 'corridos') { count++; continue; }
-        const dow = dt.getDay(); // 0=Dom … 6=Sáb
-        const ds = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-        if (dow !== 0 && dow !== 6 && !holidays.has(ds)) count++;
-      }
-      takenByEmp[v.employee_id] = (takenByEmp[v.employee_id] || 0) + count;
+    const vacsByEmp = {};
+    for (const v of vacs) (vacsByEmp[v.employee_id] ||= []).push(v);
+    for (const [empId, list] of Object.entries(vacsByEmp)) {
+      takenByEmp[empId] = vbal.countTakenIn(list, {
+        yearStart, yearEnd, dayType, holidaysSet: holidays,
+      });
     }
 
     const data = emps.map(e => {
