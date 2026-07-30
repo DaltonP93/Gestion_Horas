@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
-import { UserCircle2, Camera, Save, CheckCircle, AlertCircle, ShieldAlert } from 'lucide-react'
+import { UserCircle2, Camera, Save, CheckCircle, AlertCircle, ShieldAlert, Download } from 'lucide-react'
 import { api, apiUrl } from '@/lib/api'
 
 interface MeResponse {
@@ -135,7 +135,98 @@ export default function MiPerfilPage() {
           </button>
         </div>
       </section>
+
+      <PrivacySection />
+      <PortalWidget />
     </div>
+  )
+}
+
+interface DashboardData {
+  employee_id: number | null
+  kpis: { worked_minutes: number; late_minutes: number; overtime_minutes: number; present_days: number; week_from: string; week_to: string } | null
+  last_punch: { timestamp: string; type: 'in' | 'out' } | null
+  vacation: { available: number; year: number } | null
+  next_holiday: { date: string; name: string } | null
+  unread_notifications: number
+  pending_permissions: number
+}
+
+function PortalWidget() {
+  const [data, setData] = useState<DashboardData | null>(null)
+  useEffect(() => {
+    api.get<DashboardData>('/api/me/dashboard').then(r => setData(r.data)).catch(() => setData(null))
+  }, [])
+  if (!data || !data.employee_id) return null
+  const w = data.kpis
+  const hrs = (m?: number) => (m ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m` : '—')
+  return (
+    <section className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">Mi semana en un vistazo</h2>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <MiniStat label="Días presentes" value={String(w?.present_days ?? '—')} />
+        <MiniStat label="Trabajado" value={hrs(w?.worked_minutes)} />
+        <MiniStat label="Atraso" value={hrs(w?.late_minutes)} />
+        <MiniStat label="Extras" value={hrs(w?.overtime_minutes)} />
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3 text-xs">
+        <InfoTile label="Saldo de vacaciones" value={data.vacation ? `${data.vacation.available} días (${data.vacation.year})` : '—'} />
+        <InfoTile label="Próximo feriado" value={data.next_holiday ? `${data.next_holiday.date} · ${data.next_holiday.name}` : '—'} />
+        <InfoTile label="Solicitudes pendientes" value={String(data.pending_permissions)} />
+      </div>
+    </section>
+  )
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-100 p-3 dark:border-white/[0.06]">
+      <p className="text-xs text-slate-500 uppercase tracking-wide dark:text-white/40">{label}</p>
+      <p className="text-lg font-bold text-slate-900 dark:text-white">{value}</p>
+    </div>
+  )
+}
+function InfoTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-100 p-3 dark:border-white/[0.06]">
+      <p className="text-slate-500 dark:text-white/40">{label}</p>
+      <p className="text-slate-900 dark:text-white font-medium">{value}</p>
+    </div>
+  )
+}
+
+function PrivacySection() {
+  const [downloading, setDownloading] = useState(false)
+  const [pErr, setPErr] = useState('')
+
+  async function download() {
+    setPErr(''); setDownloading(true)
+    try {
+      const res = await api.get('/api/me/data-export', { responseType: 'blob' })
+      const blob = new Blob([res.data], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `mis-datos-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e: any) { setPErr(e.response?.data?.error || e.message) }
+    finally { setDownloading(false) }
+  }
+
+  return (
+    <section className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-white mb-1">Privacidad y datos personales</h2>
+      <p className="text-xs text-slate-500 dark:text-white/40 mb-3">
+        Podés descargar una copia estructurada de tus datos personales (perfil, marcaciones, permisos)
+        conforme a la Ley 6534/2020 de Paraguay.
+      </p>
+      {pErr && <div className="text-xs text-red-600 mb-2">{pErr}</div>}
+      <button onClick={download} disabled={downloading}
+        className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-200 rounded-xl hover:bg-slate-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04] disabled:opacity-60">
+        <Download size={14} /> {downloading ? 'Preparando…' : 'Descargar mis datos (JSON)'}
+      </button>
+    </section>
   )
 }
 
