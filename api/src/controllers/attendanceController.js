@@ -3,6 +3,7 @@ const { getIO, emitAttendance } = require('../socket/socketServer');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('../services/recalcLock');
 const { LINKED_SQL } = require('../services/rawPunchStats');
+const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
 let fireWebhooks;
 try { ({ fireWebhooks } = require('../routes/webhooks')); } catch {}
 let writeCheckinOut;
@@ -264,6 +265,22 @@ async function getDashboardStats(req, res) {
   const today = todayPY();
 
   try {
+    // RBAC jerárquico: los roles scoped ven KPIs sólo de su ámbito de
+    // departamentos (mismo criterio que /api/employees). `live_punches` y
+    // los indicadores de `raw_device_punches` no se filtran porque son
+    // conteos operativos globales sin PII (útiles para diagnóstico de
+    // sync). Los KPIs de asistencia (present/late/absent/…) sí se acotan.
+    const scope = await getVisibleDepartmentIds(req.user);
+    const isScoped = !scope.unrestricted;
+    const emptyScope = isScoped && !(scope.ids || []).length;
+    const deptClause = isScoped && !emptyScope
+      ? `AND e.department_id IN (${scope.ids.map(() => '?').join(',')})`
+      : '';
+    const activeClause = isScoped && !emptyScope
+      ? `AND emp.department_id IN (${scope.ids.map(() => '?').join(',')})`
+      : '';
+    const deptIds = isScoped && !emptyScope ? scope.ids : [];
+
     // Métricas por EMPLEADO ÚNICO (no por cantidad de marcas). Se usa
     // COUNT(DISTINCT employee_id), inmune a duplicados de daily_summary.
     // - present/late/absent/permission: empleados activos únicos en ese estado hoy.
@@ -271,26 +288,52 @@ async function getDashboardStats(req, res) {
     //   operativa de verdad; coincide con COUNT(DISTINCT employee_id) de logs).
     // - active_employees: denominador de cobertura.
     // - live_punches: CANTIDAD de marcas del día (logs), NO empleados.
+    const kpiParams = [
+      ...deptIds,
+      today, ...deptIds,
+      today, ...deptIds,
+      today, ...deptIds,
+      today, ...deptIds,
+      today, ...deptIds,
+      today,
+    ];
     const [[counts]] = await sequelize.query(`
       SELECT
-        (SELECT COUNT(*) FROM employees WHERE status = 'active') AS active_employees,
+        (SELECT COUNT(*) FROM employees emp WHERE emp.status = 'active' ${activeClause}) AS active_employees,
         (SELECT COUNT(DISTINCT ds.employee_id)
            FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
-          WHERE ds.date = ? AND ds.status = 'present')    AS present,
+          WHERE ds.date = ? AND ds.status = 'present' ${deptClause})    AS present,
         (SELECT COUNT(DISTINCT ds.employee_id)
            FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
-          WHERE ds.date = ? AND ds.status = 'late')       AS late,
+          WHERE ds.date = ? AND ds.status = 'late' ${deptClause})       AS late,
         (SELECT COUNT(DISTINCT ds.employee_id)
            FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
-          WHERE ds.date = ? AND ds.status = 'absent')     AS absent,
+          WHERE ds.date = ? AND ds.status = 'absent' ${deptClause})     AS absent,
         (SELECT COUNT(DISTINCT ds.employee_id)
            FROM daily_summary ds JOIN employees e ON e.id = ds.employee_id AND e.status = 'active'
-          WHERE ds.date = ? AND ds.status = 'permission') AS on_permission,
+          WHERE ds.date = ? AND ds.status = 'permission' ${deptClause}) AS on_permission,
         (SELECT COUNT(DISTINCT al.employee_id)
            FROM attendance_logs al JOIN employees e ON e.id = al.employee_id AND e.status = 'active'
-          WHERE DATE(al.timestamp) = ?)                   AS present_today,
+          WHERE DATE(al.timestamp) = ? ${deptClause})                   AS present_today,
         (SELECT COUNT(*) FROM attendance_logs WHERE DATE(timestamp) = ?) AS live_punches
-    `, { replacements: [today, today, today, today, today, today] });
+    `, { replacements: emptyScope
+        ? [today, today, today, today, today, today]  // no-op, se cortocircuita abajo
+        : kpiParams });
+
+    // Rol scoped sin depto vinculado → devolvemos ceros sin llenar recentLogs.
+    if (emptyScope) {
+      return res.json({
+        stats: {
+          total_employees: 0, active_employees: 0,
+          present: 0, late: 0, absent: 0, on_permission: 0,
+          present_today: 0, live_punches: 0, coverage_pct: 0,
+          raw_today: 0, mapped_today: 0, unmapped_pending: 0, unmapped_today: 0,
+        },
+        recentLogs: [],
+        date: today,
+        _scope: { unrestricted: false, departments: 0 },
+      });
+    }
 
     const active = Number(counts.active_employees) || 0;
     const presentToday = Number(counts.present_today) || 0;
@@ -338,12 +381,15 @@ async function getDashboardStats(req, res) {
       JOIN employees  e  ON al.employee_id = e.id
       LEFT JOIN departments d  ON e.department_id = d.id
       LEFT JOIN devices     dv ON al.device_id = dv.id
-      WHERE DATE(al.timestamp) = ?
+      WHERE DATE(al.timestamp) = ? ${deptClause}
       ORDER BY al.timestamp DESC
       LIMIT 20
-    `, { replacements: [today] });
+    `, { replacements: [today, ...deptIds] });
 
-    res.json({ stats, recentLogs, date: today });
+    res.json({
+      stats, recentLogs, date: today,
+      _scope: { unrestricted: !!scope.unrestricted, departments: scope.unrestricted ? null : deptIds.length },
+    });
   } catch (err) {
     logger.error('Error getDashboardStats:', err);
     res.status(500).json({ error: 'Error al obtener estadísticas' });
@@ -356,10 +402,14 @@ async function getByDate(req, res) {
   const offset = (page - 1) * limit;
 
   let where = 'WHERE ds.date = ?';
-  const params = [date];
+  let params = [date];
 
   if (dept)       { where += ' AND e.department_id = ?'; params.push(dept); }
   if (employeeId) { where += ' AND e.id = ?'; params.push(employeeId); }
+
+  // RBAC jerárquico: acota por departamento del usuario scoped.
+  const scope = await getVisibleDepartmentIds(req.user);
+  ({ where, params } = applyDepartmentScope(where, params, scope, 'e.department_id'));
 
   try {
     const [rows] = await sequelize.query(`

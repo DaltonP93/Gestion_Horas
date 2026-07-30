@@ -7,6 +7,7 @@ const {
   getDashboardStats, getByDate, registerManual, registerMobile,
   bridgeWebhook
 } = require('../controllers/attendanceController');
+const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
 
 // DTO del marcaje manual: valida tipos y valores antes del controlador.
 const manualPunchSchema = Joi.object({
@@ -58,11 +59,14 @@ router.get('/out-of-range', requirePermission('asistencia', 'view'), async (req,
     const earlyMin = Number.isFinite(early) ? early : 30;
     const lateMin  = Number.isFinite(late)  ? late  : 30;
 
-    const params = [from, to];
-    let deptFilter = '';
-    if (req.query.dept) { deptFilter = 'AND e.department_id = ?'; params.push(req.query.dept); }
-    params.push(earlyMin, lateMin);
+    let baseWhere = 'WHERE ds.date BETWEEN ? AND ? AND (ds.first_in IS NOT NULL OR ds.last_out IS NOT NULL)';
+    let baseParams = [from, to];
+    if (req.query.dept) { baseWhere += ' AND e.department_id = ?'; baseParams.push(req.query.dept); }
+    // RBAC jerárquico: acota por departamento del usuario scoped.
+    const scope = await getVisibleDepartmentIds(req.user);
+    ({ where: baseWhere, params: baseParams } = applyDepartmentScope(baseWhere, baseParams, scope, 'e.department_id'));
 
+    const params = [...baseParams, earlyMin, lateMin];
     const [rows] = await sequelize.query(`
       SELECT * FROM (
         SELECT e.id AS employee_id, e.code, CONCAT(e.first_name,' ',e.last_name) AS name,
@@ -78,7 +82,7 @@ router.get('/out-of-range', requirePermission('asistencia', 'view'), async (req,
         JOIN employees e ON e.id = ds.employee_id
         JOIN schedules  s ON s.id = e.schedule_id
         LEFT JOIN departments d ON d.id = e.department_id
-        WHERE ds.date BETWEEN ? AND ? AND (ds.first_in IS NOT NULL OR ds.last_out IS NOT NULL) ${deptFilter}
+        ${baseWhere}
       ) t
       WHERE t.early_min > ? OR t.late_out_min > ?
       ORDER BY t.date DESC, t.name
@@ -97,9 +101,12 @@ router.get('/out-of-geofence', requirePermission('asistencia', 'view'), async (r
     const now = new Date();
     const from = req.query.from || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const to   = req.query.to   || new Date().toISOString().slice(0, 10);
-    const params = [from, to];
-    let deptFilter = '';
-    if (req.query.dept) { deptFilter = 'AND e.department_id = ?'; params.push(req.query.dept); }
+    let where = "WHERE al.geofence_status = 'outside' AND DATE(al.timestamp) BETWEEN ? AND ?";
+    let params = [from, to];
+    if (req.query.dept) { where += ' AND e.department_id = ?'; params.push(req.query.dept); }
+    // RBAC jerárquico: acota por departamento del usuario scoped.
+    const scope = await getVisibleDepartmentIds(req.user);
+    ({ where, params } = applyDepartmentScope(where, params, scope, 'e.department_id'));
 
     const [rows] = await sequelize.query(`
       SELECT al.id, al.employee_id, e.code, CONCAT(e.first_name,' ',e.last_name) AS name,
@@ -109,8 +116,7 @@ router.get('/out-of-geofence', requirePermission('asistencia', 'view'), async (r
       FROM attendance_logs al
       JOIN employees e ON e.id = al.employee_id
       LEFT JOIN departments d ON d.id = e.department_id
-      WHERE al.geofence_status = 'outside'
-        AND DATE(al.timestamp) BETWEEN ? AND ? ${deptFilter}
+      ${where}
       ORDER BY al.timestamp DESC
       LIMIT 500
     `, { replacements: params });

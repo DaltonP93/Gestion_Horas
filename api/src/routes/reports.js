@@ -4,8 +4,28 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM } = require('../services/scheduler');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
+const {
+  getVisibleDepartmentIds,
+  applyDepartmentScope,
+  canSeeEmployee,
+} = require('../services/departmentScope');
 
 router.use(authenticate);
+
+// Helpers para inyectar scope de departamento en reports que arman su propio SQL.
+// - Cuando el scope es unrestricted → no-op.
+// - Cuando es scoped sin depto vinculado → fuerza 0 filas (mismo criterio que
+//   applyDepartmentScope, para no filtrar datos de otros supervisores).
+function scopeToClause(scope, col = 'e.department_id') {
+  if (!scope || scope.unrestricted) return { clause: '', params: [], empty: false };
+  const ids = scope.ids || [];
+  if (!ids.length) return { clause: 'AND 1=0', params: [], empty: true };
+  return {
+    clause: `AND ${col} IN (${ids.map(() => '?').join(',')})`,
+    params: ids,
+    empty: false,
+  };
+}
 
 // GET /api/reports/monthly?year=&month=&dept=
 router.get('/monthly', asyncHandler(async (req, res) => {
@@ -16,6 +36,12 @@ router.get('/monthly', asyncHandler(async (req, res) => {
   let deptFilter = '';
   const params = [dateFrom, dateTo];
   if (dept) { deptFilter = 'AND e.department_id = ?'; params.push(dept); }
+
+  // RBAC jerárquico: acota por departamento del usuario scoped.
+  const scope = await getVisibleDepartmentIds(req.user);
+  const sc = scopeToClause(scope, 'e.department_id');
+  deptFilter += ` ${sc.clause}`;
+  params.push(...sc.params);
 
   const [rows] = await sequelize.query(`
     SELECT
@@ -49,6 +75,10 @@ router.get('/weekly', asyncHandler(async (req, res) => {
   const from = new Date(jan1.getTime() + (weekNum - 1) * 7 * 86400000);
   const to   = new Date(from.getTime() + 6 * 86400000);
 
+  // RBAC jerárquico: acota por departamento del usuario scoped.
+  const scope = await getVisibleDepartmentIds(req.user);
+  const sc = scopeToClause(scope, 'e.department_id');
+
   const [rows] = await sequelize.query(`
     SELECT
       ds.date, ds.status, ds.first_in, ds.last_out, ds.worked_minutes, ds.late_minutes,
@@ -56,9 +86,9 @@ router.get('/weekly', asyncHandler(async (req, res) => {
     FROM daily_summary ds
     JOIN employees e ON ds.employee_id = e.id
     LEFT JOIN departments d ON e.department_id = d.id
-    WHERE ds.date BETWEEN ? AND ?
+    WHERE ds.date BETWEEN ? AND ? ${sc.clause}
     ORDER BY ds.date, e.last_name
-  `, { replacements: [from.toISOString().split('T')[0], to.toISOString().split('T')[0]] });
+  `, { replacements: [from.toISOString().split('T')[0], to.toISOString().split('T')[0], ...sc.params] });
 
   res.json({ data: rows, week: weekNum, from, to });
 }));
@@ -69,7 +99,8 @@ router.get('/weekly', asyncHandler(async (req, res) => {
 router.get('/marcadas', async (req, res) => {
   const { from, to, employeeId, deptId } = req.query;
   try {
-    const result = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId });
+    const scope = await getVisibleDepartmentIds(req.user);
+    const result = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId, scope });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -83,6 +114,12 @@ router.get('/daily-detail', async (req, res) => {
   let filter = '';
   const params = [date];
   if (dept) { filter = 'AND e.department_id = ?'; params.push(dept); }
+
+  // RBAC jerárquico: acota por departamento del usuario scoped.
+  const scope = await getVisibleDepartmentIds(req.user);
+  const sc = scopeToClause(scope, 'e.department_id');
+  filter += ` ${sc.clause}`;
+  params.push(...sc.params);
 
   const [rows] = await sequelize.query(`
     SELECT
@@ -124,7 +161,8 @@ router.get('/daily-detail', async (req, res) => {
 router.get('/marcadas/pdf', async (req, res) => {
   const { from, to, employeeId, deptId } = req.query;
   try {
-    const report = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId });
+    const scope = await getVisibleDepartmentIds(req.user);
+    const report = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId, scope });
     const PDFDocument = require('pdfkit');
 
     const doc = new PDFDocument({ size: 'A4', margin: 36 });
@@ -237,7 +275,8 @@ router.post('/marcadas/email', async (req, res) => {
   }
 
   try {
-    const report = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId });
+    const scope = await getVisibleDepartmentIds(req.user);
+    const report = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId, scope });
 
     const tableHtmlParts = report.data.map(emp => `
       <h3 style="margin-top:20px">${emp.employee_name} [${emp.code}]${emp.department ? ' — ' + emp.department : ''}</h3>
@@ -296,6 +335,17 @@ router.get('/employee/:id/analytics', async (req, res) => {
   const to   = new Date().toISOString().split('T')[0];
 
   try {
+    // RBAC jerárquico: 403 si el rol scoped no incluye este empleado.
+    const [[empRow]] = await sequelize.query(
+      'SELECT department_id FROM employees WHERE id = ? LIMIT 1',
+      { replacements: [empId] }
+    );
+    if (!empRow) return res.status(404).json({ error: 'Empleado no encontrado' });
+    const scope = await getVisibleDepartmentIds(req.user);
+    if (!canSeeEmployee(scope, empRow)) {
+      return res.status(403).json({ error: 'Sin acceso a este empleado (fuera de tu ámbito)' });
+    }
+
     // Datos diarios
     const [daily] = await sequelize.query(`
       SELECT
@@ -383,6 +433,12 @@ router.get('/monthly/export', async (req, res) => {
   let deptFilter = '';
   const params = [dateFrom, dateTo];
   if (dept) { deptFilter = 'AND e.department_id = ?'; params.push(dept); }
+
+  // RBAC jerárquico: acota por departamento del usuario scoped.
+  const scope = await getVisibleDepartmentIds(req.user);
+  const sc = scopeToClause(scope, 'e.department_id');
+  deptFilter += ` ${sc.clause}`;
+  params.push(...sc.params);
 
   try {
     const [rows] = await sequelize.query(`
