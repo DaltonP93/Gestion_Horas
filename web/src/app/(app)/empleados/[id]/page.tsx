@@ -14,6 +14,7 @@ import { employeesApi, api } from '@/lib/api'
 import { fmtTimePy } from '@/lib/datetime'
 import { validateEmployeeField, isLegalField } from '@/lib/employeeFieldValidation'
 import EmployeeNotes from '@/components/EmployeeNotes'
+import EmployeeDocuments from '@/components/EmployeeDocuments'
 import BiometriaRelojes from '@/components/BiometriaRelojes'
 import dynamic from 'next/dynamic'
 const FaceEnroll = dynamic(() => import('@/components/FaceEnroll'), { ssr: false })
@@ -515,6 +516,9 @@ export default function EmpleadoDetallePage() {
 
           {/* Reconocimiento facial */}
           {emp?.id && <FaceEnroll employeeId={emp.id} />}
+
+          {/* Documentos publicados por RR.HH. */}
+          {emp?.id && <EmployeeDocuments employeeId={emp.id} />}
 
           {/* Notas / observaciones */}
           {emp?.id && <EmployeeNotes employeeId={emp.id} />}

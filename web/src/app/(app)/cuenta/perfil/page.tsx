@@ -194,49 +194,6 @@ function InfoTile({ label, value }: { label: string; value: string }) {
     </div>
   )
 }
-function InfoTile({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-slate-100 p-3 dark:border-white/[0.06]">
-      <p className="text-slate-500 dark:text-white/40">{label}</p>
-      <p className="text-slate-900 dark:text-white font-medium">{value}</p>
-    </div>
-  )
-}
-
-function PrivacySection() {
-  const [downloading, setDownloading] = useState(false)
-  const [pErr, setPErr] = useState('')
-
-  async function download() {
-    setPErr(''); setDownloading(true)
-    try {
-      const res = await api.get('/api/me/data-export', { responseType: 'blob' })
-      const blob = new Blob([res.data], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `mis-datos-${new Date().toISOString().slice(0, 10)}.json`
-      document.body.appendChild(a); a.click(); a.remove()
-      URL.revokeObjectURL(url)
-    } catch (e: any) { setPErr(e.response?.data?.error || e.message) }
-    finally { setDownloading(false) }
-  }
-
-  return (
-    <section className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-      <h2 className="text-sm font-semibold text-slate-900 dark:text-white mb-1">Privacidad y datos personales</h2>
-      <p className="text-xs text-slate-500 dark:text-white/40 mb-3">
-        Podés descargar una copia estructurada de tus datos personales (perfil, marcaciones, permisos)
-        conforme a la Ley 6534/2020 de Paraguay.
-      </p>
-      {pErr && <div className="text-xs text-red-600 mb-2">{pErr}</div>}
-      <button onClick={download} disabled={downloading}
-        className="flex items-center gap-2 px-3 py-2 text-sm border border-slate-200 rounded-xl hover:bg-slate-50 dark:border-white/[0.08] dark:hover:bg-white/[0.04] disabled:opacity-60">
-        <Download size={14} /> {downloading ? 'Preparando…' : 'Descargar mis datos (JSON)'}
-      </button>
-    </section>
-  )
-}
 
 function PrivacySection() {
   const [downloading, setDownloading] = useState(false)
