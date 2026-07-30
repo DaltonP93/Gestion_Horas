@@ -39,7 +39,10 @@ function toDate(v) {
 }
 
 // ─── Generar reporte de marcadas (igual al PDF de SisHoras) ───────
-async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId } = {}) {
+// `scope` es opcional: cuando el caller lo pasa (rutas HTTP), acota por los
+// departamentos visibles al usuario (RBAC jerárquico). Los callers internos
+// —el cron mail scheduler y demás— lo omiten y ven todo (comportamiento previo).
+async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, scope } = {}) {
   const today = pyDateStr(new Date());
   const from  = dateFrom || today;
   const to    = dateTo   || today;
@@ -48,6 +51,16 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId } =
   const params  = [from, to];
   if (employeeId) { empFilter += ' AND e.id = ?'; params.push(employeeId); }
   if (deptId)     { empFilter += ' AND e.department_id = ?'; params.push(deptId); }
+
+  if (scope && !scope.unrestricted) {
+    const ids = scope.ids || [];
+    if (!ids.length) {
+      // rol scoped sin depto vinculado → resultado vacío coherente
+      return { data: [], period: { from, to } };
+    }
+    empFilter += ` AND e.department_id IN (${ids.map(() => '?').join(',')})`;
+    params.push(...ids);
+  }
 
   // Obtener todos los logs del período
   const [logs] = await sequelize.query(`
