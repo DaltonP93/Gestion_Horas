@@ -10,6 +10,7 @@ const {
 const { capsForRole, classifyField } = require('../services/employeeCaps');
 const { validate: validateField, auditValueOf, SENSITIVE_VALUE } = require('../services/employeeFieldValidation');
 const audit = require('../services/audit');
+const paymentTypes = require('../services/paymentTypes');
 
 // DTO de alta de empleado: campos requeridos + formatos válidos.
 const createEmployeeSchema = Joi.object({
@@ -243,10 +244,11 @@ const QUICK_EDIT_COLS = {
   phone: 'phone', position: 'position',
   birth_date: 'birth_date', hire_date: 'hire_date',
   schedule_id: 'schedule_id',
-  // Datos para planillas legales (MTESS / IPS)
+  // Datos para planillas legales (MTESS / IPS). `antiguedad_rate` NO se
+  // acepta más: la antigüedad se calcula desde `hire_date` al leer.
   document_number: 'document_number', ips_number: 'ips_number',
   salary_base: 'salary_base', gender: 'gender', pay_type: 'pay_type',
-  children_count: 'children_count', antiguedad_rate: 'antiguedad_rate',
+  children_count: 'children_count',
   // `status` NO se edita por /quick a propósito: los cambios de estado van
   // por /deactivate y /reactivate (motivo + auditoría + deshabilitación
   // pendiente en el reloj). Ver `guardStatusChange`.
@@ -267,6 +269,11 @@ router.patch('/:id/quick', authorize('admin', 'hr', 'gth'), requirePermission('e
 
   const parsed = validateField(field, value);
   if (!parsed.ok) return res.status(400).json({ error: parsed.error, field });
+
+  if (field === 'pay_type' && parsed.value != null) {
+    const okCat = await paymentTypes.isActiveCode(parsed.value);
+    if (!okCat) return res.status(400).json({ error: 'Tipo de pago inválido o inactivo', field });
+  }
 
   const [[prev]] = await sequelize.query(
     `SELECT \`${col}\` AS v FROM employees WHERE id = ?`, { replacements: [id] }

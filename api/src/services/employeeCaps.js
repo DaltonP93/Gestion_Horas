@@ -35,9 +35,11 @@ function capsForRole(role) {
 }
 
 // Campos legales tratados con permiso separado (matchea allowlist de /quick).
+// `antiguedad_rate` queda fuera desde PR-B: es derivado de hire_date, no
+// editable por la API.
 const LEGAL_FIELDS = new Set([
   'document_number', 'ips_number', 'salary_base',
-  'gender', 'pay_type', 'children_count', 'antiguedad_rate',
+  'gender', 'pay_type', 'children_count',
 ]);
 
 function classifyField(field) {

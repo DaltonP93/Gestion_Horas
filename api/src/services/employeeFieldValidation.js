@@ -8,30 +8,51 @@
  *
  * - value === '' o null/undefined = intención de limpiar el campo (NULL).
  * - No confía en el cliente: cada campo tiene reglas explícitas.
+ *
+ * Notas de diseño (PR-B):
+ * - `antiguedad_rate` deja de ser editable: se calcula al leer desde
+ *   `hire_date` (services/antiguedad.js). Cualquier intento de update
+ *   se rechaza aquí para que la superficie legacy quede sellada.
+ * - `pay_type` valida sólo el formato del código; la existencia y el
+ *   estado activo se comprueban en el handler contra el catálogo
+ *   administrable `payment_types` (services/paymentTypes.js).
+ * - `salary_base` exige entero no-negativo (nada de decimales) y admite
+ *   null / vacío cuando el permiso lo autorice.
  */
 
 const GENDERS  = new Set(['', 'M', 'F', 'O']);
-const PAYTYPES = new Set(['mensualizado', 'jornalero']);
 const STATUSES = new Set(['active', 'inactive', 'suspended']);
 
 // Documento (C.I.) y N° IPS: sólo dígitos y guiones, longitud razonable.
-const REX_DOC  = /^[0-9.\-\s]{4,20}$/;
-const REX_IPS  = /^[0-9\-\s]{3,20}$/;
-const REX_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const REX_MAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const REX_PHONE = /^[+()\d\s\-.]{4,30}$/;
+const REX_DOC       = /^[0-9.\-\s]{4,20}$/;
+const REX_IPS       = /^[0-9\-\s]{3,20}$/;
+const REX_DATE      = /^\d{4}-\d{2}-\d{2}$/;
+const REX_MAIL      = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const REX_PHONE     = /^[+()\d\s\-.]{4,30}$/;
+const REX_PAY_CODE  = /^[a-z][a-z0-9_]{0,39}$/; // slug administrable
+const REX_INT_ONLY  = /^-?\d+$/;                // dígitos, sin separadores
 
 function isBlank(v) { return v === undefined || v === null || v === ''; }
-function trim(v) { return typeof v === 'string' ? v.trim() : v; }
 
-// Columnas NOT NULL en `employees` (init.sql + migraciones 043/044): no
-// pueden limpiarse. Se rechaza blank aquí para evitar 500 desde el driver.
+// Columnas NOT NULL en `employees` (init.sql + migraciones 043/044/068).
 const NOT_NULLABLE = new Set([
   'first_name', 'last_name',
-  'pay_type', 'children_count', 'antiguedad_rate',
+  'pay_type', 'children_count',
+]);
+
+// Campos que NO pueden editarse desde la ficha: se derivan/calculan.
+// `antiguedad_rate` queda cerrado desde PR-B; se computa en runtime
+// a partir de `hire_date`. Se conserva la columna por compatibilidad
+// pero no admite escritura por la API pública.
+const READ_ONLY_FIELDS = new Set([
+  'antiguedad_rate',
 ]);
 
 function validate(field, value) {
+  if (READ_ONLY_FIELDS.has(field)) {
+    return err(`${labelOf(field)} se calcula automáticamente desde la fecha de ingreso`);
+  }
+
   if (isBlank(value)) {
     if (NOT_NULLABLE.has(field)) return err(`${labelOf(field)} es requerido`);
     return { ok: true, value: null };
@@ -77,8 +98,16 @@ function validate(field, value) {
       return { ok: true, value: String(v).replace(/\s+/g, '') };
 
     case 'salary_base': {
-      const n = Number(v);
-      if (!Number.isFinite(n) || n < 0) return err('salario debe ser ≥ 0');
+      // Sólo entero no-negativo. Rechaza decimales, notación con separadores
+      // ("2.500,50", "1,000") y strings no numéricas. La UI debe enviar el
+      // entero limpio; el formato con puntos de miles es visualización.
+      let raw = v;
+      if (typeof raw === 'string') {
+        if (!REX_INT_ONLY.test(raw)) return err('salario: entero sin separadores (≥ 0)');
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || !Number.isInteger(n)) return err('salario: entero sin separadores (≥ 0)');
+      if (n < 0) return err('salario debe ser ≥ 0');
       if (n > 1e12) return err('salario fuera de rango');
       return { ok: true, value: n };
     }
@@ -89,23 +118,14 @@ function validate(field, value) {
       return { ok: true, value: n };
     }
 
-    case 'antiguedad_rate': {
-      // PR-A: la columna se conserva por compatibilidad de DB pero el valor
-      // se interpreta ahora como AÑOS de antigüedad (entero, no-negativo).
-      // La política del CCT se aplica en liquidacion.js × antiguedadPctPorAno.
-      const n = Number(v);
-      if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 80) {
-        return err('antigüedad (años): entero 0..80');
-      }
-      return { ok: true, value: n };
-    }
-
     case 'gender':
       if (!GENDERS.has(String(v))) return err('género inválido');
       return { ok: true, value: String(v) || null };
 
     case 'pay_type':
-      if (!PAYTYPES.has(String(v))) return err('tipo de pago inválido');
+      // Sólo comprueba formato del código (slug). La existencia + estado
+      // activo se validan contra el catálogo en el handler (paymentTypes.js).
+      if (!REX_PAY_CODE.test(String(v))) return err('tipo de pago inválido');
       return { ok: true, value: String(v) };
 
     // schedule_id se maneja aparte (viene como número/opción).
@@ -125,7 +145,7 @@ function err(msg) { return { ok: false, error: msg }; }
 const LABELS = {
   first_name: 'Nombre', last_name: 'Apellido',
   pay_type: 'Tipo de pago', children_count: 'N° de hijos',
-  antiguedad_rate: 'Antigüedad (años)',
+  antiguedad_rate: 'Antigüedad',
   salary_base:     'Salario base',
 };
 function labelOf(field) { return LABELS[field] || field; }
@@ -137,4 +157,7 @@ function auditValueOf(field, value) {
   return value;
 }
 
-module.exports = { validate, auditValueOf, SENSITIVE_VALUE, trim, NOT_NULLABLE };
+module.exports = {
+  validate, auditValueOf, SENSITIVE_VALUE,
+  NOT_NULLABLE, READ_ONLY_FIELDS,
+};

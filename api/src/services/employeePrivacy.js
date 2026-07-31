@@ -24,7 +24,12 @@ const LEGAL_FIELDS = [
   'gender',
   'pay_type',
   'children_count',
+  // `antiguedad_rate` (legado) y el derivado `antiguedad_*` son sensibles:
+  // dan una pista sobre CCT/salario cuando no se tiene `legal_view`.
   'antiguedad_rate',
+  'antiguedad_years',
+  'antiguedad_months',
+  'antiguedad_label',
   'birth_date',
 ];
 

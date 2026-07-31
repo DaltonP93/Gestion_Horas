@@ -21,6 +21,9 @@ function fixture() {
     pay_type: 'monthly',
     children_count: 2,
     antiguedad_rate: 0.1,
+    antiguedad_years: 5,
+    antiguedad_months: 3,
+    antiguedad_label: '5 años y 3 meses',
     birth_date: '1990-01-01',
   };
 }

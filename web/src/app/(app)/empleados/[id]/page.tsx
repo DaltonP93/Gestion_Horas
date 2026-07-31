@@ -6,17 +6,19 @@ import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
   ArrowLeft, User, Mail, Phone, Building2, Clock,
-  Calendar, Edit2, Save, X, CheckCircle, XCircle,
+  Calendar, CheckCircle, XCircle, X,
   AlertCircle, Briefcase, UserX, UserCheck, ShieldAlert
 } from 'lucide-react'
 import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
 import { fmtTimePy } from '@/lib/datetime'
-import { validateEmployeeField, isLegalField } from '@/lib/employeeFieldValidation'
-import { formatPYG } from '@/lib/currency'
+import { formatPYG, formatThousandsPY, stripThousands } from '@/lib/currency'
 import EmployeeNotes from '@/components/EmployeeNotes'
 import EmployeeDocuments from '@/components/EmployeeDocuments'
 import BiometriaRelojes from '@/components/BiometriaRelojes'
+import EditField, { DerivedField, AddCatalogButton, type FeedbackState } from '@/components/EditField'
+import PaymentTypeModal, { canManagePaymentTypes } from '@/components/PaymentTypeModal'
+import { useCurrentUser } from '@/lib/useCurrentUser'
 import dynamic from 'next/dynamic'
 const FaceEnroll = dynamic(() => import('@/components/FaceEnroll'), { ssr: false })
 
@@ -38,167 +40,6 @@ const STATUS_ROW: Record<string, { label: string; cls: string; icon: React.React
   late:       { label: 'Retardo',   cls: 'bg-amber-50  text-amber-700',  icon: <AlertCircle size={14} /> },
   absent:     { label: 'Ausente',   cls: 'bg-red-50    text-red-700',    icon: <XCircle size={14} />     },
   permission: { label: 'Permiso',   cls: 'bg-purple-50 text-purple-700', icon: <Calendar size={14} />    },
-}
-
-// ─── Feedback inline (banner ligero, sin dependencias) ────────────
-type FeedbackState = { kind: 'ok' | 'err'; msg: string } | null
-
-// ─── Formulario de edición inline ─────────────────────────────────
-// Cada fila lleva su propia clase `group`, para que el lápiz aparezca
-// consistentemente al hacer hover/focus en cualquier sección (personal
-// o legal), sin depender del contenedor externo. En móvil el lápiz
-// está siempre visible; en desktop aparece con hover o focus dentro.
-function EditField({
-  label, value, name, type = 'text', options, onSave, readOnly = false, onFeedback,
-  min, step, formatDisplay, inputPrefix,
-}: {
-  label: string
-  value: string
-  name: string
-  type?: string
-  options?: { value: string; label: string }[]
-  onSave: (name: string, value: string) => Promise<void>
-  readOnly?: boolean
-  onFeedback?: (f: FeedbackState) => void
-  min?: number
-  step?: number
-  /** Convierte el valor guardado en la cadena que se muestra en modo lectura. */
-  formatDisplay?: (v: string) => string
-  /** Prefijo textual dentro del campo (ej. "Gs.") en modo edición. */
-  inputPrefix?: string
-}) {
-  const [editing, setEditing] = useState(false)
-  const [val, setVal]         = useState(value || '')
-  const [saving, setSaving]   = useState(false)
-  const [error, setError]     = useState<string | null>(null)
-
-  useEffect(() => { setVal(value || '') }, [value])
-
-  async function handleSave() {
-    // Validación cliente antes del round-trip.
-    const check = validateEmployeeField(name, val)
-    if (!check.ok) {
-      setError(check.error)
-      onFeedback?.({ kind: 'err', msg: `${label}: ${check.error}` })
-      return
-    }
-    setError(null)
-    setSaving(true)
-    try {
-      await onSave(name, val)
-      setEditing(false)
-      onFeedback?.({ kind: 'ok', msg: `${label} actualizado.` })
-    } catch (e: any) {
-      const msg = e?.response?.data?.error || e?.message || 'Error al guardar'
-      setError(msg)
-      onFeedback?.({ kind: 'err', msg: `${label}: ${msg}` })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const shownValue = value ? (formatDisplay ? formatDisplay(value) : value) : ''
-  const displayValue = shownValue
-    ? shownValue
-    : <span className="text-slate-400 dark:text-white/30">—</span>
-
-  return (
-    // Layout responsive: en móvil apila label sobre valor (no compite por ancho);
-    // en sm+ los pone en fila con el label ocupando 8rem y el valor absorbiendo
-    // el resto. `min-w-0` en los flex-children evita que un input o texto largo
-    // empuje la columna y termine solapando la columna derecha del grid.
-    <div
-      data-testid={`edit-field-${name}`}
-      className="group flex flex-col gap-1 py-3 border-b border-slate-50 last:border-0 sm:flex-row sm:items-center sm:gap-3 dark:border-white/[0.05]"
-    >
-      <span className="text-xs uppercase tracking-wide text-slate-500 sm:w-32 sm:shrink-0 sm:text-sm sm:normal-case sm:tracking-normal dark:text-white/40">
-        {label}
-      </span>
-      {editing ? (
-        <div className="flex flex-col items-stretch gap-1 flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            {options ? (
-              <select
-                aria-label={label}
-                value={val}
-                onChange={e => setVal(e.target.value)}
-                className="flex-1 min-w-0 border border-slate-200 rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white"
-              >
-                {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            ) : (
-              <div className="relative flex-1 min-w-0">
-                {inputPrefix && (
-                  <span className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-xs text-slate-400 dark:text-white/30">
-                    {inputPrefix}
-                  </span>
-                )}
-                <input
-                  aria-label={label}
-                  type={type}
-                  value={val}
-                  min={min}
-                  step={step}
-                  onChange={e => setVal(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') { e.preventDefault(); handleSave() }
-                    if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(value || ''); setError(null) }
-                  }}
-                  className={
-                    'w-full min-w-0 border border-slate-200 rounded-lg py-1 text-sm ' +
-                    'focus:outline-none focus:ring-2 focus:ring-blue-500 ' +
-                    'dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white ' +
-                    (inputPrefix ? 'pl-9 pr-2' : 'px-2')
-                  }
-                  autoFocus
-                />
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              aria-label={`Guardar ${label}`}
-              className="shrink-0 rounded-lg p-1 text-green-600 hover:bg-green-50 hover:text-green-700 disabled:opacity-50 dark:hover:bg-emerald-500/10"
-            >
-              <Save size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={() => { setEditing(false); setVal(value || ''); setError(null) }}
-              aria-label={`Cancelar edición de ${label}`}
-              className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:text-white/30 dark:hover:bg-white/[0.06]"
-            >
-              <X size={16} />
-            </button>
-          </div>
-          {error && <p className="text-xs text-red-600 dark:text-red-400" role="alert">{error}</p>}
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 flex-1 justify-between min-w-0">
-          <span className="text-sm font-medium text-slate-900 truncate dark:text-white" title={typeof shownValue === 'string' ? shownValue : undefined}>
-            {displayValue}
-          </span>
-          {!readOnly && (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              aria-label={`Editar ${label}`}
-              className={
-                'shrink-0 text-slate-400 hover:text-blue-600 focus-visible:text-blue-600 ' +
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded ' +
-                // Siempre visible en móvil; aparece con hover/focus en ≥sm.
-                'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 ' +
-                'transition-opacity'
-              }
-            >
-              <Edit2 size={14} />
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ─── Página principal ─────────────────────────────────────────────
@@ -232,16 +73,21 @@ export default function EmpleadoDetallePage() {
     staleTime: 300_000,
   })
 
-  // Catálogo de tipos de pago. Antes venía hardcodeado en la UI; ahora se
-  // consume desde el backend (PR-A) y quedará detrás del ABM en PR-B.
+  // Catálogo de tipos de pago (PR-B: administrable en /api/payment-types).
+  // El endpoint /api/catalogs/pay-types es el shape estable que consume la UI.
   const { data: payTypesData } = useQuery({
     queryKey: ['catalog', 'pay-types'],
     queryFn: () => api.get('/api/catalogs/pay-types').then(r => r.data),
-    staleTime: 300_000,
+    staleTime: 60_000,
   })
   const payTypeOpts = ((payTypesData?.data as { value: string; label: string; active?: boolean }[] | undefined) || [])
     .filter(p => p.active !== false)
     .map(p => ({ value: p.value, label: p.label }))
+
+  // Usuario actual (para decidir si puede crear tipos de pago desde el "+" ).
+  const currentUser = useCurrentUser()
+  const canManagePT = canManagePaymentTypes(currentUser?.role)
+  const [ptModalOpen, setPtModalOpen] = useState(false)
 
   const { data: history } = useQuery({
     queryKey: ['emp-history', id, histFrom, histTo],
@@ -457,6 +303,7 @@ export default function EmpleadoDetallePage() {
 
           {/* Datos legales MTESS / IPS */}
           {canViewLegal ? (
+            <>
             <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
               <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
                 <Briefcase size={15} className="text-cyan-500" /> Datos legales (MTESS / IPS)
@@ -467,11 +314,13 @@ export default function EmpleadoDetallePage() {
                 label="Salario base (Gs.)"
                 value={emp.salary_base != null ? String(emp.salary_base) : ''}
                 name="salary_base"
-                type="number"
-                min={0}
-                step={1}
+                type="text"
+                inputMode="numeric"
                 inputPrefix="Gs."
+                placeholder="0"
                 formatDisplay={v => formatPYG(v)}
+                formatEditing={v => formatThousandsPY(stripThousands(v))}
+                parseEditing={v => stripThousands(v)}
                 readOnly={!canEditLegal}
                 onSave={onSaveField}
                 onFeedback={setFeedback}
@@ -485,6 +334,12 @@ export default function EmpleadoDetallePage() {
                 formatDisplay={v => payTypeOpts.find(o => o.value === v)?.label || v}
                 onSave={onSaveField}
                 onFeedback={setFeedback}
+                actionSlot={canManagePT && (
+                  <AddCatalogButton
+                    label="Crear nuevo tipo de pago"
+                    onClick={() => setPtModalOpen(true)}
+                  />
+                )}
               />
               <EditField
                 label="Género"
@@ -505,24 +360,34 @@ export default function EmpleadoDetallePage() {
                 value={emp.children_count != null ? String(emp.children_count) : '0'}
                 name="children_count"
                 type="number"
+                inputMode="numeric"
                 min={0}
                 step={1}
                 readOnly={!canEditLegal}
                 onSave={onSaveField}
                 onFeedback={setFeedback}
               />
-              <EditField
-                label="Antigüedad (años)"
-                value={emp.antiguedad_rate != null ? String(emp.antiguedad_rate) : '0'}
-                name="antiguedad_rate"
-                type="number"
-                min={0}
-                step={1}
-                readOnly={!canEditLegal}
-                onSave={onSaveField}
-                onFeedback={setFeedback}
+              {/* Antigüedad: DERIVADA de hire_date. Sin edición. */}
+              <DerivedField
+                label="Antigüedad"
+                value={emp.antiguedad_label || 'Sin fecha de ingreso'}
               />
             </div>
+            <PaymentTypeModal
+              open={ptModalOpen}
+              onClose={() => setPtModalOpen(false)}
+              onCreated={async (code) => {
+                // Refresca el catálogo y selecciona automáticamente el nuevo tipo.
+                await qc.invalidateQueries({ queryKey: ['catalog', 'pay-types'] })
+                try {
+                  await onSaveField('pay_type', code)
+                  setFeedback({ kind: 'ok', msg: `Nuevo tipo de pago "${code}" creado y asignado.` })
+                } catch (e: any) {
+                  setFeedback({ kind: 'err', msg: e?.response?.data?.error || e?.message || 'Creado, pero no se pudo asignar.' })
+                }
+              }}
+            />
+            </>
           ) : null}
         </div>
 

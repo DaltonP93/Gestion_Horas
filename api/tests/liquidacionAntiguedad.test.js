@@ -1,11 +1,13 @@
 /**
- * PR-A: la columna `antiguedad_rate` pasa a interpretarse como AÑOS.
- * `computeLiquidacion` debe multiplicar por `antiguedadPctPorAno` (default 1%).
+ * PR-B: la antigüedad la deriva `computeLiquidacion` desde `hire_date`
+ * (fuente única). Se conserva un fallback al valor legado `antiguedad_rate`
+ * si el empleado no tiene fecha de ingreso. `refDate` puede fijarse en los
+ * rates para pruebas deterministas.
  */
 
 const { computeLiquidacion, DEFAULT_RATES } = require('../src/services/liquidacion');
 
-describe('computeLiquidacion — antigüedad (años × pct/año)', () => {
+describe('computeLiquidacion — antigüedad derivada de hire_date', () => {
   const baseEmp = {
     pay_type: 'mensualizado',
     salary_base: 3_000_000,       // Gs.
@@ -13,27 +15,51 @@ describe('computeLiquidacion — antigüedad (años × pct/año)', () => {
     days: [],
   };
 
-  test('default: 5 años × 1%/año = 5% del básico', () => {
-    const r = computeLiquidacion({ ...baseEmp, antiguedad_rate: 5 }, 30);
-    // básico prorrateado 30/30 → 3.000.000 · 5% = 150.000
-    expect(r.antiguedad).toBe(150000);
+  test('5 años completos × 1%/año = 5% del básico', () => {
+    const r = computeLiquidacion(
+      { ...baseEmp, hire_date: '2020-07-30' },
+      30,
+      { refDate: '2025-07-30' }
+    );
+    expect(r.antiguedad).toBe(150000); // 3.000.000 × 5%
   });
 
-  test('0 años no aporta antigüedad', () => {
-    const r = computeLiquidacion({ ...baseEmp, antiguedad_rate: 0 }, 30);
-    expect(r.antiguedad).toBe(0);
+  test('un día antes del aniversario NO cumple el año', () => {
+    const r = computeLiquidacion(
+      { ...baseEmp, hire_date: '2020-07-30' },
+      30,
+      { refDate: '2025-07-29' }
+    );
+    // 4 años cumplidos × 1% = 4%
+    expect(r.antiguedad).toBe(120000);
   });
 
-  test('antiguedad_rate ausente no rompe (default 0)', () => {
+  test('0 años sin hire_date ni fallback → sin antigüedad', () => {
     const r = computeLiquidacion({ ...baseEmp }, 30);
     expect(r.antiguedad).toBe(0);
   });
 
-  test('override de antiguedadPctPorAno vía rates (CCT distinto)', () => {
-    // 10 años · 2%/año = 20% del básico → 600.000
+  test('fallback a antiguedad_rate cuando no hay hire_date (compat)', () => {
     const r = computeLiquidacion(
-      { ...baseEmp, antiguedad_rate: 10 }, 30,
-      { antiguedadPctPorAno: 2 }
+      { ...baseEmp, antiguedad_rate: 8 }, 30
+    );
+    expect(r.antiguedad).toBe(240000); // 3.000.000 × 8 × 1%
+  });
+
+  test('hire_date presente ignora legacy antiguedad_rate', () => {
+    // hire_date acabaría dando 5 años, no los 20 del campo legado.
+    const r = computeLiquidacion(
+      { ...baseEmp, hire_date: '2020-07-30', antiguedad_rate: 20 }, 30,
+      { refDate: '2025-07-30' }
+    );
+    expect(r.antiguedad).toBe(150000);
+  });
+
+  test('override de antiguedadPctPorAno vía rates (CCT distinto)', () => {
+    // 10 años × 2%/año = 20% del básico → 600.000
+    const r = computeLiquidacion(
+      { ...baseEmp, hire_date: '2015-07-30' }, 30,
+      { antiguedadPctPorAno: 2, refDate: '2025-07-30' }
     );
     expect(r.antiguedad).toBe(600000);
   });
