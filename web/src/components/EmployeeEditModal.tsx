@@ -34,6 +34,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { X, Save, Plus, User, Briefcase, ShieldCheck, Coins, Users } from 'lucide-react'
 import { api, employeesApi } from '@/lib/api'
 import PaymentTypeModal, { canManagePaymentTypes } from './PaymentTypeModal'
+import JobTitleModal, { canManageJobTitles } from './JobTitleModal'
 import {
   TextField, SelectField, CurrencyField, fieldId, type Option,
 } from './EmployeeFormFields'
@@ -65,6 +66,7 @@ export default function EmployeeEditModal({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [payTypeModal, setPayTypeModal] = useState(false)
+  const [jobTitleModal, setJobTitleModal] = useState(false)
   const firstFieldRef = useRef<HTMLInputElement | null>(null)
   const panelRef = useRef<HTMLFormElement | null>(null)
   const openerRef = useRef<Element | null>(null)
@@ -133,6 +135,12 @@ export default function EmployeeEditModal({
     enabled: open,
     staleTime: 60_000,
   })
+  const { data: jobTitlesData } = useQuery({
+    queryKey: ['catalog', 'job-titles'],
+    queryFn: () => api.get('/api/catalogs/job-titles').then(r => r.data),
+    enabled: open,
+    staleTime: 60_000,
+  })
 
   const deptOpts = useMemo<Option[]>(
     () => [{ value: '', label: '—' }, ...(departments || []).map((d: any) => ({ value: String(d.id), label: d.name }))],
@@ -150,6 +158,25 @@ export default function EmployeeEditModal({
     const raw = (payTypesData?.data as { value: string; label: string; active?: boolean }[] | undefined) || []
     return raw.filter(p => p.active !== false).map(p => ({ value: p.value, label: p.label }))
   }, [payTypesData])
+
+  /**
+   * Cargos del catálogo. El valor actual de la ficha se agrega si no está
+   * en la lista: un `<select>` con un value ausente se renderiza en blanco
+   * y borraría el cargo al guardar, que es justo lo que pasaría con las
+   * fichas cuyo cargo fue desactivado después.
+   */
+  const jobTitleOpts = useMemo<Option[]>(() => {
+    const raw = (jobTitlesData?.data as { value: string; label: string; active?: boolean }[] | undefined) || []
+    const opts: Option[] = [
+      { value: '', label: 'Sin cargo' },
+      ...raw.filter(j => j.active !== false).map(j => ({ value: j.value, label: j.label })),
+    ]
+    const current = (form.position || '').trim()
+    if (current && !opts.some(o => o.value.toLocaleLowerCase() === current.toLocaleLowerCase())) {
+      opts.push({ value: current, label: `${current} (fuera del catálogo)` })
+    }
+    return opts
+  }, [jobTitlesData, form.position])
 
   const setField = useCallback((field: FieldName, value: string) => {
     setForm(f => ({ ...f, [field]: value }))
@@ -172,7 +199,7 @@ export default function EmployeeEditModal({
 
     if (e.key === 'Escape') {
       // El submodal gestiona su propio Escape.
-      if (!saving && !payTypeModal) onClose()
+      if (!saving && !payTypeModal && !jobTitleModal) onClose()
       return
     }
     if (e.key !== 'Tab') return
@@ -186,7 +213,7 @@ export default function EmployeeEditModal({
     } else if (!e.shiftKey && active === last) {
       e.preventDefault(); first.focus()
     }
-  }, [saving, payTypeModal, onClose])
+  }, [saving, payTypeModal, jobTitleModal, onClose])
 
   async function onSubmit(e?: React.FormEvent) {
     e?.preventDefault()
@@ -234,6 +261,7 @@ export default function EmployeeEditModal({
   if (!open || typeof document === 'undefined') return null
 
   const canManagePT     = canManagePaymentTypes(currentUserRole || undefined)
+  const canManageJT     = canManageJobTitles(currentUserRole || undefined)
   const canViewLegal    = !!caps.legal_view
   const disabledPersonal = !caps.personal_update || saving
   const disabledLegal    = !caps.legal_update || saving
@@ -292,7 +320,26 @@ export default function EmployeeEditModal({
               <Briefcase size={16} className="text-emerald-500" /> Datos laborales
             </h3>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <TextField   field="position"      label="Cargo"        value={form.position}      error={errors.position}      onChange={setField} disabled={disabledPersonal} />
+              <SelectField
+                field="position"
+                label="Cargo"
+                value={form.position}
+                error={errors.position}
+                onChange={setField}
+                disabled={disabledPersonal}
+                options={jobTitleOpts}
+                actionSlot={
+                  canManageJT ? (
+                    <button
+                      type="button"
+                      onClick={() => setJobTitleModal(true)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-white/70"
+                    >
+                      <Plus size={13} /> Nuevo cargo
+                    </button>
+                  ) : null
+                }
+              />
               <SelectField field="department_id" label="Departamento" value={form.department_id} error={errors.department_id} onChange={setField} disabled={disabledPersonal} options={deptOpts} />
               <SelectField field="branch_id"     label="Sede"         value={form.branch_id}     error={errors.branch_id}     onChange={setField} disabled={disabledPersonal} options={branchOpts} />
               <SelectField field="schedule_id"   label="Turno / horario" value={form.schedule_id} error={errors.schedule_id} onChange={setField} disabled={disabledPersonal} options={scheduleOpts} />
@@ -403,6 +450,15 @@ export default function EmployeeEditModal({
         onCreated={async (code) => {
           await qc.invalidateQueries({ queryKey: ['catalog', 'pay-types'] })
           setField('pay_type', code)
+        }}
+      />
+
+      <JobTitleModal
+        open={jobTitleModal}
+        onClose={() => setJobTitleModal(false)}
+        onCreated={async (name) => {
+          await qc.invalidateQueries({ queryKey: ['catalog', 'job-titles'] })
+          setField('position', name)
         }}
       />
     </div>

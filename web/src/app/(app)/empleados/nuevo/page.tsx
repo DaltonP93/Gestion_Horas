@@ -86,6 +86,13 @@ export default function NuevoEmpleadoPage() {
     staleTime: 300_000,
   })
 
+  const { data: jobTitlesData } = useQuery({
+    queryKey: ['catalog', 'job-titles'],
+    queryFn: () => api.get('/api/catalogs/job-titles').then(r => r.data),
+    staleTime: 300_000,
+  })
+  const jobTitles: { value: string; label: string }[] = jobTitlesData?.data || []
+
   function set(name: keyof FormData, val: string) {
     setForm(prev => ({ ...prev, [name]: val }))
     setError('')
@@ -189,7 +196,27 @@ export default function NuevoEmpleadoPage() {
         <div>
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 dark:text-white/30">Datos laborales</p>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Cargo / Puesto" name="position"  value={form.position}  onChange={set} />
+            {/* Cargo: sale del catálogo `job_titles`. Si la migración 069
+                todavía no corrió el catálogo llega vacío, y ahí conviene
+                seguir aceptando texto libre antes que bloquear el alta. */}
+            {jobTitles.length ? (
+              <div>
+                <label htmlFor="emp-nuevo-position" className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Cargo / Puesto</label>
+                <select
+                  id="emp-nuevo-position"
+                  value={form.position}
+                  onChange={e => set('position', e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]"
+                >
+                  <option value="">Sin cargo</option>
+                  {jobTitles.map(j => (
+                    <option key={j.value} value={j.value}>{j.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <Field label="Cargo / Puesto" name="position"  value={form.position}  onChange={set} />
+            )}
             <Field label="Fecha de ingreso" name="hire_date" value={form.hire_date} onChange={set} type="date" />
 
             {/* Departamento */}
