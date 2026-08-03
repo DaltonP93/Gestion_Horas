@@ -124,10 +124,12 @@ async function getById(req, res) {
     const [rows] = await sequelize.query(`
       SELECT
         e.*, d.name AS department_name, s.name AS schedule_name,
-        s.check_in, s.check_out, s.tolerance_in
+        s.check_in, s.check_out, s.tolerance_in,
+        b.name AS branch_name, b.code AS branch_code
       FROM employees e
       LEFT JOIN departments d ON e.department_id = d.id
       LEFT JOIN schedules   s ON e.schedule_id   = s.id
+      LEFT JOIN branches    b ON e.branch_id     = b.id
       WHERE e.id = ?
     `, { replacements: [req.params.id] });
 
@@ -189,11 +191,19 @@ async function create(req, res) {
 }
 
 // PUT /api/employees/:id
-// Actualización estándar. Cada campo entrante se valida y normaliza; si un
-// valor viene `null` explícito, se limpia (a diferencia del comportamiento
-// anterior con COALESCE que nunca permitía borrar). Los campos ausentes se
-// dejan intactos. Se auditan solo los cambios reales, con el diff campo a
-// campo (nunca el valor de salario).
+// Actualización ATÓMICA de la ficha (PR 1: modal de edición completa).
+//
+// Contrato:
+// 1. Se validan TODOS los campos entrantes antes de escribir.
+// 2. Si cualquiera falla, se rechaza el request completo (nada se persiste).
+// 3. El UPDATE corre dentro de una transacción; la escritura y la comprobación
+//    de existencia del empleado comparten la misma conexión.
+// 4. Un campo con `null` / `''` significa "limpiar" (a diferencia del viejo
+//    COALESCE que no permitía borrar).
+// 5. Los campos ausentes en el body se dejan intactos.
+// 6. Se auditan solo los cambios reales; `salary_base` NUNCA loggea el valor.
+// 7. Responde con la ficha completa recién guardada para que la UI no necesite
+//    una segunda vuelta al backend antes de cerrar el modal.
 async function update(req, res) {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
@@ -203,11 +213,11 @@ async function update(req, res) {
   const ALLOWED = new Set([
     'first_name', 'last_name', 'email', 'phone', 'position',
     'hire_date', 'birth_date', 'status',
-    'department_id', 'schedule_id',
+    'department_id', 'schedule_id', 'branch_id',
     'document_number', 'ips_number', 'salary_base',
     'gender', 'pay_type', 'children_count',
   ]);
-  // Campos con validador dedicado (el resto solo pasa por allowlist).
+  // Campos con validador dedicado (el resto pasa por allowlist genérica).
   const VALIDATED = new Set([
     'first_name', 'last_name', 'email', 'phone', 'position',
     'hire_date', 'birth_date', 'status',
@@ -215,43 +225,51 @@ async function update(req, res) {
     'gender', 'pay_type', 'children_count',
     'schedule_id',
   ]);
+  // FKs opcionales: entero positivo o null; el select de UI envía '' o un id.
+  const NULLABLE_FK = new Set(['department_id', 'branch_id']);
 
-  try {
-    const changes = {};
-    for (const [k, raw] of Object.entries(req.body || {})) {
-      if (!ALLOWED.has(k)) continue;
-      // `null` explícito y `''` significan "limpiar".
-      const val = raw;
-      if (VALIDATED.has(k)) {
-        const v = validateField(k, val);
-        if (!v.ok) return res.status(400).json({ error: v.error, field: k });
-        if (k === 'pay_type' && v.value != null) {
-          const ok = await paymentTypes.isActiveCode(v.value);
-          if (!ok) return res.status(400).json({ error: 'Tipo de pago inválido o inactivo', field: k });
-        }
-        changes[k] = v.value;
-      } else {
-        // department_id: entero positivo o null
-        if (val === null || val === '' || val === undefined) changes[k] = null;
-        else {
-          const n = Number(val);
-          if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: `${k} inválido`, field: k });
-          changes[k] = n;
-        }
+  // Validación completa PREVIA a cualquier escritura. Si algún campo falla,
+  // devolvemos 400 y el estado en BD queda intacto (guardado atómico).
+  const changes = {};
+  for (const [k, raw] of Object.entries(req.body || {})) {
+    if (!ALLOWED.has(k)) continue;
+    if (VALIDATED.has(k)) {
+      const v = validateField(k, raw);
+      if (!v.ok) return res.status(400).json({ error: v.error, field: k });
+      changes[k] = v.value;
+    } else if (NULLABLE_FK.has(k)) {
+      if (raw === null || raw === '' || raw === undefined) changes[k] = null;
+      else {
+        const n = Number(raw);
+        if (!Number.isInteger(n) || n <= 0) return res.status(400).json({ error: `${k} inválido`, field: k });
+        changes[k] = n;
       }
     }
+  }
 
-    if (!Object.keys(changes).length) return res.json({ message: 'Sin cambios' });
+  if (!Object.keys(changes).length) return res.json({ message: 'Sin cambios', changed: [] });
 
-    // Leer valores previos solo de los campos que van a cambiar (para diff y auditoría).
+  // Existencia del pay_type: se comprueba antes de abrir la transacción para
+  // no dejar el lock innecesariamente.
+  if (changes.pay_type != null) {
+    const ok = await paymentTypes.isActiveCode(changes.pay_type);
+    if (!ok) return res.status(400).json({ error: 'Tipo de pago inválido o inactivo', field: 'pay_type' });
+  }
+
+  const t = await sequelize.transaction();
+  try {
     const cols = Object.keys(changes);
-    const [[prev]] = await sequelize.query(
-      `SELECT ${cols.map(c => '`' + c + '`').join(', ')} FROM employees WHERE id = ?`,
-      { replacements: [id] }
+    const [prevRows] = await sequelize.query(
+      `SELECT ${cols.map(c => '`' + c + '`').join(', ')} FROM employees WHERE id = ? FOR UPDATE`,
+      { replacements: [id], transaction: t }
     );
-    if (!prev) return res.status(404).json({ error: 'Empleado no encontrado' });
+    const prev = prevRows[0];
+    if (!prev) {
+      await t.rollback();
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
 
-    // Filtrar los que realmente cambian.
+    // Filtrar los que efectivamente cambian.
     const diff = {};
     for (const c of cols) {
       const before = prev[c];
@@ -260,17 +278,27 @@ async function update(req, res) {
                 || (before != null && after != null && String(before) === String(after));
       if (!same) diff[c] = { from: before, to: after };
     }
-    if (!Object.keys(diff).length) return res.json({ message: 'Sin cambios' });
 
-    // UPDATE por lista dinámica (columnas provienen de allowlist, no del cliente).
+    if (!Object.keys(diff).length) {
+      await t.commit();
+      // Sin cambios reales: aún así devolvemos la ficha para que la UI la
+      // refresque sin hacer un segundo GET.
+      const employee = await readEmployeeById(id, req.user);
+      return res.json({ message: 'Sin cambios', changed: [], employee });
+    }
+
+    // UPDATE dinámico. Las columnas provienen de la allowlist, nunca del cliente.
     const setSql = Object.keys(diff).map(c => `\`${c}\` = ?`).join(', ');
     const vals   = Object.keys(diff).map(c => diff[c].to);
     await sequelize.query(
       `UPDATE employees SET ${setSql} WHERE id = ?`,
-      { replacements: [...vals, id] }
+      { replacements: [...vals, id], transaction: t }
     );
 
-    // Auditoría campo a campo (sin exponer salario).
+    await t.commit();
+
+    // Auditoría fuera de la transacción: si audit.log fallara no queremos
+    // revertir la escritura ya confirmada. `salary_base` se enmascara.
     for (const [field, ba] of Object.entries(diff)) {
       const kind = require('../services/employeeCaps').classifyField(field);
       audit.log({
@@ -286,11 +314,40 @@ async function update(req, res) {
       });
     }
 
-    res.json({ message: 'Empleado actualizado', changed: Object.keys(diff) });
+    const employee = await readEmployeeById(id, req.user);
+    return res.json({ message: 'Empleado actualizado', changed: Object.keys(diff), employee });
   } catch (err) {
+    try { await t.rollback(); } catch { /* noop */ }
     logger.error('Error updating employee:', err);
-    res.status(500).json({ error: 'Error al actualizar empleado' });
+    return res.status(500).json({ error: 'Error al actualizar empleado' });
   }
+}
+
+// Helper: relee la ficha completa (mismo shape que getById) para devolver al
+// cliente tras un UPDATE atómico. Enmascara según caps del usuario actual y
+// añade antigüedad derivada + capacidades.
+async function readEmployeeById(id, reqUser) {
+  const [rows] = await sequelize.query(`
+    SELECT
+      e.*, d.name AS department_name, s.name AS schedule_name,
+      s.check_in, s.check_out, s.tolerance_in,
+      b.name AS branch_name, b.code AS branch_code
+    FROM employees e
+    LEFT JOIN departments d ON e.department_id = d.id
+    LEFT JOIN schedules   s ON e.schedule_id   = s.id
+    LEFT JOIN branches    b ON e.branch_id     = b.id
+    WHERE e.id = ?
+  `, { replacements: [id] });
+  if (!rows.length) return null;
+  const row = rows[0];
+  const caps = capsForRole(reqUser?.role);
+  maskEmployeeRow(row, { caps });
+  row._caps = caps;
+  const ant = computeAntiguedad(row.hire_date, todayInCompanyTZ());
+  row.antiguedad_years  = ant ? ant.years  : null;
+  row.antiguedad_months = ant ? ant.months : null;
+  row.antiguedad_label  = formatAntiguedad(ant);
+  return row;
 }
 
 // DELETE /api/employees/:id · POST /api/employees/:id/deactivate

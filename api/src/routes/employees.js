@@ -32,10 +32,26 @@ router.use(authenticate);
 // ─── Guards de sub-acciones (PR 1: edición de ficha) ────────────
 // Complementan al catálogo plano `requirePermission` con capacidades
 // diferenciadas por campo. El catálogo global (submódulos) llega en PR 3.
+//
+// PR 1: la ficha entera se guarda con un solo PUT desde el modal, por lo que
+// el guard debe cubrir TODOS los campos del payload — no solo los del
+// allowlist de /quick. Un rol sin `personal.update` no puede cambiar
+// department_id / branch_id / schedule_id aunque no estén en /quick.
+const PUT_EDITABLE_FIELDS = new Set([
+  'first_name', 'last_name', 'email', 'phone', 'position',
+  'hire_date', 'birth_date', 'status',
+  'department_id', 'schedule_id', 'branch_id',
+  'document_number', 'ips_number', 'salary_base',
+  'gender', 'pay_type', 'children_count',
+]);
 function guardLegalOnPut(req, res, next) {
   const caps = capsForRole(req.user?.role);
-  const legalIn = Object.keys(req.body || {}).some(k => classifyField(k) === 'legal');
-  const personalIn = Object.keys(req.body || {}).some(k => classifyField(k) === 'personal' && QUICK_EDIT_COLS[k]);
+  let legalIn = false, personalIn = false;
+  for (const k of Object.keys(req.body || {})) {
+    if (!PUT_EDITABLE_FIELDS.has(k)) continue;
+    if (classifyField(k) === 'legal') legalIn = true;
+    else personalIn = true;
+  }
   if (personalIn && !caps.personal_update) return res.status(403).json({ error: 'Sin permiso (empleados.personal.update)' });
   if (legalIn && !caps.legal_update)       return res.status(403).json({ error: 'Sin permiso (empleados.legal.update)' });
   next();

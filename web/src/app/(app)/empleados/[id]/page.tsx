@@ -1,26 +1,46 @@
 'use client'
+/**
+ * /empleados/[id] — ficha del empleado (PR 1: readonly + modal).
+ *
+ * Superficie visible:
+ *   - Header rico con toda la info clave del empleado (avatar, nombre,
+ *     código, C.I., cargo, departamento, sede, turno, estado, ingreso,
+ *     antigüedad, tipo de pago).
+ *   - Un solo botón "Editar empleado" que abre el modal completo.
+ *   - Baja / reactivación permanecen como acción separada del header
+ *     porque exigen motivo + confirmación + auditoría (nunca se editan
+ *     como si fueran un campo más).
+ *   - Historial de asistencia, biometría, documentos y notas se
+ *     mantienen como paneles independientes.
+ *
+ * Cambios respecto de PR previos: se eliminó toda la edición inline
+ * (EditField) porque generaba fricción y un flujo poco claro. Ahora hay
+ * un único guardado atómico contra `PUT /api/employees/:id`.
+ */
+
 import { useEffect, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useParams, useRouter } from 'next/navigation'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useParams } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
-  ArrowLeft, User, Mail, Phone, Building2, Clock,
-  Calendar, CheckCircle, XCircle, X,
-  AlertCircle, Briefcase, UserX, UserCheck, ShieldAlert
+  ArrowLeft, User, Clock, Calendar, CheckCircle, XCircle, X,
+  AlertCircle, Briefcase, UserX, UserCheck, ShieldAlert, Building2,
+  MapPin, Coins, Fingerprint, Pencil,
 } from 'lucide-react'
 import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
 import { fmtTimePy } from '@/lib/datetime'
-import { formatPYG, formatThousandsPY, stripThousands } from '@/lib/currency'
+import { formatPYG } from '@/lib/currency'
 import EmployeeNotes from '@/components/EmployeeNotes'
 import EmployeeDocuments from '@/components/EmployeeDocuments'
 import BiometriaRelojes from '@/components/BiometriaRelojes'
-import EditField, { DerivedField, AddCatalogButton, type FeedbackState } from '@/components/EditField'
-import PaymentTypeModal, { canManagePaymentTypes } from '@/components/PaymentTypeModal'
+import EmployeeEditModal from '@/components/EmployeeEditModal'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 import dynamic from 'next/dynamic'
 const FaceEnroll = dynamic(() => import('@/components/FaceEnroll'), { ssr: false })
+
+type Feedback = { kind: 'ok' | 'err'; msg: string } | null
 
 // ─── Helpers ──────────────────────────────────────────────────────
 function minsToHM(mins: number | null) {
@@ -30,9 +50,16 @@ function minsToHM(mins: number | null) {
   return `${h}:${String(m).padStart(2, '0')}`
 }
 
-// Hora de marcación en zona de Paraguay (no la del navegador).
 function fmtTime(dt: string | null) {
   return fmtTimePy(dt)
+}
+
+function fmtCivilDate(v: string | null | undefined): string {
+  if (!v) return '—'
+  const s = String(v).slice(0, 10)
+  const [y, m, d] = s.split('-')
+  if (!y || !m || !d) return '—'
+  return `${d}/${m}/${y}`
 }
 
 const STATUS_ROW: Record<string, { label: string; cls: string; icon: React.ReactNode }> = {
@@ -42,24 +69,43 @@ const STATUS_ROW: Record<string, { label: string; cls: string; icon: React.React
   permission: { label: 'Permiso',   cls: 'bg-purple-50 text-purple-700', icon: <Calendar size={14} />    },
 }
 
-// ─── Página principal ─────────────────────────────────────────────
+// Bloque de datos del header. Reutilizable: label + value + icon opcional.
+function InfoTile({
+  label, value, icon,
+}: { label: string; value: React.ReactNode; icon?: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-slate-400 dark:text-white/40">
+        {icon} <span>{label}</span>
+      </div>
+      <div className="mt-0.5 truncate text-sm font-medium text-slate-800 dark:text-white/90">
+        {value ?? '—'}
+      </div>
+    </div>
+  )
+}
+
 export default function EmpleadoDetallePage() {
   const { id } = useParams<{ id: string }>()
-  const router  = useRouter()
-  const qc      = useQueryClient()
+  const qc = useQueryClient()
+  const currentUser = useCurrentUser()
 
-  const [histFrom, setHistFrom] = useState(() => {
-    const d = new Date(); d.setDate(1); return format(d, 'yyyy-MM-dd')
-  })
-  const [histTo, setHistTo] = useState(format(new Date(), 'yyyy-MM-dd'))
-
-  // Feedback inline (auto-clear a los 3.5s).
-  const [feedback, setFeedback] = useState<FeedbackState>(null)
+  const [feedback, setFeedback] = useState<Feedback>(null)
   useEffect(() => {
     if (!feedback) return
     const t = setTimeout(() => setFeedback(null), 3500)
     return () => clearTimeout(t)
   }, [feedback])
+
+  const [editOpen, setEditOpen] = useState(false)
+  const [bajaOpen, setBajaOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [statusBusy, setStatusBusy] = useState(false)
+
+  const [histFrom, setHistFrom] = useState(() => {
+    const d = new Date(); d.setDate(1); return format(d, 'yyyy-MM-dd')
+  })
+  const [histTo, setHistTo] = useState(format(new Date(), 'yyyy-MM-dd'))
 
   const { data: emp, isLoading, error } = useQuery({
     queryKey: ['employee', id],
@@ -67,52 +113,29 @@ export default function EmpleadoDetallePage() {
     enabled: !!id,
   })
 
-  const { data: schedules } = useQuery({
-    queryKey: ['schedules'],
-    queryFn: () => api.get('/api/schedules').then(r => r.data),
-    staleTime: 300_000,
-  })
-
-  // Catálogo de tipos de pago (PR-B: administrable en /api/payment-types).
-  // El endpoint /api/catalogs/pay-types es el shape estable que consume la UI.
-  const { data: payTypesData } = useQuery({
-    queryKey: ['catalog', 'pay-types'],
-    queryFn: () => api.get('/api/catalogs/pay-types').then(r => r.data),
-    staleTime: 60_000,
-  })
-  const payTypeOpts = ((payTypesData?.data as { value: string; label: string; active?: boolean }[] | undefined) || [])
-    .filter(p => p.active !== false)
-    .map(p => ({ value: p.value, label: p.label }))
-
-  // Usuario actual (para decidir si puede crear tipos de pago desde el "+" ).
-  const currentUser = useCurrentUser()
-  const canManagePT = canManagePaymentTypes(currentUser?.role)
-  const [ptModalOpen, setPtModalOpen] = useState(false)
-
   const { data: history } = useQuery({
     queryKey: ['emp-history', id, histFrom, histTo],
     queryFn: () => employeesApi.history(+id, { from: histFrom, to: histTo }),
     enabled: !!id,
   })
 
-  // Capacidades del rol actual sobre esta ficha. Vienen embebidas en getById
-  // como `_caps`. Nunca son la única defensa: el backend siempre valida.
+  // Catálogo de pay-types sólo para renderizar el label legible en el header.
+  const { data: payTypesData } = useQuery({
+    queryKey: ['catalog', 'pay-types'],
+    queryFn: () => api.get('/api/catalogs/pay-types').then(r => r.data),
+    staleTime: 60_000,
+    enabled: !!id,
+  })
+  const payTypeLabel = (code: string | null | undefined): string => {
+    if (!code) return '—'
+    const list = (payTypesData?.data as { value: string; label: string }[] | undefined) || []
+    return list.find(p => p.value === code)?.label || code
+  }
+
   const caps = (emp?._caps || {}) as Partial<Record<
     'personal_update' | 'legal_view' | 'legal_update' | 'biometrics_link' | 'status_change',
     boolean
   >>
-
-  // Actualizar campo individual — usa /quick para permitir clear real y auditar.
-  async function onSaveField(fieldName: string, value: string) {
-    await employeesApi.quickUpdate(+id, fieldName, value)
-    qc.invalidateQueries({ queryKey: ['employee', id] })
-    qc.invalidateQueries({ queryKey: ['employees'] })
-  }
-
-  // Baja / reactivación robusta (con motivo y auditoría en el backend).
-  const [bajaOpen, setBajaOpen] = useState(false)
-  const [reason, setReason] = useState('')
-  const [statusBusy, setStatusBusy] = useState(false)
 
   async function doDeactivate() {
     setStatusBusy(true)
@@ -142,13 +165,9 @@ export default function EmpleadoDetallePage() {
   if (isLoading) return <div className="p-6 text-slate-400 dark:text-white/30">Cargando...</div>
   if (error || !emp) return <div className="p-6 text-red-500">Empleado no encontrado</div>
 
-  const canEditPersonal = !!caps.personal_update
   const canViewLegal    = !!caps.legal_view
-  const canEditLegal    = !!caps.legal_update
+  const canEditAny      = !!caps.personal_update || !!caps.legal_update
   const canChangeStatus = !!caps.status_change
-
-  const schedOpts = [{ value: '', label: 'Sin horario' },
-    ...(schedules || []).map((s: any) => ({ value: String(s.id), label: s.name }))]
 
   const histRows = history || []
   const workedDays  = histRows.filter((r: any) => r.status === 'present' || r.status === 'late').length
@@ -156,14 +175,22 @@ export default function EmpleadoDetallePage() {
   const absentDays  = histRows.filter((r: any) => r.status === 'absent').length
   const totalWorked = histRows.reduce((acc: number, r: any) => acc + (r.worked_minutes || 0), 0)
 
+  const statusBadge = (() => {
+    switch (emp.status) {
+      case 'active':    return { label: 'Activo',     cls: 'bg-green-50 text-green-700' }
+      case 'suspended': return { label: 'Suspendido', cls: 'bg-amber-50 text-amber-700' }
+      default:          return { label: 'Inactivo',   cls: 'bg-slate-100 text-slate-600' }
+    }
+  })()
+
   return (
-    <div className="p-6 space-y-6 max-w-5xl">
+    <div className="p-6 space-y-6 max-w-6xl">
       {/* Back */}
       <Link href="/empleados" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-800 dark:text-white/40">
         <ArrowLeft size={16} /> Volver a empleados
       </Link>
 
-      {/* Feedback flotante inline */}
+      {/* Feedback */}
       {feedback && (
         <div
           role="status"
@@ -183,44 +210,86 @@ export default function EmpleadoDetallePage() {
         </div>
       )}
 
-      {/* Header empleado */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 flex items-center gap-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white text-3xl font-bold shrink-0">
-          {emp.first_name?.[0]}{emp.last_name?.[0]}
-        </div>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-            {emp.first_name} {emp.last_name}
-          </h1>
-          <div className="flex flex-wrap gap-3 mt-2 text-sm text-slate-500 dark:text-white/40">
-            <span className="font-mono bg-slate-100 px-2 py-0.5 rounded dark:bg-white/[0.06]">#{emp.code}</span>
-            {emp.employee_number && (
-              <span className="bg-slate-100 px-2 py-0.5 rounded dark:bg-white/[0.06]">{emp.employee_number}</span>
+      {/* Header enriquecido — todo el resumen del empleado en un solo bloque */}
+      <div className="rounded-2xl border border-slate-100 bg-white shadow-sm p-6 space-y-5 dark:border-white/[0.06] dark:bg-white/[0.04]">
+        <div className="flex flex-wrap items-start gap-5">
+          {emp.photo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={emp.photo_url} alt="" className="h-20 w-20 shrink-0 rounded-2xl object-cover" />
+          ) : (
+            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 text-3xl font-bold text-white">
+              {emp.first_name?.[0]}{emp.last_name?.[0]}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+              {emp.first_name} {emp.last_name}
+            </h1>
+            <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-white/50">
+              <span className="rounded bg-slate-100 px-2 py-0.5 font-mono dark:bg-white/[0.06]">#{emp.code}</span>
+              {emp.employee_number && (
+                <span className="rounded bg-slate-100 px-2 py-0.5 dark:bg-white/[0.06]">{emp.employee_number}</span>
+              )}
+              <span className={`rounded-full px-3 py-0.5 text-xs font-semibold ${statusBadge.cls}`}>{statusBadge.label}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {canEditAny && (
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700"
+              >
+                <Pencil size={14} /> Editar empleado
+              </button>
             )}
-            {emp.position && (
-              <span className="flex items-center gap-1"><Briefcase size={13} /> {emp.position}</span>
-            )}
+            {canChangeStatus && (emp.status === 'active'
+              ? <button onClick={() => setBajaOpen(true)} disabled={statusBusy}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-60">
+                  <UserX size={14} /> Dar de baja
+                </button>
+              : <button onClick={doReactivate} disabled={statusBusy}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-sm text-white hover:bg-emerald-700 disabled:opacity-60">
+                  <UserCheck size={14} /> Reactivar
+                </button>)}
           </div>
         </div>
-        <div className="flex flex-col items-end gap-2 shrink-0">
-          <span className={`px-3 py-1.5 rounded-full text-sm font-semibold ${
-            emp.status === 'active'
-              ? 'bg-green-50 text-green-700'
-              : emp.status === 'suspended'
-                ? 'bg-amber-50 text-amber-700'
-                : 'bg-slate-100 text-slate-600'
-          }`}>
-            {emp.status === 'active' ? 'Activo' : emp.status === 'suspended' ? 'Suspendido' : 'Inactivo'}
-          </span>
-          {canChangeStatus && (emp.status === 'active'
-            ? <button onClick={() => setBajaOpen(true)} disabled={statusBusy}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-xl bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60">
-                <UserX size={14} /> Dar de baja
-              </button>
-            : <button onClick={doReactivate} disabled={statusBusy}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60">
-                <UserCheck size={14} /> Reactivar
-              </button>)}
+
+        {/* Grilla de resumen — sustituye al recuadro vacío que quedaba antes */}
+        <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-3 lg:grid-cols-4 dark:border-white/[0.06]">
+          <InfoTile label="Cargo" value={emp.position || '—'} icon={<Briefcase size={11} />} />
+          <InfoTile label="Departamento" value={emp.department_name || '—'} icon={<Building2 size={11} />} />
+          <InfoTile label="Sede" value={emp.branch_name || '—'} icon={<MapPin size={11} />} />
+          <InfoTile
+            label="Turno"
+            value={
+              emp.schedule_name
+                ? (
+                  <span>
+                    {emp.schedule_name}
+                    {emp.check_in && (
+                      <span className="ml-1 text-xs text-slate-400 dark:text-white/40">
+                        {String(emp.check_in).slice(0, 5)}–{String(emp.check_out).slice(0, 5)}
+                      </span>
+                    )}
+                  </span>
+                )
+                : 'Sin turno asignado'
+            }
+            icon={<Clock size={11} />}
+          />
+          <InfoTile label="Fecha de ingreso" value={fmtCivilDate(emp.hire_date)} icon={<Calendar size={11} />} />
+          <InfoTile label="Antigüedad" value={emp.antiguedad_label || 'Sin fecha de ingreso'} icon={<Clock size={11} />} />
+          {canViewLegal && (
+            <>
+              <InfoTile label="C.I." value={emp.document_number || '—'} icon={<Fingerprint size={11} />} />
+              <InfoTile
+                label="Tipo de pago"
+                value={payTypeLabel(emp.pay_type)}
+                icon={<Coins size={11} />}
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -273,127 +342,22 @@ export default function EmpleadoDetallePage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Info personal — `min-w-0` obliga al grid child a contenerse en su
-            columna (sin él, un valor largo empuja el ancho y solapa la col.
-            derecha con biometría/documentos). */}
-        <div className="lg:col-span-1 min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-          <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-            <User size={16} className="text-blue-500" /> Información
-          </h2>
-          <EditField label="Nombre"      value={emp.first_name}    name="first_name"    readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField label="Apellido"    value={emp.last_name}     name="last_name"     readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField label="Email"       value={emp.email || ''}   name="email"         type="email" readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField label="Teléfono"    value={emp.phone || ''}   name="phone"         type="tel"   readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField label="Cargo"       value={emp.position || ''} name="position"     readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField label="Ingreso"     value={emp.hire_date ? emp.hire_date.split('T')[0] : ''} name="hire_date" type="date" readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField label="Nacimiento"  value={emp.birth_date ? emp.birth_date.split('T')[0] : ''} name="birth_date" type="date" readOnly={!canEditPersonal} onSave={onSaveField} onFeedback={setFeedback} />
-          <EditField
-            label="Horario"
-            value={emp.schedule_name || ''}
-            name="schedule_id"
-            options={schedOpts}
-            readOnly={!canEditPersonal}
-            onSave={async (name, val) => onSaveField(name, val)}
-            onFeedback={setFeedback}
-          />
-          {/* El estado NO se cambia inline: para dar de baja se usa el botón
-              del header (motivo + auditoría + deshabilitación pendiente en el
-              reloj). Cambiarlo con un select saltearía ese flujo. */}
+      {/* Modal de edición completa */}
+      {editOpen && (
+        <EmployeeEditModal
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          employee={emp}
+          caps={caps}
+          currentUserRole={currentUser?.role}
+          onSaved={() => setFeedback({ kind: 'ok', msg: 'Cambios guardados.' })}
+        />
+      )}
 
-          {/* Datos legales MTESS / IPS */}
-          {canViewLegal ? (
-            <>
-            <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/[0.06]">
-              <h3 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-                <Briefcase size={15} className="text-cyan-500" /> Datos legales (MTESS / IPS)
-              </h3>
-              <EditField label="C.I."         value={emp.document_number || ''} name="document_number" readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
-              <EditField label="N° IPS"       value={emp.ips_number || ''}      name="ips_number"      readOnly={!canEditLegal} onSave={onSaveField} onFeedback={setFeedback} />
-              <EditField
-                label="Salario base (Gs.)"
-                value={emp.salary_base != null ? String(emp.salary_base) : ''}
-                name="salary_base"
-                type="text"
-                inputMode="numeric"
-                inputPrefix="Gs."
-                placeholder="0"
-                formatDisplay={v => formatPYG(v)}
-                formatEditing={v => formatThousandsPY(stripThousands(v))}
-                parseEditing={v => stripThousands(v)}
-                readOnly={!canEditLegal}
-                onSave={onSaveField}
-                onFeedback={setFeedback}
-              />
-              <EditField
-                label="Tipo de pago"
-                value={emp.pay_type || 'mensualizado'}
-                name="pay_type"
-                readOnly={!canEditLegal}
-                options={payTypeOpts.length ? payTypeOpts : [{ value: 'mensualizado', label: 'Mensualizado' }]}
-                formatDisplay={v => payTypeOpts.find(o => o.value === v)?.label || v}
-                onSave={onSaveField}
-                onFeedback={setFeedback}
-                actionSlot={canManagePT && (
-                  <AddCatalogButton
-                    label="Crear nuevo tipo de pago"
-                    onClick={() => setPtModalOpen(true)}
-                  />
-                )}
-              />
-              <EditField
-                label="Género"
-                value={emp.gender || ''}
-                name="gender"
-                readOnly={!canEditLegal}
-                options={[
-                  { value: '',  label: '—' },
-                  { value: 'M', label: 'Masculino' },
-                  { value: 'F', label: 'Femenino' },
-                  { value: 'O', label: 'Otro' },
-                ]}
-                onSave={onSaveField}
-                onFeedback={setFeedback}
-              />
-              <EditField
-                label="N° de hijos"
-                value={emp.children_count != null ? String(emp.children_count) : '0'}
-                name="children_count"
-                type="number"
-                inputMode="numeric"
-                min={0}
-                step={1}
-                readOnly={!canEditLegal}
-                onSave={onSaveField}
-                onFeedback={setFeedback}
-              />
-              {/* Antigüedad: DERIVADA de hire_date. Sin edición. */}
-              <DerivedField
-                label="Antigüedad"
-                value={emp.antiguedad_label || 'Sin fecha de ingreso'}
-              />
-            </div>
-            <PaymentTypeModal
-              open={ptModalOpen}
-              onClose={() => setPtModalOpen(false)}
-              onCreated={async (code) => {
-                // Refresca el catálogo y selecciona automáticamente el nuevo tipo.
-                await qc.invalidateQueries({ queryKey: ['catalog', 'pay-types'] })
-                try {
-                  await onSaveField('pay_type', code)
-                  setFeedback({ kind: 'ok', msg: `Nuevo tipo de pago "${code}" creado y asignado.` })
-                } catch (e: any) {
-                  setFeedback({ kind: 'err', msg: e?.response?.data?.error || e?.message || 'Creado, pero no se pudo asignar.' })
-                }
-              }}
-            />
-            </>
-          ) : null}
-        </div>
-
-        {/* Historial */}
+      {/* Historial + paneles laterales */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {/* KPIs del período + tabla de historial */}
         <div className="lg:col-span-2 min-w-0 space-y-5">
-          {/* Stats del período */}
           <div className="grid grid-cols-4 gap-3">
             {[
               { label: 'Asistencias', value: workedDays,  cls: 'text-green-700 bg-green-50' },
@@ -408,7 +372,6 @@ export default function EmpleadoDetallePage() {
             ))}
           </div>
 
-          {/* Filtro de período */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-semibold text-slate-700 flex items-center gap-2 dark:text-white/80">
@@ -450,17 +413,67 @@ export default function EmpleadoDetallePage() {
               })}
             </div>
           </div>
+        </div>
 
-          {/* Biometría / Relojes */}
+        {/* Paneles laterales: contacto, salario visible, biometría, documentos, notas */}
+        <div className="lg:col-span-1 space-y-5">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+            <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+              <User size={16} className="text-blue-500" /> Contacto
+            </h2>
+            <dl className="space-y-2 text-sm">
+              <div className="grid grid-cols-3 gap-2">
+                <dt className="text-slate-400 dark:text-white/40">Email</dt>
+                <dd className="col-span-2 break-all text-slate-800 dark:text-white/90">{emp.email || '—'}</dd>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <dt className="text-slate-400 dark:text-white/40">Teléfono</dt>
+                <dd className="col-span-2 text-slate-800 dark:text-white/90">{emp.phone || '—'}</dd>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <dt className="text-slate-400 dark:text-white/40">Nacimiento</dt>
+                <dd className="col-span-2 text-slate-800 dark:text-white/90">{fmtCivilDate(emp.birth_date)}</dd>
+              </div>
+            </dl>
+          </div>
+
+          {canViewLegal && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+              <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+                <Coins size={16} className="text-amber-500" /> Datos salariales
+              </h2>
+              <dl className="space-y-2 text-sm">
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">Salario base</dt>
+                  <dd className="col-span-2 font-mono text-slate-800 dark:text-white/90">
+                    {emp.salary_base != null ? formatPYG(emp.salary_base) : '—'}
+                  </dd>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">Tipo de pago</dt>
+                  <dd className="col-span-2 text-slate-800 dark:text-white/90">{payTypeLabel(emp.pay_type)}</dd>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">N° IPS</dt>
+                  <dd className="col-span-2 text-slate-800 dark:text-white/90">{emp.ips_number || '—'}</dd>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">Género</dt>
+                  <dd className="col-span-2 text-slate-800 dark:text-white/90">
+                    {emp.gender === 'M' ? 'Masculino' : emp.gender === 'F' ? 'Femenino' : emp.gender === 'O' ? 'Otro' : '—'}
+                  </dd>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">N° de hijos</dt>
+                  <dd className="col-span-2 text-slate-800 dark:text-white/90">{emp.children_count ?? 0}</dd>
+                </div>
+              </dl>
+            </div>
+          )}
+
           {emp?.id && <BiometriaRelojes employeeId={emp.id} />}
-
-          {/* Reconocimiento facial */}
           {emp?.id && <FaceEnroll employeeId={emp.id} />}
-
-          {/* Documentos publicados por RR.HH. */}
           {emp?.id && <EmployeeDocuments employeeId={emp.id} />}
-
-          {/* Notas / observaciones */}
           {emp?.id && <EmployeeNotes employeeId={emp.id} />}
         </div>
       </div>
