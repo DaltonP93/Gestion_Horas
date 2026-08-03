@@ -4,9 +4,7 @@
  * ZK Attendance Management Program.
  *
  * Relojes configurados:
- *   - Reloj Comedor:   172.16.20.160:4370  (3000T-C/ID, MachineNo: 101)
- *   - Reloj Lavadero:  172.16.20.161:4370  (GT200,      MachineNo: 103)
- *   - Reloj Gerencia:  172.16.20.162:4370  (3000T-C,    MachineNo: 1)
+ *   - Reloj test:   x.x.x.x:4370  (3000T-C/ID, MachineNo: 101)
  *
  * Modos de operación:
  *   1. PUSH  — El reloj envía marcajes en tiempo real (puerto 8080)
@@ -36,9 +34,7 @@ const logger = winston.createLogger({
 
 // ─── Relojes configurados (se pueden sobreescribir con ZKTECO_DEVICES) ──
 const DEFAULT_DEVICES = [
-  { id: 101, name: 'Reloj Comedor',  ip: '172.16.20.160', port: 4370 },
-  { id: 103, name: 'Reloj Lavadero', ip: '172.16.20.161', port: 4370 },
-  { id: 1,   name: 'Reloj Gerencia', ip: '172.16.20.162', port: 4370 },
+  { id: 101, name: 'Reloj test',  ip: 'x.x.x.x', port: 4370 },
 ];
 
 function getDevices() {
