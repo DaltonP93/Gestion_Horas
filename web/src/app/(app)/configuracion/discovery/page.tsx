@@ -133,7 +133,7 @@ export default function DiscoveryPage() {
         <h2 className="font-semibold text-slate-800 text-sm dark:text-white/90">Probar IP puntual</h2>
         <div className="flex gap-3">
           <input value={probeIp} onChange={e => setProbeIp(e.target.value)}
-            placeholder="172.16.20.160"
+            placeholder="10.0.0.160"
             className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono dark:border-white/[0.08]" />
           <button onClick={probe} disabled={probing || !probeIp}
             className="bg-slate-700 text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-slate-800 disabled:opacity-60 flex items-center gap-2">

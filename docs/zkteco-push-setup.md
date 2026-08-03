@@ -8,7 +8,7 @@ ZKTeco binario y elimina el conflicto con el Attendance Management Program.
 
 | Campo | Valor |
 |---|---|
-| Server Address | `10.81.28.20` (IP interna del servidor `antigravity`) |
+| Server Address | `bridge.example.internal` (IP interna del servidor `antigravity`) |
 | Server Port | `8080` |
 | HTTPS | OFF |
 | Proxy | OFF |
@@ -20,14 +20,14 @@ Repetir en los 3 relojes:
 
 | Reloj | IP |
 |---|---|
-| Comedor | 172.16.20.160 |
-| Lavadero | 172.16.20.161 |
-| Gerencia | 172.16.20.162 |
+| Comedor | 10.0.0.160 |
+| Lavadero | 10.0.0.161 |
+| Gerencia | 10.0.0.162 |
 
 1. En el teclado del reloj: **Menú → Comm (Comunicación) → Cloud Server Setting**
    (en firmwares viejos aparece como **ADMS** o **WebServer**).
 2. Configurar:
-   - **Server Address:** `10.81.28.20`
+   - **Server Address:** `bridge.example.internal`
    - **Server Port:** `8080`
    - **Enable Domain Name:** OFF
    - **Enable Proxy Server:** OFF
@@ -40,10 +40,10 @@ Repetir en los 3 relojes:
 Una vez reiniciado:
 
 1. En el servidor: `pm2 logs sishoras-bridge --lines 50`
-   - Debe aparecer: `🔌 Reloj ZKTeco registrado vía PUSH — SN: XXXXXX (172.16.20.xxx)`
+   - Debe aparecer: `🔌 Reloj ZKTeco registrado vía PUSH — SN: XXXXXX (10.0.0.xxx)`
 2. Marcar huella o tarjeta en el reloj.
 3. `pm2 logs sishoras-bridge`
-   - Debe aparecer: `📥 PUSH de SN=XXXXXX (172.16.20.xxx): 1/1 marcaje(s) procesados`
+   - Debe aparecer: `📥 PUSH de SN=XXXXXX (10.0.0.xxx): 1/1 marcaje(s) procesados`
 4. `pm2 logs sishoras-api`
    - Debe aparecer: `Marcaje: <NOMBRE> - in/out - <TIMESTAMP>`
 5. En la UI web: `/configuracion → Relojes → expandir reloj → Verificar PUSH`
@@ -56,11 +56,11 @@ Para que los marcajes recibidos por PUSH se escriban también en
 
 ```
 ATT2000_WRITE_ENABLED=true
-ATT_HOST=ADVENTISTA
+ATT_HOST=sqlserver.example.internal
 ATT_PORT=1433
-ATT_USER=sa
-ATT_PASSWORD=nma.d.nh4
-ATT_DATABASE=att2000
+ATT_USER=sishoras_integration
+ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
+ATT_DATABASE=att2000_example
 ```
 
 Luego `pm2 reload sishoras-api`.

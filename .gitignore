@@ -31,3 +31,8 @@ web/.capacitor/
 logs/
 *.log.*
 tmp/
+
+# ── Artefactos de build de TypeScript ────────────────────────
+# Caché incremental: lo regenera `tsc` / `next build` en cada corrida.
+web/tsconfig.tsbuildinfo
+*.tsbuildinfo

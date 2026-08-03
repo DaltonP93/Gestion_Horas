@@ -92,8 +92,8 @@ El error middleware de `api/src/index.js:185-190` **nunca recibe** errores de ha
 
 **D-04 — Secretos, IPs internas y dominios hardcodeados — Alto**
 - `web/src/lib/api.ts:113,117,121,124`: `api_key: 'analytics_secret_key'` en el bundle.
-- `configuracion/page.tsx:41`: `host: '10.81.28.8', user: 'sa'`.
-- `devices.js:260-263`: IPs de relojes `172.16.20.160-162`.
+- `configuracion/page.tsx:41`: `host: 'sqlserver.example.internal', user: '<usuario_integracion>'`.
+- `devices.js:260-263`: IPs de relojes `10.0.0.160-162`.
 - `index.js:76-77`: dominio `sishoras.saa.com.py` en CORS.
 - JWT como `?access_token=` en URL para descargas (`api.ts:30-42`, `auth.js:18-19`).
 

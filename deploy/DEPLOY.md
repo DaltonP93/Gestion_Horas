@@ -338,7 +338,7 @@ Configurar SMTP), revoca esa "App password" de Gmail:
 
 ### Sobre IPs ZKTeco
 
-Las IPs `172.16.20.16x` que aparecieron en el `.env.local` son LAN privada.
+Las IPs `10.0.0.16x` que aparecieron en el `.env.local` son LAN privada.
 No son secretos públicos pero exponen tu topología de red. La nueva versión
 del sistema lee esas IPs **desde la BD** (tabla `devices`), no desde el
 `.env`, así que ya no es problema futuro.

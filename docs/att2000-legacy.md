@@ -75,7 +75,7 @@ Las credenciales de att2000 (**host, puerto, base, usuario y contraseña**) vive
 **sólo** en el servidor, en variables de entorno protegidas:
 
 ```bash
-ATT_HOST= ATT_PORT=1433 ATT_DATABASE=att2000 ATT_USER=sa ATT_PASSWORD=
+ATT_HOST= ATT_PORT=1433 ATT_DATABASE=att2000_example ATT_USER=sa ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
 ```
 
 - El navegador **no** conoce ni transmite credenciales, host ni connection

@@ -56,9 +56,9 @@ pm2 logs sishoras-bridge --lines 20   # confirmar arranque OK
 
 ### 1. ¿El reloj tiene red?
 ```bash
-ping -c 3 172.16.20.160   # Comedor
-ping -c 3 172.16.20.161   # Lavadero
-ping -c 3 172.16.20.162   # Gerencia
+ping -c 3 10.0.0.160   # Comedor
+ping -c 3 10.0.0.161   # Lavadero
+ping -c 3 10.0.0.162   # Gerencia
 ```
 
 ### 2. ¿Está enviando heartbeat PUSH?
@@ -117,7 +117,7 @@ grep ATT2000_WRITE_ENABLED /var/www/html/Gestion_Horas/api/.env
 curl -X POST http://localhost:4000/api/sync/test-conn \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"host":"10.81.28.8","user":"sa","password":"nma.d.nh4"}'
+  -d '{"host":"sqlserver.example.internal","user":"sishoras_integration","password":"<CONFIGURAR_SOLO_EN_API_ENV>"}'
 ```
 
 **Solución:**
@@ -131,7 +131,7 @@ curl -X POST http://localhost:4000/api/sync/test-conn \
 
 1. Dar de alta en UI: `/configuracion → Relojes → + Nuevo`
    - Nombre, IP, puerto 4370
-2. Configurar ADMS en el reloj apuntando a `10.81.28.20:8080`
+2. Configurar ADMS en el reloj apuntando a `bridge.example.internal:8080`
 3. (Opcional) agregar SN a whitelist: `api/.env` → `ZKTECO_PUSH_WHITELIST=101,103,1,NUEVO_SN`
 4. `pm2 reload sishoras-api sishoras-bridge`
 5. Verificar con `curl http://localhost:8081/push-state`
@@ -182,5 +182,5 @@ gunzip -c /var/backups/sishoras/asistencia_2026-04-17.sql.gz | sudo mysql asiste
 ## 🆘 Contactos de escalación
 
 - Dev principal: dalton9302@gmail.com
-- Servidor: `ssh user@10.81.28.20` (antigravity)
+- Servidor: `ssh user@bridge.example.internal` (antigravity)
 - Repo: https://github.com/DaltonP93/Gestion_Horas
