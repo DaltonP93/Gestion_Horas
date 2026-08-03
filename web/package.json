@@ -12,7 +12,7 @@
     "predev": "npm run sync:face-models",
     "build": "next build",
     "start": "next start",
-    "build:export": "next build && next export -o out",
+    "build:export": "npm run sync:face-models && next build && next export -o out",
     "cap:sync": "npm run build:export && npx cap sync",
     "cap:android": "npm run cap:sync && npx cap run android",
     "cap:ios": "npm run cap:sync && npx cap run ios",

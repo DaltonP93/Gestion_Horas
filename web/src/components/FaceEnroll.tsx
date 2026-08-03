@@ -47,6 +47,12 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
   const faRef     = useRef<FaceApi | null>(null)
   // Evita que dos clics rápidos arranquen dos flujos en paralelo.
   const busyRef   = useRef(false)
+  // El arranque tiene dos await largos (modelos y permiso de cámara). Si el
+  // componente desaparece en el medio, la limpieza corre ANTES de que exista
+  // el stream, así que no tendría qué apagar: hay que cortar el flujo y
+  // detener el stream que llegue tarde, o la cámara queda encendida sin nadie
+  // que la libere.
+  const mountedRef = useRef(true)
 
   const [status, setStatus] = useState<Status>('idle')
   const [msg, setMsg] = useState('')
@@ -78,7 +84,10 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
   }, [])
 
   // La cámara se libera también si el componente desaparece con la vista abierta.
-  useEffect(() => stopCamera, [stopCamera])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false; stopCamera() }
+  }, [stopCamera])
 
   const start = useCallback(async () => {
     if (busyRef.current) return
@@ -90,9 +99,13 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
       //    no vuelve a descargar nada.
       if (!faRef.current) {
         setStatus('loading_library')
-        faRef.current = await loadFaceModels(stage => {
-          setStatus(stage === 'library' ? 'loading_library' : 'loading_models')
+        const fa = await loadFaceModels(stage => {
+          if (mountedRef.current) setStatus(stage === 'library' ? 'loading_library' : 'loading_models')
         })
+        // Si el usuario se fue mientras cargaban los modelos, no se pide la
+        // cámara: sería encenderla para nadie.
+        if (!mountedRef.current) return
+        faRef.current = fa
         setStatus('models_ready')
       }
 
@@ -101,6 +114,12 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'user', width: 320, height: 240 },
       })
+      // El permiso pudo concederse después del desmontaje. Ese stream ya no
+      // tiene dueño: se apaga acá mismo en vez de quedar colgado.
+      if (!mountedRef.current) {
+        stream.getTracks().forEach(t => t.stop())
+        return
+      }
       streamRef.current = stream
       if (videoRef.current) {
         videoRef.current.srcObject = stream
@@ -111,6 +130,7 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
     } catch (err) {
       // Si falló después de abrir la cámara, no queda encendida.
       stopCamera()
+      if (!mountedRef.current) return
       setStatus('error')
       setMsg(faRef.current ? cameraErrorMessage(err) : faceLoadErrorMessage(err))
     } finally {
