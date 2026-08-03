@@ -97,7 +97,7 @@ ATT_HOST=sqlserver.example.internal     # o la IP del servidor, ej: 10.0.0.50
 ATT_PORT=1433
 ATT_USER=sishoras_integration
 ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
-ATT_DATABASE=att2000_example
+ATT_DATABASE=att2000
 ```
 
 El resto del .env (MySQL, JWT, etc.) puede dejarse con los valores por defecto para pruebas.

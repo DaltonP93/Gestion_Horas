@@ -8,7 +8,7 @@ ZKTeco binario y elimina el conflicto con el Attendance Management Program.
 
 | Campo | Valor |
 |---|---|
-| Server Address | `bridge.example.internal` (IP interna del servidor `antigravity`) |
+| Server Address | `10.0.0.20` (IP interna del servidor del bridge — usar IP, no nombre: abajo se deja *Domain Name* en OFF) |
 | Server Port | `8080` |
 | HTTPS | OFF |
 | Proxy | OFF |
@@ -27,7 +27,7 @@ Repetir en los 3 relojes:
 1. En el teclado del reloj: **Menú → Comm (Comunicación) → Cloud Server Setting**
    (en firmwares viejos aparece como **ADMS** o **WebServer**).
 2. Configurar:
-   - **Server Address:** `bridge.example.internal`
+   - **Server Address:** `10.0.0.20`
    - **Server Port:** `8080`
    - **Enable Domain Name:** OFF
    - **Enable Proxy Server:** OFF
@@ -60,7 +60,7 @@ ATT_HOST=sqlserver.example.internal
 ATT_PORT=1433
 ATT_USER=sishoras_integration
 ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
-ATT_DATABASE=att2000_example
+ATT_DATABASE=att2000
 ```
 
 Luego `pm2 reload sishoras-api`.

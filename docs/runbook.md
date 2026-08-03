@@ -131,7 +131,7 @@ curl -X POST http://localhost:4000/api/sync/test-conn \
 
 1. Dar de alta en UI: `/configuracion → Relojes → + Nuevo`
    - Nombre, IP, puerto 4370
-2. Configurar ADMS en el reloj apuntando a `bridge.example.internal:8080`
+2. Configurar ADMS en el reloj apuntando a `10.0.0.20:8080` (IP, no nombre: el reloj va con *Domain Name* en OFF)
 3. (Opcional) agregar SN a whitelist: `api/.env` → `ZKTECO_PUSH_WHITELIST=101,103,1,NUEVO_SN`
 4. `pm2 reload sishoras-api sishoras-bridge`
 5. Verificar con `curl http://localhost:8081/push-state`

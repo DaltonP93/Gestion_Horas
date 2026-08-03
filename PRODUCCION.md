@@ -23,7 +23,7 @@ ATT_HOST=sqlserver.example.internal        # nombre del servidor o IP
 ATT_PORT=1433
 ATT_USER=sishoras_integration
 ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
-ATT_DATABASE=att2000_example
+ATT_DATABASE=att2000
 
 # JWT (generar strings aleatorios largos)
 JWT_SECRET=cambia_esto_por_string_aleatorio_32chars
