@@ -16,7 +16,7 @@
  *     escribir (defensa en profundidad; el backend valida igualmente).
  */
 
-import { stripThousands } from './currency'
+import { parseDecimalPYG, stripThousands } from './currency'
 import { validateEmployeeField } from './employeeFieldValidation'
 
 export type Caps = {
@@ -82,7 +82,11 @@ export function snapshotOf(emp: Record<string, unknown> | null | undefined): For
     schedule_id:     intOrEmpty(e.schedule_id),
     document_number: toForm(e.document_number),
     ips_number:      toForm(e.ips_number),
-    salary_base:     intOrEmpty(e.salary_base),
+    // El backend serializa DECIMAL como "3500000.00". Debe entrar al
+    // formulario ya como entero canónico ("3500000"): si se guardara el
+    // string crudo, el formateo de miles interpretaría el punto decimal
+    // como separador y multiplicaría el salario por 100 en cada ciclo.
+    salary_base:     parseDecimalPYG(e.salary_base),
     pay_type:        toForm(e.pay_type || 'mensualizado'),
     gender:          toForm(e.gender),
     children_count:  e.children_count != null ? String(e.children_count) : '0',

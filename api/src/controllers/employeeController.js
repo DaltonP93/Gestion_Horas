@@ -190,6 +190,16 @@ async function create(req, res) {
   }
 }
 
+// Columnas DECIMAL de `employees`: comparar por valor numérico, no por texto.
+const DECIMAL_COLS = new Set(['salary_base']);
+function sameDecimal(before, after) {
+  if (before == null && after == null) return true;
+  if (before == null || after == null) return false;
+  const a = Number(before), b = Number(after);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return String(before) === String(after);
+  return a === b;
+}
+
 // PUT /api/employees/:id
 // Actualización ATÓMICA de la ficha (PR 1: modal de edición completa).
 //
@@ -269,13 +279,18 @@ async function update(req, res) {
       return res.status(404).json({ error: 'Empleado no encontrado' });
     }
 
-    // Filtrar los que efectivamente cambian.
+    // Filtrar los que efectivamente cambian. Las columnas DECIMAL vuelven de
+    // MySQL como string ("3500000.00"), así que comparar en texto contra el
+    // entero ya normalizado marcaría un cambio inexistente y reescribiría —
+    // y auditaría — un salario que nadie tocó.
     const diff = {};
     for (const c of cols) {
       const before = prev[c];
       const after  = changes[c];
-      const same = (before === after) || (before == null && after == null)
-                || (before != null && after != null && String(before) === String(after));
+      const same = DECIMAL_COLS.has(c)
+        ? sameDecimal(before, after)
+        : ((before === after) || (before == null && after == null)
+           || (before != null && after != null && String(before) === String(after)));
       if (!same) diff[c] = { from: before, to: after };
     }
 

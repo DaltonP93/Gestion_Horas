@@ -1,4 +1,4 @@
-import { formatPYG, formatThousandsPY, stripThousands } from '../currency'
+import { formatPYG, formatThousandsPY, parseDecimalPYG, stripThousands } from '../currency'
 
 describe('formatPYG', () => {
   test('formatea con "Gs." + separador de miles paraguayo', () => {
@@ -46,5 +46,37 @@ describe('stripThousands', () => {
   })
   test('devuelve "" para no-string', () => {
     expect(stripThousands(null as unknown as string)).toBe('')
+  })
+})
+
+describe('parseDecimalPYG', () => {
+  test('DECIMAL del backend → entero canónico', () => {
+    expect(parseDecimalPYG('3500000.00')).toBe('3500000')
+    expect(parseDecimalPYG('2899048.00')).toBe('2899048')
+    expect(parseDecimalPYG('0.00')).toBe('0')
+  })
+  test('number o string entero pasan sin cambios', () => {
+    expect(parseDecimalPYG(3500000)).toBe('3500000')
+    expect(parseDecimalPYG('3500000')).toBe('3500000')
+  })
+  test('vacío / null / undefined → ""', () => {
+    expect(parseDecimalPYG(null)).toBe('')
+    expect(parseDecimalPYG(undefined)).toBe('')
+    expect(parseDecimalPYG('')).toBe('')
+  })
+  test('no numérico → "" (nunca un número corrupto)', () => {
+    expect(parseDecimalPYG('abc')).toBe('')
+    expect(parseDecimalPYG('3.500.000')).toBe('')
+    expect(parseDecimalPYG(NaN)).toBe('')
+    expect(parseDecimalPYG(Infinity)).toBe('')
+  })
+  test('es idempotente: aplicarlo N veces da lo mismo', () => {
+    let v: string = parseDecimalPYG('3500000.00')
+    for (let i = 0; i < 5; i++) v = parseDecimalPYG(v)
+    expect(v).toBe('3500000')
+  })
+  test('nunca reintroduce el error de multiplicar por 100', () => {
+    expect(Number(parseDecimalPYG('3500000.00'))).toBe(3500000)
+    expect(Number(parseDecimalPYG('3500000.00'))).not.toBe(350000000)
   })
 })
