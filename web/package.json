@@ -7,6 +7,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "sync:face-models": "node scripts/sync-face-models.js",
+    "prebuild": "npm run sync:face-models",
+    "predev": "npm run sync:face-models",
     "build": "next build",
     "start": "next start",
     "build:export": "next build && next export -o out",
@@ -19,6 +22,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.17.0",
+    "@vladmandic/face-api": "1.7.15",
     "axios": "^1.6.7",
     "clsx": "^2.1.0",
     "date-fns": "^3.3.0",
