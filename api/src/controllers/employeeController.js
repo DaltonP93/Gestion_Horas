@@ -85,11 +85,14 @@ async function getAll(req, res) {
       `SELECT e.status AS status, COUNT(*) AS n FROM employees e ${where} GROUP BY e.status`,
       { replacements: params }
     );
-    const counts = { all: 0, active: 0, inactive: 0 };
+    // `suspended` es un estado de primera clase del ENUM y lo asigna el
+    // bulk-update: si no se contara aparte, `all` lo incluiría sin que
+    // ninguna tarjeta lo mostrara y el total dejaría de cuadrar.
+    const counts = { all: 0, active: 0, inactive: 0, suspended: 0 };
     for (const row of statusRows) {
       const n = Number(row.n) || 0;
       counts.all += n;
-      if (row.status === 'active' || row.status === 'inactive') counts[row.status] += n;
+      if (row.status in counts && row.status !== 'all') counts[row.status] += n;
     }
 
     // A partir de acá sí pesa el filtro de estado (listado + total paginado).
