@@ -46,12 +46,12 @@ async function getAll(req, res) {
     // status vacío = mostrar activos por defecto; 'all' o '' sin especificar = todos
     const effectiveStatus = status === undefined ? 'active' : status;
 
+    // `where` se arma SIN el filtro de estado: los contadores por estado se
+    // calculan sobre este conjunto (scope + depto + sucursal + búsqueda) para
+    // que "Todos = Activos + Inactivos" siempre se sostenga. El filtro de
+    // estado se agrega después, sólo para el listado y su total paginado.
     let where = 'WHERE 1=1';
     let params = [];
-
-    if (effectiveStatus && effectiveStatus !== 'all') {
-      where += ' AND e.status = ?'; params.push(effectiveStatus);
-    }
 
     const deptVal = dept || department_id;
     if (deptVal) { where += ' AND e.department_id = ?'; params.push(deptVal); }
@@ -80,6 +80,25 @@ async function getAll(req, res) {
       params.push(...searchParams);
     }
 
+    // Contadores por estado sobre el conjunto visible, sin paginar.
+    const [statusRows] = await sequelize.query(
+      `SELECT e.status AS status, COUNT(*) AS n FROM employees e ${where} GROUP BY e.status`,
+      { replacements: params }
+    );
+    const counts = { all: 0, active: 0, inactive: 0 };
+    for (const row of statusRows) {
+      const n = Number(row.n) || 0;
+      counts.all += n;
+      if (row.status === 'active' || row.status === 'inactive') counts[row.status] += n;
+    }
+
+    // A partir de acá sí pesa el filtro de estado (listado + total paginado).
+    let listWhere = where;
+    const listParams = [...params];
+    if (effectiveStatus && effectiveStatus !== 'all') {
+      listWhere += ' AND e.status = ?'; listParams.push(effectiveStatus);
+    }
+
     const [employees] = await sequelize.query(`
       SELECT
         e.id, e.code, e.employee_number, e.document_number,
@@ -93,14 +112,14 @@ async function getAll(req, res) {
       LEFT JOIN departments d ON e.department_id = d.id
       LEFT JOIN schedules   s ON e.schedule_id   = s.id
       LEFT JOIN branches    b ON e.branch_id     = b.id
-      ${where}
+      ${listWhere}
       ORDER BY e.last_name, e.first_name
       LIMIT ? OFFSET ?
-    `, { replacements: [...params, parseInt(limit), parseInt(offset)] });
+    `, { replacements: [...listParams, parseInt(limit), parseInt(offset)] });
 
     const [[{ total }]] = await sequelize.query(
-      `SELECT COUNT(*) AS total FROM employees e ${where}`,
-      { replacements: params }
+      `SELECT COUNT(*) AS total FROM employees e ${listWhere}`,
+      { replacements: listParams }
     );
 
     // Enmascarar campos legales cuando el rol no puede verlos.
@@ -108,7 +127,7 @@ async function getAll(req, res) {
     maskEmployeeList(employees, { caps });
 
     res.json({
-      data: employees, total, page: +page, limit: +limit, pages: Math.ceil(total / limit),
+      data: employees, total, counts, page: +page, limit: +limit, pages: Math.ceil(total / limit),
       _scope: { unrestricted: !!scope.unrestricted, departments: scope.unrestricted ? null : (scope.ids || []).length },
       _privacy: privacyDescriptor({ caps }),
     });
