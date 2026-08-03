@@ -7,7 +7,9 @@
  *
  * Contrato que se fija acá:
  *  - `counts` se calcula SIN el filtro de estado, de modo que
- *    all === active + inactive sin importar qué estado se esté viendo.
+ *    all === active + inactive + suspended sin importar qué se esté viendo.
+ *  - `suspended` tiene contador propio: es un estado del ENUM que el
+ *    bulk-update ya asignaba, y sumarlo sólo a `all` rompía la suma.
  *  - `counts` SÍ respeta depto, sucursal, búsqueda y el scope RBAC.
  *  - `total` sigue siendo el total del listado filtrado (paginación).
  *  - Los contadores no dependen de `limit`/`offset`.
@@ -72,7 +74,7 @@ describe('getAll — contadores por estado', () => {
     await controller.getAll({ query: { status: 'active' }, user: ADMIN }, res);
 
     const body = res.json.mock.calls[0][0];
-    expect(body.counts).toEqual({ all: 50, active: 42, inactive: 8 });
+    expect(body.counts).toEqual({ all: 50, active: 42, inactive: 8, suspended: 0 });
     expect(body.counts.all).toBe(body.counts.active + body.counts.inactive);
     // `total` sigue siendo el del listado filtrado.
     expect(body.total).toBe(42);
@@ -156,11 +158,11 @@ describe('getAll — contadores por estado', () => {
     await controller.getAll({ query: { status: 'active', limit: 50 }, user: ADMIN }, res);
 
     const body = res.json.mock.calls[0][0];
-    expect(body.counts).toEqual({ all: 1000, active: 900, inactive: 100 });
+    expect(body.counts).toEqual({ all: 1000, active: 900, inactive: 100, suspended: 0 });
     expect(body.data).toHaveLength(50);
   });
 
-  test('estados desconocidos suman al total pero no a las tarjetas', async () => {
+  test('suspended tiene contador propio y cierra la suma', async () => {
     primeQueries({
       statusRows: [
         { status: 'active', n: 5 },
@@ -173,7 +175,35 @@ describe('getAll — contadores por estado', () => {
     await controller.getAll({ query: { status: 'all' }, user: ADMIN }, res);
 
     const body = res.json.mock.calls[0][0];
-    expect(body.counts).toEqual({ all: 10, active: 5, inactive: 2 });
+    expect(body.counts).toEqual({ all: 10, active: 5, inactive: 2, suspended: 3 });
+    expect(body.counts.all).toBe(
+      body.counts.active + body.counts.inactive + body.counts.suspended
+    );
+  });
+
+  test('un estado fuera del ENUM suma al total sin romper las tarjetas', async () => {
+    primeQueries({
+      statusRows: [{ status: 'active', n: 5 }, { status: 'marciano', n: 1 }],
+      total: 6,
+    });
+    const res = mkRes();
+    await controller.getAll({ query: { status: 'all' }, user: ADMIN }, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.counts.all).toBe(6);
+    expect(body.counts.active).toBe(5);
+    expect(body.counts).not.toHaveProperty('marciano');
+  });
+
+  test('se puede filtrar por suspended', async () => {
+    const seen = primeQueries({
+      statusRows: [{ status: 'active', n: 5 }, { status: 'suspended', n: 3 }],
+      total: 3,
+    });
+    await controller.getAll({ query: { status: 'suspended' }, user: ADMIN }, mkRes());
+
+    expect(seen.totalQ.params).toContain('suspended');
+    expect(seen.counts.params).not.toContain('suspended');
   });
 
   test('COUNT devuelto como string se normaliza a número', async () => {
@@ -185,7 +215,7 @@ describe('getAll — contadores por estado', () => {
     await controller.getAll({ query: {}, user: ADMIN }, res);
 
     const body = res.json.mock.calls[0][0];
-    expect(body.counts).toEqual({ all: 10, active: 7, inactive: 3 });
+    expect(body.counts).toEqual({ all: 10, active: 7, inactive: 3, suspended: 0 });
   });
 
   test('sin empleados visibles devuelve ceros, no undefined', async () => {
@@ -194,6 +224,6 @@ describe('getAll — contadores por estado', () => {
     await controller.getAll({ query: {}, user: ADMIN }, res);
 
     const body = res.json.mock.calls[0][0];
-    expect(body.counts).toEqual({ all: 0, active: 0, inactive: 0 });
+    expect(body.counts).toEqual({ all: 0, active: 0, inactive: 0, suspended: 0 });
   });
 });

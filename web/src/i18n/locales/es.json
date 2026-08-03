@@ -37,6 +37,7 @@
     "actions": "Acciones",
     "active": "Activo",
     "inactive": "Inactivo",
+    "suspended": "Suspendido",
     "no_data": "Sin datos",
     "no_results": "Sin resultados",
     "required": "Requerido",

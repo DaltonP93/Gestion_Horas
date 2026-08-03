@@ -588,7 +588,7 @@ export default function EmpleadosPage() {
   // Los contadores vienen del backend sin paginar y sin el filtro de estado:
   // derivarlos de `employees` daba 0 inactivos apenas se filtraba por activos,
   // y truncaba al límite de la página.
-  const counts    = data?.counts ?? { all: 0, active: 0, inactive: 0 }
+  const counts    = data?.counts ?? { all: 0, active: 0, inactive: 0, suspended: 0 }
   const shown     = employees.length
   const truncated = (data?.total ?? 0) > shown
 
@@ -622,7 +622,7 @@ export default function EmpleadosPage() {
       <InactiveMarksAlert />
 
       {/* Stats rápidas */}
-      <div className="grid grid-cols-3 gap-4" data-testid="stats-empleados">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="stats-empleados">
         <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">{t('common.all')}</p>
           <p className="text-3xl font-bold text-slate-700 mt-1 dark:text-white/80">{counts.all}</p>
@@ -634,6 +634,12 @@ export default function EmpleadosPage() {
         <div className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 dark:bg-white/[0.03] dark:border-white/[0.08]">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">{t('common.inactive')}</p>
           <p className="text-3xl font-bold text-slate-500 mt-1 dark:text-white/40">{counts.inactive}</p>
+        </div>
+        {/* Suspendidos: el bulk-update ya asignaba este estado, pero no tenía
+            tarjeta ni filtro, así que quedaba dentro de "Todos" sin verse. */}
+        <div className="bg-amber-50 border border-amber-100 rounded-2xl px-5 py-4 dark:bg-amber-500/[0.06] dark:border-amber-400/20">
+          <p className="text-xs font-medium text-amber-600 uppercase tracking-wide dark:text-amber-300/70">{t('common.suspended')}</p>
+          <p className="text-3xl font-bold text-amber-700 mt-1 dark:text-amber-300">{counts.suspended}</p>
         </div>
       </div>
 
@@ -657,6 +663,7 @@ export default function EmpleadosPage() {
           <option value="">{t('common.all')}</option>
           <option value="active">{t('common.active')}</option>
           <option value="inactive">{t('common.inactive')}</option>
+          <option value="suspended">{t('common.suspended')}</option>
         </select>
       </div>
 

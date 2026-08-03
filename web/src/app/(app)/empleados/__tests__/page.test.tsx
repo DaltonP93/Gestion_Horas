@@ -4,7 +4,11 @@
  * Antes el filtro de estado arrancaba en "Activos" y las tarjetas se
  * derivaban de la página cargada, así que "Inactivos" mostraba 0 de entrada
  * y "Todos" repetía el total ya filtrado. Ahora el filtro arranca en "Todos"
- * y las tres tarjetas leen `counts` del backend.
+ * y las tarjetas leen `counts` del backend.
+ *
+ * Incluye "Suspendidos": es un estado del ENUM que el bulk-update ya
+ * asignaba, pero sin tarjeta ni filtro quedaba sumado en "Todos" sin que
+ * nadie pudiera verlo ni listarlo.
  */
 
 import { render, screen, waitFor, within } from '@testing-library/react'
@@ -28,6 +32,7 @@ jest.mock('@/i18n/I18nProvider', () => ({
       'common.all': 'Todos',
       'common.active': 'Activos',
       'common.inactive': 'Inactivos',
+      'common.suspended': 'Suspendidos',
       'common.import': 'Importar',
       'employees.new': 'Nuevo',
       'employees.department': 'Departamento',
@@ -60,7 +65,7 @@ beforeEach(() => {
   listMock.mockResolvedValue({
     data: [{ id: 1, code: '3081', full_name: 'Ana Gómez', status: 'active' }],
     total: 42,
-    counts: { all: 50, active: 42, inactive: 8 },
+    counts: { all: 53, active: 42, inactive: 8, suspended: 3 },
   })
 })
 
@@ -80,9 +85,10 @@ describe('EmpleadosPage — filtro y contadores', () => {
     await waitFor(() => expect(listMock).toHaveBeenCalled())
 
     // La página trae 1 empleado activo; las tarjetas deben mostrar el padrón.
-    await waitFor(() => expect(cardValue('Todos')).toBe('50'))
+    await waitFor(() => expect(cardValue('Todos')).toBe('53'))
     expect(cardValue('Activos')).toBe('42')
     expect(cardValue('Inactivos')).toBe('8')
+    expect(cardValue('Suspendidos')).toBe('3')
   })
 
   it('filtrar por activos no pone Inactivos en 0', async () => {
@@ -93,7 +99,7 @@ describe('EmpleadosPage — filtro y contadores', () => {
     listMock.mockResolvedValue({
       data: [{ id: 1, code: '3081', full_name: 'Ana Gómez', status: 'active' }],
       total: 42,
-      counts: { all: 50, active: 42, inactive: 8 },
+      counts: { all: 53, active: 42, inactive: 8, suspended: 3 },
     })
     await user.selectOptions(screen.getByDisplayValue('Todos'), 'active')
 
@@ -101,14 +107,14 @@ describe('EmpleadosPage — filtro y contadores', () => {
       expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'active' }))
     )
     await waitFor(() => expect(cardValue('Inactivos')).toBe('8'))
-    expect(cardValue('Todos')).toBe('50')
+    expect(cardValue('Todos')).toBe('53')
   })
 
   it('avisa cuando el listado quedó truncado por el límite', async () => {
     listMock.mockResolvedValue({
       data: new Array(500).fill(0).map((_, i) => ({ id: i, code: String(i), full_name: `E${i}`, status: 'active' })),
       total: 1200,
-      counts: { all: 1200, active: 1100, inactive: 100 },
+      counts: { all: 1200, active: 1100, inactive: 100, suspended: 0 },
     })
     renderPage()
 
@@ -125,5 +131,26 @@ describe('EmpleadosPage — filtro y contadores', () => {
     await waitFor(() => expect(cardValue('Todos')).toBe('0'))
     expect(cardValue('Activos')).toBe('0')
     expect(cardValue('Inactivos')).toBe('0')
+    expect(cardValue('Suspendidos')).toBe('0')
+  })
+
+  it('las tarjetas cierran la suma incluyendo suspendidos', async () => {
+    renderPage()
+    await waitFor(() => expect(listMock).toHaveBeenCalled())
+
+    await waitFor(() => expect(cardValue('Todos')).toBe('53'))
+    const n = (l: string) => Number(cardValue(l))
+    expect(n('Todos')).toBe(n('Activos') + n('Inactivos') + n('Suspendidos'))
+  })
+
+  it('se puede filtrar por Suspendidos', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await waitFor(() => expect(listMock).toHaveBeenCalled())
+
+    await user.selectOptions(screen.getByDisplayValue('Todos'), 'suspended')
+    await waitFor(() =>
+      expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'suspended' }))
+    )
   })
 })
