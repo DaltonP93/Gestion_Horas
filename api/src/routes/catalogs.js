@@ -10,6 +10,7 @@
 const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
 const paymentTypes = require('../services/paymentTypes');
+const jobTitles = require('../services/jobTitles');
 const { asyncHandler } = require('../utils/asyncHandler');
 
 router.use(authenticate);
@@ -33,6 +34,23 @@ router.get('/pay-types', asyncHandler(async (_req, res) => {
       ],
       source: 'builtin',
     });
+  }
+}));
+
+// GET /api/catalogs/job-titles
+// Cargos activos para el selector de la ficha. Mismo shape que pay-types.
+// El `value` es el nombre porque eso es lo que guarda `employees.position`.
+router.get('/job-titles', asyncHandler(async (_req, res) => {
+  try {
+    const rows = await jobTitles.listAll({ activeOnly: true });
+    res.json({
+      data: rows.map(r => ({ value: r.name, label: r.name, active: !!Number(r.active) })),
+      source: 'job_titles',
+    });
+  } catch {
+    // Degradado: si la migración 069 todavía no corrió, lista vacía. La
+    // ficha cae a texto libre en vez de quedarse sin poder cargar cargo.
+    res.json({ data: [], source: 'unavailable' });
   }
 }));
 
