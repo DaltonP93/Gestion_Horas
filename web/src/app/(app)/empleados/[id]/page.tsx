@@ -369,10 +369,18 @@ export default function EmpleadoDetallePage() {
         ))}
       </div>
 
-      {/* Historial + biometría. En anchos intermedios cae a una sola columna
-          para no dejar una franja lateral larga y angosta. */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="min-w-0 space-y-5 xl:col-span-2">
+      {/* Una sola grilla con dos áreas explícitas.
+          Antes eran dos grillas hermanas: la primera emparejaba Historial
+          con la columna de biometría, y como esa columna es bastante más
+          alta que el historial (limitado a max-h-80), la fila dejaba un
+          hueco grande debajo del historial; Contacto y Datos salariales
+          vivían en la grilla siguiente, o sea debajo de todo ese hueco.
+          Ahora la columna principal concentra el contenido —historial,
+          tarjetas informativas, documentos y notas— y ocupa ella misma
+          ese espacio. Sin grid-auto-flow:dense: el orden del DOM es el
+          orden de lectura. */}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-3">
+        <div data-testid="ficha-principal" className="min-w-0 space-y-6 xl:col-span-2">
           <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <h2 className="font-semibold text-slate-700 flex items-center gap-2 dark:text-white/80">
@@ -414,12 +422,80 @@ export default function EmpleadoDetallePage() {
               })}
             </div>
           </div>
+
+          {/* Tarjetas informativas: comparten fila desde 768px. Si el rol no
+              puede ver datos salariales, Contacto toma el ancho completo en
+              lugar de dejar media fila vacía. */}
+          <div
+            data-testid="ficha-tarjetas-info"
+            className={canViewLegal ? 'grid grid-cols-1 gap-6 md:grid-cols-2' : 'grid grid-cols-1 gap-6'}
+          >
+            <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+              <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+                <User size={16} className="text-blue-500" /> Contacto
+              </h2>
+              <dl className="space-y-2 text-sm">
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">Email</dt>
+                  <dd className="col-span-2 min-w-0 break-all text-slate-800 dark:text-white/90">{emp.email || '—'}</dd>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">Teléfono</dt>
+                  <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.phone || '—'}</dd>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <dt className="text-slate-400 dark:text-white/40">Nacimiento</dt>
+                  <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{fmtCivilDate(emp.birth_date)}</dd>
+                </div>
+              </dl>
+            </div>
+
+            {canViewLegal && (
+              <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+                <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+                  <Coins size={16} className="text-amber-500" /> Datos salariales
+                </h2>
+                <dl className="space-y-2 text-sm">
+                  <div className="grid grid-cols-3 gap-2">
+                    <dt className="text-slate-400 dark:text-white/40">Salario base</dt>
+                    <dd className="col-span-2 min-w-0 font-mono text-slate-800 dark:text-white/90">
+                      {emp.salary_base != null ? formatPYG(emp.salary_base) : '—'}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <dt className="text-slate-400 dark:text-white/40">Tipo de pago</dt>
+                    <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{payTypeLabel(emp.pay_type)}</dd>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <dt className="text-slate-400 dark:text-white/40">N° IPS</dt>
+                    <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.ips_number || '—'}</dd>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <dt className="text-slate-400 dark:text-white/40">Género</dt>
+                    <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">
+                      {emp.gender === 'M' ? 'Masculino' : emp.gender === 'F' ? 'Femenino' : emp.gender === 'O' ? 'Otro' : '—'}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <dt className="text-slate-400 dark:text-white/40">N° de hijos</dt>
+                    <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.children_count ?? 0}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+          </div>
+
+          {/* Documentos y notas: ancho completo de la columna principal,
+              son los paneles más densos y no se parten en dos. */}
+          {emp?.id && <div className="min-w-0"><EmployeeDocuments employeeId={emp.id} /></div>}
+          {emp?.id && <div className="min-w-0"><EmployeeNotes employeeId={emp.id} /></div>}
         </div>
 
-        {/* Identificación biométrica: huella/tarjeta en relojes + rostro.
-            Agrupadas porque resuelven lo mismo desde el punto de vista del
-            operador. */}
-        <div className="min-w-0 space-y-5 xl:col-span-1">
+        {/* Columna lateral: identificación biométrica (huella/tarjeta en los
+            relojes + rostro). Agrupadas porque resuelven lo mismo desde el
+            punto de vista del operador. Por debajo de xl la columna deja de
+            existir y estas tarjetas quedan al final, después de notas. */}
+        <aside data-testid="ficha-lateral" className="min-w-0 space-y-5 xl:col-span-1">
           <section aria-labelledby="bio-group-title" className="min-w-0 space-y-3">
             <h2 id="bio-group-title" className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-white/40">
               <Fingerprint size={14} /> Identificación biométrica
@@ -427,69 +503,8 @@ export default function EmpleadoDetallePage() {
             {emp?.id && <BiometriaRelojes employeeId={emp.id} />}
             {emp?.id && <FaceEnroll employeeId={emp.id} />}
           </section>
-        </div>
+        </aside>
       </div>
-
-      {/* Contacto y salario comparten fila sólo en escritorio */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-          <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-            <User size={16} className="text-blue-500" /> Contacto
-          </h2>
-          <dl className="space-y-2 text-sm">
-            <div className="grid grid-cols-3 gap-2">
-              <dt className="text-slate-400 dark:text-white/40">Email</dt>
-              <dd className="col-span-2 min-w-0 break-all text-slate-800 dark:text-white/90">{emp.email || '—'}</dd>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <dt className="text-slate-400 dark:text-white/40">Teléfono</dt>
-              <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.phone || '—'}</dd>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <dt className="text-slate-400 dark:text-white/40">Nacimiento</dt>
-              <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{fmtCivilDate(emp.birth_date)}</dd>
-            </div>
-          </dl>
-        </div>
-
-        {canViewLegal && (
-          <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-            <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-              <Coins size={16} className="text-amber-500" /> Datos salariales
-            </h2>
-            <dl className="space-y-2 text-sm">
-              <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">Salario base</dt>
-                <dd className="col-span-2 min-w-0 font-mono text-slate-800 dark:text-white/90">
-                  {emp.salary_base != null ? formatPYG(emp.salary_base) : '—'}
-                </dd>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">Tipo de pago</dt>
-                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{payTypeLabel(emp.pay_type)}</dd>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">N° IPS</dt>
-                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.ips_number || '—'}</dd>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">Género</dt>
-                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">
-                  {emp.gender === 'M' ? 'Masculino' : emp.gender === 'F' ? 'Femenino' : emp.gender === 'O' ? 'Otro' : '—'}
-                </dd>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">N° de hijos</dt>
-                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.children_count ?? 0}</dd>
-              </div>
-            </dl>
-          </div>
-        )}
-      </div>
-
-      {/* Documentos y notas: ancho completo, son los paneles más densos */}
-      {emp?.id && <div className="min-w-0"><EmployeeDocuments employeeId={emp.id} /></div>}
-      {emp?.id && <div className="min-w-0"><EmployeeNotes employeeId={emp.id} /></div>}
     </div>
   )
 }
