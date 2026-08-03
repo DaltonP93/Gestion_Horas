@@ -36,3 +36,8 @@ tmp/
 # Caché incremental: lo regenera `tsc` / `next build` en cada corrida.
 web/tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# ── Modelos de face-api ──────────────────────────────────────
+# Se copian desde node_modules en cada build (web/scripts/sync-face-models.js),
+# así el JS y los pesos son siempre de la misma versión exacta. No se versionan.
+web/public/face-models/
