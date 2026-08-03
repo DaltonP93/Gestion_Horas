@@ -27,6 +27,20 @@ const REX_PHONE     = /^[+()\d\s\-.]{4,30}$/
 const REX_PAY_CODE  = /^[a-z][a-z0-9_]{0,39}$/
 const REX_INT_ONLY  = /^-?\d+$/
 
+// Espeja a `normalizeSalary` del backend: sólo entero limpio. Un string con
+// punto es ambiguo ("1.000" son mil guaraníes al tipear pero uno en un
+// DECIMAL de MySQL), así que se rechaza aquí y se normaliza antes, al
+// construir el formulario (`parseDecimalPYG`).
+function normalizeSalary(raw: string | number): number | null {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && Number.isInteger(raw) ? raw : null
+  }
+  const s = String(raw).trim()
+  if (!REX_INT_ONLY.test(s)) return null
+  const n = Number(s)
+  return Number.isFinite(n) && Number.isInteger(n) ? n : null
+}
+
 const NOT_NULLABLE = new Set([
   'first_name', 'last_name',
   'pay_type', 'children_count',
@@ -90,12 +104,8 @@ export function validateEmployeeField(field: string, raw: unknown): ValidationRe
       if (!REX_IPS.test(String(v))) return err('N° IPS inválido')
       return { ok: true, value: String(v).replace(/\s+/g, '') }
     case 'salary_base': {
-      let raw2 = v as string | number
-      if (typeof raw2 === 'string') {
-        if (!REX_INT_ONLY.test(raw2)) return err('salario: entero sin separadores (≥ 0)')
-      }
-      const n = Number(raw2)
-      if (!Number.isFinite(n) || !Number.isInteger(n)) return err('salario: entero sin separadores (≥ 0)')
+      const n = normalizeSalary(v as string | number)
+      if (n === null) return err('salario: entero sin separadores (≥ 0)')
       if (n < 0) return err('salario debe ser ≥ 0')
       if (n > 1e12) return err('salario fuera de rango')
       return { ok: true, value: n }

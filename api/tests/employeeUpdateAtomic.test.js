@@ -174,6 +174,48 @@ describe('employeeController.update — guardado atómico', () => {
     expect(jsonArg.employee).toEqual(expect.objectContaining({ id: 7 }));
   });
 
+  test('salario sin tocar: el DECIMAL de MySQL no cuenta como cambio', async () => {
+    // MySQL devuelve DECIMAL como "3500000.00"; el cliente manda el entero
+    // canónico. Comparar en texto marcaría un cambio inexistente, y el
+    // salario se reescribiría (y auditaría) sin que nadie lo tocara.
+    sequelize.query
+      .mockResolvedValueOnce([[{ first_name: 'Ana', salary_base: '3500000.00' }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[{ id: 7, first_name: 'Anabel', hire_date: null }]]);
+    const req = mkReq({ first_name: 'Anabel', salary_base: 3500000 });
+    const res = mkRes();
+
+    await controller.update(req, res);
+
+    const jsonArg = res.json.mock.calls[0][0];
+    expect(jsonArg.changed).toEqual(['first_name']);
+    expect(jsonArg.changed).not.toContain('salary_base');
+    expect(audit.log).toHaveBeenCalledTimes(1);
+    expect(audit.log.mock.calls[0][0].details.field).toBe('first_name');
+
+    const updateSql = sequelize.query.mock.calls[1][0];
+    expect(updateSql).toContain('`first_name` = ?');
+    expect(updateSql).not.toContain('salary_base');
+  });
+
+  test('un salario realmente distinto sí se persiste', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ salary_base: '3500000.00' }]])
+      .mockResolvedValueOnce([{ affectedRows: 1 }])
+      .mockResolvedValueOnce([[{ id: 7, hire_date: null }]]);
+    const req = mkReq({ salary_base: 4000000 });
+    const res = mkRes();
+
+    await controller.update(req, res);
+
+    expect(res.json.mock.calls[0][0].changed).toEqual(['salary_base']);
+    expect(sequelize.query.mock.calls[1][1].replacements[0]).toBe(4000000);
+    // El valor nunca viaja al log de auditoría.
+    expect(audit.log.mock.calls[0][0].details).toMatchObject({
+      field: 'salary_base', from: null, to: null, sensitive: true,
+    });
+  });
+
   test('branch_id aceptado por PUT (allowlist PR 1) y clasificado como personal', async () => {
     sequelize.query
       .mockResolvedValueOnce([[{ branch_id: 1 }]])

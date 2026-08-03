@@ -354,30 +354,31 @@ export default function EmpleadoDetallePage() {
         />
       )}
 
-      {/* Historial + paneles laterales */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* KPIs del período + tabla de historial */}
-        <div className="lg:col-span-2 min-w-0 space-y-5">
-          <div className="grid grid-cols-4 gap-3">
-            {[
-              { label: 'Asistencias', value: workedDays,  cls: 'text-green-700 bg-green-50' },
-              { label: 'Retardos',    value: lateDays,    cls: 'text-amber-700 bg-amber-50' },
-              { label: 'Ausencias',   value: absentDays,  cls: 'text-red-700   bg-red-50'   },
-              { label: 'Horas',       value: minsToHM(totalWorked), cls: 'text-blue-700 bg-blue-50' },
-            ].map(s => (
-              <div key={s.label} className={`rounded-2xl p-4 ${s.cls}`}>
-                <p className="text-xs font-medium opacity-70 uppercase tracking-wide">{s.label}</p>
-                <p className="text-2xl font-bold mt-0.5">{s.value}</p>
-              </div>
-            ))}
+      {/* KPIs del período — ancho completo, 2 columnas en móvil */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          { label: 'Asistencias', value: workedDays,  cls: 'text-green-700 bg-green-50' },
+          { label: 'Retardos',    value: lateDays,    cls: 'text-amber-700 bg-amber-50' },
+          { label: 'Ausencias',   value: absentDays,  cls: 'text-red-700   bg-red-50'   },
+          { label: 'Horas',       value: minsToHM(totalWorked), cls: 'text-blue-700 bg-blue-50' },
+        ].map(s => (
+          <div key={s.label} className={`min-w-0 rounded-2xl p-4 ${s.cls}`}>
+            <p className="text-xs font-medium opacity-70 uppercase tracking-wide">{s.label}</p>
+            <p className="text-2xl font-bold mt-0.5">{s.value}</p>
           </div>
+        ))}
+      </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-            <div className="flex items-center justify-between mb-4">
+      {/* Historial + biometría. En anchos intermedios cae a una sola columna
+          para no dejar una franja lateral larga y angosta. */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div className="min-w-0 space-y-5 xl:col-span-2">
+          <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <h2 className="font-semibold text-slate-700 flex items-center gap-2 dark:text-white/80">
                 <Clock size={16} className="text-blue-500" /> Historial de asistencia
               </h2>
-              <div className="flex gap-2 items-center text-sm">
+              <div className="flex flex-wrap gap-2 items-center text-sm">
                 <input type="date" value={histFrom} onChange={e => setHistFrom(e.target.value)}
                   className="border border-slate-200 rounded-xl px-2 py-1 text-sm dark:border-white/[0.08]" />
                 <span className="text-slate-400 dark:text-white/30">–</span>
@@ -415,68 +416,80 @@ export default function EmpleadoDetallePage() {
           </div>
         </div>
 
-        {/* Paneles laterales: contacto, salario visible, biometría, documentos, notas */}
-        <div className="lg:col-span-1 space-y-5">
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        {/* Identificación biométrica: huella/tarjeta en relojes + rostro.
+            Agrupadas porque resuelven lo mismo desde el punto de vista del
+            operador. */}
+        <div className="min-w-0 space-y-5 xl:col-span-1">
+          <section aria-labelledby="bio-group-title" className="min-w-0 space-y-3">
+            <h2 id="bio-group-title" className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-white/40">
+              <Fingerprint size={14} /> Identificación biométrica
+            </h2>
+            {emp?.id && <BiometriaRelojes employeeId={emp.id} />}
+            {emp?.id && <FaceEnroll employeeId={emp.id} />}
+          </section>
+        </div>
+      </div>
+
+      {/* Contacto y salario comparten fila sólo en escritorio */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
+            <User size={16} className="text-blue-500" /> Contacto
+          </h2>
+          <dl className="space-y-2 text-sm">
+            <div className="grid grid-cols-3 gap-2">
+              <dt className="text-slate-400 dark:text-white/40">Email</dt>
+              <dd className="col-span-2 min-w-0 break-all text-slate-800 dark:text-white/90">{emp.email || '—'}</dd>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <dt className="text-slate-400 dark:text-white/40">Teléfono</dt>
+              <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.phone || '—'}</dd>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <dt className="text-slate-400 dark:text-white/40">Nacimiento</dt>
+              <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{fmtCivilDate(emp.birth_date)}</dd>
+            </div>
+          </dl>
+        </div>
+
+        {canViewLegal && (
+          <div className="min-w-0 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
             <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-              <User size={16} className="text-blue-500" /> Contacto
+              <Coins size={16} className="text-amber-500" /> Datos salariales
             </h2>
             <dl className="space-y-2 text-sm">
               <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">Email</dt>
-                <dd className="col-span-2 break-all text-slate-800 dark:text-white/90">{emp.email || '—'}</dd>
+                <dt className="text-slate-400 dark:text-white/40">Salario base</dt>
+                <dd className="col-span-2 min-w-0 font-mono text-slate-800 dark:text-white/90">
+                  {emp.salary_base != null ? formatPYG(emp.salary_base) : '—'}
+                </dd>
               </div>
               <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">Teléfono</dt>
-                <dd className="col-span-2 text-slate-800 dark:text-white/90">{emp.phone || '—'}</dd>
+                <dt className="text-slate-400 dark:text-white/40">Tipo de pago</dt>
+                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{payTypeLabel(emp.pay_type)}</dd>
               </div>
               <div className="grid grid-cols-3 gap-2">
-                <dt className="text-slate-400 dark:text-white/40">Nacimiento</dt>
-                <dd className="col-span-2 text-slate-800 dark:text-white/90">{fmtCivilDate(emp.birth_date)}</dd>
+                <dt className="text-slate-400 dark:text-white/40">N° IPS</dt>
+                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.ips_number || '—'}</dd>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <dt className="text-slate-400 dark:text-white/40">Género</dt>
+                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">
+                  {emp.gender === 'M' ? 'Masculino' : emp.gender === 'F' ? 'Femenino' : emp.gender === 'O' ? 'Otro' : '—'}
+                </dd>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <dt className="text-slate-400 dark:text-white/40">N° de hijos</dt>
+                <dd className="col-span-2 min-w-0 text-slate-800 dark:text-white/90">{emp.children_count ?? 0}</dd>
               </div>
             </dl>
           </div>
-
-          {canViewLegal && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
-              <h2 className="font-semibold text-slate-700 mb-3 flex items-center gap-2 dark:text-white/80">
-                <Coins size={16} className="text-amber-500" /> Datos salariales
-              </h2>
-              <dl className="space-y-2 text-sm">
-                <div className="grid grid-cols-3 gap-2">
-                  <dt className="text-slate-400 dark:text-white/40">Salario base</dt>
-                  <dd className="col-span-2 font-mono text-slate-800 dark:text-white/90">
-                    {emp.salary_base != null ? formatPYG(emp.salary_base) : '—'}
-                  </dd>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <dt className="text-slate-400 dark:text-white/40">Tipo de pago</dt>
-                  <dd className="col-span-2 text-slate-800 dark:text-white/90">{payTypeLabel(emp.pay_type)}</dd>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <dt className="text-slate-400 dark:text-white/40">N° IPS</dt>
-                  <dd className="col-span-2 text-slate-800 dark:text-white/90">{emp.ips_number || '—'}</dd>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <dt className="text-slate-400 dark:text-white/40">Género</dt>
-                  <dd className="col-span-2 text-slate-800 dark:text-white/90">
-                    {emp.gender === 'M' ? 'Masculino' : emp.gender === 'F' ? 'Femenino' : emp.gender === 'O' ? 'Otro' : '—'}
-                  </dd>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <dt className="text-slate-400 dark:text-white/40">N° de hijos</dt>
-                  <dd className="col-span-2 text-slate-800 dark:text-white/90">{emp.children_count ?? 0}</dd>
-                </div>
-              </dl>
-            </div>
-          )}
-
-          {emp?.id && <BiometriaRelojes employeeId={emp.id} />}
-          {emp?.id && <FaceEnroll employeeId={emp.id} />}
-          {emp?.id && <EmployeeDocuments employeeId={emp.id} />}
-          {emp?.id && <EmployeeNotes employeeId={emp.id} />}
-        </div>
+        )}
       </div>
+
+      {/* Documentos y notas: ancho completo, son los paneles más densos */}
+      {emp?.id && <div className="min-w-0"><EmployeeDocuments employeeId={emp.id} /></div>}
+      {emp?.id && <div className="min-w-0"><EmployeeNotes employeeId={emp.id} /></div>}
     </div>
   )
 }

@@ -25,12 +25,30 @@ export function formatThousandsPY(v: number | string | null | undefined): string
   return NF_PY.format(Math.trunc(n))
 }
 
-// Convierte lo que el usuario tipea (con o sin separadores) a un string de
-// dígitos apto para el backend. Preserva el signo negativo si viene (el
-// validador lo rechazará en la capa siguiente). Nunca lanza.
+// Convierte lo que el usuario TIPEA (con o sin separadores de miles) a un
+// string de dígitos. Preserva el signo negativo si viene (el validador lo
+// rechazará en la capa siguiente). Nunca lanza.
+//
+// Sólo apto para entrada del usuario: en es-PY el punto es separador de
+// miles, así que "3.500.000" → "3500000". NUNCA aplicar sobre un DECIMAL
+// del backend ("3500000.00"), donde el punto es separador decimal — para
+// eso está `parseDecimalPYG`.
 export function stripThousands(input: string): string {
   if (typeof input !== 'string') return ''
   const neg = input.trim().startsWith('-')
   const digits = input.replace(/[^\d]/g, '')
   return neg ? '-' + digits : digits
+}
+
+// Convierte un valor tal como llega de la API (MySQL DECIMAL serializado
+// como "3500000.00", o un number) al entero canónico en string.
+// Devuelve '' para null/undefined/'' o para cualquier cosa no numérica —
+// preferimos vacío antes que un número corrupto.
+export function parseDecimalPYG(v: unknown): string {
+  if (v === null || v === undefined || v === '') return ''
+  const s = typeof v === 'number' ? String(v) : String(v).trim()
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return ''
+  const n = Number(s)
+  if (!Number.isFinite(n)) return ''
+  return String(Math.trunc(n))
 }

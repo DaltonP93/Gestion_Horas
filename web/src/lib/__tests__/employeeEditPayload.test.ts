@@ -181,3 +181,44 @@ describe('filterByCaps', () => {
     expect(r).toEqual({})
   })
 })
+
+describe('snapshotOf — salario que llega como DECIMAL de MySQL', () => {
+  test('"3500000.00" entra al formulario como "3500000"', () => {
+    expect(snapshotOf({ salary_base: '3500000.00' }).salary_base).toBe('3500000')
+  })
+
+  test('un number entero también', () => {
+    expect(snapshotOf({ salary_base: 3500000 }).salary_base).toBe('3500000')
+  })
+
+  test('buildPayload sobre ese snapshot devuelve 3500000, no 350000000', () => {
+    const form = snapshotOf({
+      first_name: 'Ana', last_name: 'Gómez', pay_type: 'mensualizado',
+      children_count: 0, salary_base: '3500000.00',
+    })
+    const r = buildPayload(form)
+    expect(r.ok).toBe(true)
+    expect(r.payload.salary_base).toBe(3500000)
+  })
+
+  test('tres ciclos abrir → guardar → releer conservan 3500000', () => {
+    // Simula lo que hace el backend: persiste el entero y lo devuelve como
+    // DECIMAL. Antes del fix cada vuelta multiplicaba por 100.
+    let fromApi: string | number = '3500000.00'
+    for (let i = 0; i < 3; i++) {
+      const form = snapshotOf({
+        first_name: 'Ana', last_name: 'Gómez', pay_type: 'mensualizado',
+        children_count: 0, salary_base: fromApi,
+      })
+      const r = buildPayload(form)
+      expect(r.ok).toBe(true)
+      expect(r.payload.salary_base).toBe(3500000)
+      fromApi = `${r.payload.salary_base}.00`
+    }
+  })
+
+  test('salario nulo o ausente queda vacío', () => {
+    expect(snapshotOf({ salary_base: null }).salary_base).toBe('')
+    expect(snapshotOf({}).salary_base).toBe('')
+  })
+})

@@ -32,6 +32,21 @@ const REX_PHONE     = /^[+()\d\s\-.]{4,30}$/;
 const REX_PAY_CODE  = /^[a-z][a-z0-9_]{0,39}$/; // slug administrable
 const REX_INT_ONLY  = /^-?\d+$/;                // dígitos, sin separadores
 
+// Normaliza el salario a entero PYG. Acepta number entero o string de
+// dígitos. Cualquier punto o coma se rechaza: en es-PY "1.000" son mil
+// guaraníes pero en un DECIMAL de MySQL es uno — la ambigüedad no se
+// resuelve mirando el string, así que el contrato de la API es entero
+// limpio y el cliente normaliza antes de enviar.
+function normalizeSalary(raw) {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && Number.isInteger(raw) ? raw : null;
+  }
+  const s = String(raw).trim();
+  if (!REX_INT_ONLY.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && Number.isInteger(n) ? n : null;
+}
+
 function isBlank(v) { return v === undefined || v === null || v === ''; }
 
 // Columnas NOT NULL en `employees` (init.sql + migraciones 043/044/068).
@@ -98,15 +113,11 @@ function validate(field, value) {
       return { ok: true, value: String(v).replace(/\s+/g, '') };
 
     case 'salary_base': {
-      // Sólo entero no-negativo. Rechaza decimales, notación con separadores
-      // ("2.500,50", "1,000") y strings no numéricas. La UI debe enviar el
-      // entero limpio; el formato con puntos de miles es visualización.
-      let raw = v;
-      if (typeof raw === 'string') {
-        if (!REX_INT_ONLY.test(raw)) return err('salario: entero sin separadores (≥ 0)');
-      }
-      const n = Number(raw);
-      if (!Number.isFinite(n) || !Number.isInteger(n)) return err('salario: entero sin separadores (≥ 0)');
+      // Entero no-negativo. Rechaza separadores de miles ("3.500.000",
+      // "1,000"), centavos reales y strings no numéricas. La UI envía el
+      // entero limpio; el formato con puntos es sólo visualización.
+      const n = normalizeSalary(v);
+      if (n === null) return err('salario: entero sin separadores (≥ 0)');
       if (n < 0) return err('salario debe ser ≥ 0');
       if (n > 1e12) return err('salario fuera de rango');
       return { ok: true, value: n };
@@ -160,4 +171,5 @@ function auditValueOf(field, value) {
 module.exports = {
   validate, auditValueOf, SENSITIVE_VALUE,
   NOT_NULLABLE, READ_ONLY_FIELDS,
+  normalizeSalary,
 };
