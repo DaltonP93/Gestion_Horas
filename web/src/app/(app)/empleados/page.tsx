@@ -556,7 +556,7 @@ export default function EmpleadosPage() {
   const qc = useQueryClient()
   const { t } = useI18n()
   const [search, setSearch]       = useState('')
-  const [status, setStatus]       = useState('active')
+  const [status, setStatus]       = useState('')
   const [dept, setDept]           = useState('')
   const [showImport, setImport]   = useState(false)
   const [selected, setSelected]   = useState<number[]>([])
@@ -585,8 +585,12 @@ export default function EmpleadosPage() {
   })
 
   const employees = data?.data || []
-  const active    = employees.filter((e: any) => e.status === 'active').length
-  const inactive  = employees.filter((e: any) => e.status === 'inactive').length
+  // Los contadores vienen del backend sin paginar y sin el filtro de estado:
+  // derivarlos de `employees` daba 0 inactivos apenas se filtraba por activos,
+  // y truncaba al límite de la página.
+  const counts    = data?.counts ?? { all: 0, active: 0, inactive: 0 }
+  const shown     = employees.length
+  const truncated = (data?.total ?? 0) > shown
 
   return (
     <div className="p-6 space-y-6">
@@ -598,7 +602,7 @@ export default function EmpleadosPage() {
           </div>
           <div>
             <h1 className="font-display text-2xl font-bold text-slate-900 dark:text-white tracking-tight">{t('nav.employees')}</h1>
-            <p className="text-sm text-slate-500 dark:text-white/40">{data?.total || 0} · {active} {t('common.active').toLowerCase()}</p>
+            <p className="text-sm text-slate-500 dark:text-white/40">{counts.all} · {counts.active} {t('common.active').toLowerCase()}</p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -618,18 +622,18 @@ export default function EmpleadosPage() {
       <InactiveMarksAlert />
 
       {/* Stats rápidas */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-4" data-testid="stats-empleados">
         <div className="bg-white border border-slate-100 rounded-2xl px-5 py-4 shadow-sm dark:bg-white/[0.04] dark:border-white/[0.06]">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">{t('common.all')}</p>
-          <p className="text-3xl font-bold text-slate-700 mt-1 dark:text-white/80">{data?.total || 0}</p>
+          <p className="text-3xl font-bold text-slate-700 mt-1 dark:text-white/80">{counts.all}</p>
         </div>
         <div className="bg-green-50 border border-green-100 rounded-2xl px-5 py-4">
           <p className="text-xs font-medium text-green-600 uppercase tracking-wide">{t('common.active')}</p>
-          <p className="text-3xl font-bold text-green-700 mt-1">{active}</p>
+          <p className="text-3xl font-bold text-green-700 mt-1">{counts.active}</p>
         </div>
         <div className="bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 dark:bg-white/[0.03] dark:border-white/[0.08]">
           <p className="text-xs font-medium text-slate-500 uppercase tracking-wide dark:text-white/40">{t('common.inactive')}</p>
-          <p className="text-3xl font-bold text-slate-500 mt-1 dark:text-white/40">{inactive}</p>
+          <p className="text-3xl font-bold text-slate-500 mt-1 dark:text-white/40">{counts.inactive}</p>
         </div>
       </div>
 
@@ -774,7 +778,11 @@ export default function EmpleadosPage() {
         )}
       </div>
 
-      <p className="text-xs text-slate-400 dark:text-white/30">{employees.length} empleados mostrados</p>
+      <p className="text-xs text-slate-400 dark:text-white/30">
+        {truncated
+          ? `${shown} de ${data?.total ?? 0} empleados mostrados — refiná los filtros para ver el resto`
+          : `${shown} empleados mostrados`}
+      </p>
 
       {showImport && (
         <ImportModal
