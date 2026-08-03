@@ -162,14 +162,20 @@ export default function EmployeeEditModal({
   }, [])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const root = panelRef.current
+    // El submodal de tipos de pago se renderiza dentro de este overlay, así
+    // que sus teclas burbujean hasta acá. Nada de lo que sigue debe actuar
+    // sobre un evento nacido fuera del formulario: el trap creería que el
+    // foco se escapó y lo arrastraría al panel de atrás, sacando al usuario
+    // del diálogo que está viendo.
+    if (!root || !root.contains(e.target as Node)) return
+
     if (e.key === 'Escape') {
-      // El submodal de tipos de pago gestiona su propio Escape.
+      // El submodal gestiona su propio Escape.
       if (!saving && !payTypeModal) onClose()
       return
     }
     if (e.key !== 'Tab') return
-    const root = panelRef.current
-    if (!root) return
     const nodes = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE))
     if (!nodes.length) return
     const first = nodes[0]

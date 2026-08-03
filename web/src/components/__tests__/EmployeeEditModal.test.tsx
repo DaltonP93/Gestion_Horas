@@ -336,4 +336,23 @@ describe('cierre y guardado', () => {
     await user.tab()
     expect(document.activeElement).toBe(first)
   })
+
+  it('el trap no roba el foco al submodal de tipos de pago', async () => {
+    const user = userEvent.setup()
+    renderModal()
+
+    await user.click(screen.getByRole('button', { name: /Nuevo tipo de pago/i }))
+    const sub = screen.getByRole('dialog', { name: /Nuevo tipo de pago/i })
+    const subInput = sub.querySelector('input') as HTMLInputElement
+    subInput.focus()
+
+    // Shift+Tab desde el submodal antes satisfacía `!root.contains(active)`
+    // y mandaba el foco al formulario de atrás.
+    await user.tab({ shift: true })
+    expect(sub.contains(document.activeElement)).toBe(true)
+
+    // Y Escape dentro del submodal no debe cerrar el modal del empleado.
+    fireEvent.keyDown(subInput, { key: 'Escape' })
+    expect(screen.getByRole('dialog', { name: /Editar empleado/i })).toBeInTheDocument()
+  })
 })
