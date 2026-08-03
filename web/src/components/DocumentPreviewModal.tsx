@@ -30,13 +30,12 @@ export interface PreviewDoc {
 }
 
 export default function DocumentPreviewModal({
-  open, employeeId, doc, onClose, onDownload,
+  open, employeeId, doc, onClose,
 }: {
   open: boolean
   employeeId: number
   doc: PreviewDoc | null
   onClose: () => void
-  onDownload: (doc: PreviewDoc) => void
 }) {
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState<string | null>(null)
@@ -48,6 +47,10 @@ export default function DocumentPreviewModal({
   // El object URL vivo, para poder revocarlo desde la limpieza sin
   // depender del estado (que ya podría haberse reemplazado).
   const urlRef = useRef<string | null>(null)
+  // El binario ya descargado. Descargar desde el modal lo reutiliza en vez
+  // de pedirlo de nuevo: sin segunda petición no hay un segundo error que
+  // el usuario no vería, porque el banner del padre queda tapado por el modal.
+  const blobRef = useRef<Blob | null>(null)
 
   const revoke = useCallback(() => {
     if (urlRef.current) {
@@ -64,6 +67,7 @@ export default function DocumentPreviewModal({
 
     // Cada apertura o cambio de documento suelta el anterior antes de pedir.
     revoke()
+    blobRef.current = null
     setUrl(null)
     setError(null)
     setLoading(true)
@@ -76,6 +80,7 @@ export default function DocumentPreviewModal({
           setError('El documento llegó vacío. Puede estar dañado en el servidor.')
           return
         }
+        blobRef.current = blob
         const mime = resolveMime(blob?.type, doc.mime, doc.filename)
         const k = previewKind(mime)
         setKind(k)
@@ -117,6 +122,22 @@ export default function DocumentPreviewModal({
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = prev }
   }, [open])
+
+  /**
+   * Guarda el binario que ya está en memoria. No hay red de por medio, así
+   * que tampoco hay un fallo nuevo que informar; si la descarga inicial
+   * falló, este botón no se ofrece.
+   */
+  const saveToDisk = useCallback(() => {
+    const blob = blobRef.current
+    if (!blob || !doc) return
+    const tmp = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = tmp
+    a.download = doc.filename
+    a.click()
+    URL.revokeObjectURL(tmp)
+  }, [doc])
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     const root = panelRef.current
@@ -160,14 +181,16 @@ export default function DocumentPreviewModal({
             <p className="truncate text-xs text-slate-500 dark:text-white/50">{doc.filename}</p>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              onClick={() => onDownload(doc)}
-              title="Descargar"
-              className="rounded-lg p-1.5 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
-            >
-              <Download size={16} className="text-slate-600 dark:text-white/60" />
-            </button>
+            {!loading && !error && (
+              <button
+                type="button"
+                onClick={saveToDisk}
+                title="Descargar"
+                className="rounded-lg p-1.5 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
+              >
+                <Download size={16} className="text-slate-600 dark:text-white/60" />
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -202,7 +225,7 @@ export default function DocumentPreviewModal({
               </p>
               <button
                 type="button"
-                onClick={() => onDownload(doc)}
+                onClick={saveToDisk}
                 className="inline-flex items-center gap-2 rounded-xl bg-fuchsia-600 px-4 py-2 text-xs font-medium text-white hover:bg-fuchsia-700"
               >
                 <Download size={13} /> Descargar

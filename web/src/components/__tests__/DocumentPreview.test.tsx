@@ -186,6 +186,61 @@ describe('vista previa — descarga autenticada', () => {
   })
 })
 
+describe('vista previa — descargar desde el modal', () => {
+  it('reutiliza el binario ya descargado, sin una segunda petición', async () => {
+    const user = userEvent.setup()
+    const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    render(<EmployeeDocuments employeeId={459} />)
+    await openPreview(user)
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled())
+
+    const antes = apiGet.mock.calls.filter(([u]) => DOWNLOAD_RE.test(String(u))).length
+    await user.click(within(dialog).getByTitle('Descargar'))
+
+    // Sin red no hay un segundo error que el usuario no vería: el banner del
+    // padre queda tapado por el modal.
+    const despues = apiGet.mock.calls.filter(([u]) => DOWNLOAD_RE.test(String(u))).length
+    expect(despues).toBe(antes)
+    expect(click).toHaveBeenCalled()
+    click.mockRestore()
+  })
+
+  it('el fallback de formato no visualizable también descarga sin pedir de nuevo', async () => {
+    primeApi([DOC_DOCX], mkBlob(DOC_DOCX.mime))
+    const user = userEvent.setup()
+    const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    render(<EmployeeDocuments employeeId={459} />)
+    await openPreview(user)
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() =>
+      expect(within(dialog).getByText(/Vista previa no disponible/i)).toBeInTheDocument()
+    )
+
+    const antes = apiGet.mock.calls.filter(([u]) => DOWNLOAD_RE.test(String(u))).length
+    const botones = within(dialog).getAllByRole('button', { name: /descargar/i })
+    await user.click(botones.find(b => b.textContent?.trim() === 'Descargar')!)
+
+    expect(apiGet.mock.calls.filter(([u]) => DOWNLOAD_RE.test(String(u))).length).toBe(antes)
+    expect(click).toHaveBeenCalled()
+    click.mockRestore()
+  })
+
+  it('si la descarga inicial falló no se ofrece descargar', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (DOWNLOAD_RE.test(String(url))) return Promise.reject({ response: { status: 410 } })
+      return Promise.resolve({ data: { items: [DOC_PDF] } })
+    })
+    const user = userEvent.setup()
+    render(<EmployeeDocuments employeeId={459} />)
+    await openPreview(user)
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument())
+
+    expect(within(dialog).queryByTitle('Descargar')).toBeNull()
+  })
+})
+
 describe('vista previa — ciclo de vida del object URL', () => {
   it('se revoca al cerrar', async () => {
     const user = userEvent.setup()

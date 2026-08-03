@@ -218,7 +218,6 @@ export default function EmployeeDocuments({ employeeId }: { employeeId: number }
         employeeId={employeeId}
         doc={preview}
         onClose={() => setPreview(null)}
-        onDownload={download}
       />
     </div>
   )
