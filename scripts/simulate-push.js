@@ -14,7 +14,7 @@
  *
  * Ejemplos:
  *   node scripts/simulate-push.js                      # 1 marcaje a localhost
- *   node scripts/simulate-push.js 10.81.28.20:8080     # contra prod
+ *   node scripts/simulate-push.js bridge.example.internal:8080     # contra prod
  *   node scripts/simulate-push.js localhost:8080 FAKE 99 5   # 5 marcajes user 99
  */
 

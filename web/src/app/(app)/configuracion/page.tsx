@@ -557,7 +557,7 @@ function RelojesTab() {
             <div><label className={labelCls}>Ubicación</label><input value={form.location} onChange={e => setForm(f=>({...f,location:e.target.value}))} placeholder="ej: Planta Baja" className={inputCls} /></div>
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2"><label className={labelCls}>Dirección IP *</label><input value={form.ip_address} onChange={e => setForm(f=>({...f,ip_address:e.target.value}))} placeholder="172.16.20.160" className={inputCls} /></div>
+            <div className="col-span-2"><label className={labelCls}>Dirección IP *</label><input value={form.ip_address} onChange={e => setForm(f=>({...f,ip_address:e.target.value}))} placeholder="10.0.0.160" className={inputCls} /></div>
             <div><label className={labelCls}>Puerto</label><input value={form.port} onChange={e => setForm(f=>({...f,port:e.target.value}))} placeholder="4370" className={inputCls} /></div>
           </div>
           <div><label className={labelCls}>N° de serie (opcional)</label><input value={form.serial_no} onChange={e => setForm(f=>({...f,serial_no:e.target.value}))} placeholder="ej: ABCD123456" className={inputCls} /></div>

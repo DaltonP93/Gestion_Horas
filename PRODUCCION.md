@@ -19,10 +19,10 @@ DB_USER=root
 DB_PASSWORD=TU_PASSWORD_MYSQL
 
 # SQL Server att2000 (SOLO LECTURA)
-ATT_HOST=ADVENTISTA        # nombre del servidor o IP
+ATT_HOST=sqlserver.example.internal        # nombre del servidor o IP
 ATT_PORT=1433
-ATT_USER=sa
-ATT_PASSWORD=TU_PASSWORD_SA
+ATT_USER=sishoras_integration
+ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
 ATT_DATABASE=att2000
 
 # JWT (generar strings aleatorios largos)

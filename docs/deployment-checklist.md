@@ -16,8 +16,8 @@ En `api/.env`:
 ```
 ATT2000_WRITE_ENABLED=true          # replicar PUSH → att2000.CHECKINOUT
 ATT2000_PULL_CRON=*/10 * * * *      # respaldo (opcional)
-ATT_HOST=10.81.28.8
-ATT_PASSWORD=nma.d.nh4
+ATT_HOST=sqlserver.example.internal
+ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
 BRIDGE_URL=http://localhost:8081
 ZKTECO_PUSH_WHITELIST=101,103,1     # SNs permitidos (opcional)
 ```
@@ -44,17 +44,17 @@ Verificar: `netstat -an | findstr :4370` no debe mostrar conexiones ESTABLISHED 
 ## 4. Firewall Linux (servidor antigravity)
 
 ```bash
-sudo ufw allow from 172.16.20.0/24 to any port 8080   # PUSH ZKTeco
-sudo ufw allow from 172.16.20.0/24 to any port 4370   # ping a relojes
+sudo ufw allow from 10.0.0.0/24 to any port 8080   # PUSH ZKTeco
+sudo ufw allow from 10.0.0.0/24 to any port 4370   # ping a relojes
 sudo ufw status
 ```
 
 ## 5. Configurar relojes
 
 Ver `docs/zkteco-push-setup.md`. Para cada reloj:
-- [ ] Comedor (172.16.20.160)
-- [ ] Lavadero (172.16.20.161)
-- [ ] Gerencia (172.16.20.162)
+- [ ] Comedor (10.0.0.160)
+- [ ] Lavadero (10.0.0.161)
+- [ ] Gerencia (10.0.0.162)
 
 ## 6. Actualizar código + reiniciar
 
