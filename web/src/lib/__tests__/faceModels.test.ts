@@ -64,6 +64,14 @@ describe('modelos de face-api servidos por la aplicación', () => {
     expect(pkg.scripts.prebuild).toContain('sync:face-models')
   })
 
+  it('el build de exportación también sincroniza', () => {
+    // Los hooks pre/post de npm sólo aplican al script del mismo nombre: el
+    // `next build` embebido en build:export no dispara `prebuild`, así que
+    // la app exportada (Capacitor) saldría sin modelos.
+    const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+    expect(pkg.scripts['build:export']).toContain('sync:face-models')
+  })
+
   it('los modelos generados no se versionan', () => {
     const ignore = readFileSync(join(ROOT, '..', '.gitignore'), 'utf8')
     expect(ignore).toMatch(/web\/public\/face-models/)

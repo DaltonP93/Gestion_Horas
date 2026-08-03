@@ -191,6 +191,37 @@ describe('FaceEnroll — cámara', () => {
     expect(stop).toHaveBeenCalledTimes(2)
   })
 
+  it('desmontar mientras cargan los modelos no llega a pedir la cámara', async () => {
+    const resolvers: ((v: unknown) => void)[] = []
+    loadFromUri.mockImplementation(() => new Promise(res => { resolvers.push(res) }))
+    const user = userEvent.setup()
+    const { unmount } = render(<FaceEnroll employeeId={459} />)
+    await user.click(enrolar())
+    await waitFor(() => expect(resolvers.length).toBe(3))
+
+    unmount()
+    resolvers.forEach(r => r(undefined))
+    await new Promise(r => setTimeout(r, 0))
+
+    // Encender la cámara para un componente que ya no existe la dejaría
+    // prendida sin nadie que la apague.
+    expect(getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('un stream que llega después del desmontaje se apaga igual', async () => {
+    let entregar: (s: MediaStream) => void = () => {}
+    getUserMedia.mockImplementation(() => new Promise(res => { entregar = res as never }))
+    const user = userEvent.setup()
+    const { unmount } = render(<FaceEnroll employeeId={459} />)
+    await user.click(enrolar())
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalled())
+
+    // El permiso se concede después de que el usuario navegó a otra parte.
+    unmount()
+    entregar(mkStream())
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(2))
+  })
+
   it('desmontar con la cámara abierta la libera', async () => {
     const user = userEvent.setup()
     const { unmount } = render(<FaceEnroll employeeId={459} />)
