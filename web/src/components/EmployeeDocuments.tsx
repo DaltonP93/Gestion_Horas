@@ -1,7 +1,9 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
-import { FileText, Upload, Download, Trash2, Eye, EyeOff, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
+import { FileText, Upload, Download, Trash2, Eye, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
+import DocumentPreviewModal, { type PreviewDoc } from './DocumentPreviewModal'
+import { previewErrorMessage } from '@/lib/documentPreview'
 
 interface Doc {
   id: number
@@ -41,6 +43,7 @@ export default function EmployeeDocuments({ employeeId }: { employeeId: number }
   const [title, setTitle]       = useState('')
   const [note, setNote]         = useState('')
   const [visible, setVisible]   = useState(true)
+  const [preview, setPreview]   = useState<PreviewDoc | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function load() {
@@ -75,14 +78,19 @@ export default function EmployeeDocuments({ employeeId }: { employeeId: number }
     finally { setUploading(false) }
   }
 
-  async function download(d: Doc) {
+  async function download(d: { id: number; filename: string }) {
     try {
       const res = await api.get(`/api/employees/${employeeId}/documents/${d.id}/download`, { responseType: 'blob' })
       const url = URL.createObjectURL(res.data)
       const a = document.createElement('a')
       a.href = url; a.download = d.filename; a.click()
       URL.revokeObjectURL(url)
-    } catch (e: any) { setError(e.response?.data?.error || e.message) }
+    } catch (e: unknown) {
+      // Con responseType 'blob' el cuerpo del error también llega como Blob,
+      // así que `e.response.data.error` no es texto: era un objeto vacío en
+      // pantalla. Se traduce por estado, igual que la vista previa.
+      setError(previewErrorMessage(e))
+    }
   }
 
   async function remove(d: Doc) {
@@ -175,11 +183,23 @@ export default function EmployeeDocuments({ employeeId }: { employeeId: number }
               <span className="text-slate-800 dark:text-white truncate flex-1">{d.title}</span>
               {d.period && <span className="text-xs text-slate-400 dark:text-white/30 font-mono">{d.period}</span>}
               <span className="text-[10px] text-slate-400 dark:text-white/30">{fmtSize(d.size_bytes)}</span>
-              {d.visible_to_employee ? (
-                <Eye size={12} className="text-emerald-500" aria-label="Visible al empleado" />
-              ) : (
-                <EyeOff size={12} className="text-slate-400" aria-label="No visible al empleado" />
-              )}
+              {/* Estado, no acción: es un badge y no debe leerse como botón.
+                  El ojo pasó a ser el botón "Ver documento" de al lado. */}
+              <span
+                data-testid="doc-visibilidad"
+                className={
+                  'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ' +
+                  (d.visible_to_employee
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300'
+                    : 'bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-white/60')
+                }
+              >
+                {d.visible_to_employee ? 'Visible al empleado' : 'Privado'}
+              </span>
+              <button onClick={() => setPreview(d)} title="Ver documento"
+                className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06]">
+                <Eye size={14} className="text-slate-600 dark:text-white/60" />
+              </button>
               <button onClick={() => download(d)} title="Descargar"
                 className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06]">
                 <Download size={14} className="text-slate-600 dark:text-white/60" />
@@ -192,6 +212,14 @@ export default function EmployeeDocuments({ employeeId }: { employeeId: number }
           ))}
         </div>
       )}
+
+      <DocumentPreviewModal
+        open={!!preview}
+        employeeId={employeeId}
+        doc={preview}
+        onClose={() => setPreview(null)}
+        onDownload={download}
+      />
     </div>
   )
 }
