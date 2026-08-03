@@ -309,9 +309,7 @@ router.get('/ping-all', authorize('admin','gestor','hr'), async (req, res) => {
     let [devices] = await sequelize.query('SELECT * FROM devices');
     if (!devices.length) {
       const DEFAULTS = [
-        { name: 'Reloj Comedor',  ip_address: '172.16.20.160', port: 4370, location: 'Comedor' },
-        { name: 'Reloj Lavadero', ip_address: '172.16.20.161', port: 4370, location: 'Lavadero' },
-        { name: 'Reloj Gerencia', ip_address: '172.16.20.162', port: 4370, location: 'Gerencia' },
+        { name: 'Reloj test',  ip_address: 'x.x.x.x', port: 4370, location: 'test' }
       ];
       for (const d of DEFAULTS) {
         await sequelize.query(
