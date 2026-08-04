@@ -8,6 +8,7 @@ const { authenticate, authorize, requireSuperAdmin } = require('../middleware/au
 const { sequelize } = require('../config/database');
 const { reprocessUnmapped, linkEmployeeDevice } = require('../services/deviceMapping');
 const audit = require('../services/audit');
+const { fetchPushStatus, logBridgeFailure, newCorrelationId } = require('../services/bridgeClient');
 
 router.use(authenticate);
 
@@ -123,42 +124,74 @@ async function withZK(device, fn, { maxAttempts = 3, delayMs = 3000 } = {}) {
 }
 
 // GET /api/devices/:id/push-status — ¿está el reloj enviando marcajes por PUSH?
+//
+// Responde SIEMPRE con la forma normalizada del contrato (ver
+// docs/bridge-push-status-contract.md). Los estados del reloj —online, stale,
+// never_seen— son datos, no errores: van con 200. Sólo los problemas de
+// infraestructura llevan 4xx/5xx, y cada causa el suyo.
 router.get('/:id/push-status', authorize('admin','gestor','hr'), async (req, res) => {
+  const correlationId = newCorrelationId();
   const [[device]] = await sequelize.query('SELECT * FROM devices WHERE id=?', { replacements: [req.params.id] });
-  if (!device) return res.status(404).json({ error: 'Reloj no encontrado' });
-
-  const bridgeUrl = process.env.BRIDGE_URL || 'http://localhost:8081';
-  try {
-    const r = await fetch(`${bridgeUrl}/devices/${device.id}/push-state`);
-    if (!r.ok) throw new Error(`Bridge respondió ${r.status}`);
-    const payload = await r.json();
-
-    // Último marcaje recibido por PUSH en las últimas 24 h según attendance_logs
-    const [[last]] = await sequelize.query(`
-      SELECT MAX(timestamp) AS last_push
-      FROM attendance_logs
-      WHERE device_id = ? AND timestamp >= NOW() - INTERVAL 24 HOUR
-    `, { replacements: [device.id] });
-
-    const state = payload?.state || null;
-    const lastSeen = state?.lastSeen ? new Date(state.lastSeen) : null;
-    const now = Date.now();
-    const activeMs = 5 * 60 * 1000;
-    const pushActive = lastSeen && (now - lastSeen.getTime()) < activeMs;
-
-    res.json({
-      device: device.name,
-      ip: device.ip_address,
-      pushActive: !!pushActive,
-      sn: state?.sn || null,
-      lastSeen: state?.lastSeen || null,
-      lastPunch: state?.lastPunch || null,
-      punches24h: last?.last_push ? 1 : 0,
-      lastPunchInDb: last?.last_push || null
+  if (!device) {
+    return res.status(404).json({
+      available: false, status: 'unavailable', error_code: 'DEVICE_NOT_FOUND',
+      message: 'Reloj no encontrado', correlation_id: correlationId,
     });
-  } catch (err) {
-    res.status(502).json({ error: `No se pudo consultar el Bridge: ${err.message}` });
   }
+
+  const base = {
+    device_id: device.id,
+    device: device.name,
+    serial: device.serial_no || null,
+    correlation_id: correlationId,
+  };
+
+  const r = await fetchPushStatus({
+    serial: device.serial_no,
+    ip: device.ip_address,
+    correlationId,
+  });
+
+  if (!r.ok) {
+    logBridgeFailure(r, { device_id: device.id, route: 'push-status' });
+    // Sin detalle técnico: el mensaje es fijo y el correlation_id permite
+    // encontrar la línea de log correspondiente.
+    return res.status(r.http_status).json({
+      ...base,
+      available: false,
+      status: 'unavailable',
+      error_code: r.error_code,
+      message: r.message,
+      last_push_at: null,
+      last_event_at: null,
+    });
+  }
+
+  const { found, serial, last_push_at, last_event_at } = r.data;
+  const windowMs = parseInt(process.env.PUSH_ONLINE_WINDOW_MS || String(5 * 60 * 1000), 10);
+  const skewMs = parseInt(process.env.PUSH_MAX_SKEW_MS || String(2 * 60 * 1000), 10);
+  const ahora = Date.now();
+  // Una fecha futura daba una diferencia negativa, siempre menor que la
+  // ventana: el reloj se veía "online" hasta que esa fecha quedara atrás. Se
+  // tolera un desfasaje chico y se recorta; más allá de eso, no cuenta.
+  const ultimo = [last_push_at, last_event_at]
+    .map(v => (v ? Date.parse(v) : NaN))
+    .filter(n => !Number.isNaN(n) && n - ahora <= skewMs)
+    .map(n => Math.min(n, ahora))
+    .sort((a, b) => b - a)[0];
+
+  let status;
+  if (!found || ultimo === undefined) status = 'never_seen';
+  else status = (ahora - ultimo) < windowMs ? 'online' : 'stale';
+
+  res.json({
+    ...base,
+    available: true,
+    serial: serial || device.serial_no || null,
+    last_push_at: last_push_at || null,
+    last_event_at: last_event_at || null,
+    status,
+  });
 });
 
 // GET/POST /api/devices/:id/diagnose — diagnóstico detallado paso a paso
@@ -246,20 +279,17 @@ async function handleDiagnose(req, res) {
   // Push Service + ADMS, la vía recomendada es que el reloj EMPUJE las marcas a
   // SisHoras en vez de leerlas por pull.
   const push = await (async () => {
-    const bridgeUrl = process.env.BRIDGE_URL || 'http://localhost:8081';
+    // Antes esto llamaba al bridge SIN la cabecera x-api-key, recibía 401 y lo
+    // reportaba como "endpoint protegido, el bridge necesita un token": la
+    // clave ya existía en el entorno, sólo no se estaba mandando.
+    const r = await fetchPushStatus({ serial: device.serial_no, ip: device.ip_address });
     try {
-      const r = await fetch(`${bridgeUrl}/devices/${device.id}/push-state`, { signal: AbortSignal.timeout(4000) });
-      if (r.status === 401 || r.status === 403) {
-        return { available: null, protected: true, detail: `El endpoint push-state del bridge está protegido (${r.status}); no bloquea la lectura directa. Para verlo, el bridge necesita exponer un health público o un token interno.` };
-      }
-      if (!r.ok) return { available: false, detail: `bridge respondió ${r.status}` };
-      const payload = await r.json();
-      const st = payload?.state || null;
-      const lastSeen = st?.lastSeen ? new Date(st.lastSeen) : null;
-      const active = lastSeen && (Date.now() - lastSeen.getTime()) < 10 * 60 * 1000;
-      return { available: true, pushing: !!active, lastSeen: st?.lastSeen || null, sn: st?.sn || null };
+      if (!r.ok) return { available: false, error_code: r.error_code, detail: r.message };
+      const ultimo = r.data.last_event_at || r.data.last_push_at || null;
+      const active = ultimo && (Date.now() - Date.parse(ultimo)) < 10 * 60 * 1000;
+      return { available: true, pushing: !!active, lastSeen: ultimo, sn: r.data.serial || null };
     } catch (e) {
-      return { available: false, detail: 'bridge no disponible (' + (e.message || e) + ')' };
+      return { available: false, error_code: 'BRIDGE_ERROR', detail: 'bridge no disponible' };
     }
   })();
   result.push = push;

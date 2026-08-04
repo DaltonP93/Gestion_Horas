@@ -15,6 +15,7 @@ require('dotenv').config();
 const express = require('express');
 const { createClient } = require('redis');
 const winston = require('winston');
+const { buildPushStatusFor } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
 const { startPushServer, pushState } = require('./pushServer');
@@ -260,6 +261,20 @@ function startBridgeApi(devices) {
   // Estado de los relojes vía PUSH ADMS (últimos heartbeats/marcajes recibidos)
   app.get('/push-state', (req, res) => {
     res.json(pushState);
+  });
+
+  // Contrato explícito con la API — ver docs/bridge-push-status-contract.md.
+  // Se consulta por serial o IP, no por id: el id del Bridge sale de la
+  // posición dentro de ZKTECO_DEVICES y no tiene relación con devices.id
+  // de MySQL, así que preguntar por id sólo acertaba por casualidad.
+  app.get('/push-status', (req, res) => {
+    const serial = (req.query.serial || '').toString().trim();
+    const ip     = (req.query.ip || '').toString().trim();
+    if (!serial && !ip) {
+      return res.status(400).json({ error: 'serial o ip requerido' });
+    }
+
+    res.json(buildPushStatusFor(pushState, { serial, ip }));
   });
 
   app.get('/devices/:id/push-state', (req, res) => {
