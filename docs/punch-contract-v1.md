@@ -71,7 +71,7 @@ Segundos. Los milisegundos se descartan: los relojes reportan segundos, y conser
 ### Identificador de usuario
 
 - NFC + trim.
-- Los ceros a la izquierda se quitan **sólo** si el valor es puramente numérico: `"0042"` y `42` son el mismo empleado, pero `"007A"` es un código propio y se conserva entero.
+- **Los ceros a la izquierda se conservan.** La tentación es quitarlos —`"0042"` y `"42"` parecen el mismo empleado— y así lo tenía la primera versión de este contrato. Es incorrecto: el sistema ya trata este campo como string exacto. `employee_device_map.device_user_id` se compara con el valor trimeado tal cual (`api/src/services/zktecoReader.js`), así que `"0042"` y `"42"` son **dos asignaciones distintas**; unificarlos acá colapsaría los marcajes de dos personas en un solo `event_id` — exactamente el fallo que este contrato existe para evitar. Si un despliegue confirma que su reloj rellena con ceros el mismo identificador, puede activarlo con `stripLeadingZeros: true`: es una decisión por instalación, no un default.
 
 ### Resto
 
@@ -120,7 +120,7 @@ Dos marcajes en el **mismo segundo** con distinto usuario, tipo o `verify_mode` 
 
 `PUNCH_UNSUPPORTED_VERSION`, `PUNCH_BATCH_EMPTY`, `PUNCH_BATCH_TOO_LARGE`, `PUNCH_BATCH_TOO_MANY_EVENTS`, `PUNCH_DEVICE_ID_INVALID`, `PUNCH_USER_ID_INVALID`, `PUNCH_TIMESTAMP_INVALID`, `PUNCH_TIMESTAMP_FUTURE`, `PUNCH_TIMESTAMP_TOO_OLD`, `PUNCH_EVENT_TYPE_INVALID`, `PUNCH_VERIFY_MODE_INVALID`, `PUNCH_WORK_CODE_INVALID`, `PUNCH_EVENT_ID_MISMATCH`, `PUNCH_SEPARATOR_IN_VALUE`.
 
-El validador **recalcula cada `event_id`** y exige que coincida con el declarado. Si el emisor normalizó distinto —por ejemplo, sin quitar los ceros a la izquierda— es mejor rechazar el lote que aceptar identificadores que romperían la idempotencia río abajo.
+El validador **recalcula cada `event_id`** y exige que coincida con el declarado. Si el emisor normalizó distinto —por ejemplo, quitando los ceros a la izquierda o dejando un `work_code` vacío en vez de `null`— es mejor rechazar el lote que aceptar identificadores que romperían la idempotencia río abajo.
 
 ## Un solo archivo para los dos lados
 
