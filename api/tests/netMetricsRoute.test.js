@@ -67,7 +67,7 @@ const SUPER = { id: 1, role: 'super_admin' };
 beforeEach(() => {
   jest.clearAllMocks()
   guards.length = 0
-  jest.spyOn(netMetrics, 'fetchRuns').mockResolvedValue([])
+  jest.spyOn(netMetrics, 'fetchRuns').mockResolvedValue({ rows: [], truncated: false, limit: 5000 })
   jest.spyOn(netMetrics, 'availableColumns').mockResolvedValue(
     ['mode', 'bytes_from_device', 'bytes_estimated', 'error_code']
   )
@@ -143,12 +143,12 @@ describe('GET /api/devices/network-metrics — parámetros', () => {
 
 describe('GET /api/devices/network-metrics — respuesta', () => {
   it('agrega por reloj e incluye la ventana consultada', async () => {
-    netMetrics.fetchRuns.mockResolvedValue([
+    netMetrics.fetchRuns.mockResolvedValue({ rows: [
       { device_id: 1, device_name: 'Comedor', started_at: '2026-08-03T10:00:00Z',
         status: 'success', mode: 'polling_auto', raw_count: 1000, imported_count: 5,
         duplicate_count: 995, bytes_from_device: 100000, bytes_estimated: 1,
         attempts: 1, duration_ms: 3000 },
-    ])
+    ], truncated: false, limit: 5000 })
     const res = mkRes()
     await call({ query: {}, user: SUPER }, res)
 
@@ -176,10 +176,10 @@ describe('GET /api/devices/network-metrics — respuesta', () => {
   })
 
   it('la respuesta no contiene datos personales ni secretos', async () => {
-    netMetrics.fetchRuns.mockResolvedValue([
+    netMetrics.fetchRuns.mockResolvedValue({ rows: [
       { device_id: 1, device_name: 'Comedor', started_at: '2026-08-03T10:00:00Z',
         status: 'success', mode: 'polling_auto', raw_count: 10, imported_count: 1 },
-    ])
+    ], truncated: false, limit: 5000 })
     const res = mkRes()
     await call({ query: {}, user: SUPER }, res)
 
@@ -187,6 +187,38 @@ describe('GET /api/devices/network-metrics — respuesta', () => {
     for (const prohibida of ['password', 'token', 'descriptor', 'document_number', 'salary']) {
       expect(json).not.toContain(prohibida)
     }
+  })
+
+  it('avisa cuando la ventana se recortó por el tope de filas', async () => {
+    netMetrics.fetchRuns.mockResolvedValue({ rows: [], truncated: true, limit: 5000 })
+    const res = mkRes()
+    await call({ query: {}, user: SUPER }, res)
+
+    const body = res.json.mock.calls[0][0]
+    // Un total recortado en silencio se leería como un día de poco tráfico.
+    expect(body.truncated).toBe(true)
+    expect(body.row_limit).toBe(5000)
+  })
+
+  it('informa cuántas corridas traen medición y cuántas no', async () => {
+    netMetrics.fetchRuns.mockResolvedValue({ rows: [
+      // Anterior a la migración 070: sin bytes.
+      { device_id: 1, started_at: '2026-08-03T09:00:00Z', status: 'success',
+        raw_count: 900, imported_count: 3, bytes_from_device: null },
+      { device_id: 1, started_at: '2026-08-03T11:00:00Z', status: 'success',
+        raw_count: 900, imported_count: 2, bytes_from_device: 90000 },
+    ], truncated: false, limit: 5000 })
+    const res = mkRes()
+    await call({ query: {}, user: SUPER }, res)
+
+    const body = res.json.mock.calls[0][0]
+    expect(body.coverage).toEqual({ runs: 2, measured_runs: 1, unmeasured_runs: 1 })
+  })
+
+  it('advierte que wasted_bytes es un piso, no el desperdicio exacto', async () => {
+    const res = mkRes()
+    await call({ query: {}, user: SUPER }, res)
+    expect(res.json.mock.calls[0][0].notes.saving).toMatch(/piso/i)
   })
 
   it('un fallo interno responde 500 sin filtrar el error', async () => {

@@ -189,6 +189,7 @@ describe('aggregateRuns', () => {
     expect(nm.aggregateRuns([])).toEqual({
       devices: [],
       totals: { runs: 0, raw_count: 0, imported_count: 0, bytes_from_device: 0,
+                measured_runs: 0, unmeasured_runs: 0,
                 saving: { wasted_ratio: 0, wasted_bytes: 0, useful_ratio: 0 } },
     });
     expect(() => nm.aggregateRuns(null)).not.toThrow();

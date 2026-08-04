@@ -638,7 +638,7 @@ router.get('/network-metrics', requireSuperAdmin, async (req, res) => {
       return res.status(400).json({ error: 'device_id inválido' });
     }
 
-    const rows = await netMetrics.fetchRuns({ from, to, deviceId });
+    const { rows, truncated, limit } = await netMetrics.fetchRuns({ from, to, deviceId });
     const agg  = netMetrics.aggregateRuns(rows);
     const cols = await netMetrics.availableColumns();
 
@@ -652,9 +652,22 @@ router.get('/network-metrics', requireSuperAdmin, async (req, res) => {
       metrics_available: cols.length === 4,
       missing_columns: ['mode', 'bytes_from_device', 'bytes_estimated', 'error_code']
         .filter(c => !cols.includes(c)),
+      // Aunque el esquema esté completo, una ventana que cruza el momento en
+      // que se aplicó la migración mezcla corridas medidas con corridas sin
+      // medir. Se informa la cobertura para no promediar a ciegas.
+      coverage: {
+        runs: agg.totals.runs,
+        measured_runs: agg.totals.measured_runs,
+        unmeasured_runs: agg.totals.unmeasured_runs,
+      },
+      // El tope de filas se avisa: un total recortado en silencio se leería
+      // como un día tranquilo de tráfico.
+      truncated, row_limit: limit,
       notes: {
         bytes: 'Volumen del payload decodificado, estimado por muestreo. No son bytes de cable.',
-        saving: 'Proporción de lo leído que no resultó en marcaciones nuevas.',
+        saving: 'Proporción de lo leído que no resultó en marcaciones nuevas. '
+          + 'wasted_bytes es un piso: los bytes suman TODOS los intentos, '
+          + 'mientras que raw_count corresponde sólo a la mejor lectura.',
       },
     });
   } catch (err) {

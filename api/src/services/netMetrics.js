@@ -26,7 +26,12 @@ function modeFromOrigin(origin) {
     case 'automatic': return 'polling_auto';
     case 'recovery':  return 'recovery';
     case 'push':      return 'push';
-    case 'manual':    return 'polling_manual';
+    // 'manual' viene de la UI; 'script' de la línea de comandos y 'direct' es
+    // el origen por defecto de deviceLock cuando el llamador no lo declara.
+    // Los tres son lecturas disparadas por una persona: mismo modo.
+    case 'manual':
+    case 'script':
+    case 'direct':    return 'polling_manual';
     default:          return origin ? 'polling_manual' : null;
   }
 }
@@ -131,12 +136,18 @@ function aggregateRuns(rows) {
         raw_count: 0, in_range_count: 0, imported_count: 0,
         duplicate_count: 0, unmapped_count: 0,
         bytes_from_device: 0, bytes_estimated: false,
+        // Cuántas de esas corridas traen realmente la medición de red. Una
+        // corrida anterior a la migración 070 tiene bytes NULL, y sumarla como
+        // 0 abarataría el promedio sin que se note.
+        measured_runs: 0, unmeasured_runs: 0,
         attempts: 0, duration_ms: 0,
         last_run_at: null,
       });
     }
     const d = porDispositivo.get(key);
     d.runs += 1;
+    if (r.bytes_from_device == null) d.unmeasured_runs += 1;
+    else d.measured_runs += 1;
     d.raw_count        += num(r.raw_count);
     d.in_range_count   += num(r.in_range_count);
     d.imported_count   += num(r.imported_count);
@@ -170,7 +181,12 @@ function aggregateRuns(rows) {
     raw_count: acc.raw_count + d.raw_count,
     imported_count: acc.imported_count + d.imported_count,
     bytes_from_device: acc.bytes_from_device + d.bytes_from_device,
-  }), { runs: 0, raw_count: 0, imported_count: 0, bytes_from_device: 0 });
+    measured_runs: acc.measured_runs + d.measured_runs,
+    unmeasured_runs: acc.unmeasured_runs + d.unmeasured_runs,
+  }), {
+    runs: 0, raw_count: 0, imported_count: 0, bytes_from_device: 0,
+    measured_runs: 0, unmeasured_runs: 0,
+  });
 
   return {
     devices: devices.sort((a, b) => b.bytes_from_device - a.bytes_from_device),
@@ -210,10 +226,17 @@ async function availableColumns() {
 /**
  * Lee las ejecuciones de la ventana pedida. Selecciona sólo columnas de
  * conteo y control: ninguna trae datos personales.
+ *
+ * Devuelve `{ rows, truncated, limit }`. El tope existe para no traer una
+ * ventana enorme a memoria, pero recortar en silencio sería peor que el
+ * problema que evita: los totales saldrían bajos y nadie sabría por qué,
+ * justo cuando el número se usa para decidir la arquitectura. Se pide uno de
+ * más para poder AVISAR que faltan filas.
  */
 async function fetchRuns({ from, to, deviceId = null, limit = 5000 }) {
   const cols = await availableColumns();
   const opt = (name) => (cols.includes(name) ? name : `NULL AS ${name}`);
+  const tope = Number(limit) > 0 ? Math.floor(Number(limit)) : 5000;
 
   const where = ['r.started_at >= ?', 'r.started_at < ?'];
   const params = [from, to];
@@ -231,20 +254,27 @@ async function fetchRuns({ from, to, deviceId = null, limit = 5000 }) {
       WHERE ${where.join(' AND ')}
       ORDER BY r.started_at DESC
       LIMIT ?`,
-    { replacements: [...params, Number(limit) || 5000] }
+    { replacements: [...params, tope + 1] }
   );
-  return rows;
+  const truncated = rows.length > tope;
+  return { rows: truncated ? rows.slice(0, tope) : rows, truncated, limit: tope };
 }
 
-/** Estado de la cola, reutilizando las tablas que ya existen. */
+/**
+ * Estado de la cola, reutilizando las tablas que ya existen.
+ *
+ * El estado en espera de `sync_jobs` es 'queued' (migración 064 y
+ * services/syncJobs.js). Filtrar por 'pending' devolvía siempre 0: la cola se
+ * veía vacía aunque hubiera lecturas acumulándose.
+ */
 async function queueSnapshot() {
   const snap = { pending: 0, running: 0, locks: 0, oldest_pending_age_sec: null };
   try {
     const [[jobs]] = await sequelize.query(
       `SELECT
-         SUM(status = 'pending') AS pending,
+         SUM(status = 'queued')  AS pending,
          SUM(status = 'running') AS running,
-         MIN(CASE WHEN status = 'pending' THEN created_at END) AS oldest
+         MIN(CASE WHEN status = 'queued' THEN created_at END) AS oldest
        FROM sync_jobs`
     );
     snap.pending = num(jobs?.pending);

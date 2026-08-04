@@ -97,6 +97,104 @@ describe('attempts_detail se recorta por elementos, no por caracteres', () => {
   });
 });
 
+describe('la cola se consulta por el estado que realmente usa sync_jobs', () => {
+  it('cuenta los trabajos en "queued", no en "pending"', async () => {
+    sequelize.query.mockResolvedValue([[{ pending: 4, running: 1, oldest: null }]]);
+    const snap = await nm.queueSnapshot();
+
+    const sql = String(sequelize.query.mock.calls[0][0]);
+    // sync_jobs nace en 'queued' (migración 064). Filtrar por 'pending' daba
+    // siempre 0: la cola se veía vacía aunque hubiera lecturas esperando.
+    expect(sql).toMatch(/status = 'queued'/);
+    expect(sql).not.toMatch(/status = 'pending'/);
+    expect(snap.pending).toBe(4);
+  });
+
+  it('la antigüedad del más viejo también mira "queued"', async () => {
+    sequelize.query.mockResolvedValue([[{ pending: 1, running: 0, oldest: null }]]);
+    await nm.queueSnapshot();
+    const sql = String(sequelize.query.mock.calls[0][0]);
+    expect(sql).toMatch(/WHEN status = 'queued' THEN created_at/);
+  });
+});
+
+describe('el modo se registra también sin metadata de lock', () => {
+  it("'direct' y 'script' son lecturas de una persona", () => {
+    // deviceLock adquiere con origin 'direct' cuando el llamador no lo declara
+    // (POST /backup-all, scripts). Antes caían en mode NULL.
+    expect(nm.modeFromOrigin('direct')).toBe('polling_manual');
+    expect(nm.modeFromOrigin('script')).toBe('polling_manual');
+    expect(nm.modeFromOrigin('automatic')).toBe('polling_auto');
+  });
+
+  it('el lector usa el mismo default que el lock', () => {
+    // Sin esto el agregado por modo perdía todas esas corridas.
+    expect(readerSrc).toMatch(/opts\.lock\.origin\)\s*\|\|\s*'direct'/);
+  });
+});
+
+describe('una lectura que falla al procesarse no pierde su medición', () => {
+  it('el informe queda accesible aunque la corrida lance', () => {
+    // El buffer ya se descargó: la red se consumió. Si el recálculo revienta,
+    // la auditoría tiene que registrar igual raw_count y bytes.
+    expect(readerSrc).toMatch(/out\.report = report/);
+    expect(readerSrc).toMatch(/parcial\.report\?\.read_attempts_detail\?\.length/);
+  });
+
+  it('sin lectura previa no se inventa una corrida con ceros', () => {
+    // Réplica del gate del lector.
+    const gate = (p) => (p?.report?.read_attempts_detail?.length ? p.report : null);
+    expect(gate({})).toBeNull();
+    expect(gate({ report: { read_attempts_detail: [] } })).toBeNull();
+    expect(gate({ report: { read_attempts_detail: [{ attempt: 1 }] } })).not.toBeNull();
+  });
+
+  it('la duración cero no se persiste como duración real', () => {
+    // report.duration_ms recién se completa al final; con `??` un informe
+    // interrumpido guardaba 0 ms.
+    expect(readerSrc).toMatch(/report\?\.duration_ms > 0 \? report\.duration_ms/);
+  });
+});
+
+describe('el tope de filas no se aplica en silencio', () => {
+  it('avisa cuando hay más corridas que el límite', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ c: 'mode' }]])                       // availableColumns
+      .mockResolvedValueOnce([[{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]]);
+
+    const r = await nm.fetchRuns({ from: new Date(), to: new Date(), limit: 3 });
+    expect(r.truncated).toBe(true);
+    expect(r.rows).toHaveLength(3);
+    // Pide uno de más justamente para poder detectarlo.
+    expect(sequelize.query.mock.calls[1][1].replacements.at(-1)).toBe(4);
+  });
+
+  it('sin recorte lo dice explícitamente', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ c: 'mode' }]])
+      .mockResolvedValueOnce([[{ id: 1 }, { id: 2 }]]);
+
+    const r = await nm.fetchRuns({ from: new Date(), to: new Date(), limit: 3 });
+    expect(r.truncated).toBe(false);
+    expect(r.rows).toHaveLength(2);
+  });
+});
+
+describe('las corridas sin medición se cuentan aparte', () => {
+  it('distingue bytes ausentes de bytes en cero', () => {
+    const { totals, devices } = nm.aggregateRuns([
+      { device_id: 1, raw_count: 900, imported_count: 3, bytes_from_device: null },
+      { device_id: 1, raw_count: 900, imported_count: 2, bytes_from_device: 90000 },
+      { device_id: 1, raw_count: 900, imported_count: 1, bytes_from_device: 0 },
+    ]);
+    // Un NULL (pre-migración) no es lo mismo que un 0 medido: promediarlos
+    // juntos abarataría el consumo sin dejar rastro.
+    expect(totals.measured_runs).toBe(2);
+    expect(totals.unmeasured_runs).toBe(1);
+    expect(devices[0].bytes_from_device).toBe(90000);
+  });
+});
+
 describe('el esquema se consulta una sola vez', () => {
   it('memoriza las columnas entre llamadas', async () => {
     sequelize.query.mockResolvedValue([[{ c: 'mode' }]]);
