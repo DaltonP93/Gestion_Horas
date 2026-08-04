@@ -535,6 +535,31 @@ function ClockStatus({ st, device }: { st?: StatusItem; device: Device }) {
   )
 }
 
+/** Etiquetas de los modos de lectura registrados por la API. */
+const MODE_LABEL: Record<string, string> = {
+  polling_auto:   'Automática',
+  polling_manual: 'Manual',
+  recovery:       'Recuperación',
+  push:           'PUSH',
+}
+
+function fmtBytes(b: number | null | undefined): string {
+  const n = Number(b)
+  if (!Number.isFinite(n) || n <= 0) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function fmtPct(v: number | null | undefined): string {
+  // null/undefined son "no medido". Number(null) es 0, y "0.0%" se leería
+  // como "no se descartó nada", que es lo contrario de no saberlo.
+  if (v === null || v === undefined) return '—'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return `${(n * 100).toFixed(1)}%`
+}
+
 function HistoryModal({ device, onClose }: { device: Device; onClose: () => void }) {
   const [rows, setRows] = useState<any[] | null>(null)
   useEffect(() => {
@@ -549,7 +574,7 @@ function HistoryModal({ device, onClose }: { device: Device; onClose: () => void
   }
   return (
     <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-2xl w-full max-w-2xl p-6 space-y-3 dark:bg-[#0d0d0f]">
+      <div className="bg-white rounded-2xl w-full min-w-0 max-w-4xl p-6 space-y-3 dark:bg-[#0d0d0f]">
         <div className="flex items-center justify-between">
           <h3 className="font-bold text-slate-900 dark:text-white">Historial de sincronizaciones — {device.name}</h3>
           <button aria-label="Cerrar" onClick={onClose} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"><X size={18} /></button>
@@ -557,10 +582,22 @@ function HistoryModal({ device, onClose }: { device: Device; onClose: () => void
         {rows === null ? <p className="text-sm text-slate-400 py-6 text-center">Cargando…</p>
           : rows.length === 0 ? <p className="text-sm text-slate-400 py-6 text-center">Sin corridas registradas.</p>
           : (
-            <div className="max-h-96 overflow-y-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
+            <div className="max-h-96 min-w-0 overflow-auto rounded-xl border border-slate-100 dark:border-white/[0.06]">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-slate-50 dark:bg-white/[0.04] text-left text-slate-500 dark:text-white/40">
-                  <tr><th className="px-3 py-2">Fecha</th><th className="px-3 py-2">Estado</th><th className="px-3 py-2">Importadas</th><th className="px-3 py-2">Intentos</th><th className="px-3 py-2">Duración</th><th className="px-3 py-2">Detalle</th></tr>
+                  <tr>
+                    <th className="px-3 py-2">Fecha</th>
+                    <th className="px-3 py-2">Estado</th>
+                    <th className="px-3 py-2">Modo</th>
+                    <th className="px-3 py-2">Leídas</th>
+                    <th className="px-3 py-2">Importadas</th>
+                    <th className="px-3 py-2">Duplicadas</th>
+                    <th className="px-3 py-2" title="Volumen del payload que entregó el reloj (estimado por muestreo)">Volumen</th>
+                    <th className="px-3 py-2" title="Proporción de lo leído que no aportó marcaciones nuevas: lo que ahorraría un flujo incremental">Descartado</th>
+                    <th className="px-3 py-2">Intentos</th>
+                    <th className="px-3 py-2">Duración</th>
+                    <th className="px-3 py-2">Detalle</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {rows.map(r => {
@@ -569,7 +606,14 @@ function HistoryModal({ device, onClose }: { device: Device; onClose: () => void
                       <tr key={r.id} className="border-t border-slate-50 dark:border-white/[0.04]">
                         <td className="px-3 py-1.5">{fmtDT(r.finished_at || r.started_at)}</td>
                         <td className="px-3 py-1.5"><span className={`px-2 py-0.5 rounded-full ${s.cls}`}>{s.label}</span></td>
+                        <td className="px-3 py-1.5">{MODE_LABEL[r.mode] || '—'}</td>
+                        <td className="px-3 py-1.5">{r.raw_count ?? '—'}</td>
                         <td className="px-3 py-1.5">{r.imported_count ?? 0}{r.in_range_count != null ? ` / ${r.in_range_count}` : ''}</td>
+                        <td className="px-3 py-1.5">{r.duplicate_count ?? '—'}</td>
+                        <td className="px-3 py-1.5" title={r.bytes_estimated ? 'Estimado por muestreo' : undefined}>
+                          {fmtBytes(r.bytes_from_device)}{r.bytes_estimated ? '≈' : ''}
+                        </td>
+                        <td className="px-3 py-1.5">{fmtPct(r.saving?.wasted_ratio)}</td>
                         <td className="px-3 py-1.5">{r.attempts ?? '—'}{r.attempts_requested != null && r.attempts_requested !== r.attempts ? ` de ${r.attempts_requested}` : ''}</td>
                         <td className="px-3 py-1.5">{r.duration_ms != null ? `${(r.duration_ms / 1000).toFixed(1)}s` : '—'}</td>
                         <td className="px-3 py-1.5 text-slate-500 dark:text-white/40 max-w-[16rem] truncate" title={r.error_message || ''}>{r.error_message || '—'}</td>

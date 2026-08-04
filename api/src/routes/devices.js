@@ -606,6 +606,62 @@ router.get('/:id/users', authorize('admin','gestor'), async (req, res) => {
 // Lectura directa de relojes: lógica en services/zktecoReader.js (compartida
 // con el script scripts/read-zkteco-now.js).
 const { backupDeviceDirect, backupAllDevices } = require('../services/zktecoReader');
+const netMetrics = require('../services/netMetrics');
+
+/**
+ * GET /api/devices/network-metrics?from=&to=&device_id=
+ *
+ * Línea base de consumo de red por reloj: cuánto se lee, cuánto de eso es
+ * realmente nuevo y cuánto se descarta. Es la medición previa a reemplazar el
+ * polling por un flujo incremental.
+ *
+ * Sólo super_admin: es una vista de diagnóstico de infraestructura. No
+ * devuelve marcaciones, ni empleados, ni ningún dato personal — únicamente
+ * contadores agregados, duraciones y códigos de error.
+ */
+router.get('/network-metrics', requireSuperAdmin, async (req, res) => {
+  try {
+    // Ventana por defecto: últimas 24 h, que es la unidad de medida útil
+    // para comparar un día de polling contra un día de PUSH.
+    const to   = req.query.to   ? new Date(String(req.query.to))   : new Date();
+    const from = req.query.from ? new Date(String(req.query.from))
+                                : new Date(to.getTime() - 24 * 60 * 60 * 1000);
+    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+      return res.status(400).json({ error: 'Rango de fechas inválido' });
+    }
+    if (from >= to) {
+      return res.status(400).json({ error: 'La fecha inicial debe ser anterior a la final' });
+    }
+
+    const deviceId = req.query.device_id ? parseInt(String(req.query.device_id), 10) : null;
+    if (req.query.device_id && (!Number.isFinite(deviceId) || deviceId <= 0)) {
+      return res.status(400).json({ error: 'device_id inválido' });
+    }
+
+    const rows = await netMetrics.fetchRuns({ from, to, deviceId });
+    const agg  = netMetrics.aggregateRuns(rows);
+    const cols = await netMetrics.availableColumns();
+
+    res.json({
+      window: { from: from.toISOString(), to: to.toISOString() },
+      ...agg,
+      queue: await netMetrics.queueSnapshot(),
+      // Sin la migración 070 aplicada, las columnas de red llegan nulas y los
+      // bytes dan 0. Se dice explícitamente para no leer "0 bytes" como si
+      // fuera una medición.
+      metrics_available: cols.length === 4,
+      missing_columns: ['mode', 'bytes_from_device', 'bytes_estimated', 'error_code']
+        .filter(c => !cols.includes(c)),
+      notes: {
+        bytes: 'Volumen del payload decodificado, estimado por muestreo. No son bytes de cable.',
+        saving: 'Proporción de lo leído que no resultó en marcaciones nuevas.',
+      },
+    });
+  } catch (err) {
+    try { require('../config/logger').error('network-metrics:', err); } catch {}
+    res.status(500).json({ error: 'No se pudieron obtener las métricas' });
+  }
+});
 
 // Normaliza el rango pedido (from/to en 'YYYY-MM-DD'); default: últimos 3 días.
 function readRange(req) {
@@ -979,15 +1035,26 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
 router.get('/:id/sync-runs', authorize('admin', 'gestor', 'hr'), async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    // Columnas de red opcionales: la vista funciona con la migración 070 sin
+    // aplicar (llegan nulas y la UI las omite).
+    const netCols = await netMetrics.availableColumns();
+    const opt = (c) => (netCols.includes(c) ? c : `NULL AS ${c}`);
     const [rows] = await sequelize.query(
       `SELECT id, status, started_at, finished_at,
-              imported_count, in_range_count, unmapped_count,
+              raw_count, imported_count, in_range_count, duplicate_count, unmapped_count,
               attempts, attempts_requested, duration_ms, error_message,
-              first_valid_time, last_valid_time
+              first_valid_time, last_valid_time,
+              ${opt('mode')}, ${opt('bytes_from_device')},
+              ${opt('bytes_estimated')}, ${opt('error_code')}
          FROM device_sync_runs WHERE device_id = ? ORDER BY id DESC LIMIT ?`,
       { replacements: [parseInt(req.params.id, 10), limit] }
     );
-    res.json({ ok: true, items: rows });
+    // El ahorro se deriva acá para no repetir la fórmula en el cliente.
+    const items = rows.map(r => ({
+      ...r,
+      saving: netMetrics.estimateIncrementalSaving(r),
+    }));
+    res.json({ ok: true, items });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
   }
