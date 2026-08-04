@@ -99,13 +99,46 @@ function sanitizeStderr(raw) {
     .split(/\r?\n/)
     .filter(l => /^\s*(mysqldump:|gzip:|ERROR\b)/i.test(l));
   if (!lines.length) return '';
-  return lines.join(' | ')
-    .replace(/'[^']*'@'[^']*'/g, "'***'@'***'")
+  return redactQuoted(lines.join(' | '))
     .replace(/\b(pass(word)?|pwd)\s*[=:]\s*\S+/gi, 'password=***')
     .replace(/\b\d{1,3}(\.\d{1,3}){3}\b/g, '***.***.***.***')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, STDERR_LOG_CHARS);
+}
+
+const QUOTED_PLACEHOLDER = "'***'";
+
+/**
+ * Borra todo literal entrecomillado del texto de diagnóstico.
+ *
+ * mysqldump mete ahí justo lo que no puede salir en un log: 'usuario'@'host',
+ * el hostname de «Unknown MySQL server host 'db.interna'» y el SQL entero de
+ * «Couldn't execute 'SHOW FIELDS FROM ...'». Los códigos numéricos, que son
+ * lo que sirve para diagnosticar, quedan intactos.
+ *
+ * La comilla simple sólo abre literal si viene después de espacio o
+ * puntuación: si no, el apóstrofo de "Couldn't" abriría un span falso y
+ * dejaría el SQL a la vista.
+ */
+function redactQuoted(text) {
+  let s = String(text)
+    .replace(/`[^`]*`/g, '`***`')
+    .replace(/"[^"]*"/g, '"***"')
+    .replace(/(^|[\s=(:,[])'[^']*'/g, `$1${QUOTED_PLACEHOLDER}`);
+
+  // Red de seguridad: si quedó una comilla sin pareja (un literal que contenía
+  // Red de seguridad: si quedó una comilla sin pareja (un literal que contenía
+  // un apóstrofo, por ejemplo), se corta ahí en vez de arriesgar la cola.
+  // Se enmascaran —conservando la longitud, para no correr los índices— los
+  // placeholders ya redactados y los apóstrofos de contracción ("Couldn't"),
+  // que no delimitan nada.
+  const masked = s
+    .replace(/(['"`])\*\*\*\1/g, ' '.repeat(QUOTED_PLACEHOLDER.length))
+    .replace(/(?<=\p{L})'(?=\p{L})/gu, ' ');
+  const lone = masked.search(/['"`]/);
+  if (lone !== -1) s = `${s.slice(0, lone).trimEnd()} …`;
+  return s;
 }
 
 function classifyStreamError(err, stage) {
@@ -181,7 +214,13 @@ async function _runBackupOnce(opts = {}) {
   let killTimer = null;
 
   const killChild = (signal) => {
-    if (!child || child.killed || child.exitCode !== null) return;
+    if (!child) return;
+    // OJO: no usar child.killed — se pone en true en cuanto la señal se ENVÍA,
+    // no cuando el proceso muere. Si mysqldump ignora o atrapa el SIGTERM, ese
+    // guard bloquearía la escalada a SIGKILL y el backup quedaría colgado
+    // esperando 'close' para siempre. Lo único que dice "ya terminó" es tener
+    // exitCode o signalCode.
+    if (child.exitCode !== null || child.signalCode !== null) return;
     try { child.kill(signal); } catch { /* el proceso ya no existe */ }
   };
   const killEscalating = () => {

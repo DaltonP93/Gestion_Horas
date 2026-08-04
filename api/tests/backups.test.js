@@ -61,6 +61,12 @@ beforeAll(() => {
     setTimeout(() => process.kill(process.pid, 'SIGTERM'), 30);
     setInterval(() => {}, 1000);
   `);
+  // Atrapa SIGTERM y sigue vivo: obliga a que la escalada llegue a SIGKILL.
+  BIN.stubborn = writeBin('dump-stubborn.js', `
+    process.on('SIGTERM', () => {});
+    process.stdout.write('-- parcial\\n');
+    setInterval(() => {}, 1000);
+  `);
   BIN.noisy = writeBin('dump-noisy.js', `
     for (let i = 0; i < 5000; i++) process.stderr.write('mysqldump: aviso ruidoso numero ' + i + '\\n');
     process.stdout.write('-- ok\\n');
@@ -265,6 +271,18 @@ describe('timeout y cancelación', () => {
     expect(listTemps()).toEqual([]);
   }, 10000);
 
+  test('un mysqldump que atrapa SIGTERM igual se corta: escala a SIGKILL', async () => {
+    // child.killed se pone en true al ENVIAR el SIGTERM; si el guard mirara
+    // esa bandera, el SIGKILL nunca saldría y esto quedaría colgado.
+    const svc = load({ MYSQLDUMP_BIN: BIN.stubborn, BACKUP_TIMEOUT_MS: '250', BACKUP_KILL_GRACE_MS: '200' });
+    const t0 = Date.now();
+    const err = await svc.runBackup().catch(e => e);
+
+    expect(err.code).toBe(svc.BACKUP_ERROR_CODES.TIMEOUT);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(listTemps()).toEqual([]);
+  }, 10000);
+
   test('cancelar durante el apagado da BACKUP_CANCELLED', async () => {
     const svc = load({ MYSQLDUMP_BIN: BIN.hang });
     const p = svc.runBackup();
@@ -350,8 +368,9 @@ describe('sanitización', () => {
 
     expect(limpio).not.toContain('sishoras');
     expect(limpio).not.toContain('10.20.30.40');
-    expect(limpio).toContain("'***'@'***'");
+    expect(limpio).toContain('"***"');                 // el literal entero se va
     expect(limpio).toContain('1045');                  // el código sí sirve
+    expect(limpio).toContain('when trying to connect');
   });
 
   test('descarta contenido SQL y contraseñas', () => {
@@ -365,6 +384,29 @@ describe('sanitización', () => {
     expect(limpio).not.toContain('INSERT INTO');
     expect(limpio).not.toContain('SuperSecreta123');
     expect(limpio).toContain('password=***');
+  });
+
+  test('no filtra hostnames internos fuera del formato usuario@host', () => {
+    const svc = load();
+    const limpio = svc.sanitizeStderr(
+      `mysqldump: Got error: 2005: Unknown MySQL server host 'db-prod.interna.sishoras' (-2) when trying to connect`
+    );
+
+    expect(limpio).not.toContain('db-prod.interna.sishoras');
+    expect(limpio).toContain('2005');                  // el código sobrevive
+    expect(limpio).toContain('Unknown MySQL server host');
+  });
+
+  test('no filtra el SQL de un error de ejecución', () => {
+    const svc = load();
+    const limpio = svc.sanitizeStderr(
+      "mysqldump: Couldn't execute 'SHOW FIELDS FROM `empleados` WHERE documento=\"1234567\"': Table doesn't exist (1146)"
+    );
+
+    expect(limpio).not.toContain('SHOW FIELDS');
+    expect(limpio).not.toContain('empleados');
+    expect(limpio).not.toContain('1234567');
+    expect(limpio).toContain('1146');
   });
 
   test('sanitizePath deja sólo el nombre del archivo', () => {
