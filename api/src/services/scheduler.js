@@ -301,7 +301,10 @@ async function runScheduledReport(schedule) {
     );
 
   } catch (err) {
-    logger.error(`Error en reporte programado #${schedule.id}:`, err);
+    // Se relanza: quien decide y registra es runJob, con job, duración y
+    // error_code. Tragarlo acá hacía que un reporte fallido quedara como OK.
+    err.stage = err.stage || 'reporte_programado';
+    throw err;
   }
 }
 

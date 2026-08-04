@@ -5,7 +5,7 @@
  * `Error cron courses due: {}` — sin message, sin code y sin stack, por lo que
  * no había forma de saber qué había fallado.
  */
-const { serializeError, serializeErrorPublic, safeErrorCode, redactSecrets, redactStrict } =
+const { serializeError, serializeErrorPublic, safeErrorCode, redactSecrets, redactStrict, isDbShaped } =
   require('../src/utils/errorInfo');
 
 describe('serializeError', () => {
@@ -178,5 +178,75 @@ describe('safeErrorCode', () => {
   test('entradas basura', () => {
     expect(safeErrorCode(null)).toBe('UNKNOWN_ERROR');
     expect(safeErrorCode('texto')).toBe('UNKNOWN_ERROR');
+  });
+});
+
+// ── Hallazgos de la revisión de Codex sobre el PR ────────────────
+describe('errores de base: redacción dura también en message', () => {
+  test('el message de un duplicado no filtra el valor de la fila', () => {
+    const parent = Object.assign(new Error("Duplicate entry 'juan.perez@empresa.com' for key 'employees.email'"), {
+      code: 'ER_DUP_ENTRY', errno: 1062, sqlState: '23000',
+      sqlMessage: "Duplicate entry 'juan.perez@empresa.com' for key 'employees.email'",
+    });
+    const err = Object.assign(new Error("Validation error: Duplicate entry 'juan.perez@empresa.com'"), {
+      name: 'SequelizeUniqueConstraintError', parent,
+    });
+    const json = JSON.stringify(serializeError(err));
+
+    expect(json).not.toContain('juan.perez');
+    expect(json).not.toContain('empresa.com');
+    expect(json).toContain('1062');
+    expect(json).toContain('23000');
+  });
+
+  test('comillas anidadas de MySQL no dejan fragmentos (bug #70907)', () => {
+    // El emparejado ingenuo cerraba en la comilla interna y dejaba el
+    // identificador de la tabla a la vista.
+    const t = redactStrict("Couldn't execute 'show table status like 'uc\\_secreta%''");
+
+    expect(t).not.toContain('uc\\_secreta');
+    expect(t).not.toContain('show table status');
+    expect(t).toContain("Couldn't execute");
+  });
+
+  test("un valor con apóstrofo tampoco se escapa", () => {
+    const t = redactStrict("Duplicate entry 'O'Brien' for key 'name'");
+    expect(t).not.toContain('Brien');
+    expect(t).toBe("Duplicate entry '***'");
+  });
+
+  test('el apóstrofo de una contracción no corta antes de tiempo', () => {
+    const t = redactStrict("Table 'asistencia.empleados' doesn't exist");
+    expect(t).toBe("Table '***'");
+  });
+
+  test('un correo sin comillas también se enmascara', () => {
+    expect(redactStrict('no se pudo notificar a juan.perez@empresa.com')).toContain('***@***');
+  });
+
+  test('la cadena de cause hereda la redacción dura', () => {
+    const raiz = Object.assign(new Error("Duplicate entry 'secreto@x.com' for key 'email'"), {
+      code: 'ER_DUP_ENTRY', sqlState: '23000',
+    });
+    const top = Object.assign(new Error('no se pudo guardar el empleado'), {
+      name: 'SequelizeUniqueConstraintError', cause: raiz,
+    });
+    const json = JSON.stringify(serializeError(top));
+
+    expect(json).not.toContain('secreto@x.com');
+  });
+
+  test('un error de red NO recibe redacción dura: la IP sigue visible', () => {
+    const err = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8081'), { code: 'ECONNREFUSED' });
+    expect(serializeError(err).message).toContain('127.0.0.1:8081');
+  });
+
+  test('isDbShaped reconoce las formas habituales', () => {
+    expect(isDbShaped({ sqlState: '23000' })).toBe(true);
+    expect(isDbShaped({ name: 'SequelizeDatabaseError' })).toBe(true);
+    expect(isDbShaped({ code: 'ER_LOCK_DEADLOCK' })).toBe(true);
+    expect(isDbShaped({ parent: { sqlMessage: 'x' } })).toBe(true);
+    expect(isDbShaped({ code: 'ECONNREFUSED' })).toBe(false);
+    expect(isDbShaped(null)).toBe(false);
   });
 });

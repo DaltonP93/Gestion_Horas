@@ -51,13 +51,62 @@ function redactSecrets(input) {
     );
 }
 
-/** redactSecrets + identidades y direcciones: para texto que puede traer datos de fila. */
+/**
+ * Índice de la primera comilla que ABRE un literal.
+ *
+ * La comilla simple no cuenta si es un apóstrofo entre letras ("doesn't"):
+ * si no, `Table 'db.t' doesn't exist` se cortaría en el lugar equivocado.
+ */
+function firstQuoteIndex(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"' || c === '`') return i;
+    if (c === "'") {
+      const prev = i > 0 ? s[i - 1] : '';
+      const next = i + 1 < s.length ? s[i + 1] : '';
+      const esApostrofo = /\p{L}/u.test(prev) && /\p{L}/u.test(next);
+      if (!esApostrofo) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * redactSecrets + todo lo que identifique a una persona, una fila o un host.
+ * Para texto que puede traer datos de la base (sqlMessage, mensajes de MySQL).
+ *
+ * Corta en la primera comilla de apertura en vez de intentar emparejar: MySQL
+ * anida y desbalancea comillas con total naturalidad — `Duplicate entry
+ * 'O'Brien' for key 'name'`, o el `Couldn't execute 'show ... like 'uc_%''` del
+ * bug #70907 — y cualquier intento de emparejar deja fragmentos del valor a la
+ * vista. Lo que queda ("Duplicate entry", "Unknown column") más el error_code
+ * alcanza para diagnosticar; el valor no hace falta.
+ */
 function redactStrict(input) {
-  return redactSecrets(input)
-    // identificadores 'usuario'@'host' de MySQL
-    .replace(/'[^']*'@'[^']*'/g, "'***'@'***'")
+  let s = redactSecrets(input)
+    // correos, por si aparecen sin comillas
+    .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, '***@***')
     // IPv4
     .replace(/\b\d{1,3}(\.\d{1,3}){3}\b/g, '***.***.***.***');
+
+  const q = firstQuoteIndex(s);
+  if (q !== -1) s = `${s.slice(0, q).trimEnd()} '***'`;
+  return s;
+}
+
+/**
+ * ¿El error viene de la base? En ese caso su `message` suele ser el propio
+ * mensaje del motor, con valores de fila adentro, así que va con redacción
+ * dura — igual que sqlMessage.
+ */
+function isDbShaped(err) {
+  if (!err || typeof err !== 'object') return false;
+  const p = err.parent || err.original;
+  const tiene = (o) => !!o && (o.sqlState !== undefined || o.sqlMessage !== undefined || o.sql !== undefined);
+  if (tiene(err) || tiene(p)) return true;
+  if (typeof err.name === 'string' && /^Sequelize/.test(err.name)) return true;
+  const code = err.code || (p && p.code);
+  return typeof code === 'string' && /^(ER_|SQLITE_|PROTOCOL_)/.test(code);
 }
 
 function truncate(s, max = MAX_MESSAGE) {
@@ -78,10 +127,10 @@ function safeErrorCode(err) {
   return 'UNKNOWN_ERROR';
 }
 
-function shortStack(stack) {
+function shortStack(stack, redact = redactSecrets) {
   if (!stack || typeof stack !== 'string') return undefined;
   const lines = stack.split('\n').slice(0, MAX_STACK_FRAMES + 1);
-  return redactSecrets(lines.join('\n'));
+  return redact(lines.join('\n'));
 }
 
 /**
@@ -92,7 +141,7 @@ function shortStack(stack) {
  * @returns {object}
  */
 function serializeError(err, opts = {}) {
-  const { includeStack = true, stage, _depth = 0, _seen = new WeakSet() } = opts;
+  const { includeStack = true, stage, strict = false, _depth = 0, _seen = new WeakSet() } = opts;
 
   // No-Error: string, número, null, undefined…
   if (err == null) {
@@ -114,9 +163,14 @@ function serializeError(err, opts = {}) {
                : null;
   const pick = (k) => (err[k] !== undefined ? err[k] : (parent ? parent[k] : undefined));
 
+  // Un error de base arrastra valores de fila en su propio message, no sólo en
+  // sqlMessage; y sus causas suelen repetir el mismo texto.
+  const duro = strict || isDbShaped(err);
+  const redact = duro ? redactStrict : redactSecrets;
+
   const out = {
     name: typeof err.name === 'string' ? err.name : 'Error',
-    message: truncate(redactSecrets(err.message !== undefined ? err.message : '(sin mensaje)')),
+    message: truncate(redact(err.message !== undefined ? err.message : '(sin mensaje)')),
     error_code: safeErrorCode(err),
   };
 
@@ -139,14 +193,14 @@ function serializeError(err, opts = {}) {
   if (stg) out.stage = String(stg);
 
   if (includeStack) {
-    const st = shortStack(err.stack);
+    const st = shortStack(err.stack, redact);
     if (st) out.stack = st;
   }
 
   // Cadena de causas, acotada.
   const cause = err.cause;
   if (cause !== undefined && _depth < MAX_CAUSE_DEPTH) {
-    out.cause = serializeError(cause, { includeStack: false, _depth: _depth + 1, _seen });
+    out.cause = serializeError(cause, { includeStack: false, strict: duro, _depth: _depth + 1, _seen });
   }
 
   return out;
@@ -160,6 +214,7 @@ function serializeErrorPublic(err, opts = {}) {
 
 module.exports = {
   serializeError,
+  isDbShaped,
   serializeErrorPublic,
   safeErrorCode,
   redactSecrets,

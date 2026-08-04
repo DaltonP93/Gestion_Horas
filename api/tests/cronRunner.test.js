@@ -167,3 +167,43 @@ describe('cronCallback', () => {
     expect(logs.info.some(l => l.meta && l.meta.result === 'ok' && l.meta.processed === 2)).toBe(true);
   });
 });
+
+// ── Hallazgo de Codex: fallos reportados como valor de retorno ───
+describe('jobs que no lanzan y devuelven el error', () => {
+  test('{ date, error } de runReconciliation cuenta como fallo, no como OK', async () => {
+    const r = await runJob('reconciliacion', async () => ({ date: '2026-08-04', error: 'att2000 inaccesible' }));
+
+    expect(r.ok).toBe(false);
+    expect(logs.error).toHaveLength(1);
+    expect(logs.info.some(l => l.meta && l.meta.result === 'ok')).toBe(false);
+    expect(logs.error[0].meta.reported_by).toBe('valor de retorno');
+  });
+
+  test('{ sent: 0, error } de las alertas diarias también', async () => {
+    const r = await runJob('alertas_atrasos', async () => ({ sent: 0, error: 'SMTP caído' }));
+
+    expect(r.ok).toBe(false);
+    expect(logs.error[0].meta.error.message).toBe('SMTP caído');
+  });
+
+  test('un error embebido como Error conserva su código', async () => {
+    const err = Object.assign(new Error('sin conexión'), { code: 'ETIMEDOUT' });
+    const r = await runJob('x', async () => ({ error: err }));
+
+    expect(r.error_code).toBe('ETIMEDOUT');
+  });
+
+  test('sin error embebido sigue siendo éxito', async () => {
+    expect((await runJob('a', async () => ({ sent: 3 }))).ok).toBe(true);
+    expect((await runJob('b', async () => ({ sent: 3, error: null }))).ok).toBe(true);
+    expect((await runJob('c', async () => ({ sent: 0, error: '' }))).ok).toBe(true);
+    expect((await runJob('d', async () => ({ errors: [] }))).ok).toBe(true);   // plural: no es el campo
+  });
+
+  test('se conserva la cantidad procesada aunque la corrida sea fallida', async () => {
+    const r = await runJob('parcial', async () => ({ sent: 4, error: 'falló al final' }));
+
+    expect(r.ok).toBe(false);
+    expect(r.processed).toBe(4);
+  });
+});

@@ -20,6 +20,17 @@ const _running = new Map();
 function isRunning(name) { return _running.has(name); }
 function runningJobs() { return [..._running.keys()]; }
 
+/**
+ * Fallo reportado como valor de retorno en vez de excepción.
+ * Devuelve el error embebido, o null si la corrida fue limpia.
+ */
+function resultError(result) {
+  if (!result || typeof result !== 'object') return null;
+  const e = result.error;
+  if (e === null || e === undefined || e === false || e === '') return null;
+  return e;
+}
+
 /** Normaliza lo que devuelve el job a una cantidad procesada, si la hay. */
 function extractProcessed(result) {
   if (typeof result === 'number' && Number.isFinite(result)) return result;
@@ -68,6 +79,30 @@ async function runJob(name, fn, opts = {}) {
     const result = await fn();
     const duration_ms = Date.now() - startedAt;
     const processed = extractProcessed(result);
+
+    // Varios jobs no lanzan: devuelven el fallo como dato. runReconciliation()
+    // resuelve { date, error } cuando att2000 está inaccesible, y las alertas
+    // diarias devuelven { sent: 0, error }. Sin esto, una falla conocida
+    // quedaba registrada como "✅ Cron OK".
+    const embedded = resultError(result);
+    if (embedded) {
+      const error_code = safeErrorCode(embedded);
+      logger.error('❌ Cron falló', {
+        job: name,
+        scheduled_at: toIso(scheduledAt),
+        started_at: new Date(startedAt).toISOString(),
+        finished_at: new Date().toISOString(),
+        duration_ms,
+        result: 'error',
+        reported_by: 'valor de retorno',
+        error_code,
+        error: serializeError(embedded),
+        processed,
+        ...meta,
+      });
+      return { ok: false, duration_ms, processed, error_code, value: result };
+    }
+
     logger.info('✅ Cron OK', {
       job: name,
       scheduled_at: toIso(scheduledAt),
