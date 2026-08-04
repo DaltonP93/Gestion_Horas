@@ -1,7 +1,7 @@
 import axios from 'axios'
 import {
   createAuthSession, browserAuthEnv, listenAuthChannel,
-  isRefreshUrl, bearerOf, REFRESH_PATH,
+  isRefreshUrl, isPublicAuthUrl, bearerOf, REFRESH_PATH,
 } from './authRefresh'
 
 // Normaliza la URL del API:
@@ -86,17 +86,25 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
+    // En login / recuperación de contraseña, el 401 lo produce el formulario:
+    // renovar o redirigir acá taparía el mensaje de error de la pantalla.
+    if (isPublicAuthUrl(original.url)) return Promise.reject(error)
+
     if (original._retry) return Promise.reject(error)   // un solo reintento
     original._retry = true
 
+    let token: string
     try {
-      const token = await authSession.ensureFreshToken(bearerOf(original.headers?.Authorization))
-      original.headers = { ...(original.headers || {}), Authorization: `Bearer ${token}` }
-      return await api(original)
+      token = await authSession.ensureFreshToken(bearerOf(original.headers?.Authorization))
     } catch {
       // La sesión ya se cerró (una sola vez) dentro de ensureFreshToken.
       return Promise.reject(error)
     }
+
+    // El reintento va FUERA del catch: si falla por su cuenta (403, 500, una
+    // cancelación), el llamador tiene que recibir ESE error y no el 401 viejo.
+    original.headers = { ...(original.headers || {}), Authorization: `Bearer ${token}` }
+    return api(original)
   }
 )
 

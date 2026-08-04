@@ -14,6 +14,17 @@
 
 export const REFRESH_PATH = '/api/auth/refresh'
 
+/**
+ * Endpoints públicos de auth: un 401 acá significa "credenciales inválidas",
+ * no "sesión vencida". Renovar o cerrar sesión sobre ellos recargaría la
+ * pantalla de login antes de que llegue a mostrar el error.
+ */
+export const PUBLIC_AUTH_PATHS = [
+  '/api/auth/login',
+  '/api/auth/password/forgot',
+  '/api/auth/password/reset',
+] as const
+
 /** Claves de sesión. Se limpian sólo éstas: las preferencias de UI sobreviven. */
 export const AUTH_KEYS = ['access_token', 'refresh_token', 'token', 'user'] as const
 
@@ -48,9 +59,18 @@ export class SessionLostError extends Error {
 
 /** ¿La URL apunta al endpoint de refresh? Ese nunca se reintenta ni se refresca. */
 export function isRefreshUrl(url?: string | null): boolean {
-  if (!url) return false
-  const path = url.split('?')[0].replace(/\/+$/, '')
-  return path.endsWith(REFRESH_PATH)
+  return pathOf(url).endsWith(REFRESH_PATH)
+}
+
+function pathOf(url?: string | null): string {
+  if (!url) return ''
+  return url.split('?')[0].replace(/\/+$/, '')
+}
+
+/** ¿Es un endpoint donde el 401 es del formulario, no de la sesión? */
+export function isPublicAuthUrl(url?: string | null): boolean {
+  const path = pathOf(url)
+  return !!path && PUBLIC_AUTH_PATHS.some(p => path.endsWith(p))
 }
 
 /**
@@ -123,7 +143,11 @@ export function createAuthSession(
 
     const refreshToken = env.getItem('refresh_token')
     if (!refreshToken) {
-      logout('sin refresh token')
+      // Sin refresh token pero CON access token había una sesión y se perdió:
+      // corresponde cerrarla. Sin ninguno de los dos no había sesión que
+      // cerrar — redirigir ahí recargaría el login encima del error del
+      // formulario.
+      if (current) logout('sin refresh token')
       return Promise.reject(new SessionLostError('sin refresh token'))
     }
 

@@ -159,3 +159,75 @@ describe('casos que no deben disparar refresh', () => {
     expect(refrescos).toBe(0)
   })
 })
+
+// ── Segunda tanda de Codex ──────────────────────────────────────
+describe('401 del formulario de login', () => {
+  test('un login con credenciales malas no cierra sesión ni redirige', async () => {
+    localStorage.clear()                          // no había sesión
+    api.defaults.adapter = asAdapter((config) => Promise.reject(fallo(config, 401, 'Unauthorized')))
+
+    await expect(api.post('/api/auth/login', { username: 'x', password: 'mal' }))
+      .rejects.toMatchObject({ response: { status: 401 } })
+
+    expect(refrescos).toBe(0)
+    expect(window.location.href).toBe('')         // la pantalla de login sigue en pie
+    expect(authSession.isSessionLost).toBe(false)
+  })
+
+  test('recuperación de contraseña tampoco', async () => {
+    localStorage.clear()
+    api.defaults.adapter = asAdapter((config) => Promise.reject(fallo(config, 401, 'Unauthorized')))
+
+    await expect(api.post('/api/auth/password/forgot', { email: 'x@y.com' })).rejects.toBeDefined()
+    expect(window.location.href).toBe('')
+  })
+
+  test('un 401 sin ninguna credencial guardada no redirige', async () => {
+    localStorage.clear()
+    await expect(api.get('/api/employees')).rejects.toMatchObject({ response: { status: 401 } })
+
+    expect(refrescos).toBe(0)
+    expect(window.location.href).toBe('')
+  })
+
+  test('pero con access token y sin refresh token SÍ cierra la sesión', async () => {
+    localStorage.clear()
+    localStorage.setItem('access_token', 'viejo')   // había sesión, se perdió el refresh
+    await expect(api.get('/api/employees')).rejects.toBeDefined()
+
+    expect(window.location.href).toContain('/login')
+  })
+})
+
+describe('el error del reintento no queda tapado', () => {
+  test('un 403 después de renovar llega como 403, no como el 401 viejo', async () => {
+    let primera = true
+    api.defaults.adapter = asAdapter((config) => {
+      if (primera) { primera = false; return Promise.reject(fallo(config, 401, 'Unauthorized')) }
+      return Promise.reject(fallo(config, 403, 'Forbidden'))
+    })
+
+    await expect(api.get('/api/employees')).rejects.toMatchObject({ response: { status: 403 } })
+    expect(refrescos).toBe(1)
+  })
+
+  test('un 500 en el reintento llega como 500', async () => {
+    let primera = true
+    api.defaults.adapter = asAdapter((config) => {
+      if (primera) { primera = false; return Promise.reject(fallo(config, 401, 'Unauthorized')) }
+      return Promise.reject(fallo(config, 500, 'Error'))
+    })
+
+    await expect(api.get('/api/employees')).rejects.toMatchObject({ response: { status: 500 } })
+  })
+
+  test('una cancelación en el reintento llega como cancelación', async () => {
+    let primera = true
+    api.defaults.adapter = asAdapter((config) => {
+      if (primera) { primera = false; return Promise.reject(fallo(config, 401, 'Unauthorized')) }
+      return Promise.reject(Object.assign(new Error('canceled'), { code: 'ERR_CANCELED', config }))
+    })
+
+    await expect(api.get('/api/employees')).rejects.toMatchObject({ code: 'ERR_CANCELED' })
+  })
+})
