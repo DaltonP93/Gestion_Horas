@@ -145,10 +145,28 @@ const ISO_SIN_OFFSET = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?
  *
  * @returns {string|null} ISO 8601 UTC ("2026-08-04T10:15:00Z") o null si no se pudo interpretar.
  */
-function normalizeTimestamp(raw, { assumeOffsetMinutes = CIVIL_OFFSET_MINUTES } = {}) {
+function normalizeTimestamp(raw, { assumeOffsetMinutes = CIVIL_OFFSET_MINUTES, dateMeans = null } = {}) {
   if (raw === null || raw === undefined) return null;
   if (raw instanceof Date) {
-    return Number.isNaN(raw.getTime()) ? null : truncarASegundo(raw.getTime());
+    // Un Date NO dice de dónde viene. El polling hace `new Date(r.timestamp)`
+    // sobre la hora de pared del reloj, así que el objeto ya quedó anclado a
+    // la zona DEL PROCESO: hashearlo como instante conserva exactamente la
+    // dependencia que este contrato existe para eliminar. Y no se puede
+    // recuperar la intención mirando el objeto.
+    //
+    // Así que hay que declararla. Sin `dateMeans` el valor se rechaza.
+    if (Number.isNaN(raw.getTime())) return null;
+    if (dateMeans === 'utc_instant') return truncarASegundo(raw.getTime());
+    if (dateMeans === 'civil_wall') {
+      // Se reconstruye la hora de pared desde los componentes locales y se
+      // reancla al offset civil.
+      const utcMs = Date.UTC(
+        raw.getFullYear(), raw.getMonth(), raw.getDate(),
+        raw.getHours(), raw.getMinutes(), raw.getSeconds()
+      );
+      return truncarASegundo(utcMs - assumeOffsetMinutes * 60 * 1000);
+    }
+    return null;
   }
   const s = String(raw).trim();
   if (!s) return null;
@@ -200,12 +218,18 @@ function encodeField(v) {
 }
 
 /**
- * Campos ESTABLES que definen la identidad de un marcaje.
+ * Campos ESTABLES que definen la identidad de un marcaje: qué reloj, qué
+ * persona, cuándo y de qué tipo.
  *
- * Deliberadamente fuera: batch_id, fecha de recepción, orden dentro del lote,
- * IP del reloj, bridge_id y cualquier dato variable del transporte. Si el mismo
- * marcaje se reenvía por otro lote, otro bridge o meses después, el
- * identificador tiene que ser el mismo.
+ * Fuera quedan `verify_mode` y `work_code`, que son ATRIBUTOS del marcaje y no
+ * su identidad. La razón es concreta, no estética: el PUSH parsea `verify` y
+ * `workCode` de la línea ATTLOG, pero el polling no los publica. Con esos
+ * campos dentro del hash, el mismo marcaje leído por PUSH y por polling daba
+ * DOS identificadores distintos — y el sistema los habría insertado dos veces,
+ * que es justo lo que el contrato promete evitar.
+ *
+ * También fuera: batch_id, fecha de recepción, orden dentro del lote, IP del
+ * reloj, bridge_id y cualquier dato variable del transporte.
  */
 function canonicalString(evento) {
   const campos = [
@@ -214,8 +238,6 @@ function canonicalString(evento) {
     encodeField(evento.device_user_id),
     encodeField(evento.occurred_at),
     encodeField(evento.event_type),
-    encodeField(evento.verify_mode),
-    encodeField(evento.work_code),
   ];
   return campos.join(FIELD_SEP);
 }
@@ -248,7 +270,14 @@ function buildEvent(input = {}, opts = {}) {
   }
 
   const occurred_at = normalizeTimestamp(input.occurred_at ?? input.timestamp, opts);
-  if (!occurred_at) return { ok: false, error_code: REJECT_CODES.TIMESTAMP_INVALID };
+  if (!occurred_at) {
+    const esDate = (input.occurred_at ?? input.timestamp) instanceof Date;
+    return {
+      ok: false,
+      error_code: REJECT_CODES.TIMESTAMP_INVALID,
+      detail: esDate ? 'un Date necesita dateMeans: utc_instant | civil_wall' : undefined,
+    };
+  }
 
   const event_type = normalizeEventType(input.event_type ?? input.type);
 
@@ -403,8 +432,6 @@ function validateEvent(evento, { now = Date.now(), checkEventIds = true, batchDe
       device_user_id: userId,
       occurred_at: occurred,
       event_type: evento.event_type,
-      verify_mode: vm === undefined ? null : vm,
-      work_code: wc === undefined ? null : wc,
     });
     if (evento.event_id !== esperado) return reject(REJECT_CODES.EVENT_ID_MISMATCH);
   }

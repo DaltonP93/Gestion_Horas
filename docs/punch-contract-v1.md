@@ -68,6 +68,20 @@ Paraguay dejó de aplicar horario de verano en 2024, así que el offset es const
 
 Segundos. Los milisegundos se descartan: los relojes reportan segundos, y conservarlos haría que el mismo marcaje leído por dos caminos distintos calculara identificadores distintos.
 
+### Un objeto `Date` no se acepta a secas
+
+Un `Date` **no dice de dónde viene**. El polling hace hoy `new Date(r.timestamp)` sobre la hora de pared del reloj, así que el objeto ya quedó anclado a la zona del proceso; hashearlo como instante conservaría justo la dependencia que este contrato existe para eliminar. Y mirando el objeto no hay forma de recuperar la intención.
+
+Por eso hay que declararla:
+
+| `dateMeans` | Significado |
+|---|---|
+| `'utc_instant'` | el `Date` ya es un instante absoluto correcto (por ejemplo, una fila de att2000 leída por el driver) |
+| `'civil_wall'` | el `Date` lleva la hora de pared del reloj en sus componentes locales; se reancla al offset civil |
+| ausente | **se rechaza** |
+
+Preferir siempre pasar el string civil. La opción existe para los caminos que ya tienen un `Date` en la mano.
+
 ### Identificador de usuario
 
 - NFC + trim.
@@ -84,7 +98,7 @@ Segundos. Los milisegundos se descartan: los relojes reportan segundos, y conser
 ## `event_id`
 
 ```
-sha256( "sishoras.punch.v1" ␟ device_id ␟ device_user_id ␟ occurred_at ␟ event_type ␟ verify_mode ␟ work_code )
+sha256( "sishoras.punch.v1" ␟ device_id ␟ device_user_id ␟ occurred_at ␟ event_type )
 ```
 
 Los campos van en orden fijo, con tipo codificado (`n` para null, `i:` para entero, `s:` para string) y separados por `U+001F`. **No se usa `JSON.stringify`**: el orden de las claves no puede influir en el resultado, y con esta construcción no puede por definición.
@@ -94,6 +108,12 @@ Si un valor contiene el separador, el evento se **rechaza** en vez de arriesgar 
 ### Deliberadamente fuera del identificador
 
 `batch_id`, fecha de recepción, orden dentro del lote, IP del reloj, `bridge_id`, y cualquier dato variable del transporte. Si el mismo marcaje se reenvía por otro lote, otro bridge o meses después, el identificador es el mismo.
+
+**Y también `verify_mode` y `work_code`**, que son *atributos* del marcaje y no su identidad. La razón es concreta: el PUSH parsea `verify` y `workCode` de la línea ATTLOG, pero **el polling no los publica**. Con esos campos dentro del hash, el mismo marcaje leído por PUSH y por polling producía dos identificadores distintos, y el sistema lo habría insertado dos veces — exactamente lo que el contrato promete evitar.
+
+La identidad de un marcaje es *qué reloj, qué persona, cuándo y de qué tipo*. Cómo se identificó la persona (huella, tarjeta, rostro) y con qué código de obra son datos del marcaje, no el marcaje.
+
+> Cuando dos fuentes reporten el mismo evento con atributos distintos, el consumidor decide con cuál se queda. Queda fuera de este contrato, pero hay que resolverlo antes de conectar el Outbox.
 
 ### Política ante marcajes idénticos
 

@@ -66,7 +66,8 @@ describe('normalización determinista', () => {
 
   test('los milisegundos se descartan: los relojes reportan segundos', () => {
     expect(C.normalizeTimestamp('2026-08-04T10:15:03.987Z')).toBe('2026-08-04T10:15:03Z');
-    expect(C.normalizeTimestamp(new Date('2026-08-04T10:15:03.987Z'))).toBe('2026-08-04T10:15:03Z');
+    expect(C.normalizeTimestamp(new Date('2026-08-04T10:15:03.987Z'), { dateMeans: 'utc_instant' }))
+      .toBe('2026-08-04T10:15:03Z');
   });
 
   test('fechas imposibles o basura se rechazan', () => {
@@ -105,15 +106,18 @@ describe('event_id estable y reproducible', () => {
       { ...base, device_user_id: '43' },
       { ...base, occurred_at: '2026-08-04T10:15:04Z' },
       { ...base, event_type: 'out' },
-      { ...base, verify_mode: 2 },
-      { ...base, work_code: 'OBRA-1' },
     ];
     for (const v of variantes) expect(C.computeEventId(v)).not.toBe(original);
   });
 
-  test('null y cadena vacía no colisionan en work_code', () => {
-    expect(C.computeEventId({ ...base, work_code: null }))
-      .not.toBe(C.computeEventId({ ...base, work_code: '' }));
+  test('verify_mode y work_code NO cambian la identidad: son atributos', () => {
+    // El PUSH los trae de la línea ATTLOG; el polling no los publica. Si
+    // entraran al hash, el mismo marcaje leído por los dos caminos daría dos
+    // identificadores y se insertaría dos veces.
+    const original = C.computeEventId(base);
+    expect(C.computeEventId({ ...base, verify_mode: 15 })).toBe(original);
+    expect(C.computeEventId({ ...base, work_code: 'OBRA-1' })).toBe(original);
+    expect(C.computeEventId({ ...base, verify_mode: null, work_code: null })).toBe(original);
   });
 
   test('los campos volátiles NO entran en el identificador', () => {
@@ -129,7 +133,7 @@ describe('event_id estable y reproducible', () => {
     const canon = C.canonicalString(base);
     expect(canon).toContain('sishoras.punch.v1');
     expect(canon).not.toContain('{');
-    expect(canon.split(C.FIELD_SEP)).toHaveLength(7);
+    expect(canon.split(C.FIELD_SEP)).toHaveLength(5);   // prefijo + 4 campos de identidad
   });
 
   test('dos marcajes reales idénticos colapsan a un solo evento — política explícita', () => {
@@ -164,12 +168,13 @@ describe('las tres formas de origen convergen', () => {
 
     // Polling: objeto de node-zklib
     const reg = origen_polling_zklib.registros[0];
+    // El polling NO publica verify ni workCode. Antes este test fijaba
+    // verify_mode: 1 a mano, y así ocultaba que el hash no convergía.
     const desdePolling = C.buildEvent({
       device_id: origen_polling_zklib.device_id,
       device_user_id: reg.userId,
       occurred_at: reg.timestamp,
       event_type: reg.state === 0 ? 'in' : 'out',
-      verify_mode: 1,
     });
 
     // att2000: fila CHECKINOUT
@@ -179,7 +184,6 @@ describe('las tres formas de origen convergen', () => {
       device_user_id: fila.USERID,
       occurred_at: fila.CHECKTIME,
       event_type: fila.CHECKTYPE === 'I' ? 'in' : 'out',
-      verify_mode: 1,
     });
 
     expect(desdePush.ok && desdePolling.ok && desdeAtt.ok).toBe(true);
@@ -326,11 +330,10 @@ describe('validación de lotes', () => {
     expect(C.validateBatch(lote, { now: AHORA }).error_code).toBe(C.REJECT_CODES.SEPARATOR_IN_VALUE);
   });
 
-  test('un work_code no canónico se rechaza', () => {
+  test('un work_code no canónico se rechaza aunque no entre al hash', () => {
     for (const wc of ['', '  ', ' OBRA ']) {
       const lote = loteValido();
       lote.events[0] = { ...lote.events[0], work_code: wc };
-      lote.events[0].event_id = C.computeEventId(lote.events[0]);
       expect(C.validateBatch(lote, { now: AHORA }).error_code).toBe(C.REJECT_CODES.WORK_CODE_INVALID);
     }
   });
@@ -374,6 +377,34 @@ describe('el contrato no está conectado', () => {
   test('sólo exporta funciones puras y constantes', () => {
     for (const [, v] of Object.entries(C)) {
       expect(['function', 'object', 'number', 'string']).toContain(typeof v);
+    }
+  });
+});
+
+describe('un Date no declara qué significa', () => {
+  test('se rechaza sin dateMeans: el polling lo construye con la zona del proceso', () => {
+    const r = C.buildEvent({ ...base, occurred_at: new Date('2026-08-04T10:15:03Z') });
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(C.REJECT_CODES.TIMESTAMP_INVALID);
+    expect(r.detail).toContain('dateMeans');
+  });
+
+  test('declarado como instante UTC se respeta', () => {
+    expect(C.normalizeTimestamp(new Date('2026-08-04T10:15:03Z'), { dateMeans: 'utc_instant' }))
+      .toBe('2026-08-04T10:15:03Z');
+  });
+
+  test('declarado como hora de pared se reancla al offset civil', () => {
+    // new Date(2026, 7, 4, 7, 15, 3) usa los componentes LOCALES del proceso;
+    // leerlos de vuelta recupera la hora de pared del reloj.
+    expect(C.normalizeTimestamp(new Date(2026, 7, 4, 7, 15, 3), { dateMeans: 'civil_wall' }))
+      .toBe('2026-08-04T10:15:03Z');
+  });
+
+  test('un Date inválido se rechaza en cualquier modo', () => {
+    for (const modo of ['utc_instant', 'civil_wall', null]) {
+      expect(C.normalizeTimestamp(new Date('nada'), { dateMeans: modo })).toBeNull();
     }
   });
 });
