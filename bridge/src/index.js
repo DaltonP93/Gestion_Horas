@@ -15,7 +15,7 @@ require('dotenv').config();
 const express = require('express');
 const { createClient } = require('redis');
 const winston = require('winston');
-const { buildPushStatusPayload, MATCHED_BY } = require('./pushStatusContract');
+const { buildPushStatusFor } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
 const { startPushServer, pushState } = require('./pushServer');
@@ -274,23 +274,7 @@ function startBridgeApi(devices) {
       return res.status(400).json({ error: 'serial o ip requerido' });
     }
 
-    let matchedBy = MATCHED_BY.NONE;
-    let sn = null;
-    let state = null;
-
-    if (serial && pushState[serial]) {
-      sn = serial; state = pushState[serial]; matchedBy = MATCHED_BY.SERIAL;
-    } else if (ip) {
-      const porIp = Object.entries(pushState).find(([, s]) => s && s.ip === ip);
-      if (porIp) { sn = porIp[0]; state = porIp[1]; matchedBy = MATCHED_BY.IP; }
-    }
-
-    res.json(buildPushStatusPayload({
-      serial: sn,
-      lastPushAt:  state ? state.lastSeen  || null : null,
-      lastEventAt: state ? state.lastPunch || null : null,
-      matchedBy,
-    }));
+    res.json(buildPushStatusFor(pushState, { serial, ip }));
   });
 
   app.get('/devices/:id/push-state', (req, res) => {

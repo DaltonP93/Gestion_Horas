@@ -195,3 +195,54 @@ describe('no filtra secretos', () => {
     expect(r.message).not.toContain('ECONNREFUSED'); // no para el cliente
   });
 });
+
+describe('el validador es exacto (hallazgo de Codex)', () => {
+  test('una clave de más rompe el contrato — un Bridge que filtre la IP no pasa', async () => {
+    fetchMock.mockResolvedValue(respuesta(200, { ...payloadOk(), ip: '10.0.0.5' }));
+    expect((await fetchPushStatus({ serial: 'SN-1' })).error_code).toBe(BRIDGE_ERROR_CODES.BAD_CONTRACT);
+  });
+
+  test('una clave ausente también', async () => {
+    const { last_event_at, ...incompleto } = payloadOk();
+    fetchMock.mockResolvedValue(respuesta(200, incompleto));
+    expect((await fetchPushStatus({ serial: 'SN-1' })).error_code).toBe(BRIDGE_ERROR_CODES.BAD_CONTRACT);
+  });
+
+  test('undefined no cuela por donde debía ir null', async () => {
+    fetchMock.mockResolvedValue(respuesta(200, { ...payloadOk(), last_push_at: undefined }));
+    expect((await fetchPushStatus({ serial: 'SN-1' })).error_code).toBe(BRIDGE_ERROR_CODES.BAD_CONTRACT);
+  });
+
+  test('matched_by fuera del enum', async () => {
+    fetchMock.mockResolvedValue(respuesta(200, { ...payloadOk(), matched_by: 'magia' }));
+    expect((await fetchPushStatus({ serial: 'SN-1' })).error_code).toBe(BRIDGE_ERROR_CODES.BAD_CONTRACT);
+  });
+
+  test('un objeto con prototipo raro no pasa por objeto plano', async () => {
+    const raro = Object.create({ heredado: true });
+    Object.assign(raro, payloadOk());
+    fetchMock.mockResolvedValue(respuesta(200, raro));
+    expect((await fetchPushStatus({ serial: 'SN-1' })).error_code).toBe(BRIDGE_ERROR_CODES.BAD_CONTRACT);
+  });
+
+  test('matched_by "ambiguous" sí es válido', async () => {
+    fetchMock.mockResolvedValue(respuesta(200, {
+      contract_version: PUSH_STATUS_CONTRACT_VERSION, found: false, serial: null,
+      last_push_at: null, last_event_at: null, matched_by: 'ambiguous',
+    }));
+    expect((await fetchPushStatus({ serial: 'SN-1' })).ok).toBe(true);
+  });
+});
+
+describe('las dos copias del contrato no pueden divergir', () => {
+  test('api/src/services y bridge/src tienen exactamente el mismo archivo', () => {
+    const fs = require('fs'), path = require('path');
+    const raiz = path.join(__dirname, '..', '..');
+    const a = fs.readFileSync(path.join(raiz, 'api', 'src', 'services', 'pushStatusContract.js'), 'utf8');
+    const b = fs.readFileSync(path.join(raiz, 'bridge', 'src', 'pushStatusContract.js'), 'utf8');
+
+    // Una divergencia silenciosa acá haría que la API rechace payloads
+    // válidos del Bridge, o peor, que acepte los inválidos.
+    expect(a).toBe(b);
+  });
+});

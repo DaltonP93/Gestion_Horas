@@ -192,3 +192,28 @@ describe('identidad y privacidad', () => {
     expect(fallo.body.correlation_id).toMatch(/^sh-/);
   });
 });
+
+describe('fechas futuras (hallazgo de Codex)', () => {
+  test('un timestamp del futuro no deja el reloj "online" indefinidamente', async () => {
+    const futuro = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const res = await llamar({ bridge: bridgeOk({ last_push_at: futuro, last_event_at: futuro }) });
+
+    // Antes: ahora - futuro < ventana siempre → online durante tres horas.
+    expect(res.body.status).toBe('never_seen');
+  });
+
+  test('un desfasaje chico de reloj se tolera y cuenta como online', async () => {
+    const casiAhora = new Date(Date.now() + 30 * 1000).toISOString();
+    const res = await llamar({ bridge: bridgeOk({ last_push_at: casiAhora, last_event_at: casiAhora }) });
+
+    expect(res.body.status).toBe('online');
+  });
+
+  test('una fecha futura no tapa a una pasada válida', async () => {
+    const futuro = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    const reciente = new Date(Date.now() - 60 * 1000).toISOString();
+    const res = await llamar({ bridge: bridgeOk({ last_push_at: futuro, last_event_at: reciente }) });
+
+    expect(res.body.status).toBe('online');
+  });
+});

@@ -169,14 +169,20 @@ router.get('/:id/push-status', authorize('admin','gestor','hr'), async (req, res
 
   const { found, serial, last_push_at, last_event_at } = r.data;
   const windowMs = parseInt(process.env.PUSH_ONLINE_WINDOW_MS || String(5 * 60 * 1000), 10);
+  const skewMs = parseInt(process.env.PUSH_MAX_SKEW_MS || String(2 * 60 * 1000), 10);
+  const ahora = Date.now();
+  // Una fecha futura daba una diferencia negativa, siempre menor que la
+  // ventana: el reloj se veía "online" hasta que esa fecha quedara atrás. Se
+  // tolera un desfasaje chico y se recorta; más allá de eso, no cuenta.
   const ultimo = [last_push_at, last_event_at]
     .map(v => (v ? Date.parse(v) : NaN))
-    .filter(n => !Number.isNaN(n))
+    .filter(n => !Number.isNaN(n) && n - ahora <= skewMs)
+    .map(n => Math.min(n, ahora))
     .sort((a, b) => b - a)[0];
 
   let status;
   if (!found || ultimo === undefined) status = 'never_seen';
-  else status = (Date.now() - ultimo) < windowMs ? 'online' : 'stale';
+  else status = (ahora - ultimo) < windowMs ? 'online' : 'stale';
 
   res.json({
     ...base,

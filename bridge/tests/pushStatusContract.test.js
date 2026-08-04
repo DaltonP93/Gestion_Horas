@@ -10,6 +10,7 @@ const express = require('express');
 
 const {
   buildPushStatusPayload,
+  buildPushStatusFor,
   validatePushStatusPayload,
   PUSH_STATUS_CONTRACT_VERSION,
   MATCHED_BY,
@@ -24,24 +25,12 @@ function bootApp(pushState, { apiKey = 'clave' } = {}) {
     if (apiKey && provided && provided === apiKey) return next();
     return res.status(401).json({ error: 'No autorizado' });
   });
+  // Misma resolución que el endpoint real: se importa, no se replica.
   app.get('/push-status', (req, res) => {
     const serial = (req.query.serial || '').toString().trim();
     const ip     = (req.query.ip || '').toString().trim();
     if (!serial && !ip) return res.status(400).json({ error: 'serial o ip requerido' });
-
-    let matchedBy = MATCHED_BY.NONE, sn = null, state = null;
-    if (serial && pushState[serial]) {
-      sn = serial; state = pushState[serial]; matchedBy = MATCHED_BY.SERIAL;
-    } else if (ip) {
-      const porIp = Object.entries(pushState).find(([, s]) => s && s.ip === ip);
-      if (porIp) { sn = porIp[0]; state = porIp[1]; matchedBy = MATCHED_BY.IP; }
-    }
-    res.json(buildPushStatusPayload({
-      serial: sn,
-      lastPushAt:  state ? state.lastSeen  || null : null,
-      lastEventAt: state ? state.lastPunch || null : null,
-      matchedBy,
-    }));
+    res.json(buildPushStatusFor(pushState, { serial, ip }));
   });
   return app;
 }
@@ -143,5 +132,37 @@ describe('forma del contrato', () => {
     expect(buildPushStatusPayload({}).found).toBe(false);
     expect(buildPushStatusPayload({ serial: 'X' }).found).toBe(true);
     expect(buildPushStatusPayload({}).matched_by).toBe('none');
+  });
+});
+
+describe('IP ambigua (hallazgo de Codex)', () => {
+  const DOS_RELOJES = {
+    'SN-A': { ip: '10.0.0.5', lastSeen: '2026-08-04T18:00:00.000Z' },
+    'SN-B': { ip: '10.0.0.5', lastSeen: '2026-08-04T09:00:00.000Z' },
+  };
+
+  test('dos relojes con la misma IP no se resuelven por IP', async () => {
+    const r = await request(bootApp(DOS_RELOJES))
+      .get('/push-status?ip=10.0.0.5').set('x-api-key', 'clave').expect(200);
+
+    // Antes se devolvía el primero: serial y frescura de OTRO equipo.
+    expect(r.body.found).toBe(false);
+    expect(r.body.serial).toBeNull();
+    expect(r.body.matched_by).toBe('ambiguous');
+  });
+
+  test('con serial sí se resuelve, aunque compartan IP', async () => {
+    const r = await request(bootApp(DOS_RELOJES))
+      .get('/push-status?serial=SN-B&ip=10.0.0.5').set('x-api-key', 'clave').expect(200);
+
+    expect(r.body.serial).toBe('SN-B');
+    expect(r.body.matched_by).toBe('serial');
+    expect(r.body.last_push_at).toBe('2026-08-04T09:00:00.000Z');
+  });
+
+  test('la respuesta ambigua sigue cumpliendo el contrato', async () => {
+    const r = await request(bootApp(DOS_RELOJES))
+      .get('/push-status?ip=10.0.0.5').set('x-api-key', 'clave').expect(200);
+    expect(validatePushStatusPayload(r.body)).toEqual({ ok: true });
   });
 });
