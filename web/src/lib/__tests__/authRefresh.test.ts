@@ -274,6 +274,35 @@ describe('navegación durante el refresh', () => {
     expect(redirecciones).toHaveLength(1)        // no redirige dos veces
   })
 
+  test('un refresh que llega TARDE no revive la sesión cerrada', async () => {
+    const { env, store, mensajes } = makeEnv(sesionValida)
+    let resolver: ((t: Tokens) => void) | null = null
+    const s = createAuthSession(env, () => new Promise<Tokens>(res => { resolver = res }))
+
+    const p = s.ensureFreshToken('viejo')
+    s.logout('salida manual')                    // cierra mientras el refresh viaja
+    resolver!({ accessToken: 'tarde', refreshToken: 'tardeR' })
+
+    await expect(p).rejects.toBeInstanceOf(SessionLostError)
+    // Lo crítico: no quedan credenciales vivas después del cierre.
+    expect(store.has('access_token')).toBe(false)
+    expect(store.has('refresh_token')).toBe(false)
+    expect(mensajes.some(m => m.type === 'refreshed')).toBe(false)
+  })
+
+  test('tampoco revive si el cierre vino de otra pestaña', async () => {
+    const { env, store } = makeEnv(sesionValida)
+    let resolver: ((t: Tokens) => void) | null = null
+    const s = createAuthSession(env, () => new Promise<Tokens>(res => { resolver = res }))
+
+    const p = s.ensureFreshToken('viejo')
+    s.handleMessage({ type: 'logout', at: 1, reason: 'otra pestaña' })
+    resolver!({ accessToken: 'tarde', refreshToken: 'tardeR' })
+
+    await expect(p).rejects.toBeInstanceOf(SessionLostError)
+    expect(store.has('access_token')).toBe(false)
+  })
+
   test('una petición que llega después del cierre no reabre la sesión', async () => {
     const { env } = makeEnv(sesionValida)
     const s = createAuthSession(env, async () => ({ accessToken: 'x', refreshToken: 'y' }))

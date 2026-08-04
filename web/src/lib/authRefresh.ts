@@ -129,6 +129,11 @@ export function createAuthSession(
 
     const run = doRefresh(refreshToken)
       .then((tokens) => {
+        // La sesión pudo cerrarse MIENTRAS esta petición viajaba (botón salir,
+        // o el aviso de otra pestaña). Guardar el token acá dejaría
+        // credenciales vivas después de un cierre, y la petición original
+        // seguiría autenticada.
+        if (sessionLost) throw new SessionLostError('sesión cerrada durante la renovación')
         if (!tokens || !tokens.accessToken) throw new SessionLostError('respuesta de refresh inválida')
         env.setItem('access_token', tokens.accessToken)
         if (tokens.refreshToken) env.setItem('refresh_token', tokens.refreshToken)
