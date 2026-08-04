@@ -5,7 +5,7 @@ import {
   UserCircle2, SlidersHorizontal, ShieldCheck, LogOut,
 } from 'lucide-react'
 import { useCurrentUser, type Role } from '@/lib/useCurrentUser'
-import { apiUrl } from '@/lib/api'
+import { apiUrl, authSession } from '@/lib/api'
 import { PopoverSurface, popoverItemClass, popoverDividerClass } from '@/components/ui/Popover'
 
 // Etiqueta legible del rol (evita mostrar el enum crudo).
@@ -109,8 +109,9 @@ export default function AccountMenu() {
         }).catch(() => {})
       }
     } finally {
-      localStorage.clear()
-      window.location.href = '/login'
+      // Limpia sólo las claves de sesión (las preferencias de UI quedan),
+      // avisa a las demás pestañas y redirige una sola vez.
+      authSession.logout('salida manual')
     }
   }
 

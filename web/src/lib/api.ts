@@ -1,4 +1,8 @@
 import axios from 'axios'
+import {
+  createAuthSession, browserAuthEnv, listenAuthChannel,
+  isRefreshUrl, bearerOf, REFRESH_PATH,
+} from './authRefresh'
 
 // Normaliza la URL del API:
 // - quita trailing slash y trailing /api (las rutas ya empiezan con /api)
@@ -51,28 +55,48 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// Interceptor: refrescar token si expira
+// Cliente sin interceptores para el refresh. Usar `api` acá era un camino a
+// la recursión: un 401 del propio refresh volvía a entrar al interceptor.
+// Se exporta sólo para que los tests puedan inyectarle un adaptador.
+export const refreshClient = axios.create({ baseURL: API_URL })
+
+export const authSession = createAuthSession(
+  browserAuthEnv(),
+  async (refreshToken: string) => {
+    const { data } = await refreshClient.post(REFRESH_PATH, { refreshToken })
+    return { accessToken: data.accessToken, refreshToken: data.refreshToken }
+  },
+)
+
+// Escucha el canal entre pestañas: si otra cierra sesión, ésta la sigue.
+if (typeof window !== 'undefined') listenAuthChannel(authSession)
+
+// Interceptor: refrescar token si expira.
+// Como máximo UNA renovación en curso por pestaña; las demás peticiones
+// esperan esa misma promesa y se reintentan una sola vez.
 api.interceptors.response.use(
   res => res,
   async error => {
     const original = error.config
-    if (error.response?.status === 401 && !original._retry) {
-      original._retry = true
-      const refreshToken = localStorage.getItem('refresh_token')
-      if (refreshToken) {
-        try {
-          const { data } = await api.post('/api/auth/refresh', { refreshToken })
-          localStorage.setItem('access_token', data.accessToken)
-          localStorage.setItem('refresh_token', data.refreshToken)
-          original.headers.Authorization = `Bearer ${data.accessToken}`
-          return api(original)
-        } catch {
-          localStorage.clear()
-          window.location.href = '/login'
-        }
-      }
+    if (!original || error.response?.status !== 401) return Promise.reject(error)
+
+    // Un 401 del endpoint de refresh es terminal: no se refresca ni se reintenta.
+    if (isRefreshUrl(original.url)) {
+      authSession.logout('refresh devolvió 401')
+      return Promise.reject(error)
     }
-    return Promise.reject(error)
+
+    if (original._retry) return Promise.reject(error)   // un solo reintento
+    original._retry = true
+
+    try {
+      const token = await authSession.ensureFreshToken(bearerOf(original.headers?.Authorization))
+      original.headers = { ...(original.headers || {}), Authorization: `Bearer ${token}` }
+      return await api(original)
+    } catch {
+      // La sesión ya se cerró (una sola vez) dentro de ensureFreshToken.
+      return Promise.reject(error)
+    }
   }
 )
 
