@@ -380,3 +380,19 @@ describe('carrera entre pestañas', () => {
     expect(store.has('access_token')).toBe(false)
   })
 })
+
+describe('credenciales heredadas', () => {
+  test('la clave legada con usuario/contraseña se borra al cerrar sesión', () => {
+    const { env, store } = makeEnv({
+      ...sesionValida,
+      sishoras_db_conn: '{"user":"sa","password":"Secreta1"}',
+      sishoras_att2000_target: '{"host":"10.0.0.9"}',
+    })
+    const s = createAuthSession(env, async () => ({ accessToken: 'x', refreshToken: 'y' }))
+
+    s.logout('salida manual')
+
+    expect(store.has('sishoras_db_conn')).toBe(false)
+    expect(store.has('sishoras_att2000_target')).toBe(false)
+  })
+})

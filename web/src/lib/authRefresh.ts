@@ -37,6 +37,10 @@ export const PUBLIC_AUTH_PATHS = [
 export const AUTH_KEYS = [
   'access_token', 'refresh_token', 'token', 'user',
   'sishoras_offline_punches',
+  // Clave heredada que en versiones viejas guardaba usuario/contraseña de la
+  // base. Sólo se purgaba al montar la página legada de ATT2000 (super_admin),
+  // así que en un navegador compartido podía quedar indefinidamente.
+  'sishoras_db_conn', 'sishoras_att2000_target',
 ] as const
 
 export const AUTH_CHANNEL = 'sishoras-auth'
