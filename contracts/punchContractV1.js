@@ -126,11 +126,18 @@ function normalizeEventType(raw) {
   return EVENT_TYPES.includes(lower) ? lower : 'unknown';
 }
 
+/**
+ * El modo de verificación puede venir en blanco: la línea ATTLOG trae la
+ * columna con espacios de relleno. `Number('   ')` es 0, así que sin trimear
+ * un dato AUSENTE se publicaba como el modo 0, que es un valor real.
+ * También se exige decimal: Number aceptaría '0x10' y '1e2'.
+ */
 function normalizeVerifyMode(raw) {
-  if (raw === null || raw === undefined || raw === '') return null;
-  const n = Number(raw);
-  if (!Number.isInteger(n)) return NaN;            // el validador lo rechaza
-  return n;
+  if (raw === null || raw === undefined) return null;
+  const s = String(raw).trim();
+  if (s === '') return null;
+  if (!/^\d+$/.test(s)) return NaN;               // el validador lo rechaza
+  return Number(s);
 }
 
 const ISO_CON_OFFSET = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
@@ -383,6 +390,14 @@ function validateEvent(evento, { now = Date.now(), checkEventIds = true, batchDe
 
   const device_id = toDeviceId(evento.device_id ?? batchDeviceId);
   if (device_id === null) return reject(REJECT_CODES.DEVICE_ID_INVALID);
+  // Un evento no puede declarar otro reloj que el del lote. Si pudiera, un
+  // lote de device_id 1 con un evento de device_id 2 —y su hash consistente—
+  // pasaría la validación, y quien confíe en el reloj del lote para mapear o
+  // guardar estaría atribuyendo el marcaje al equipo equivocado.
+  const delLote = toDeviceId(batchDeviceId);
+  if (delLote !== null && evento.device_id !== undefined && device_id !== delLote) {
+    return reject(REJECT_CODES.DEVICE_ID_INVALID, 'no coincide con el device_id del lote');
+  }
 
   const userId = normalizeString(evento.device_user_id);
   if (!userId || userId.length > LIMITS.MAX_DEVICE_USER_ID) return reject(REJECT_CODES.USER_ID_INVALID);

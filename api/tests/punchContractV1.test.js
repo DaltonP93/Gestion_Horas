@@ -408,3 +408,48 @@ describe('un Date no declara qué significa', () => {
     }
   });
 });
+
+describe('cuarta tanda de Codex', () => {
+  test('un verify en blanco es dato AUSENTE, no el modo 0', () => {
+    // La columna verify de ATTLOG viene con espacios de relleno, y
+    // Number('   ') es 0 — un modo de verificación real.
+    for (const blanco of ['', '   ', '\t', null, undefined]) {
+      expect(C.buildEvent({ ...base, verify_mode: blanco }).event.verify_mode).toBeNull();
+    }
+  });
+
+  test('el modo 0 explícito sí se conserva', () => {
+    expect(C.buildEvent({ ...base, verify_mode: '0' }).event.verify_mode).toBe(0);
+    expect(C.buildEvent({ ...base, verify_mode: 0 }).event.verify_mode).toBe(0);
+  });
+
+  test('sólo se acepta decimal: Number aceptaría 0x10 y 1e2', () => {
+    for (const raro of ['0x10', '1e2', '1.5', '+1', '-1', 'uno']) {
+      expect(C.buildEvent({ ...base, verify_mode: raro }).error_code)
+        .toBe(C.REJECT_CODES.VERIFY_MODE_INVALID);
+    }
+  });
+
+  test('un evento no puede declarar un reloj distinto al del lote', () => {
+    // Sin esto, un lote de device_id 1 con un evento de device_id 2 —y su
+    // hash consistente— pasaba, y quien confiara en el reloj del lote habría
+    // atribuido el marcaje al equipo equivocado.
+    const { batch } = C.buildBatch({
+      bridge_id: 'b', device_id: 1,
+      events: [{ device_id: 2, device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
+    });
+    batch.device_id = 1;
+
+    const r = C.validateBatch(batch, { now: Date.parse('2026-08-04T12:00:00Z') });
+    expect(r.error_code).toBe(C.REJECT_CODES.DEVICE_ID_INVALID);
+    expect(r.detail).toContain('lote');
+  });
+
+  test('un evento que omite device_id hereda el del lote', () => {
+    const { batch } = C.buildBatch({
+      bridge_id: 'b', device_id: 1,
+      events: [{ device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
+    });
+    expect(C.validateBatch(batch, { now: Date.parse('2026-08-04T12:00:00Z') }).ok).toBe(true);
+  });
+});

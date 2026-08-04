@@ -92,7 +92,7 @@ Preferir siempre pasar el string civil. La opción existe para los caminos que y
 | Campo | Regla |
 |---|---|
 | `event_type` | enum `in`, `out`, `break_start`, `break_end`, `unknown`; lo no reconocido cae en `unknown` |
-| `verify_mode` | entero 0–255 o `null` |
+| `verify_mode` | entero decimal 0–255 o `null`; en blanco o con espacios → `null`, **no** el modo 0 |
 | `work_code` | string no vacío o `null` (vacío se normaliza a `null`) |
 
 ## `event_id`
@@ -117,11 +117,13 @@ La identidad de un marcaje es *qué reloj, qué persona, cuándo y de qué tipo*
 
 ### Política ante marcajes idénticos
 
-**Dos marcaciones con los mismos campos estables y el mismo segundo son el mismo evento.** No hay forma de distinguirlas: un reloj no puede registrar dos hechos diferentes para el mismo usuario, en el mismo segundo, con el mismo tipo y el mismo modo de verificación. Si llegan dos, o es el mismo hecho reenviado, o un duplicado del transporte — y en ambos casos colapsar es lo correcto.
+**Dos marcaciones con los mismos campos de identidad y el mismo segundo son el mismo evento.** No hay forma de distinguirlas: un reloj no registra dos hechos diferentes para el mismo usuario, en el mismo segundo y con el mismo tipo. Si llegan dos, o es el mismo hecho reenviado, o un duplicado del transporte — y en ambos casos colapsar es lo correcto.
 
 La consecuencia hay que aceptarla con los ojos abiertos: si un dispositivo real produjera dos marcajes legítimos indistinguibles, el sistema los contaría como uno. A cambio, la idempotencia no necesita estado.
 
-Dos marcajes en el **mismo segundo** con distinto usuario, tipo o `verify_mode` conservan identidades distintas.
+Dos marcajes en el **mismo segundo** con distinto usuario o distinto tipo conservan identidades distintas.
+
+Dos marcajes que difieran **sólo** en `verify_mode` o `work_code` **colapsan**, porque esos campos no son identidad. Es la consecuencia directa de sacarlos del hash, y hay que tenerla presente al diseñar el merge río abajo: si la misma persona ficha dos veces en el mismo segundo con el mismo tipo y distinto código de obra, el sistema lo cuenta una sola vez.
 
 ## Validación
 
