@@ -14,7 +14,12 @@ jest.mock('../src/config/database', () => ({
 const { sequelize } = require('../src/config/database');
 const nm = require('../src/services/netMetrics');
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // `availableColumns` memoriza el esquema: sin esto, una prueba heredaría
+  // las columnas de la anterior y la secuencia de mocks se correría.
+  nm.__resetColumnsCache();
+});
 
 describe('modeFromOrigin', () => {
   it('traduce los orígenes de lock existentes', () => {

@@ -325,7 +325,14 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       err = e?.message || String(e);
     }
     attemptsRun++;
-    const payload = err ? { bytes: 0, estimated: false } : netMetrics.estimateBytes(logs);
+    // La instrumentación nunca puede tumbar la lectura: si medir falla, se
+    // pierde la métrica de ese intento, no el intento. Esta línea está fuera
+    // del try/catch de la lectura, así que necesita el suyo.
+    let payload = { bytes: 0, estimated: false };
+    if (!err) {
+      try { payload = netMetrics.estimateBytes(logs); }
+      catch { payload = { bytes: 0, estimated: true }; }
+    }
     const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
       : scoreOf(logs, truncated);
     detail.push({
@@ -486,7 +493,20 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     // attempts_requested = los pedidos. Antes `attempts` guardaba los pedidos.
     const executed = report?.read_attempts_detail?.length || (report ? 1 : (opts.attempts || 1));
     const requested = opts.attempts || executed;
-    const detailJson = report?.read_attempts_detail?.length ? JSON.stringify(report.read_attempts_detail).slice(0, 4000) : null;
+    // El detalle va a una columna JSON: cortar el string a 4000 caracteres
+    // deja JSON inválido y el INSERT falla, perdiendo TODA la fila de
+    // auditoría (el catch de más abajo lo silencia). Se recortan elementos,
+    // no caracteres, conservando los últimos intentos, que son los que
+    // explican el resultado final.
+    const detailJson = (() => {
+      const all = report?.read_attempts_detail;
+      if (!all?.length) return null;
+      for (let keep = all.length; keep > 0; keep--) {
+        const json = JSON.stringify(all.slice(-keep));
+        if (json.length <= 4000) return json;
+      }
+      return null;
+    })();
     const extraCols = await getExistingColumns('device_sync_runs',
       ['attempts_detail', 'attempts_requested', 'retry_count',
        'mode', 'bytes_from_device', 'bytes_estimated', 'error_code']);

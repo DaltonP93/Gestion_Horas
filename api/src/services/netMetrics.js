@@ -178,16 +178,33 @@ function aggregateRuns(rows) {
   };
 }
 
-/** Columnas de métricas presentes, para funcionar sin la migración aplicada. */
+let _colsCache = null;
+
+/** Sólo para pruebas: olvida el esquema memorizado. */
+function __resetColumnsCache() { _colsCache = null; }
+
+/**
+ * Columnas de métricas presentes, para funcionar sin la migración aplicada.
+ *
+ * Se memoriza: el esquema no cambia mientras el proceso vive, y esto lo
+ * consultan tanto el endpoint de métricas como el historial de cada reloj.
+ * Tras aplicar la migración hay que recargar la API — que es lo que ya se
+ * hace en el despliegue.
+ */
 async function availableColumns() {
+  if (_colsCache) return _colsCache;
   try {
     const [rows] = await sequelize.query(
       `SELECT COLUMN_NAME AS c FROM INFORMATION_SCHEMA.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_sync_runs'
           AND COLUMN_NAME IN ('mode','bytes_from_device','bytes_estimated','error_code')`
     );
-    return rows.map(r => r.c);
-  } catch { return []; }
+    _colsCache = rows.map(r => r.c);
+    return _colsCache;
+  } catch {
+    // Un fallo puntual no se memoriza: se reintenta en la próxima consulta.
+    return [];
+  }
 }
 
 /**
@@ -255,6 +272,7 @@ module.exports = {
   estimateIncrementalSaving,
   aggregateRuns,
   availableColumns,
+  __resetColumnsCache,
   fetchRuns,
   queueSnapshot,
 };
