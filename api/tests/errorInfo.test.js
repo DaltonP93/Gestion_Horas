@@ -270,3 +270,27 @@ describe('segunda tanda de Codex', () => {
     expect(JSON.stringify(serializeError(err))).toContain('127.0.0.1:8081');
   });
 });
+
+describe('secretos en JSON (hallazgo de Codex)', () => {
+  test('claves entrecomilladas también se redactan', () => {
+    const t = redactSecrets('HTTP 401: {"password":"Secreta1","token":"abc.def","apiKey":"XYZ"}');
+
+    expect(t).not.toContain('Secreta1');
+    expect(t).not.toContain('abc.def');
+    expect(t).not.toContain('XYZ');
+  });
+
+  test('comillas simples y camelCase', () => {
+    expect(redactSecrets("{'accessKey': 'AKIA123', 'sessionId': 'abc'}")).not.toContain('AKIA123');
+  });
+
+  test('los campos no sensibles del JSON sobreviven', () => {
+    expect(redactSecrets('{"status":"error","user":"juan","password":"x"}')).toContain('"status"');
+  });
+
+  test('el error real de hrSourceSync no filtra el cuerpo', () => {
+    // runSync lanza `HTTP ${status}: ${body.slice(0,200)}`
+    const s = serializeError(new Error('HTTP 401: {"error":"unauthorized","token":"eyJhbG.eyJzdWI.firma"}'));
+    expect(JSON.stringify(s)).not.toContain('eyJhbG.eyJzdWI.firma');
+  });
+});

@@ -1,5 +1,5 @@
 const winston = require('winston');
-const { serializeError, redactSecrets } = require('../utils/errorInfo');
+const { serializeError, redactSecrets, redactStrict } = require('../utils/errorInfo');
 
 const SPLAT = Symbol.for('splat');
 
@@ -17,6 +17,20 @@ const SPLAT = Symbol.for('splat');
  *  - Error → se serializa a `error` + `error_code`, sin secretos;
  *  - objetos planos → quedan como metadata (los resuelve splat()).
  */
+/**
+ * Redacción de un argumento extra primitivo — casi siempre un `err.message`.
+ *
+ * Winston los descartaba enteros; ahora que llegan al log hay que mirarlos.
+ * Si el texto trae un literal entrecomillado se aplica la redacción dura: los
+ * mensajes de MySQL meten los valores de fila entre comillas
+ * ("Duplicate entry 'juan@empresa.com' for key 'email'"). Sin comillas se usa
+ * la suave, para no perder datos útiles de operación como una IP y un puerto.
+ */
+function redactPrimitiveSplat(arg) {
+  const s = String(arg);
+  return /['"`]/.test(s) ? redactStrict(s) : redactSecrets(s);
+}
+
 const rescueSplat = winston.format((info) => {
   const extra = info[SPLAT];
   if (!Array.isArray(extra) || extra.length === 0) return info;
@@ -38,7 +52,7 @@ const rescueSplat = winston.format((info) => {
       const ser = serializeError(arg);
       metas.push({ error: ser, error_code: ser.error_code });
     } else if (arg === null || arg === undefined || typeof arg !== 'object') {
-      appended.push(String(arg));
+      appended.push(redactPrimitiveSplat(arg));
     } else {
       metas.push(arg);
     }

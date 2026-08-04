@@ -48,6 +48,14 @@ function redactSecrets(input) {
     .replace(
       new RegExp(`\\b(${SECRET_KEY_RE.source})\\s*[=:]\\s*("[^"]*"|'[^']*'|\\S+)`, 'gi'),
       '$1=***'
+    )
+    // Lo mismo en JSON, donde la clave viene entrecomillada y el regex de
+    // arriba no engancha. hrSourceSync lanza `HTTP 401: {"token":"…"}` con el
+    // cuerpo de la respuesta de la fuente externa, y ese mensaje termina en
+    // el log del cron.
+    .replace(
+      new RegExp(`(["'])(${SECRET_KEY_RE.source})\\1\\s*:\\s*("[^"]*"|'[^']*'|[^,}\\s]+)`, 'gi'),
+      '$1$2$1:"***"'
     );
 }
 

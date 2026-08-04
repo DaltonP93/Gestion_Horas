@@ -96,3 +96,27 @@ describe('higiene', () => {
     expect(ultimo().message).toContain('127.0.0.1:8081');
   });
 });
+
+describe('cuarta tanda de Codex', () => {
+  test('un err.message de MySQL como extra no filtra el valor de fila', () => {
+    // Winston los descartaba enteros; ahora que llegan hay que redactarlos.
+    logger.error('Error cron courses due:', "Duplicate entry 'juan@empresa.com' for key 'employees.email'");
+    const info = ultimo();
+
+    expect(info.message).not.toContain('juan@empresa.com');
+    expect(info.message).toContain('Duplicate entry');
+  });
+
+  test('un extra sin comillas conserva la IP: sigue siendo útil para operar', () => {
+    logger.error('Error cron:', 'connect ECONNREFUSED 127.0.0.1:8081');
+    expect(ultimo().message).toContain('127.0.0.1:8081');
+  });
+
+  test('un cuerpo JSON con credenciales no llega al log', () => {
+    logger.error('Error cargando schedules HR:', 'HTTP 401: {"password":"secreta","token":"abc.def.ghi"}');
+    const json = JSON.stringify(ultimo());
+
+    expect(json).not.toContain('secreta');
+    expect(json).not.toContain('abc.def.ghi');
+  });
+});
