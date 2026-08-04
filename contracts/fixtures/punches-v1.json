@@ -1,0 +1,77 @@
+{
+  "_nota": "Fixtures anonimizados del contrato v1. IPs de documentación (RFC 5737), seriales y usuarios ficticios. No contienen datos de producción.",
+  "origen_push_attlog": {
+    "_formato": "ZKTeco ADMS: userId \\t datetime \\t status \\t verify \\t workCode",
+    "lineas": [
+      "42\t2026-08-04 07:15:03\t0\t1\t",
+      "42\t2026-08-04 12:02:11\t1\t1\t0",
+      "1007\t2026-08-04 07:15:03\t0\t15\tOBRA-2"
+    ],
+    "device_id": 1,
+    "device_sn": "SN-DEMO-0001",
+    "device_ip": "192.0.2.10"
+  },
+  "origen_polling_zklib": {
+    "_formato": "node-zklib: { userId, timestamp, state }",
+    "registros": [
+      { "userId": 42, "timestamp": "2026-08-04T07:15:03", "state": 0 },
+      { "userId": "42", "timestamp": "2026-08-04 12:02:11", "state": 1 }
+    ],
+    "device_id": 1
+  },
+  "origen_att2000": {
+    "_formato": "CHECKINOUT: USERID, CHECKTIME, CHECKTYPE",
+    "filas": [
+      { "USERID": "42", "CHECKTIME": "2026-08-04 07:15:03", "CHECKTYPE": "I" },
+      { "USERID": "42", "CHECKTIME": "2026-08-04 12:02:11", "CHECKTYPE": "O" }
+    ],
+    "device_id": 1
+  },
+  "_nota_ceros": "El relleno con ceros NO se quita: 42 y 0042 son identidades distintas, porque employee_device_map compara device_user_id como string exacto. Las tres formas de origen usan el mismo id a propósito.",
+  "canonico_esperado": {
+    "_nota": "Las tres formas de arriba, para el usuario 42 a las 07:15:03, deben producir exactamente este evento.",
+    "device_id": 1,
+    "device_user_id": "42",
+    "occurred_at": "2026-08-04T10:15:03Z",
+    "event_type": "in",
+    "verify_mode": 1,
+    "work_code": null
+  },
+  "unicode": {
+    "device_id": 2,
+    "device_user_id": "EMP-Ñandú",
+    "occurred_at": "2026-08-04T10:15:03Z",
+    "event_type": "in",
+    "verify_mode": null,
+    "work_code": "TURNO-Ñ"
+  },
+  "maliciosos": [
+    { "_caso": "inyección SQL en el user id", "device_id": 1, "device_user_id": "1'; DROP TABLE attendance_logs; --", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in" },
+    { "_caso": "separador canónico embebido", "device_id": 1, "device_user_id": "42\u001fs:99", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in" },
+    { "_caso": "device_id negativo", "device_id": -1, "device_user_id": "42", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in" },
+    { "_caso": "device_id no numérico", "device_id": "../../etc/passwd", "device_user_id": "42", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in" },
+    { "_caso": "timestamp basura", "device_id": 1, "device_user_id": "42", "occurred_at": "no-es-una-fecha", "event_type": "in" },
+    { "_caso": "fecha imposible", "device_id": 1, "device_user_id": "42", "occurred_at": "2026-02-31T10:00:00", "event_type": "in" },
+    { "_caso": "user id vacío", "device_id": 1, "device_user_id": "   ", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in" },
+    { "_caso": "verify_mode fraccionario", "device_id": 1, "device_user_id": "42", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in", "verify_mode": 1.5 },
+    { "_caso": "verify_mode fuera de rango", "device_id": 1, "device_user_id": "42", "occurred_at": "2026-08-04T10:15:03Z", "event_type": "in", "verify_mode": 99999 }
+  ],
+  "lote_valido": {
+    "schema_version": 1,
+    "batch_id": "b-demo-0001",
+    "bridge_id": "bridge-demo",
+    "device_id": 1,
+    "generated_at": "2026-08-04T10:20:00Z",
+    "events": [
+      {
+        "event_id": "sha256:PLACEHOLDER",
+        "device_id": 1,
+        "device_user_id": "42",
+        "occurred_at": "2026-08-04T10:15:03Z",
+        "event_type": "in",
+        "verify_mode": 1,
+        "work_code": null
+      }
+    ]
+  }
+}
