@@ -15,6 +15,7 @@ require('dotenv').config();
 const express = require('express');
 const { createClient } = require('redis');
 const winston = require('winston');
+const { buildPushStatusPayload, MATCHED_BY } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
 const { startPushServer, pushState } = require('./pushServer');
@@ -260,6 +261,36 @@ function startBridgeApi(devices) {
   // Estado de los relojes vía PUSH ADMS (últimos heartbeats/marcajes recibidos)
   app.get('/push-state', (req, res) => {
     res.json(pushState);
+  });
+
+  // Contrato explícito con la API — ver docs/bridge-push-status-contract.md.
+  // Se consulta por serial o IP, no por id: el id del Bridge sale de la
+  // posición dentro de ZKTECO_DEVICES y no tiene relación con devices.id
+  // de MySQL, así que preguntar por id sólo acertaba por casualidad.
+  app.get('/push-status', (req, res) => {
+    const serial = (req.query.serial || '').toString().trim();
+    const ip     = (req.query.ip || '').toString().trim();
+    if (!serial && !ip) {
+      return res.status(400).json({ error: 'serial o ip requerido' });
+    }
+
+    let matchedBy = MATCHED_BY.NONE;
+    let sn = null;
+    let state = null;
+
+    if (serial && pushState[serial]) {
+      sn = serial; state = pushState[serial]; matchedBy = MATCHED_BY.SERIAL;
+    } else if (ip) {
+      const porIp = Object.entries(pushState).find(([, s]) => s && s.ip === ip);
+      if (porIp) { sn = porIp[0]; state = porIp[1]; matchedBy = MATCHED_BY.IP; }
+    }
+
+    res.json(buildPushStatusPayload({
+      serial: sn,
+      lastPushAt:  state ? state.lastSeen  || null : null,
+      lastEventAt: state ? state.lastPunch || null : null,
+      matchedBy,
+    }));
   });
 
   app.get('/devices/:id/push-state', (req, res) => {

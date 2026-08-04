@@ -435,8 +435,12 @@ function RelojesTab() {
       const r = await api.get(`/api/devices/${d.id}/push-status`)
       setDeviceData(p => ({ ...p, [d.id]: { ...p[d.id], push: r.data } }))
     } catch (e: any) {
-      const msg = e.response?.data?.error || e.response?.data?.message || e.message
-      setDeviceData(p => ({ ...p, [d.id]: { ...p[d.id], push: { error: msg } } }))
+      // El servidor ya responde con la forma normalizada incluso al fallar;
+      // esto sólo cubre el caso de no llegar a hablar con él.
+      const body = e.response?.data
+      setDeviceData(p => ({ ...p, [d.id]: { ...p[d.id], push: body?.status
+        ? body
+        : { available: false, status: 'unavailable', message: 'No se pudo verificar el estado PUSH.' } } }))
     }
     setBusy(d.id, '')
   }
@@ -756,27 +760,28 @@ function RelojesTab() {
                           </button>
                         </div>
 
-                        {data.push && !data.push.error && (
+                        {data.push?.available && (
                           <div className={`w-full mt-2 p-3 rounded-xl border text-left text-xs ${
-                            data.push.pushActive ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                                                 : 'bg-amber-50 border-amber-200 text-amber-800'
+                            data.push.status === 'online' ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                                                          : 'bg-amber-50 border-amber-200 text-amber-800'
                           }`}>
-                            <p className="font-semibold">
-                              {data.push.pushActive ? '✅ PUSH ADMS activo' : '⚠ PUSH ADMS sin actividad reciente'}
-                            </p>
-                            <p className="mt-1">SN: {data.push.sn || '—'}</p>
-                            <p>Último heartbeat: {data.push.lastSeen ? new Date(data.push.lastSeen).toLocaleString() : 'nunca'}</p>
-                            <p>Último marcaje PUSH: {data.push.lastPunch ? new Date(data.push.lastPunch).toLocaleString() : 'nunca'}</p>
-                            {!data.push.pushActive && (
+                            <p className="font-semibold">{PUSH_STATUS_LABEL[data.push.status] || data.push.status}</p>
+                            <p className="mt-1">SN: {data.push.serial || '—'}</p>
+                            <p>Último contacto: {data.push.last_push_at ? new Date(data.push.last_push_at).toLocaleString() : 'nunca'}</p>
+                            <p>Último marcaje PUSH: {data.push.last_event_at ? new Date(data.push.last_event_at).toLocaleString() : 'nunca'}</p>
+                            {data.push.status !== 'online' && (
                               <p className="mt-2 text-amber-700">
                                 Configure el reloj: Menú → Comm → Cloud Server → IP del servidor SisHoras, puerto 8080, y reinicie el reloj.
                               </p>
                             )}
                           </div>
                         )}
-                        {data.push?.error && (
+                        {data.push && data.push.available === false && (
                           <div className="w-full mt-2 p-3 bg-red-50 border border-red-200 rounded-xl text-left text-xs text-red-700">
-                            {data.push.error}
+                            <p>{data.push.message || 'No se pudo verificar el estado PUSH.'}</p>
+                            {data.push.correlation_id && (
+                              <p className="mt-1 text-red-500">Referencia: {data.push.correlation_id}</p>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1244,6 +1249,13 @@ function ApiTab() {
       </div>
     </div>
   )
+}
+
+const PUSH_STATUS_LABEL: Record<string, string> = {
+  online:     '✅ PUSH ADMS activo',
+  stale:      '⚠ PUSH ADMS sin actividad reciente',
+  never_seen: '⚠ El reloj nunca envió datos por PUSH',
+  unavailable:'⚠ No se pudo verificar',
 }
 
 export default function ConfiguracionPage() {
