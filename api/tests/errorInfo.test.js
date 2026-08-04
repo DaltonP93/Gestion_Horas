@@ -294,3 +294,28 @@ describe('secretos en JSON (hallazgo de Codex)', () => {
     expect(JSON.stringify(s)).not.toContain('eyJhbG.eyJzdWI.firma');
   });
 });
+
+describe('nombres OAuth en el redactor', () => {
+  test('las variantes camelCase y snake_case de token se redactan', () => {
+    const t = redactSecrets('HTTP 401: {"accessToken":"AAA","refreshToken":"BBB","id_token":"CCC","access_token":"DDD"}');
+
+    for (const v of ['AAA', 'BBB', 'CCC', 'DDD']) expect(t).not.toContain(v);
+  });
+
+  test('clientSecret, apiKey y privateKey', () => {
+    const t = redactSecrets('{"clientSecret":"S1","apiKey":"S2","privateKey":"S3","sessionToken":"S4"}');
+    for (const v of ['S1', 'S2', 'S3', 'S4']) expect(t).not.toContain(v);
+  });
+
+  test('los campos inocentes siguen visibles', () => {
+    const t = redactSecrets('{"status":"error","user":"juan","tokenCount":3}');
+    expect(t).toContain('"status"');
+    expect(t).toContain('juan');
+  });
+
+  test('el redactor no se cuelga con un cuerpo largo', () => {
+    const t0 = Date.now();
+    redactSecrets('x'.repeat(50000) + '{"accessToken":"AAA"}');
+    expect(Date.now() - t0).toBeLessThan(1000);
+  });
+});

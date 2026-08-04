@@ -16,7 +16,11 @@ const MAX_STACK_FRAMES = 8;
 const MAX_CAUSE_DEPTH = 3;
 
 // Claves cuyo valor nunca se serializa, venga de donde venga.
-const SECRET_KEY_RE = /(pass(word)?|pwd|secret|token|jwt|authorization|auth|api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|credential|cookie|session[_-]?id)/i;
+// Nombres de campo cuyo valor nunca se serializa. Incluye las variantes
+// OAuth en camelCase y snake_case (accessToken, refresh_token, id_token…):
+// `token` a secas no las cubría, y hrSourceSync mete el cuerpo de la
+// respuesta externa en el mensaje del error.
+const SECRET_KEY_RE = /((?:access|refresh|id|bearer|auth|api|secret|private|client|session|csrf|xsrf)[_-]?(?:token|key|secret)|(?:token|key|secret|password|pwd|credential)s?|pass(word)?|jwt|authorization|auth|cookie|session[_-]?id|[a-z]+[_-]?token)/i;
 
 // Campos que arrastran SQL, payloads o credenciales completas.
 const NEVER_SERIALIZE = new Set([
