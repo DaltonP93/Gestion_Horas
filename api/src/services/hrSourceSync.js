@@ -13,6 +13,8 @@
  */
 
 const cron = require('node-cron');
+const { cronCallback } = require('../utils/cronRunner');
+const { serializeError, safeErrorCode } = require('../utils/errorInfo');
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 
@@ -243,14 +245,21 @@ async function loadHrSchedules() {
         logger.warn(`Cron inválido para fuente "${row.name}": ${row.schedule_cron}`);
         continue;
       }
-      const task = cron.schedule(row.schedule_cron, () => {
-        runSync(row.id).catch(e => logger.error(`Cron HR ${row.id} error:`, e.message));
-      });
+      const task = cron.schedule(row.schedule_cron, cronCallback(
+        `hr_sync_${row.id}`,
+        () => runSync(row.id),
+        { meta: { source_id: row.id, cron: row.schedule_cron } }
+      ));
       _jobs.set(row.id, task);
       logger.info(`📅 Sync HR "${row.name}" programado: ${row.schedule_cron}`);
     }
   } catch (err) {
-    logger.error('Error cargando schedules HR:', err.message);
+    logger.error('Error cargando schedules HR', {
+      job: 'hr_schedules_load',
+      result: 'error',
+      error_code: safeErrorCode(err),
+      error: serializeError(err, { stage: 'load_schedules' }),
+    });
   }
 }
 
@@ -267,9 +276,11 @@ async function reloadSchedule(sourceId) {
   );
   if (!row || !row.enabled || !row.schedule_cron) return;
   if (!cron.validate(row.schedule_cron)) return;
-  const task = cron.schedule(row.schedule_cron, () => {
-    runSync(row.id).catch(e => logger.error(`Cron HR ${row.id} error:`, e.message));
-  });
+  const task = cron.schedule(row.schedule_cron, cronCallback(
+    `hr_sync_${row.id}`,
+    () => runSync(row.id),
+    { meta: { source_id: row.id, cron: row.schedule_cron } }
+  ));
   _jobs.set(row.id, task);
 }
 

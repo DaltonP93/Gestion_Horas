@@ -8,6 +8,8 @@
  */
 
 const cron = require('node-cron');
+const { cronCallback } = require('../utils/cronRunner');
+const { serializeError, safeErrorCode } = require('../utils/errorInfo');
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 
@@ -101,12 +103,13 @@ function startReconciliationCron() {
   if (!expr) return;
   if (_job) _job.stop();
   try {
-    _job = cron.schedule(expr, () => {
-      runReconciliation().catch(err => logger.error('Reconciliation job error:', err.message));
-    });
+    _job = cron.schedule(expr, cronCallback('reconciliacion', () => runReconciliation()));
     logger.info(`📅 Cron reconciliación activo: ${expr}`);
   } catch (err) {
-    logger.error('No se pudo registrar RECONCILIATION_CRON:', err.message);
+    logger.error('No se pudo registrar RECONCILIATION_CRON', {
+      job: 'reconciliacion', result: 'error',
+      error_code: safeErrorCode(err), error: serializeError(err, { stage: 'register' }),
+    });
   }
 }
 
