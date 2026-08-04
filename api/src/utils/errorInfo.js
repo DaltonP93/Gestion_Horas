@@ -148,9 +148,11 @@ function serializeError(err, opts = {}) {
     return { name: 'NoError', message: '(sin error)', error_code: 'UNKNOWN_ERROR', ...(stage ? { stage } : {}) };
   }
   if (typeof err !== 'object') {
+    // `strict` viene heredado del padre: una causa primitiva de un error de
+    // base ("Duplicate entry 'x@y.com'…") necesita la misma redacción dura.
     return {
       name: typeof err,
-      message: truncate(redactSecrets(err)),
+      message: truncate((strict ? redactStrict : redactSecrets)(err)),
       error_code: 'NON_ERROR_THROWN',
       ...(stage ? { stage } : {}),
     };

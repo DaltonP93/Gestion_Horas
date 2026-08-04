@@ -250,3 +250,23 @@ describe('errores de base: redacción dura también en message', () => {
     expect(isDbShaped(null)).toBe(false);
   });
 });
+
+describe('segunda tanda de Codex', () => {
+  test('una causa primitiva hereda la redacción dura del padre', () => {
+    const err = Object.assign(new Error('no se pudo guardar'), {
+      name: 'SequelizeUniqueConstraintError',
+      sqlState: '23000',
+      cause: "Duplicate entry 'secreto@ejemplo.com' for key 'employees.email'",
+    });
+    const json = JSON.stringify(serializeError(err));
+
+    expect(json).not.toContain('secreto@ejemplo.com');
+    expect(json).toContain('Duplicate entry');
+  });
+
+  test('una causa primitiva de un error normal NO se sobre-redacta', () => {
+    const err = new Error('falló el bridge');
+    err.cause = 'timeout contra 127.0.0.1:8081';
+    expect(JSON.stringify(serializeError(err))).toContain('127.0.0.1:8081');
+  });
+});

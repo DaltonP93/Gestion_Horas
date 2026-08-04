@@ -207,3 +207,25 @@ describe('jobs que no lanzan y devuelven el error', () => {
     expect(r.processed).toBe(4);
   });
 });
+
+describe('cantidad procesada del sync HR', () => {
+  test('una importación que sólo crea no queda en processed: 0', async () => {
+    // runSync() devuelve { created, updated, skipped, errors, total }.
+    const r = await runJob('hr_sync_1', async () => ({
+      created: 10, updated: 0, skipped: 2, errors: [], total: 12,
+    }));
+
+    expect(r.processed).toBe(12);
+  });
+
+  test('processed: 0 legítimo se conserva', async () => {
+    const r = await runJob('hr_sync_2', async () => ({ created: 0, updated: 0, total: 0 }));
+    expect(r.processed).toBe(0);
+    expect(r.ok).toBe(true);
+  });
+
+  test('sin total, cae a los parciales', async () => {
+    expect((await runJob('a2', async () => ({ sent: 5 }))).processed).toBe(5);
+    expect((await runJob('b2', async () => ({ created: 7 }))).processed).toBe(7);
+  });
+});

@@ -35,7 +35,10 @@ function resultError(result) {
 function extractProcessed(result) {
   if (typeof result === 'number' && Number.isFinite(result)) return result;
   if (result && typeof result === 'object') {
-    for (const k of ['processed', 'count', 'sent', 'imported', 'removed', 'updated', 'total']) {
+    // `total` va antes que los parciales: runSync() devuelve
+    // { created, updated, skipped, errors, total }, y una importación que crea
+    // 10 empleados sin actualizar ninguno quedaba registrada como processed: 0.
+    for (const k of ['processed', 'total', 'count', 'sent', 'imported', 'created', 'removed', 'updated']) {
       if (typeof result[k] === 'number' && Number.isFinite(result[k])) return result[k];
     }
   }
