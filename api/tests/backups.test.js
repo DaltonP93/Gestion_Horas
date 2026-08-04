@@ -368,9 +368,7 @@ describe('sanitización', () => {
 
     expect(limpio).not.toContain('sishoras');
     expect(limpio).not.toContain('10.20.30.40');
-    expect(limpio).toContain('"***"');                 // el literal entero se va
-    expect(limpio).toContain('1045');                  // el código sí sirve
-    expect(limpio).toContain('when trying to connect');
+    expect(limpio).toBe("mysqldump: Got error: 1045: '***'");   // queda el código
   });
 
   test('descarta contenido SQL y contraseñas', () => {
@@ -395,6 +393,7 @@ describe('sanitización', () => {
     expect(limpio).not.toContain('db-prod.interna.sishoras');
     expect(limpio).toContain('2005');                  // el código sobrevive
     expect(limpio).toContain('Unknown MySQL server host');
+    expect(limpio.endsWith("'***'")).toBe(true);
   });
 
   test('no filtra el SQL de un error de ejecución', () => {
@@ -406,7 +405,32 @@ describe('sanitización', () => {
     expect(limpio).not.toContain('SHOW FIELDS');
     expect(limpio).not.toContain('empleados');
     expect(limpio).not.toContain('1234567');
-    expect(limpio).toContain('1146');
+    expect(limpio).toContain("Couldn't execute");      // el apóstrofo no corta acá
+  });
+
+  test('comillas anidadas no dejan fragmentos (MySQL bug #70907)', () => {
+    const svc = load();
+    // Emparejar comillas cerraba en la interna y dejaba escapar el
+    // identificador de la tabla.
+    const limpio = svc.sanitizeStderr(
+      "mysqldump: Couldn't execute 'show table status like 'uc\\_secreta%'': error"
+    );
+
+    expect(limpio).not.toContain('uc\\_secreta');
+    expect(limpio).not.toContain('show table status');
+    expect(limpio).toBe("mysqldump: Couldn't execute '***'");
+  });
+
+  test('una comilla en la primera línea no tapa el diagnóstico de la segunda', () => {
+    const svc = load();
+    const limpio = svc.sanitizeStderr([
+      "mysqldump: Got error: 2005: Unknown host 'db.interna'",
+      'mysqldump: Aborting dump on error 1',
+    ].join('\n'));
+
+    expect(limpio).not.toContain('db.interna');
+    expect(limpio).toContain('2005');
+    expect(limpio).toContain('Aborting dump on error 1');
   });
 
   test('sanitizePath deja sólo el nombre del archivo', () => {

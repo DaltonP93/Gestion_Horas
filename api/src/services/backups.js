@@ -99,7 +99,9 @@ function sanitizeStderr(raw) {
     .split(/\r?\n/)
     .filter(l => /^\s*(mysqldump:|gzip:|ERROR\b)/i.test(l));
   if (!lines.length) return '';
-  return redactQuoted(lines.join(' | '))
+  // El corte es POR LÍNEA: una comilla en la primera no puede tapar el
+  // diagnóstico de las siguientes.
+  return lines.map(redactQuoted).join(' | ')
     .replace(/\b(pass(word)?|pwd)\s*[=:]\s*\S+/gi, 'password=***')
     .replace(/\b\d{1,3}(\.\d{1,3}){3}\b/g, '***.***.***.***')
     .replace(/\s+/g, ' ')
@@ -107,38 +109,40 @@ function sanitizeStderr(raw) {
     .slice(0, STDERR_LOG_CHARS);
 }
 
-const QUOTED_PLACEHOLDER = "'***'";
-
 /**
  * Borra todo literal entrecomillado del texto de diagnóstico.
  *
  * mysqldump mete ahí justo lo que no puede salir en un log: 'usuario'@'host',
  * el hostname de «Unknown MySQL server host 'db.interna'» y el SQL entero de
  * «Couldn't execute 'SHOW FIELDS FROM ...'». Los códigos numéricos, que son
- * lo que sirve para diagnosticar, quedan intactos.
+ * lo que sirve para diagnosticar, quedan a la izquierda del corte.
  *
- * La comilla simple sólo abre literal si viene después de espacio o
- * puntuación: si no, el apóstrofo de "Couldn't" abriría un span falso y
- * dejaría el SQL a la vista.
+ * Se corta en la primera comilla de APERTURA en vez de emparejar comillas:
+ * MySQL las anida y las desbalancea con naturalidad —el bug #70907 produce
+ * `Couldn't execute 'show table status like 'uc\_%''`— y cualquier intento de
+ * emparejar cierra en la comilla interna y deja el identificador a la vista.
+ *
+ * La comilla simple no abre literal si es un apóstrofo entre letras, para que
+ * "Couldn't execute" no corte en la palabra equivocada.
  */
-function redactQuoted(text) {
-  let s = String(text)
-    .replace(/`[^`]*`/g, '`***`')
-    .replace(/"[^"]*"/g, '"***"')
-    .replace(/(^|[\s=(:,[])'[^']*'/g, `$1${QUOTED_PLACEHOLDER}`);
+function firstQuoteIndex(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"' || c === '`') return i;
+    if (c === "'") {
+      const prev = i > 0 ? s[i - 1] : '';
+      const next = i + 1 < s.length ? s[i + 1] : '';
+      const esApostrofo = /\p{L}/u.test(prev) && /\p{L}/u.test(next);
+      if (!esApostrofo) return i;
+    }
+  }
+  return -1;
+}
 
-  // Red de seguridad: si quedó una comilla sin pareja (un literal que contenía
-  // Red de seguridad: si quedó una comilla sin pareja (un literal que contenía
-  // un apóstrofo, por ejemplo), se corta ahí en vez de arriesgar la cola.
-  // Se enmascaran —conservando la longitud, para no correr los índices— los
-  // placeholders ya redactados y los apóstrofos de contracción ("Couldn't"),
-  // que no delimitan nada.
-  const masked = s
-    .replace(/(['"`])\*\*\*\1/g, ' '.repeat(QUOTED_PLACEHOLDER.length))
-    .replace(/(?<=\p{L})'(?=\p{L})/gu, ' ');
-  const lone = masked.search(/['"`]/);
-  if (lone !== -1) s = `${s.slice(0, lone).trimEnd()} …`;
-  return s;
+function redactQuoted(text) {
+  const s = String(text);
+  const q = firstQuoteIndex(s);
+  return q === -1 ? s : `${s.slice(0, q).trimEnd()} '***'`;
 }
 
 function classifyStreamError(err, stage) {
