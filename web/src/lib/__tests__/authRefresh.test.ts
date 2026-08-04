@@ -312,3 +312,71 @@ describe('navegación durante el refresh', () => {
     await expect(s.ensureFreshToken('viejo')).rejects.toBeInstanceOf(SessionLostError)
   })
 })
+
+// ── Tercera tanda de Codex ──────────────────────────────────────
+describe('cola de marcajes offline', () => {
+  const conCola = { ...sesionValida, sishoras_offline_punches: '[{"tipo":"in","lat":-25.3,"selfie":"…"}]' }
+
+  test('el cierre de sesión borra los marcajes pendientes', () => {
+    const { env, store } = makeEnv(conCola)
+    const s = createAuthSession(env, async () => ({ accessToken: 'x', refreshToken: 'y' }))
+
+    s.logout('salida manual')
+
+    // Si sobrevive, el próximo usuario del mismo navegador los enviaría
+    // bajo su cuenta cuando /marcar reintente la cola.
+    expect(store.has('sishoras_offline_punches')).toBe(false)
+    expect(store.get('sish_ui')).toBe('{"tema":"oscuro"}')   // las preferencias sí quedan
+  })
+
+  test('también se borran cuando la sesión se pierde sola', async () => {
+    const { env, store } = makeEnv(conCola)
+    const s = createAuthSession(env, async () => { throw new Error('401') })
+
+    await s.ensureFreshToken('viejo').catch(() => {})
+
+    expect(store.has('sishoras_offline_punches')).toBe(false)
+  })
+})
+
+describe('carrera entre pestañas', () => {
+  test('la pestaña que pierde no borra los tokens de la que ganó', async () => {
+    const { env, store, redirecciones } = makeEnv(sesionValida)
+    // Mientras esta pestaña pide, la otra rota el token y lo guarda.
+    const s = createAuthSession(env, async () => {
+      store.set('access_token', 'nuevoDeLaOtra')
+      store.set('refresh_token', 'r2')
+      throw new Error('401: refresh token ya consumido')
+    })
+
+    const token = await s.ensureFreshToken('viejo')
+
+    expect(token).toBe('nuevoDeLaOtra')      // se reusa lo que dejó la ganadora
+    expect(store.get('access_token')).toBe('nuevoDeLaOtra')
+    expect(redirecciones).toHaveLength(0)    // nadie cierra sesión
+    expect(s.isSessionLost).toBe(false)
+  })
+
+  test('si nadie rotó nada, el fallo sigue siendo terminal', async () => {
+    const { env, redirecciones } = makeEnv(sesionValida)
+    const s = createAuthSession(env, async () => { throw new Error('401') })
+
+    await expect(s.ensureFreshToken('viejo')).rejects.toBeInstanceOf(SessionLostError)
+    expect(redirecciones).toHaveLength(1)
+  })
+
+  test('un cierre explícito durante el fallo gana sobre el rescate', async () => {
+    const { env, store } = makeEnv(sesionValida)
+    const s = createAuthSession(env, async () => {
+      store.set('access_token', 'nuevoDeLaOtra')
+      throw new Error('401')
+    })
+
+    const p = s.ensureFreshToken('viejo')
+    s.logout('salida manual')
+    await p.catch(() => {})
+
+    expect(s.isSessionLost).toBe(true)
+    expect(store.has('access_token')).toBe(false)
+  })
+})

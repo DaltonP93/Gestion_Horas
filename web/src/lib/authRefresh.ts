@@ -25,8 +25,19 @@ export const PUBLIC_AUTH_PATHS = [
   '/api/auth/password/reset',
 ] as const
 
-/** Claves de sesión. Se limpian sólo éstas: las preferencias de UI sobreviven. */
-export const AUTH_KEYS = ['access_token', 'refresh_token', 'token', 'user'] as const
+/**
+ * Claves que se borran al cerrar sesión.
+ *
+ * Se limpian sólo éstas —las preferencias de UI (`sish_ui`, `sish_theme`)
+ * sobreviven—, pero la cola de marcajes offline TIENE que irse: contiene
+ * marcajes pendientes de una persona, con tipo, ubicación y a veces selfie.
+ * Si quedara, el siguiente usuario del mismo navegador los enviaría bajo su
+ * propia cuenta cuando /marcar reintente la cola.
+ */
+export const AUTH_KEYS = [
+  'access_token', 'refresh_token', 'token', 'user',
+  'sishoras_offline_punches',
+] as const
 
 export const AUTH_CHANNEL = 'sishoras-auth'
 
@@ -166,8 +177,17 @@ export function createAuthSession(
         return tokens.accessToken
       })
       .catch((err) => {
-        // Fallo definitivo: se cierra una vez y TODOS los que esperaban
-        // esta promesa reciben el rechazo.
+        // Antes de dar la sesión por perdida: otra PESTAÑA pudo haber rotado
+        // el token mientras esta petición viajaba. Cada pestaña tiene su
+        // propia promesa en vuelo, así que las dos pueden llamar al endpoint
+        // con el mismo refresh token; la que pierde recibe 401 por un token ya
+        // consumido. Cerrar sesión ahí borraría los tokens NUEVOS de la que
+        // ganó y echaría a todas las pestañas.
+        const actual = env.getItem('access_token')
+        const refrescoActual = env.getItem('refresh_token')
+        if (!sessionLost && actual && (actual !== tokenUsed || refrescoActual !== refreshToken)) {
+          return actual
+        }
         logout('refresh falló')
         throw err instanceof SessionLostError ? err : new SessionLostError('refresh falló')
       })
