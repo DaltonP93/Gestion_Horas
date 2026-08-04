@@ -453,3 +453,46 @@ describe('cuarta tanda de Codex', () => {
     expect(C.validateBatch(batch, { now: Date.parse('2026-08-04T12:00:00Z') }).ok).toBe(true);
   });
 });
+
+describe('la documentación no puede desincronizarse del módulo', () => {
+  const DOC = fs.readFileSync(path.join(__dirname, '..', '..', 'docs', 'punch-contract-v1.md'), 'utf8');
+
+  test('todos los códigos de rechazo están documentados', () => {
+    // Durante el desarrollo de este contrato la doc quedó tres veces
+    // afirmando lo contrario del código. Esto lo vuelve detectable.
+    const faltantes = Object.values(C.REJECT_CODES).filter(c => !DOC.includes(c));
+    expect(faltantes).toEqual([]);
+  });
+
+  test('la doc no inventa códigos que el módulo no tiene', () => {
+    // PUNCH_CONTRACT_V1_ENABLED es el feature flag, no un código de rechazo.
+    const enDoc = (DOC.match(/PUNCH_[A-Z0-9_]+/g) || [])
+      .filter(c => !c.startsWith('PUNCH_CONTRACT_'));
+    const reales = new Set(Object.values(C.REJECT_CODES));
+    expect([...new Set(enDoc)].filter(c => !reales.has(c))).toEqual([]);
+  });
+
+  test('los límites documentados son los del módulo', () => {
+    expect(DOC).toContain(String(C.LIMITS.MAX_EVENTS_PER_BATCH));
+    expect(DOC).toContain('256 KB');
+    expect(C.LIMITS.MAX_BATCH_BYTES).toBe(256 * 1024);
+    expect(DOC).toContain(`${C.LIMITS.MAX_DEVICE_USER_ID} caracteres`);
+    expect(DOC).toContain(`${C.LIMITS.MAX_WORK_CODE} caracteres`);
+  });
+
+  test('la fórmula documentada del event_id es la real', () => {
+    const campos = C.canonicalString({
+      device_id: 1, device_user_id: '42',
+      occurred_at: '2026-08-04T10:15:03Z', event_type: 'in',
+    }).split(C.FIELD_SEP).length - 1;
+    const enDoc = (DOC.match(/sha256\( "sishoras\.punch\.v1"([^)]*)\)/) || [, ''])[1];
+    // Se extraen los nombres de campo en vez de partir por el glifo separador,
+    // que en el documento es decorativo y no el U+001F real.
+    const nombres = enDoc.match(/[a-z_]+/g) || [];
+
+    expect(nombres).toHaveLength(campos);
+    // Y que no mencione los atributos como parte del hash.
+    expect(enDoc).not.toContain('verify_mode');
+    expect(enDoc).not.toContain('work_code');
+  });
+});

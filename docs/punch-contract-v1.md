@@ -33,7 +33,8 @@ Con un `event_id` determinista, la idempotencia deja de depender del estado: el 
 
 ```json
 {
-  "event_id": "sha256:8f8977aa…",
+  "event_id": "sha256:f2b8432a…",
+  "device_id": 1,
   "device_user_id": "42",
   "occurred_at": "2026-08-04T10:15:03Z",
   "event_type": "in",
@@ -41,6 +42,8 @@ Con un `event_id` determinista, la idempotencia deja de depender del estado: el 
   "work_code": null
 }
 ```
+
+`device_id` puede omitirse en el evento y heredarse del lote, pero **no puede contradecirlo**: un evento que declare otro reloj se rechaza.
 
 ## Normalización determinista
 
@@ -135,12 +138,15 @@ Dos marcajes que difieran **sólo** en `verify_mode` o `work_code` **colapsan**,
 | Tamaño sin comprimir | 256 KB |
 | `device_user_id` | 64 caracteres |
 | `work_code` | 32 caracteres |
+| `batch_id` / `bridge_id` | 64 caracteres |
 | Margen hacia el futuro | 5 min |
 | Antigüedad máxima | ~13 meses |
 
 ### Motivos de rechazo
 
-`PUNCH_UNSUPPORTED_VERSION`, `PUNCH_BATCH_EMPTY`, `PUNCH_BATCH_TOO_LARGE`, `PUNCH_BATCH_TOO_MANY_EVENTS`, `PUNCH_DEVICE_ID_INVALID`, `PUNCH_USER_ID_INVALID`, `PUNCH_TIMESTAMP_INVALID`, `PUNCH_TIMESTAMP_FUTURE`, `PUNCH_TIMESTAMP_TOO_OLD`, `PUNCH_EVENT_TYPE_INVALID`, `PUNCH_VERIFY_MODE_INVALID`, `PUNCH_WORK_CODE_INVALID`, `PUNCH_EVENT_ID_MISMATCH`, `PUNCH_SEPARATOR_IN_VALUE`.
+`PUNCH_UNSUPPORTED_VERSION`, `PUNCH_BATCH_NOT_OBJECT`, `PUNCH_BATCH_EMPTY`, `PUNCH_BATCH_TOO_LARGE`, `PUNCH_BATCH_TOO_MANY_EVENTS`, `PUNCH_BATCH_ID_INVALID`, `PUNCH_BRIDGE_ID_INVALID`, `PUNCH_DEVICE_ID_INVALID`, `PUNCH_GENERATED_AT_INVALID`, `PUNCH_EVENT_NOT_OBJECT`, `PUNCH_USER_ID_INVALID`, `PUNCH_TIMESTAMP_INVALID`, `PUNCH_TIMESTAMP_FUTURE`, `PUNCH_TIMESTAMP_TOO_OLD`, `PUNCH_EVENT_TYPE_INVALID`, `PUNCH_VERIFY_MODE_INVALID`, `PUNCH_WORK_CODE_INVALID`, `PUNCH_EVENT_ID_MISMATCH`, `PUNCH_SEPARATOR_IN_VALUE`.
+
+> Esta lista y la tabla de límites las verifica un test contra el módulo: la documentación de este contrato se desincronizó tres veces durante su desarrollo, y una regla que el código no cumple es peor que no escribirla.
 
 El validador **recalcula cada `event_id`** y exige que coincida con el declarado. Si el emisor normalizó distinto —por ejemplo, quitando los ceros a la izquierda o dejando un `work_code` vacío en vez de `null`— es mejor rechazar el lote que aceptar identificadores que romperían la idempotencia río abajo.
 
