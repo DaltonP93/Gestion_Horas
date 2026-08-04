@@ -325,7 +325,14 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       err = e?.message || String(e);
     }
     attemptsRun++;
-    const payload = err ? { bytes: 0, estimated: false } : netMetrics.estimateBytes(logs);
+    // La instrumentación nunca puede tumbar la lectura: si medir falla, se
+    // pierde la métrica de ese intento, no el intento. Esta línea está fuera
+    // del try/catch de la lectura, así que necesita el suyo.
+    let payload = { bytes: 0, estimated: false };
+    if (!err) {
+      try { payload = netMetrics.estimateBytes(logs); }
+      catch { payload = { bytes: 0, estimated: true }; }
+    }
     const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
       : scoreOf(logs, truncated);
     detail.push({
@@ -449,7 +456,12 @@ async function buildEmployeeMatcher() {
 // Registra una lectura de reloj en device_sync_runs (auditoría). No dry-run.
 // Best-effort: nunca debe tumbar la lectura.
 async function recordSyncRun(device, { startedAt, report = null, error = null, opts = {}, sanitizeErr }) {
-  const lockOrigin = (opts.lock && typeof opts.lock === 'object') ? opts.lock.origin : null;
+  // Mismo default que usa el lock al adquirirse (origin: 'direct'): sin esto,
+  // toda lectura que no declare metadata — POST /backup-all, los scripts —
+  // guardaba mode NULL y desaparecía del agregado por modo.
+  const lockOrigin = opts.lock === false
+    ? null
+    : (((opts.lock && typeof opts.lock === 'object' && opts.lock.origin) || 'direct'));
   try {
     if (!(await tableExists('device_sync_runs'))) return;
     const now = new Date();
@@ -486,7 +498,20 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     // attempts_requested = los pedidos. Antes `attempts` guardaba los pedidos.
     const executed = report?.read_attempts_detail?.length || (report ? 1 : (opts.attempts || 1));
     const requested = opts.attempts || executed;
-    const detailJson = report?.read_attempts_detail?.length ? JSON.stringify(report.read_attempts_detail).slice(0, 4000) : null;
+    // El detalle va a una columna JSON: cortar el string a 4000 caracteres
+    // deja JSON inválido y el INSERT falla, perdiendo TODA la fila de
+    // auditoría (el catch de más abajo lo silencia). Se recortan elementos,
+    // no caracteres, conservando los últimos intentos, que son los que
+    // explican el resultado final.
+    const detailJson = (() => {
+      const all = report?.read_attempts_detail;
+      if (!all?.length) return null;
+      for (let keep = all.length; keep > 0; keep--) {
+        const json = JSON.stringify(all.slice(-keep));
+        if (json.length <= 4000) return json;
+      }
+      return null;
+    })();
     const extraCols = await getExistingColumns('device_sync_runs',
       ['attempts_detail', 'attempts_requested', 'retry_count',
        'mode', 'bytes_from_device', 'bytes_estimated', 'error_code']);
@@ -501,7 +526,7 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
       report?.total_read || 0, report?.valid || 0, report?.in_range || 0,
       report?.imported || 0, report?.skipped || 0, report?.notFound || 0, report?.junk || 0,
       report?.first_valid || null, report?.last_valid || null,
-      executed, report?.duration_ms ?? (now - startedAt),
+      executed, (report?.duration_ms > 0 ? report.duration_ms : (now - startedAt)),
       opts.from || null, opts.to || null, errMsg, opts.createdBy || null,
     ];
     if (hasReqCol) { cols.push('attempts_requested'); vals.push(requested); }
@@ -570,12 +595,21 @@ async function backupDeviceDirect(device, opts = {}) {
     if (renewTimer.unref) renewTimer.unref();
   }
 
+  // El informe se expone por referencia para que siga disponible aunque la
+  // corrida termine lanzando: si la lectura ya bajó el buffer y lo que falla
+  // después es la persistencia o el recálculo, la red YA se consumió. Sin
+  // esto, esas corridas quedaban con raw_count y bytes en 0 y la línea base
+  // subestimaba justo los casos más caros.
+  const parcial = {};
   try {
-    const report = await _backupDeviceDirectImpl(device, opts);
+    const report = await _backupDeviceDirectImpl(device, opts, parcial);
     if (!opts.dryRun) await recordSyncRun(device, { startedAt, report, opts });
     return report;
   } catch (err) {
-    if (!opts.dryRun) await recordSyncRun(device, { startedAt, error: err, opts });
+    // Sólo si hubo lectura: si falló antes de leer, el informe está vacío y
+    // registrarlo sería inventar una corrida con contadores en cero.
+    const leido = parcial.report?.read_attempts_detail?.length ? parcial.report : null;
+    if (!opts.dryRun) await recordSyncRun(device, { startedAt, report: leido, error: err, opts });
     throw err;
   } finally {
     // Liberar SIEMPRE el lock del reloj (aunque falle la persistencia/recálculo)
@@ -590,7 +624,7 @@ async function backupDeviceDirect(device, opts = {}) {
   }
 }
 
-async function _backupDeviceDirectImpl(device, opts = {}) {
+async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1, cooldownMs = 0 } = opts;
   const t0 = Date.now();
   const report = {
@@ -605,6 +639,9 @@ async function _backupDeviceDirectImpl(device, opts = {}) {
     duration_ms: 0, sample: [], debug: null,
     retry_count: 0,
   };
+  // Referencia viva para el llamador (ver backupDeviceDirect): permite auditar
+  // lo ya leído aunque esta función termine lanzando.
+  out.report = report;
 
   // Contexto de instrumentación por fase (job/device/run). sync_run_id se
   // conoce recién al registrar la corrida; aquí puede ir nulo.
