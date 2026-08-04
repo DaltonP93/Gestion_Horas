@@ -478,6 +478,7 @@ function startAtt2000PullCron() {
             logger.warn(`bulkRecalc ${date}: ${e.message}`);
           }
         }
+        return result;   // { imported, skipped, notFound, total } → processed
       } catch (err) {
         recordRun({ source: 'auto', ok: false, error: err.message });
         throw err;   // el runner lo registra con código y detalle seguros
