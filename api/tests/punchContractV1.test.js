@@ -434,11 +434,15 @@ describe('cuarta tanda de Codex', () => {
     // Sin esto, un lote de device_id 1 con un evento de device_id 2 —y su
     // hash consistente— pasaba, y quien confiara en el reloj del lote habría
     // atribuido el marcaje al equipo equivocado.
-    const { batch } = C.buildBatch({
-      bridge_id: 'b', device_id: 1,
-      events: [{ device_id: 2, device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
-    });
-    batch.device_id = 1;
+    // Se arma a mano: buildBatch ya no lo emite, y el caso real es un lote
+    // recibido de otro emisor.
+    const evento = C.buildEvent({
+      device_id: 2, device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in',
+    }).event;
+    const batch = {
+      schema_version: 1, batch_id: 'b-x', bridge_id: 'b', device_id: 1,
+      generated_at: '2026-08-04T11:00:00Z', events: [evento],
+    };
 
     const r = C.validateBatch(batch, { now: Date.parse('2026-08-04T12:00:00Z') });
     expect(r.error_code).toBe(C.REJECT_CODES.DEVICE_ID_INVALID);
@@ -494,5 +498,60 @@ describe('la documentación no puede desincronizarse del módulo', () => {
     // Y que no mencione los atributos como parte del hash.
     expect(enDoc).not.toContain('verify_mode');
     expect(enDoc).not.toContain('work_code');
+  });
+});
+
+describe('quinta tanda de Codex', () => {
+  test('Number es demasiado generoso para un device_id', () => {
+    // true→1, [1]→1, '0x10'→16, '1e2'→100: todos habrían pasado por relojes
+    // reales, con un event_id calculado para otro.
+    for (const malo of [true, false, [1], '0x10', '1e2', '  ', {}, [], '1.0', '+1']) {
+      expect(C.buildEvent({ ...base, device_id: malo }).error_code)
+        .toBe(C.REJECT_CODES.DEVICE_ID_INVALID);
+    }
+  });
+
+  test('un device_id legítimo sigue pasando, como número o string decimal', () => {
+    expect(C.buildEvent({ ...base, device_id: 7 }).event.device_id).toBe(7);
+    expect(C.buildEvent({ ...base, device_id: '7' }).event.device_id).toBe(7);
+    expect(C.buildEvent({ ...base, device_id: '07' }).event.device_id).toBe(7);
+  });
+
+  test('un device_id coercionable no cuela por el validador de lotes', () => {
+    const { batch } = C.buildBatch({
+      bridge_id: 'b', device_id: 1,
+      events: [{ device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
+    });
+    batch.device_id = true;   // hash calculado para el reloj 1
+
+    expect(C.validateBatch(batch, { now: Date.parse('2026-08-04T12:00:00Z') }).error_code)
+      .toBe(C.REJECT_CODES.DEVICE_ID_INVALID);
+  });
+
+  test('buildBatch no emite un lote que el propio contrato rechazaría', () => {
+    // Antes devolvía ok: true hasheando el evento con SU reloj mientras el
+    // lote declaraba otro; el validador del otro lado lo rechazaba.
+    const r = C.buildBatch({
+      bridge_id: 'b', device_id: 1,
+      events: [{ device_id: 2, device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
+    });
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(C.REJECT_CODES.DEVICE_ID_INVALID);
+    expect(r.index).toBe(0);
+  });
+
+  test('todo lo que buildBatch acepta, validateBatch lo valida', () => {
+    // La propiedad que importa: productor y consumidor no pueden discrepar.
+    const r = C.buildBatch({
+      bridge_id: 'b', device_id: 3,
+      events: [
+        { device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in', verify_mode: '  ' },
+        { device_id: 3, device_user_id: '0042', occurred_at: '2026-08-04 07:20:00', event_type: 'out', work_code: ' OBRA ' },
+      ],
+    });
+
+    expect(r.ok).toBe(true);
+    expect(C.validateBatch(r.batch, { now: Date.parse('2026-08-04T12:00:00Z') }).ok).toBe(true);
   });
 });

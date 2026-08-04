@@ -43,7 +43,9 @@ Con un `event_id` determinista, la idempotencia deja de depender del estado: el 
 }
 ```
 
-`device_id` puede omitirse en el evento y heredarse del lote, pero **no puede contradecirlo**: un evento que declare otro reloj se rechaza.
+**Un lote pertenece a un solo reloj.** `device_id` puede omitirse en el evento y heredarse del lote, pero **no puede contradecirlo**: un evento que declare otro reloj se rechaza, tanto al construir el lote como al validarlo. Un bridge con varios relojes emite un lote por reloj.
+
+El identificador de reloj debe ser un entero positivo o su string decimal. `true`, `[1]`, `'0x10'` y `'1e2'` se rechazan: `Number` los convertiría en enteros positivos y habrían pasado por relojes reales.
 
 ## Normalización determinista
 

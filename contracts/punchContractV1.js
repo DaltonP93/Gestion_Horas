@@ -309,19 +309,46 @@ function buildEvent(input = {}, opts = {}) {
   return { ok: true, event: { event_id: computeEventId(evento), ...evento } };
 }
 
+/**
+ * Identificador de reloj: entero positivo, o el string decimal que lo
+ * representa. Nada más.
+ *
+ * `Number` es demasiado generoso para esto: convierte `true` en 1, `[1]` en 1,
+ * `'0x10'` en 16 y `'1e2'` en 100. Cualquiera de esos habría pasado como un
+ * reloj real, y con un event_id calculado para otro.
+ */
 function toDeviceId(v) {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(v);
+  if (typeof v === 'number') return Number.isInteger(v) && v > 0 ? v : null;
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 // ── Lote ─────────────────────────────────────────────────────────
 
+/**
+ * Un lote pertenece a UN reloj. Si un evento declara otro, se rechaza acá en
+ * vez de dejar que el productor emita un lote que este mismo contrato va a
+ * rechazar del otro lado.
+ */
 function buildBatch({ bridge_id, device_id, events = [], batch_id, generated_at } = {}, opts = {}) {
+  const delLote = toDeviceId(device_id);
   const construidos = [];
-  for (const e of events) {
-    const r = buildEvent(e, { ...opts, device_id: e.device_id ?? device_id });
-    if (!r.ok) return r;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    const propio = e && e.device_id !== undefined ? toDeviceId(e.device_id) : null;
+    if (delLote !== null && propio !== null && propio !== delLote) {
+      return {
+        ok: false,
+        error_code: REJECT_CODES.DEVICE_ID_INVALID,
+        detail: 'el evento declara un reloj distinto al del lote',
+        index: i,
+      };
+    }
+    const r = buildEvent(e, { ...opts, device_id: e && e.device_id !== undefined ? e.device_id : device_id });
+    if (!r.ok) return { ...r, index: i };
     construidos.push(r.event);
   }
   return {
