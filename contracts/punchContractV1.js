@@ -87,16 +87,25 @@ const CANONICAL_PREFIX = 'sishoras.punch.v1';
 // ── Normalización ────────────────────────────────────────────────
 
 /**
- * Normaliza el identificador de usuario del reloj.
- * - NFC + trim (un reloj puede mandar espacios de relleno)
- * - los ceros a la izquierda se quitan SÓLO si el valor es puramente numérico:
- *   "0042" y "42" son el mismo empleado, pero "007A" es un código propio.
+ * Normaliza el identificador de usuario del reloj: NFC + trim, y nada más.
+ *
+ * Los ceros a la izquierda se CONSERVAN por defecto. La tentación es quitarlos
+ * —"0042" y "42" parecen el mismo empleado— pero el sistema ya trata este
+ * campo como string exacto: `employee_device_map.device_user_id` se compara
+ * con el valor trimeado tal cual (`zktecoReader.js`), así que "0042" y "42"
+ * son DOS asignaciones distintas. Unificarlos acá colapsaría los marcajes de
+ * dos personas en un solo event_id, que es exactamente el fallo que este
+ * contrato existe para evitar.
+ *
+ * Si un despliegue confirma que su reloj rellena con ceros el mismo id, puede
+ * activarse con `stripLeadingZeros: true` — pero es una decisión por
+ * instalación, no un default.
  */
-function normalizeDeviceUserId(raw) {
+function normalizeDeviceUserId(raw, { stripLeadingZeros = false } = {}) {
   if (raw === null || raw === undefined) return null;
   const s = String(raw).normalize('NFC').trim();
   if (!s) return null;
-  if (/^\d+$/.test(s)) {
+  if (stripLeadingZeros && /^\d+$/.test(s)) {
     const sinCeros = s.replace(/^0+/, '');
     return sinCeros === '' ? '0' : sinCeros;
   }
@@ -146,6 +155,10 @@ function normalizeTimestamp(raw, { assumeOffsetMinutes = CIVIL_OFFSET_MINUTES } 
 
   const conOffset = ISO_CON_OFFSET.exec(s);
   if (conOffset) {
+    // Date.parse "arregla" fechas imposibles: 2026-02-31 se convierte en
+    // 2026-03-03 sin avisar, y el marcaje cambiaría de día antes de hashearse.
+    const [, y, mo, d, h, mi, sec] = conOffset;
+    if (!fechaCivilValida(+y, +mo, +d, +h, +mi, sec ? +sec : 0)) return null;
     const ms = Date.parse(normalizarTextoIso(s));
     return Number.isNaN(ms) ? null : truncarASegundo(ms);
   }
@@ -228,7 +241,7 @@ function buildEvent(input = {}, opts = {}) {
   const device_id = toDeviceId(input.device_id ?? opts.device_id);
   if (device_id === null) return { ok: false, error_code: REJECT_CODES.DEVICE_ID_INVALID };
 
-  const device_user_id = normalizeDeviceUserId(input.device_user_id ?? input.userId ?? input.employeeCode);
+  const device_user_id = normalizeDeviceUserId(input.device_user_id ?? input.userId ?? input.employeeCode, opts);
   if (!device_user_id) return { ok: false, error_code: REJECT_CODES.USER_ID_INVALID };
   if (device_user_id.length > LIMITS.MAX_DEVICE_USER_ID) {
     return { ok: false, error_code: REJECT_CODES.USER_ID_INVALID, detail: 'demasiado largo' };
@@ -344,9 +357,13 @@ function validateEvent(evento, { now = Date.now(), checkEventIds = true, batchDe
 
   const userId = normalizeString(evento.device_user_id);
   if (!userId || userId.length > LIMITS.MAX_DEVICE_USER_ID) return reject(REJECT_CODES.USER_ID_INVALID);
-  if (normalizeDeviceUserId(userId) !== userId) {
-    return reject(REJECT_CODES.USER_ID_INVALID, 'sin normalizar (ceros a la izquierda o espacios)');
+  if (userId !== evento.device_user_id) {
+    return reject(REJECT_CODES.USER_ID_INVALID, 'sin normalizar (espacios o forma Unicode)');
   }
+  // Un separador embebido permitiría fabricar dos eventos distintos con el
+  // mismo string canónico. buildEvent ya lo rechaza; acá también, porque un
+  // lote externo llega con su event_id ya calculado.
+  if (userId.includes(FIELD_SEP)) return reject(REJECT_CODES.SEPARATOR_IN_VALUE);
 
   const occurred = normalizeTimestamp(evento.occurred_at);
   if (!occurred) return reject(REJECT_CODES.TIMESTAMP_INVALID);
@@ -367,8 +384,17 @@ function validateEvent(evento, { now = Date.now(), checkEventIds = true, batchDe
   }
 
   const wc = evento.work_code;
-  if (wc !== null && wc !== undefined && (typeof wc !== 'string' || wc.length > LIMITS.MAX_WORK_CODE)) {
-    return reject(REJECT_CODES.WORK_CODE_INVALID);
+  if (wc !== null && wc !== undefined) {
+    if (typeof wc !== 'string' || wc.length > LIMITS.MAX_WORK_CODE) {
+      return reject(REJECT_CODES.WORK_CODE_INVALID);
+    }
+    // Debe venir ya canónico: buildEvent convierte '' y los espacios a null,
+    // así que aceptar aquí una variante daría DOS event_id válidos para el
+    // mismo marcaje según qué lado lo haya generado.
+    if (normalizeString(wc) !== wc) {
+      return reject(REJECT_CODES.WORK_CODE_INVALID, 'sin normalizar (vacío o espacios)');
+    }
+    if (wc.includes(FIELD_SEP)) return reject(REJECT_CODES.SEPARATOR_IN_VALUE);
   }
 
   if (checkEventIds) {

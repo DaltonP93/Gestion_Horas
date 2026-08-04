@@ -3,7 +3,7 @@
   "origen_push_attlog": {
     "_formato": "ZKTeco ADMS: userId \\t datetime \\t status \\t verify \\t workCode",
     "lineas": [
-      "0042\t2026-08-04 07:15:03\t0\t1\t",
+      "42\t2026-08-04 07:15:03\t0\t1\t",
       "42\t2026-08-04 12:02:11\t1\t1\t0",
       "1007\t2026-08-04 07:15:03\t0\t15\tOBRA-2"
     ],
@@ -15,7 +15,7 @@
     "_formato": "node-zklib: { userId, timestamp, state }",
     "registros": [
       { "userId": 42, "timestamp": "2026-08-04T07:15:03", "state": 0 },
-      { "userId": "0042", "timestamp": "2026-08-04 12:02:11", "state": 1 }
+      { "userId": "42", "timestamp": "2026-08-04 12:02:11", "state": 1 }
     ],
     "device_id": 1
   },
@@ -27,6 +27,7 @@
     ],
     "device_id": 1
   },
+  "_nota_ceros": "El relleno con ceros NO se quita: 42 y 0042 son identidades distintas, porque employee_device_map compara device_user_id como string exacto. Las tres formas de origen usan el mismo id a propósito.",
   "canonico_esperado": {
     "_nota": "Las tres formas de arriba, para el usuario 42 a las 07:15:03, deben producir exactamente este evento.",
     "device_id": 1,

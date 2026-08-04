@@ -94,7 +94,8 @@ describe('un lote de otro emisor no se acepta a ciegas', () => {
   test('un event_id calculado con otras reglas se rechaza', () => {
     const evento = eventoDesdeAttlog(FIXTURES.origen_push_attlog.lineas[0], 1).event;
     const { batch } = C.buildBatch({ bridge_id: 'b', device_id: 1, events: [evento] });
-    // Un emisor que no quitara los ceros a la izquierda calcularía otro hash.
+    // Un emisor que normalizara distinto (por ejemplo quitando los ceros a la
+    // izquierda) calcularía otro hash para el mismo marcaje.
     batch.events[0].event_id = C.computeEventId({ ...batch.events[0], device_user_id: '0042' });
 
     expect(C.validateBatch(batch, { now: AHORA }).error_code).toBe(C.REJECT_CODES.EVENT_ID_MISMATCH);

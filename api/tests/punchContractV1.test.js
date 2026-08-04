@@ -22,16 +22,25 @@ const base = {
 };
 
 describe('normalización determinista', () => {
-  test('los ceros a la izquierda de un id numérico no cambian la identidad', () => {
-    expect(C.normalizeDeviceUserId('0042')).toBe('42');
-    expect(C.normalizeDeviceUserId('  042  ')).toBe('42');
-    expect(C.normalizeDeviceUserId('0')).toBe('0');
-    expect(C.normalizeDeviceUserId('000')).toBe('0');
+  test('los ceros a la izquierda se CONSERVAN: son parte del identificador', () => {
+    // employee_device_map compara device_user_id como string exacto, así que
+    // "0042" y "42" son dos asignaciones distintas. Unificarlas acá colapsaría
+    // los marcajes de dos personas en un solo event_id.
+    expect(C.normalizeDeviceUserId('0042')).toBe('0042');
+    expect(C.normalizeDeviceUserId('  042  ')).toBe('042');
+    expect(C.normalizeDeviceUserId('007A')).toBe('007A');
   });
 
-  test('un id alfanumérico conserva sus ceros: es un código propio, no un número', () => {
-    expect(C.normalizeDeviceUserId('007A')).toBe('007A');
-    expect(C.normalizeDeviceUserId('EMP-0042')).toBe('EMP-0042');
+  test('"42" y "0042" no colapsan al mismo evento', () => {
+    const a = C.buildEvent({ ...base, device_user_id: '42' });
+    const b = C.buildEvent({ ...base, device_user_id: '0042' });
+    expect(a.event.event_id).not.toBe(b.event.event_id);
+  });
+
+  test('quitar los ceros es opt-in por instalación, no un default', () => {
+    expect(C.normalizeDeviceUserId('0042', { stripLeadingZeros: true })).toBe('42');
+    expect(C.normalizeDeviceUserId('000', { stripLeadingZeros: true })).toBe('0');
+    expect(C.normalizeDeviceUserId('007A', { stripLeadingZeros: true })).toBe('007A');
   });
 
   test('la hora sin offset se ancla a la zona civil, no a la del proceso', () => {
@@ -180,8 +189,8 @@ describe('las tres formas de origen convergen', () => {
     expect(desdePush.event.device_user_id).toBe(canonico_esperado.device_user_id);
   });
 
-  test('"0042" y 42 son el mismo empleado en cualquier origen', () => {
-    const a = C.buildEvent({ ...base, device_user_id: '0042' });
+  test('un id numérico y su forma string sí convergen', () => {
+    const a = C.buildEvent({ ...base, device_user_id: '42' });
     const b = C.buildEvent({ ...base, device_user_id: 42 });
     expect(a.event.event_id).toBe(b.event.event_id);
   });
@@ -299,10 +308,38 @@ describe('validación de lotes', () => {
     expect(r.index).toBe(0);
   });
 
-  test('un user id sin normalizar se rechaza: rompería la idempotencia', () => {
+  test('un user id con espacios se rechaza: rompería la idempotencia', () => {
     const lote = loteValido();
-    lote.events[0] = { ...lote.events[0], device_user_id: '0042' };
+    lote.events[0] = { ...lote.events[0], device_user_id: ' 42 ' };
     expect(C.validateBatch(lote, { now: AHORA }).error_code).toBe(C.REJECT_CODES.USER_ID_INVALID);
+  });
+
+  test('un separador embebido se rechaza también en la validación', () => {
+    // buildEvent lo rechaza, pero un lote externo llega con su id ya calculado.
+    const lote = loteValido();
+    const malicioso = `42${C.FIELD_SEP}s:99`;
+    lote.events[0] = {
+      ...lote.events[0],
+      device_user_id: malicioso,
+      event_id: C.computeEventId({ ...lote.events[0], device_user_id: malicioso }),
+    };
+    expect(C.validateBatch(lote, { now: AHORA }).error_code).toBe(C.REJECT_CODES.SEPARATOR_IN_VALUE);
+  });
+
+  test('un work_code no canónico se rechaza', () => {
+    for (const wc of ['', '  ', ' OBRA ']) {
+      const lote = loteValido();
+      lote.events[0] = { ...lote.events[0], work_code: wc };
+      lote.events[0].event_id = C.computeEventId(lote.events[0]);
+      expect(C.validateBatch(lote, { now: AHORA }).error_code).toBe(C.REJECT_CODES.WORK_CODE_INVALID);
+    }
+  });
+
+  test('una fecha imposible CON offset no se corre de día', () => {
+    // Date.parse convierte 2026-02-31 en 2026-03-03 sin avisar.
+    expect(C.normalizeTimestamp('2026-02-31T10:00:00Z')).toBeNull();
+    expect(C.normalizeTimestamp('2026-02-31T10:00:00-03:00')).toBeNull();
+    expect(C.normalizeTimestamp('2026-13-01T10:00:00Z')).toBeNull();
   });
 
   test('un timestamp no canónico se rechaza', () => {
