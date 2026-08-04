@@ -5,6 +5,8 @@
  */
 
 const cron = require('node-cron');
+const { cronCallback, runJob } = require('../utils/cronRunner');
+const { serializeError, safeErrorCode } = require('../utils/errorInfo');
 const { sequelize } = require('../config/database');
 const { sendMail, buildReportEmailHtml } = require('./emailService');
 const logger = require('../config/logger');
@@ -230,10 +232,11 @@ function registerJob(schedule) {
     return;
   }
 
-  const task = cron.schedule(schedule.cron_expression, async () => {
-    logger.info(`Ejecutando reporte programado #${schedule.id}: ${schedule.name}`);
-    await runScheduledReport(schedule);
-  }, { timezone: schedule.timezone || TZ_PY });
+  const task = cron.schedule(schedule.cron_expression, cronCallback(
+    `reporte_programado_${schedule.id}`,
+    () => runScheduledReport(schedule),
+    { meta: { schedule_id: schedule.id, schedule_name: schedule.name } }
+  ), { timezone: schedule.timezone || TZ_PY });
 
   _jobs.set(schedule.id, task);
 }
@@ -454,7 +457,7 @@ function startAtt2000PullCron() {
 
   try {
     const { syncAttendance } = require('../config/zkAdapter');
-    _att2000PullJob = cron.schedule(expr, async () => {
+    _att2000PullJob = cron.schedule(expr, cronCallback('att2000_pull', async () => {
       try {
         const dateFrom = pyDateStr(new Date(Date.now() - 24 * 3600 * 1000));
         const result = await syncAttendance({ dateFrom, limit: 5000 });
@@ -473,13 +476,16 @@ function startAtt2000PullCron() {
           }
         }
       } catch (err) {
-        logger.error('Error en cron att2000 pull:', err.message);
         recordRun({ source: 'auto', ok: false, error: err.message });
+        throw err;   // el runner lo registra con código y detalle seguros
       }
-    });
+    }));
     logger.info(`📅 Cron respaldo att2000 → MySQL (legado) activo: ${expr}`);
   } catch (err) {
-    logger.error('No se pudo registrar ATT2000_PULL_CRON:', err.message);
+    logger.error('No se pudo registrar ATT2000_PULL_CRON', {
+      job: 'att2000_pull', result: 'error',
+      error_code: safeErrorCode(err), error: serializeError(err, { stage: 'register' }),
+    });
   }
 }
 
@@ -495,7 +501,7 @@ function startDailyAlertsCron() {
 
     if (_lateJob) _lateJob.stop();
     if (cron.validate(lateExpr)) {
-      _lateJob = cron.schedule(lateExpr, async () => {
+      _lateJob = cron.schedule(lateExpr, cronCallback('alertas_atrasos', async () => {
         const r = await sendDailyLateAlerts();
         logger.info(`📧 Alertas atrasos: ${JSON.stringify(r)}`);
         // Webhook Slack/Teams
@@ -511,13 +517,14 @@ function startDailyAlertsCron() {
           );
           if (rows.length) await wh.notifyLateArrivals(rows).catch(() => {});
         } catch {}
-      }, { timezone: tz });
+        return r;
+      }), { timezone: tz });
       logger.info(`📅 Cron alertas atrasos activo: ${lateExpr} (${tz})`);
     }
 
     if (_absentJob) _absentJob.stop();
     if (cron.validate(absentExpr)) {
-      _absentJob = cron.schedule(absentExpr, async () => {
+      _absentJob = cron.schedule(absentExpr, cronCallback('alertas_ausencias', async () => {
         const r = await sendDailyAbsenceAlerts();
         logger.info(`📧 Alertas ausencias: ${JSON.stringify(r)}`);
         // Webhook Slack/Teams
@@ -533,11 +540,15 @@ function startDailyAlertsCron() {
           );
           if (rows.length) await wh.notifyAbsences(rows).catch(() => {});
         } catch {}
-      }, { timezone: tz });
+        return r;
+      }), { timezone: tz });
       logger.info(`📅 Cron alertas ausencias activo: ${absentExpr} (${tz})`);
     }
   } catch (err) {
-    logger.error('No se pudieron registrar crons de alertas:', err.message);
+    logger.error('No se pudieron registrar crons de alertas', {
+      job: 'alertas_diarias', result: 'error',
+      error_code: safeErrorCode(err), error: serializeError(err, { stage: 'register' }),
+    });
   }
 }
 
@@ -549,7 +560,7 @@ function startCoursesDueCron() {
   try {
     if (_coursesCron) _coursesCron.stop();
     if (!cron.validate(expr)) return;
-    _coursesCron = cron.schedule(expr, async () => {
+    _coursesCron = cron.schedule(expr, cronCallback('capacitaciones_vencimiento', async () => {
       try {
         // Buscar asignaciones de cursos vencidas o a punto de vencer (próximos 3 días)
         const [rows] = await sequelize.query(`
@@ -595,13 +606,17 @@ function startCoursesDueCron() {
           sent++;
         }
         if (sent) logger.info(`📚 Cron cursos: ${sent} recordatorio(s) enviado(s)`);
+        return { sent };
       } catch (err) {
-        logger.error('Error cron courses due:', err.message);
+        throw err;   // el runner registra job, duración, error_code y detalle
       }
-    }, { timezone: tz });
+    }), { timezone: tz });
     logger.info(`📅 Cron vencimiento capacitaciones activo: ${expr} (${tz})`);
   } catch (err) {
-    logger.error('No se pudo registrar cron de capacitaciones:', err.message);
+    logger.error('No se pudo registrar cron de capacitaciones', {
+      job: 'capacitaciones_vencimiento', result: 'error',
+      error_code: safeErrorCode(err), error: serializeError(err, { stage: 'register' }),
+    });
   }
 }
 
