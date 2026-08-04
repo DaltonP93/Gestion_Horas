@@ -17,6 +17,8 @@
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 const { withDeadlockRetry, isRetryable, mysqlErrno } = require('../utils/mysqlRetry');
+// Sólo mide: no altera qué se lee ni cuándo (ver services/netMetrics.js).
+const netMetrics = require('./netMetrics');
 
 // ─── Instrumentación por fase ───────────────────────────────────
 // Traza estructurada por fase de la sincronización (SIN SQL, sin stack, sin
@@ -323,6 +325,7 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       err = e?.message || String(e);
     }
     attemptsRun++;
+    const payload = err ? { bytes: 0, estimated: false } : netMetrics.estimateBytes(logs);
     const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
       : scoreOf(logs, truncated);
     detail.push({
@@ -332,6 +335,10 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       first_valid: sc.minTs ? pyDateTimeStr(new Date(sc.minTs)) : null,
       last_valid: sc.maxTs ? pyDateTimeStr(new Date(sc.maxTs)) : null,
       duration_ms: Date.now() - t0, error: err,
+      // Volumen del payload decodificado de ESTE intento. Es lo que permite
+      // ver que el polling descarga el buffer entero cada vez.
+      payload_bytes: payload.bytes,
+      payload_estimated: payload.estimated,
     });
     logMem(memCtx, 'read_attempt', { attempt: i + 1, records: sc.total });
 
@@ -442,6 +449,7 @@ async function buildEmployeeMatcher() {
 // Registra una lectura de reloj en device_sync_runs (auditoría). No dry-run.
 // Best-effort: nunca debe tumbar la lectura.
 async function recordSyncRun(device, { startedAt, report = null, error = null, opts = {}, sanitizeErr }) {
+  const lockOrigin = (opts.lock && typeof opts.lock === 'object') ? opts.lock.origin : null;
   try {
     if (!(await tableExists('device_sync_runs'))) return;
     const now = new Date();
@@ -479,7 +487,9 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     const executed = report?.read_attempts_detail?.length || (report ? 1 : (opts.attempts || 1));
     const requested = opts.attempts || executed;
     const detailJson = report?.read_attempts_detail?.length ? JSON.stringify(report.read_attempts_detail).slice(0, 4000) : null;
-    const extraCols = await getExistingColumns('device_sync_runs', ['attempts_detail', 'attempts_requested', 'retry_count']);
+    const extraCols = await getExistingColumns('device_sync_runs',
+      ['attempts_detail', 'attempts_requested', 'retry_count',
+       'mode', 'bytes_from_device', 'bytes_estimated', 'error_code']);
     const hasDetailCol = extraCols.includes('attempts_detail');
     const hasReqCol = extraCols.includes('attempts_requested');
     const hasRetryCol = extraCols.includes('retry_count');
@@ -497,6 +507,28 @@ async function recordSyncRun(device, { startedAt, report = null, error = null, o
     if (hasReqCol) { cols.push('attempts_requested'); vals.push(requested); }
     if (hasDetailCol) { cols.push('attempts_detail'); vals.push(detailJson); }
     if (hasRetryCol) { cols.push('retry_count'); vals.push(retryCount); }
+
+    // Métricas de red (migración 070). El modo se deriva del origen del lock,
+    // que ya distingue automático de manual; los bytes son la suma de lo que
+    // entregó el reloj en los intentos ejecutados.
+    const bytesFromAttempts = (report?.read_attempts_detail || [])
+      .reduce((acc, a) => acc + (Number(a.payload_bytes) || 0), 0);
+    const bytesEstimated = (report?.read_attempts_detail || []).some(a => a.payload_estimated);
+    if (extraCols.includes('mode')) {
+      cols.push('mode');
+      vals.push(netMetrics.modeFromOrigin(lockOrigin));
+    }
+    if (extraCols.includes('bytes_from_device')) {
+      cols.push('bytes_from_device'); vals.push(bytesFromAttempts);
+    }
+    if (extraCols.includes('bytes_estimated')) {
+      cols.push('bytes_estimated'); vals.push(bytesEstimated ? 1 : 0);
+    }
+    if (extraCols.includes('error_code')) {
+      cols.push('error_code');
+      vals.push(error ? netMetrics.classifyErrorCode(error)
+                      : (report?.read_truncated ? 'truncated' : null));
+    }
     await sequelize.query(
       `INSERT INTO device_sync_runs (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`,
       { replacements: vals }
