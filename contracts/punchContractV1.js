@@ -334,7 +334,30 @@ function toDeviceId(v) {
  * rechazar del otro lado.
  */
 function buildBatch({ bridge_id, device_id, events = [], batch_id, generated_at } = {}, opts = {}) {
-  const delLote = toDeviceId(device_id);
+  let delLote = toDeviceId(device_id);
+
+  // Sin reloj de lote válido, se deriva del de los eventos SI todos coinciden.
+  // Sin esto, `delLote` quedaba en null, el chequeo de discrepancia se saltaba
+  // y el lote salía con device_id: null — que validateBatch rechaza. Otra vez
+  // el productor diciendo ok sobre algo que el consumidor no acepta.
+  if (delLote === null) {
+    const declarados = new Set();
+    for (const e of events) {
+      if (e && e.device_id !== undefined) declarados.add(toDeviceId(e.device_id));
+    }
+    if (declarados.size === 1 && !declarados.has(null)) {
+      delLote = [...declarados][0];
+    } else {
+      return {
+        ok: false,
+        error_code: REJECT_CODES.DEVICE_ID_INVALID,
+        detail: declarados.size > 1
+          ? 'un lote es de un solo reloj y los eventos declaran varios'
+          : 'falta el device_id del lote y no puede derivarse de los eventos',
+      };
+    }
+  }
+
   const construidos = [];
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
@@ -357,7 +380,7 @@ function buildBatch({ bridge_id, device_id, events = [], batch_id, generated_at 
       schema_version: PUNCH_CONTRACT_VERSION,
       batch_id: batch_id || `b-${crypto.randomBytes(8).toString('hex')}`,
       bridge_id: normalizeString(bridge_id) || 'desconocido',
-      device_id: toDeviceId(device_id),
+      device_id: delLote,
       generated_at: new Date().toISOString(),
       events: construidos,
     },

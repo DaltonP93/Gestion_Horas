@@ -541,17 +541,66 @@ describe('quinta tanda de Codex', () => {
     expect(r.index).toBe(0);
   });
 
+  // La propiedad que importa, y que se me rompió dos veces seguidas por
+  // arreglar un lado sin el otro: si buildBatch dice ok, validateBatch tiene
+  // que aceptarlo. Se barren formas de entrada en vez de un caso suelto.
   test('todo lo que buildBatch acepta, validateBatch lo valida', () => {
-    // La propiedad que importa: productor y consumidor no pueden discrepar.
-    const r = C.buildBatch({
-      bridge_id: 'b', device_id: 3,
-      events: [
-        { device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in', verify_mode: '  ' },
-        { device_id: 3, device_user_id: '0042', occurred_at: '2026-08-04 07:20:00', event_type: 'out', work_code: ' OBRA ' },
-      ],
+    const AHORA = Date.parse('2026-08-04T12:00:00Z');
+    const ev = (extra = {}) => ({
+      device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in', ...extra,
     });
 
-    expect(r.ok).toBe(true);
-    expect(C.validateBatch(r.batch, { now: Date.parse('2026-08-04T12:00:00Z') }).ok).toBe(true);
+    const entradas = [
+      { bridge_id: 'b', device_id: 3, events: [ev()] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ device_id: 3 })] },
+      { bridge_id: 'b', device_id: '3', events: [ev()] },
+      { bridge_id: 'b', events: [ev({ device_id: 3 })] },                    // se deriva
+      { bridge_id: 'b', events: [ev({ device_id: 3 }), ev({ device_id: 3, device_user_id: '43' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ verify_mode: '  ' })] }, // verify en blanco
+      { bridge_id: 'b', device_id: 3, events: [ev({ verify_mode: 0 })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ work_code: ' OBRA ' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ work_code: '' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ device_user_id: '0042' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ device_user_id: ' 42 ' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ occurred_at: '2026-08-04 07:15:03' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ occurred_at: '2026-08-04T07:15:03-03:00' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ event_type: 'CUALQUIERA' })] },
+      { bridge_id: 'b', device_id: 3, events: [ev({ device_user_id: 'EMP-Ñandú' })] },
+    ];
+
+    for (const entrada of entradas) {
+      const r = C.buildBatch(entrada);
+      if (!r.ok) continue;                       // rechazar es siempre válido
+      const v = C.validateBatch(r.batch, { now: AHORA });
+      expect({ entrada: JSON.stringify(entrada), ...v }).toMatchObject({ ok: true });
+    }
+  });
+
+  test('buildBatch nunca devuelve ok con un reloj que el validador no acepte', () => {
+    // El caso que se me había escapado: sin device_id en el lote, el chequeo
+    // de discrepancia se saltaba y salía un lote con device_id: null.
+    const ok = C.buildBatch({
+      bridge_id: 'b',
+      events: [{ device_id: 3, device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
+    });
+    expect(ok.ok).toBe(true);
+    expect(ok.batch.device_id).toBe(3);          // derivado de los eventos
+
+    const varios = C.buildBatch({
+      bridge_id: 'b',
+      events: [
+        { device_id: 1, device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' },
+        { device_id: 2, device_user_id: '43', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' },
+      ],
+    });
+    expect(varios.ok).toBe(false);
+    expect(varios.detail).toContain('un solo reloj');
+
+    const ninguno = C.buildBatch({
+      bridge_id: 'b',
+      events: [{ device_user_id: '42', occurred_at: '2026-08-04T10:15:03Z', event_type: 'in' }],
+    });
+    expect(ninguno.ok).toBe(false);
+    expect(ninguno.error_code).toBe(C.REJECT_CODES.DEVICE_ID_INVALID);
   });
 });
