@@ -133,10 +133,18 @@ router.get('/:filename', async (req, res) => {
 });
 
 // DELETE /api/backups/:filename
+// Misma validación que el GET, y por el mismo motivo: el regex laxo anterior
+// (`asistencia_.*\.sql\.gz`, con `.*`) sobre `req.params.filename` sin basename
+// ni comprobación de prefijo permitía salir del directorio. Express decodifica
+// `%2F` dentro del parámetro, así que
+//   DELETE /api/backups/asistencia_%2F..%2F..%2F..%2Fetc%2Fpasswd.sql.gz
+// llegaba como `asistencia_/../../../etc/passwd.sql.gz`, pasaba el regex y
+// `path.join` lo normalizaba fuera de BACKUP_DIR → unlink arbitrario.
 router.delete('/:filename', async (req, res) => {
-  const f = req.params.filename;
-  if (!/^asistencia_.*\.sql\.gz$/.test(f)) return res.status(400).json({ error: 'Nombre inválido' });
-  const fp = path.join(BACKUP_DIR, f);
+  const f = path.basename(req.params.filename);
+  if (!/^asistencia_[\w\-]+\.sql\.gz$/.test(f)) return res.status(400).json({ error: 'Nombre inválido' });
+  const fp = path.resolve(BACKUP_DIR, f);
+  if (!fp.startsWith(path.resolve(BACKUP_DIR) + path.sep)) return res.status(400).json({ error: 'Ruta inválida' });
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Backup no encontrado' });
   try { fs.unlinkSync(fp); res.json({ ok: true }); }
   catch (err) { res.status(500).json({ error: err.message }); }

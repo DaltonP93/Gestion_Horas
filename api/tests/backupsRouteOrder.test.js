@@ -144,6 +144,79 @@ describe('lo que ya funcionaba sigue funcionando', () => {
   });
 });
 
+/**
+ * Encontrado al revisar el archivo para este PR, no reportado.
+ *
+ * `DELETE /:filename` usaba `req.params.filename` crudo con un regex laxo
+ * (`asistencia_.*\.sql\.gz`) y `path.join`, sin basename ni comprobación de
+ * prefijo. Express decodifica `%2F` dentro del parámetro, así que el `.*`
+ * tragaba separadores y `path.join` normalizaba fuera de BACKUP_DIR: un admin
+ * podía borrar cualquier archivo que el proceso pudiera escribir.
+ */
+describe('DELETE /:filename no sale del directorio de backups', () => {
+  const del = () => capas().find(l => l.path === '/:filename' && l.methods.includes('delete'));
+
+  test('un archivo fuera del directorio sobrevive a todos los ataques', async () => {
+    // Lo que hay que probar no es el status sino que el unlink nunca salga del
+    // directorio. La víctima vive afuera y tiene nombre de backup válido, así
+    // que sólo la alcanza un traversal de verdad.
+    const afuera = fs.mkdtempSync(path.join(os.tmpdir(), 'sishoras-victima-'));
+    const victima = path.join(afuera, 'asistencia_20260804_020000.sql.gz');
+    fs.writeFileSync(victima, 'no me borres');
+
+    // El traversal se DERIVA con path.relative; contar `../` a mano es cómo se
+    // escribe un test de seguridad que pasa contra el código vulnerable.
+    const salto = path.relative(DIR, victima);            // ../sishoras-victima-x/asistencia_...
+    expect(salto.startsWith('..')).toBe(true);            // el salto es real
+
+    const ataques = [
+      `asistencia_/../${salto}`,      // lo que llega tras decodificar %2F
+      `asistencia_${path.sep}..${path.sep}${salto}`,
+      victima,                        // ruta absoluta directa
+      salto,
+    ];
+
+    // Guarda del guard: contra el handler viejo, al menos un ataque tenía que
+    // llegar al archivo. Si ninguno resuelve a la víctima, el test no prueba nada.
+    const alcanzan = ataques.filter(a => path.join(DIR, a) === victima);
+    expect(alcanzan.length).toBeGreaterThan(0);
+
+    for (const malo of ataques) {
+      const res = fakeRes();
+      await del().handler({ params: { filename: malo } }, res);
+      expect(fs.existsSync(victima)).toBe(true);   // ← lo que importa
+    }
+
+    fs.rmSync(afuera, { recursive: true, force: true });
+  });
+
+  test('ningún nombre aceptado resuelve fuera de BACKUP_DIR', () => {
+    // La propiedad, no los cuatro casos: para cualquier entrada que pase el
+    // regex, la ruta final tiene que quedar dentro del directorio.
+    const entradas = [
+      'asistencia_20260804_020000.sql.gz', 'asistencia_/../x.sql.gz',
+      'asistencia_..%2Fx.sql.gz', 'asistencia_../../x.sql.gz',
+      '/etc/asistencia_x.sql.gz', 'asistencia_ ../x.sql.gz',
+    ];
+    for (const entrada of entradas) {
+      const f = path.basename(entrada);
+      if (!/^asistencia_[\w\-]+\.sql\.gz$/.test(f)) continue;   // rechazada antes de tocar el disco
+      const fp = path.resolve(DIR, f);
+      expect(fp.startsWith(path.resolve(DIR) + path.sep)).toBe(true);
+    }
+  });
+
+  test('sigue borrando un backup legítimo', async () => {
+    const nombre = 'asistencia_20260101_030000.sql.gz';
+    fs.writeFileSync(path.join(DIR, nombre), 'x');
+    const res = fakeRes();
+    await del().handler({ params: { filename: nombre } }, res);
+
+    expect(res.body.ok).toBe(true);
+    expect(fs.existsSync(path.join(DIR, nombre))).toBe(false);
+  });
+});
+
 describe('la regla, no el caso', () => {
   test('ninguna ruta literal queda tapada por una paramétrica del mismo método', () => {
     const todas = capas();
