@@ -244,6 +244,38 @@ describe('identidad', () => {
       .toContain(r.error_code);
   });
 
+  test('rechaza una identidad incompleta en vez de fusionarla', () => {
+    // El agujero: si faltaba un campo de identidad, la comprobación de
+    // event_id se saltaba y el merge devolvía ok. Dos observaciones
+    // malformadas con el mismo event_id inventado se fusionaban en una
+    // marcación de identidad nula.
+    for (const campo of ['device_id', 'device_user_id', 'occurred_at', 'event_type']) {
+      const rota = { ...obs('push', { verify_mode: 1 }), [campo]: null };
+      const r = mergePunchObservations(rota, { ...rota, source: 'polling' });
+
+      expect(r.ok).toBe(false);
+      expect(r.error_code).toBe(MERGE_ERRORS.IDENTITY_INCOMPLETE);
+      expect(r.detail).toContain(campo);
+    }
+  });
+
+  test('rechaza un event_type que no está en el contrato', () => {
+    const rara = { ...obs('push', { verify_mode: 1 }), event_type: 'almuerzo' };
+    const r = mergePunchObservations(rara);
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(MERGE_ERRORS.IDENTITY_INCOMPLETE);
+  });
+
+  test('dos observaciones malformadas con event_id inventado no se fusionan', () => {
+    const a = { event_id: 'sha256:inventado', device_id: null, device_user_id: null,
+                occurred_at: null, event_type: null, source: 'push',
+                received_at: null, raw_reference: null, verify_mode: 1, work_code: null };
+    const b = { ...a, source: 'polling', verify_mode: 9 };
+
+    expect(mergePunchObservations(a, b).ok).toBe(false);
+  });
+
   test('rechaza una fuente desconocida', () => {
     const r = mergePunchObservations(obs('telepatia', { verify_mode: 1 }));
     expect(r.ok).toBe(false);

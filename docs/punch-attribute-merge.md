@@ -186,6 +186,7 @@ Nada se pierde en silencio.
 | `merge_event_id_missing` | falta `event_id` |
 | `merge_event_id_mismatch` | dos entradas con `event_id` distinto |
 | `merge_identity_mismatch` | mismo `event_id`, identidad distinta |
+| `merge_identity_incomplete` | falta un campo de identidad, o `event_type` no está en el contrato |
 | `merge_event_id_inconsistent` | el `event_id` no corresponde a la identidad declarada |
 | `merge_source_invalid` | `source` fuera de `push` / `polling` / `att2000` |
 | `merge_received_at_invalid` | `received_at` no es string ni nulo |
@@ -193,6 +194,16 @@ Nada se pierde en silencio.
 `merge_event_id_inconsistent` es el que impide fusionar dos marcaciones
 distintas que declaren el mismo `event_id`: se recalcula desde la identidad y se
 compara.
+
+`merge_identity_incomplete` es su condición previa, y llegó corrigiendo un
+agujero: la primera versión sólo recalculaba el `event_id` **si** los cuatro
+campos estaban presentes y el `event_type` era conocido — y si no, seguía de
+largo devolviendo `ok`. Dos observaciones malformadas que declararan el mismo
+`event_id` inventado se fusionaban en una marcación de identidad nula, que es
+exactamente lo que la comprobación pretendía impedir.
+
+Una identidad que no se puede verificar no es "fusionable con reservas": es un
+rechazo.
 
 ---
 

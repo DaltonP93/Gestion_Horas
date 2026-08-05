@@ -83,6 +83,7 @@ const MERGE_ERRORS = Object.freeze({
   EVENT_ID_MISSING:    'merge_event_id_missing',
   EVENT_ID_MISMATCH:   'merge_event_id_mismatch',
   IDENTITY_MISMATCH:   'merge_identity_mismatch',
+  IDENTITY_INCOMPLETE: 'merge_identity_incomplete',
   EVENT_ID_INCONSISTENT: 'merge_event_id_inconsistent',
   SOURCE_INVALID:      'merge_source_invalid',
   RECEIVED_AT_INVALID: 'merge_received_at_invalid',
@@ -357,10 +358,33 @@ function mergePunchObservations(...entradas) {
   // El event_id tiene que corresponder a la identidad declarada. Sin esto, dos
   // observaciones podrían traer el mismo event_id inventado y fusionarse pese
   // a ser marcaciones distintas.
-  if (IDENTITY_FIELDS.every((c) => identity[c] !== null && identity[c] !== undefined)) {
-    if (EVENT_TYPES.includes(identity.event_type) && computeEventId(identity) !== event_id) {
-      return { ok: false, error_code: MERGE_ERRORS.EVENT_ID_INCONSISTENT };
-    }
+  //
+  // La identidad se exige COMPLETA y VÁLIDA antes de verificar nada. La primera
+  // versión sólo recalculaba cuando los cuatro campos estaban presentes y el
+  // event_type era conocido, y si no, seguía de largo devolviendo ok: dos
+  // observaciones malformadas con el mismo event_id inventado se fusionaban en
+  // una marcación de identidad nula, que es justo lo que la comprobación
+  // pretendía impedir. Una identidad que no se puede verificar no es
+  // "fusionable con reservas": es un rechazo.
+  const faltantes = IDENTITY_FIELDS.filter(
+    (c) => identity[c] === null || identity[c] === undefined || identity[c] === '',
+  );
+  if (faltantes.length) {
+    return {
+      ok: false,
+      error_code: MERGE_ERRORS.IDENTITY_INCOMPLETE,
+      detail: faltantes.join(', '),
+    };
+  }
+  if (!EVENT_TYPES.includes(identity.event_type)) {
+    return {
+      ok: false,
+      error_code: MERGE_ERRORS.IDENTITY_INCOMPLETE,
+      detail: `event_type: ${identity.event_type}`,
+    };
+  }
+  if (computeEventId(identity) !== event_id) {
+    return { ok: false, error_code: MERGE_ERRORS.EVENT_ID_INCONSISTENT };
   }
 
   // Unión: observaciones idénticas colapsan (reenvío del mismo lote).
