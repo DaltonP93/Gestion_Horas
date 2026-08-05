@@ -31,15 +31,24 @@ const IDENTIDAD = {
   event_type:     BASE.event.event_type,
 };
 
-/** Observación de `source`, con los atributos que se le pasen. */
+/**
+ * Observación de `source`, con los atributos que se le pasen.
+ *
+ * OJO con el `??`: usarlo acá convierte un `received_at: null` EXPLÍCITO en el
+ * valor por defecto, y entonces los casos de "recepción desconocida" no prueban
+ * nada. Pasó — el barrido decía cubrir `received_at: null` y en realidad todas
+ * las observaciones tenían fecha. Se distingue "no se especificó" de
+ * "se especificó null" con `in`.
+ */
 function obs(source, attrs = {}) {
+  const dado = (k, porDefecto) => (k in attrs ? attrs[k] : porDefecto);
   return {
     ...IDENTIDAD,
     source,
-    received_at: attrs.received_at ?? `2026-03-11T08:05:00-03:00`,
-    raw_reference: attrs.raw_reference ?? null,
-    verify_mode: attrs.verify_mode ?? null,
-    work_code: attrs.work_code ?? null,
+    received_at:   dado('received_at', '2026-03-11T08:05:00-03:00'),
+    raw_reference: dado('raw_reference', null),
+    verify_mode:   dado('verify_mode', null),
+    work_code:     dado('work_code', null),
   };
 }
 
@@ -108,6 +117,54 @@ describe('dos no-nulos que discrepan', () => {
     const p = ok(a, b);
     const valores = p.observations.map(o => o.verify_mode).sort();
     expect(valores).toEqual([1, 4]);
+  });
+});
+
+describe('valores falsy y recepción desconocida', () => {
+  test('verify_mode 0 es un valor, no una ausencia', () => {
+    // `0` es falsy: un `||` mal puesto lo trataría como "no vino".
+    const p = ok(obs('push', { verify_mode: 0 }), obs('polling', { verify_mode: 4 }));
+
+    expect(p.verify_mode).toBe(0);
+    expect(p.attribute_conflict).toBe(true);
+  });
+
+  test('un 0 conocido le gana a un null', () => {
+    expect(ok(obs('push', { verify_mode: null }), obs('polling', { verify_mode: 0 })).verify_mode).toBe(0);
+  });
+
+  test('work_code vacío es un valor, no una ausencia', () => {
+    expect(ok(obs('push', { work_code: '' }), obs('polling', { work_code: null })).work_code).toBe('');
+  });
+
+  test('received_at nulo mezclado con no nulo no rompe el orden', () => {
+    // El bug: `null < '2026-…'` y `'2026-…' < null` son AMBOS false, así que el
+    // comparador devolvía 1 en los dos sentidos. Un comparador que no es orden
+    // total hace que `sort` dependa del orden de entrada.
+    const sinFecha = obs('polling', { verify_mode: 7, received_at: null });
+    const conFecha = obs('polling', { verify_mode: 9, received_at: '2026-03-11T08:00:00-03:00' });
+
+    expect(ok(sinFecha, conFecha)).toEqual(ok(conFecha, sinFecha));
+    // La de fecha conocida gana: no puede ganar "la más temprana" algo de lo
+    // que no se sabe cuándo llegó.
+    expect(ok(sinFecha, conFecha).verify_mode).toBe(9);
+  });
+
+  test('el mismo instante con otro offset ordena igual', () => {
+    const a = obs('polling', { verify_mode: 1, received_at: '2026-03-11T08:00:00-03:00' });
+    const b = obs('polling', { verify_mode: 1, received_at: '2026-03-11T12:00:00+01:00' });
+    // Mismo momento: lexicográficamente '0' < '1', por instante son iguales.
+    expect(ok(a, b)).toEqual(ok(b, a));
+  });
+
+  test('first/last received_at se calculan por instante, no alfabéticamente', () => {
+    const p = ok(
+      obs('push',    { received_at: '2026-03-11T12:00:00+01:00' }),  // 08:00 -03
+      obs('polling', { received_at: '2026-03-11T09:00:00-03:00' }),
+    );
+
+    expect(p.first_received_at).toBe('2026-03-11T12:00:00+01:00');
+    expect(p.last_received_at).toBe('2026-03-11T09:00:00-03:00');
   });
 });
 
@@ -219,6 +276,15 @@ const UNIVERSO = [
   obs('att2000', { verify_mode: 3,  work_code: 'D', received_at: '2026-03-12T10:00:00-03:00' }),
   obs('att2000', { verify_mode: null, work_code: 'A' }),
   obs('push',    { verify_mode: 1,  work_code: 'A', raw_reference: 'push#1' }),
+
+  // Clases que la primera versión del barrido NO cubría, y que escondían una
+  // violación de conmutatividad en 8 de 64 pares: `received_at` nulo mezclado
+  // con no nulo hacía que el comparador no fuera un orden total.
+  obs('push',    { verify_mode: 0, work_code: '',   received_at: null }),
+  obs('polling', { verify_mode: 0, work_code: 'A',  received_at: null }),
+  obs('att2000', { verify_mode: 15, work_code: '0', received_at: null }),
+  // Mismo instante, offset distinto: no puede ordenarse lexicográficamente.
+  obs('push',    { verify_mode: 2, work_code: 'E', received_at: '2026-03-11T12:00:00+01:00' }),
 ];
 
 const PARES = [];

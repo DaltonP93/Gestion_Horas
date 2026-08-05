@@ -94,11 +94,31 @@ push (3)  >  polling (2)  >  att2000 (1)
 
 Cuando la prioridad empata (misma fuente):
 
-1. gana la observación **recibida antes** (`received_at`);
-2. si también empata, gana el **valor menor** por orden canónico.
+1. gana la observación **recibida antes** (`received_at`), comparada **por
+   instante**, no lexicográficamente;
+2. una `received_at` desconocida (`null`) va **última** — no puede ganar "la más
+   temprana" algo de lo que no se sabe cuándo llegó;
+3. si todo empata, gana el **valor menor** por orden canónico.
 
 El desempate no pretende ser "el correcto": pretende ser **total y
 determinista**, para que el resultado no dependa del orden de llegada.
+
+Que sea **total** no es un detalle. La primera versión comparaba los strings
+directamente y no lo era:
+
+```
+null < '2026-03-11T08:00:00-03:00'   → false   (null→0, string→NaN)
+'2026-03-11T08:00:00-03:00' < null   → false
+```
+
+Las dos comparaciones daban `false`, el comparador devolvía `1` en ambos
+sentidos, y con un comparador que no es un orden total el resultado de `sort`
+depende del orden de entrada — justo lo que este módulo promete que no pasa.
+Rompía la conmutatividad en 8 de 64 pares.
+
+Comparar por instante arregla además el caso de dos offsets distintos:
+`2026-03-11T08:00:00-03:00` y `2026-03-11T12:00:00+01:00` son el mismo momento
+y ordenan igual. Lo mismo vale para `first_received_at` / `last_received_at`.
 
 ### 4. Discrepar nunca crea una segunda marcación
 

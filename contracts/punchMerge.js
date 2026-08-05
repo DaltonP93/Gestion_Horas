@@ -144,11 +144,43 @@ function compararObservaciones(a, b) {
   const pa = SOURCE_PRIORITY[a.source] || 0;
   const pb = SOURCE_PRIORITY[b.source] || 0;
   if (pa !== pb) return pb - pa;                       // más confiable primero
-  if (a.received_at !== b.received_at) {
-    return a.received_at < b.received_at ? -1 : 1;     // más temprana primero
+
+  const ra = instanteRecepcion(a.received_at);
+  const rb = instanteRecepcion(b.received_at);
+  if (ra !== rb) {
+    // Recepción desconocida va última: no puede ganar el desempate de
+    // "la más temprana" algo de lo que no se sabe cuándo llegó.
+    if (ra === null) return 1;
+    if (rb === null) return -1;
+    return ra - rb;                                    // más temprana primero
   }
+
   const ka = claveObservacion(a), kb = claveObservacion(b);
   return ka < kb ? -1 : ka > kb ? 1 : 0;
+}
+
+/**
+ * `received_at` como instante comparable, o null si no se sabe.
+ *
+ * Comparar los strings directamente NO sirve, y romperlo costó una violación
+ * de conmutatividad en 8 de 64 pares:
+ *
+ *   null < '2026-03-11T08:00:00-03:00'   → false   (null→0, string→NaN)
+ *   '2026-03-11T08:00:00-03:00' < null   → false
+ *
+ * Las dos comparaciones daban false, el comparador devolvía 1 en ambos
+ * sentidos, y con un comparador que no es un orden total el resultado de
+ * `sort` depende del orden de entrada — que es exactamente lo que este módulo
+ * promete que no pasa.
+ *
+ * Comparar por instante y no lexicográficamente también arregla el caso de dos
+ * offsets distintos: '2026-03-11T08:00:00-03:00' y '2026-03-11T12:00:00+01:00'
+ * son el mismo momento y ordenan igual.
+ */
+function instanteRecepcion(v) {
+  if (typeof v !== 'string' || !v) return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : t;
 }
 
 // Nota deliberada: NO hay una función `ganadora(a, b)` aparte.
@@ -344,7 +376,12 @@ function mergePunchObservations(...entradas) {
     if (conflict) conflicts.push(conflict);
   }
 
-  const recibidas = conjunto.map((o) => o.received_at).filter(Boolean).sort();
+  // Por instante, no lexicográfico: dos offsets distintos del mismo momento
+  // ordenan igual, y un orden alfabético daría un primero/último equivocado.
+  const recibidas = conjunto
+    .map((o) => o.received_at)
+    .filter((v) => instanteRecepcion(v) !== null)
+    .sort((x, y) => instanteRecepcion(x) - instanteRecepcion(y));
 
   return {
     ok: true,
