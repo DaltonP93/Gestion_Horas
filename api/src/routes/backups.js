@@ -40,18 +40,14 @@ router.post('/purge', async (_req, res) => {
   }
 });
 
-// GET /api/backups/:filename — descargar archivo
-router.get('/:filename', async (req, res) => {
-  const f = path.basename(req.params.filename); // evita path traversal
-  if (!/^asistencia_[\w\-]+\.sql\.gz$/.test(f)) return res.status(400).json({ error: 'Nombre inválido' });
-  const fp = path.resolve(BACKUP_DIR, f);
-  // Double-check que el archivo resuelto sigue dentro de BACKUP_DIR
-  if (!fp.startsWith(path.resolve(BACKUP_DIR) + path.sep)) return res.status(400).json({ error: 'Ruta inválida' });
-  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Backup no encontrado' });
-  res.setHeader('Content-Type', 'application/gzip');
-  res.setHeader('Content-Disposition', `attachment; filename="${f}"`);
-  fs.createReadStream(fp).pipe(res);
-});
+// ── Rutas literales ────────────────────────────────────────────
+// Express resuelve por ORDEN de registro: una ruta paramétrica declarada
+// antes que una literal se queda con la literal. `GET /:filename` estaba
+// registrada acá arriba y capturaba `GET /offsite-config`, que no pasaba el
+// regex de nombre y respondía 400 «Nombre inválido»: la pantalla de
+// configuración off-site no podía leer su configuración.
+//
+// Las paramétricas van al final del archivo. No agregar ninguna antes.
 
 // ── Backup off-site config ─────────────────────────────────────
 const OFFSITE_KEYS = [
@@ -120,11 +116,35 @@ router.post('/offsite-test', async (_req, res) => {
 // POST /api/backups — generar backup manual (con upload off-site)
 // (override para usar runBackupWithUpload)
 
+// ── Rutas paramétricas — SIEMPRE al final ──────────────────────
+// Cualquier ruta literal declarada DESPUÉS de éstas sería inalcanzable.
+
+// GET /api/backups/:filename — descargar archivo
+router.get('/:filename', async (req, res) => {
+  const f = path.basename(req.params.filename); // evita path traversal
+  if (!/^asistencia_[\w\-]+\.sql\.gz$/.test(f)) return res.status(400).json({ error: 'Nombre inválido' });
+  const fp = path.resolve(BACKUP_DIR, f);
+  // Double-check que el archivo resuelto sigue dentro de BACKUP_DIR
+  if (!fp.startsWith(path.resolve(BACKUP_DIR) + path.sep)) return res.status(400).json({ error: 'Ruta inválida' });
+  if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Backup no encontrado' });
+  res.setHeader('Content-Type', 'application/gzip');
+  res.setHeader('Content-Disposition', `attachment; filename="${f}"`);
+  fs.createReadStream(fp).pipe(res);
+});
+
 // DELETE /api/backups/:filename
+// Misma validación que el GET, y por el mismo motivo: el regex laxo anterior
+// (`asistencia_.*\.sql\.gz`, con `.*`) sobre `req.params.filename` sin basename
+// ni comprobación de prefijo permitía salir del directorio. Express decodifica
+// `%2F` dentro del parámetro, así que
+//   DELETE /api/backups/asistencia_%2F..%2F..%2F..%2Fetc%2Fpasswd.sql.gz
+// llegaba como `asistencia_/../../../etc/passwd.sql.gz`, pasaba el regex y
+// `path.join` lo normalizaba fuera de BACKUP_DIR → unlink arbitrario.
 router.delete('/:filename', async (req, res) => {
-  const f = req.params.filename;
-  if (!/^asistencia_.*\.sql\.gz$/.test(f)) return res.status(400).json({ error: 'Nombre inválido' });
-  const fp = path.join(BACKUP_DIR, f);
+  const f = path.basename(req.params.filename);
+  if (!/^asistencia_[\w\-]+\.sql\.gz$/.test(f)) return res.status(400).json({ error: 'Nombre inválido' });
+  const fp = path.resolve(BACKUP_DIR, f);
+  if (!fp.startsWith(path.resolve(BACKUP_DIR) + path.sep)) return res.status(400).json({ error: 'Ruta inválida' });
   if (!fs.existsSync(fp)) return res.status(404).json({ error: 'Backup no encontrado' });
   try { fs.unlinkSync(fp); res.json({ ok: true }); }
   catch (err) { res.status(500).json({ error: err.message }); }
