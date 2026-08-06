@@ -115,3 +115,57 @@ describe('cada causa conserva su propio HTTP', () => {
     expect(distintos.size).toBeGreaterThan(1);
   });
 });
+
+describe('health/detailed no pinta el Bridge en verde estando degradado', () => {
+  // checkBridge() sólo miraba `res.ok`. Como el Bridge responde 200 aun sin
+  // relojes, la pantalla de salud mostraba OK justo cuando falta configuración
+  // — el diagnóstico principal del operador escondiendo el problema.
+  const { checkBridgeForTest } = require('../src/routes/health');
+
+  test('degradado ⇒ ok:false, y se propagan los campos seguros', async () => {
+    global.fetch = async () => respuesta(200, {
+      status: 'degraded', degraded: true, configured_devices: 0,
+      device_source: 'none', config_problems: 2,
+    });
+
+    const r = await checkBridgeForTest();
+
+    expect(r.ok).toBe(false);
+    expect(r.degraded).toBe(true);
+    expect(r.configured_devices).toBe(0);
+    expect(r.device_source).toBe('none');
+  });
+
+  test('sano ⇒ ok:true', async () => {
+    global.fetch = async () => respuesta(200, {
+      status: 'ok', degraded: false, configured_devices: 3, device_source: 'zkteco_devices_env',
+    });
+
+    const r = await checkBridgeForTest();
+
+    expect(r.ok).toBe(true);
+    expect(r.configured_devices).toBe(3);
+  });
+
+  test('un cuerpo no-JSON no rompe el chequeo', async () => {
+    global.fetch = async () => ({
+      status: 200, ok: true,
+      json: async () => { throw new Error('no es JSON'); },
+      clone() { return this; },
+    });
+
+    const r = await checkBridgeForTest();
+    expect(r.ok).toBe(true);
+  });
+
+  test('no propaga IP ni serial aunque el Bridge los mandara', async () => {
+    global.fetch = async () => respuesta(200, {
+      status: 'ok', degraded: false, configured_devices: 1,
+      ip: '10.0.0.11', serial: 'SN-SECRETO',
+    });
+
+    const serializado = JSON.stringify(await checkBridgeForTest());
+    expect(serializado).not.toContain('10.0.0.11');
+    expect(serializado).not.toContain('SN-SECRETO');
+  });
+});

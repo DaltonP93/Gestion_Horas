@@ -271,6 +271,14 @@ function startBridgeApi(devices, resolution) {
       return res.status(400).json({ error: 'serial o ip requerido' });
     }
 
+    // Ésta es la ruta que consume la API (fetchPushStatus), no la heredada
+    // /devices/:id/push-state. Sin esta comprobación acá, un Bridge sin
+    // relojes respondía 200 con found:false y la API informaba "never_seen":
+    // el operador leía "el reloj nunca se vio" cuando el problema real es que
+    // no hay ningún reloj configurado.
+    const faltaConfig = configurationSummary(resolution);
+    if (faltaConfig) return res.status(503).json({ error: 'Bridge sin configurar', ...faltaConfig });
+
     res.json(buildPushStatusFor(pushState, { serial, ip }));
   });
 

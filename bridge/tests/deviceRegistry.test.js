@@ -44,6 +44,26 @@ describe('sin configuración no se inventa ningún reloj', () => {
     expect(r.problems.map(p => p.code)).toContain(PROBLEM.TEST_DEVICE_IN_PRODUCTION);
   });
 
+  test('NODE_ENV ausente NO cuenta como desarrollo', () => {
+    // Arranque directo, systemd o un PM2 sin bloque env dejan NODE_ENV vacío.
+    // Con la regla anterior (!== 'production') eso habilitaba el reloj
+    // ficticio en una máquina de producción.
+    for (const entorno of [undefined, '', 'staging', 'produccion', 'PRODUCTION']) {
+      const r = resolveDevices({ NODE_ENV: entorno, BRIDGE_ALLOW_TEST_DEVICE: 'true' });
+
+      expect(r.devices).toEqual([]);
+      expect(r.degraded).toBe(true);
+      expect(r.problems.map(p => p.code)).toContain(PROBLEM.TEST_DEVICE_IN_PRODUCTION);
+    }
+  });
+
+  test('sólo development y test lo habilitan', () => {
+    for (const entorno of ['development', 'test']) {
+      const r = resolveDevices({ NODE_ENV: entorno, BRIDGE_ALLOW_TEST_DEVICE: 'true' });
+      expect(r.devices).toHaveLength(1);
+    }
+  });
+
   test('en desarrollo, con la flag, sí se permite un reloj ficticio', () => {
     const r = resolveDevices({ NODE_ENV: 'development', BRIDGE_ALLOW_TEST_DEVICE: 'true' });
 
@@ -249,7 +269,7 @@ describe('push-status distingue "sin configurar" de "reloj inexistente"', () => 
 
 describe('validadores', () => {
   test('hosts válidos', () => {
-    for (const h of ['10.0.0.11', '192.168.1.1', '0.0.0.0', '255.255.255.255',
+    for (const h of ['10.0.0.11', '192.168.1.1', '127.0.0.1', '203.0.113.10',
       'reloj.local', 'reloj-comedor.empresa.com', 'a']) {
       expect(hostValido(h)).toBe(true);
     }
@@ -260,6 +280,28 @@ describe('validadores', () => {
       'reloj_.local', '10.0.0.256', null, undefined, 42, '1.2.3.04']) {
       expect(hostValido(h)).toBe(false);
     }
+  });
+
+  test('rechaza direcciones que no son un destino unicast alcanzable', () => {
+    // Validar sólo el rango de los octetos las dejaba pasar, y el polling
+    // terminaba intentando conectarse a algo que no es un equipo. Peor:
+    // 0.0.0.0 se resuelve al host local en varios sistemas.
+    const noUnicast = [
+      '0.0.0.0',          // «esta red» — sin especificar
+      '0.1.2.3',          // 0.0.0.0/8
+      '255.255.255.255',  // broadcast
+      '224.0.0.1',        // multicast
+      '239.255.255.250',  // multicast (SSDP)
+      '240.0.0.1',        // reservada
+    ];
+    for (const h of noUnicast) expect(hostValido(h)).toBe(false);
+  });
+
+  test('una entrada no unicast queda como host_invalid, no como reloj', () => {
+    const r = resolveDevices(env({ ZKTECO_DEVICES: 'Falso@0.0.0.0:4370,Real@10.0.0.11:4370' }));
+
+    expect(r.devices.map(d => d.name)).toEqual(['Real']);
+    expect(r.problems.map(p => p.code)).toContain(PROBLEM.HOST_INVALID);
   });
 
   test('puertos válidos e inválidos', () => {

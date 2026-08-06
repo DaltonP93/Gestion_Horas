@@ -58,7 +58,28 @@ async function checkBridge() {
     const to = setTimeout(() => ctrl.abort(), 3000);
     const res = await fetch(`${url}/health`, { signal: ctrl.signal });
     clearTimeout(to);
-    return { ok: res.ok, latency_ms: Date.now() - t0, status: res.status };
+
+    // El Bridge responde 200 aun sin relojes configurados: el proceso está
+    // vivo y lo que falta es configuración. Pero mirar sólo `res.ok` pintaba
+    // el Bridge en verde en la pantalla de salud justo cuando no tiene ningún
+    // reloj — el diagnóstico principal del operador escondiendo el problema.
+    let cuerpo = null;
+    try { cuerpo = await res.json(); } catch { /* no JSON: se ignora */ }
+
+    const degradado = Boolean(cuerpo && (cuerpo.degraded === true || cuerpo.status === 'degraded'));
+    return {
+      ok: res.ok && !degradado,
+      latency_ms: Date.now() - t0,
+      status: res.status,
+      // Campos seguros del contrato del Bridge: conteos y estado, sin IP ni serial.
+      ...(cuerpo ? {
+        bridge_status: cuerpo.status ?? null,
+        degraded: degradado,
+        configured_devices: cuerpo.configured_devices ?? cuerpo.devices ?? null,
+        device_source: cuerpo.device_source ?? null,
+        config_problems: cuerpo.config_problems ?? null,
+      } : {}),
+    };
   } catch (err) {
     return { ok: false, latency_ms: Date.now() - t0, error: err.message };
   }
@@ -96,3 +117,6 @@ router.get('/detailed', authenticate, authorize('admin', 'gth'), async (req, res
 });
 
 module.exports = router;
+// Costura para tests: `checkBridge` no es una ruta, es la lógica que decide si
+// el Bridge se muestra sano. Se expone para poder probarla sin levantar Express.
+module.exports.checkBridgeForTest = checkBridge;

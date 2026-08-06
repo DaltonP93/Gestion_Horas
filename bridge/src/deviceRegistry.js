@@ -79,10 +79,21 @@ function hostValido(host) {
     // pero no es una dirección. Se compara la forma NORMALIZADA contra el texto
     // original para rechazar ceros a la izquierda ('1.2.3.04'), que según la
     // implementación se interpretan como octal.
-    return m.slice(1).every((o) => {
-      const n = Number(o);
-      return String(n) === o && n >= 0 && n <= 255;
-    });
+    const octetos = m.slice(1).map(Number);
+    const rangoOk = m.slice(1).every((o, i) => String(octetos[i]) === o && octetos[i] >= 0 && octetos[i] <= 255);
+    if (!rangoOk) return false;
+
+    // Validar sólo el rango deja pasar direcciones que no son un destino TCP
+    // alcanzable. Un reloj es siempre unicast: si acá entra 0.0.0.0 el polling
+    // termina conectándose al host local, y una multicast o el broadcast no
+    // apuntan a ningún equipo.
+    const primero = octetos[0];
+    if (primero === 0) return false;                       // 0.0.0.0/8 — «esta red»
+    if (primero >= 224 && primero <= 239) return false;    // 224.0.0.0/4 — multicast
+    if (primero >= 240) return false;                      // 240.0.0.0/4 reservada + broadcast
+    // El loopback SÍ se acepta: es unicast y es el destino de un simulador de
+    // reloj en desarrollo. Lo que se rechaza es lo que no puede ser un equipo.
+    return true;
   }
   // Un hostname puramente numérico con puntos sería un IPv4 mal formado, no un
   // nombre: se rechaza en lugar de dejarlo pasar como host DNS.
@@ -226,8 +237,17 @@ function parseJson(texto) {
  */
 function resolveDevices(env = process.env) {
   const crudo = (env.ZKTECO_DEVICES || '').trim();
-  const enProduccion = env.NODE_ENV === 'production';
   const permiteTest = env.BRIDGE_ALLOW_TEST_DEVICE === 'true';
+
+  // Opt-in explícito, no "todo lo que no sea production".
+  //
+  // Con `NODE_ENV !== 'production'` bastaba que la variable faltara —arranque
+  // directo, systemd, un PM2 sin el bloque env— para que una máquina de
+  // producción se considerara entorno de desarrollo y la flag habilitara el
+  // reloj ficticio. Eso reintroducía el health engañoso por la puerta de al
+  // lado, que es exactamente lo que este módulo existe para impedir.
+  const ENTORNOS_DE_PRUEBA = ['development', 'test'];
+  const entornoDePrueba = ENTORNOS_DE_PRUEBA.includes(env.NODE_ENV);
 
   const problemas = [];
   let candidatos = [];
@@ -286,9 +306,9 @@ function resolveDevices(env = process.env) {
 
   // Sin relojes reales. El reloj de prueba NO es un fallback: hay que pedirlo.
   if (permiteTest) {
-    if (enProduccion) {
+    if (!entornoDePrueba) {
       // Ni con la flag. Es la regla que este módulo existe para sostener.
-      problemas.push({ code: PROBLEM.TEST_DEVICE_IN_PRODUCTION });
+      problemas.push({ code: PROBLEM.TEST_DEVICE_IN_PRODUCTION, detail: `NODE_ENV=${env.NODE_ENV || '(sin definir)'}` });
       return { devices: [], source: DEVICE_SOURCE.NONE, degraded: true, problems: problemas };
     }
     return {

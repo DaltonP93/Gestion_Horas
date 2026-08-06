@@ -92,7 +92,15 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD requerido}@127.0.0.1:6379
       API_URL: http://api:4000
       API_KEY: ${BRIDGE_API_KEY:?BRIDGE_API_KEY requerido}
+      BRIDGE_API_KEY: ${BRIDGE_API_KEY:?BRIDGE_API_KEY requerido}
       ZKTECO_POLL_INTERVAL: 30000
+      # Relojes del Bridge. El Dockerfile sólo copia package*.json y src/, así
+      # que `bridge/.env` NUNCA llega al contenedor: en Docker la única forma
+      # de configurar relojes es reenviar la variable desde el .env raíz.
+      # Sin esto, un despliegue Docker arranca con cero relojes.
+      # Formato: [nombre@]host[:puerto][#serial], separados por coma. Ej:
+      #   ZKTECO_DEVICES=Gerencia@10.0.0.11:4370,Comedor@10.0.0.12:4370
+      ZKTECO_DEVICES: ${ZKTECO_DEVICES:?ZKTECO_DEVICES requerido — ver bridge/.env.example}
     ports:
       - "8080:8080"   # Puerto para recibir PUSH del reloj ZKTeco
     network_mode: host  # Necesario para acceder a relojes en LAN
