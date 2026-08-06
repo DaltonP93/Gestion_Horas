@@ -71,8 +71,8 @@ Los cuatro estados son cerrados, con `CHECK` en la tabla.
 |---|---|
 | `enqueue(evento)` | Valida contra el contrato v1 y guarda. Idempotente por `event_id`. |
 | `claimBatch({limit})` | Reclama filas transmitibles y las marca `sending`. |
-| `acknowledge(ids)` | Confirma la entrega. Idempotente. |
-| `releaseForRetry(ids, {backoffMs})` | Vuelve a `pending`; al agotar intentos va a `dead_letter`. |
+| `acknowledge(ids, {claimToken})` | Confirma la entrega. Idempotente. **Requiere token.** |
+| `releaseForRetry(ids, {claimToken, backoffMs})` | Vuelve a `pending`; al agotar intentos va a `dead_letter`. **Requiere token.** |
 | `moveToDeadLetter(ids)` | Descarta explícitamente. No puede tocar algo ya confirmado. |
 | `recoverStaleClaims()` | Rescata lotes huérfanos pasado el TTL. |
 | `stats()` | Conteos por estado. Sin datos personales. |
@@ -101,7 +101,9 @@ Un lector no bloquea al escritor, y la base sobrevive a un corte sin quedar a me
 
 ### Token de reclamo
 
-`claimBatch` devuelve un `claim_token`, y `acknowledge` / `releaseForRetry` lo aceptan para condicionar la transición.
+`claimBatch` devuelve un `claim_token`, y `acknowledge` / `releaseForRetry` lo **exigen** — una llamada sin token se rechaza con `outbox_claim_token_required`.
+
+Al principio lo dejé opcional, razonando que un ACK es idempotente y confirmar de más no pierde datos. Era incorrecto: ese camino sin token conserva íntegra la carrera que el token vino a cerrar. Como todavía no hay consumidores conectados, no hay compatibilidad que preservar.
 
 Sin él hay una carrera **semántica** que serializar la transacción no arregla: el consumidor A reclama, se cuelga, `recoverStaleClaims` devuelve la fila a `pending`, B la reclama — y recién ahí A revive y llama a `releaseForRetry`. A estaría devolviendo a `pending` un lote que B tiene en vuelo y sano, o sumándole un intento hacia `dead_letter`.
 
@@ -109,7 +111,9 @@ Con token, la operación de A no encuentra nada que cambiar.
 
 ### `SQLITE_BUSY` se devuelve, no se lanza
 
-Si otro escritor mantiene el lock más allá de `busy_timeout`, SQLite lanza. El contrato del módulo es que **ninguna operación lanza**, así que las transacciones se envuelven y el error se traduce a `{ ok: false, error_code: 'outbox_busy' }`. Una vez conectado, esto deja al consumidor reintentar en vez de morir.
+Si otro escritor mantiene el lock más allá de `busy_timeout`, SQLite lanza. El contrato del módulo es que **ninguna operación lanza**, así que se traduce a `{ ok: false, error_code: 'outbox_busy' }`.
+
+Incluye `enqueue`, que al principio quedó fuera: es la ruta de **ingesta**, y si el error escapara la contención abortaría el ciclo que recibe la marcación del reloj — exactamente lo que el Outbox existe para evitar.
 
 ### El contrato valida antes de tocar el disco
 

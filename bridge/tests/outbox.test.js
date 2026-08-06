@@ -110,8 +110,8 @@ describe('sobrevive al reinicio del proceso', () => {
     const uno = abierto();
     const e = marcacion(1);
     uno.enqueue(e);
-    uno.claimBatch();
-    uno.acknowledge([e.event_id]);
+    const A = uno.claimBatch();
+    uno.acknowledge([e.event_id], { claimToken: A.claim_token });
     uno.close();
 
     const dos = abierto();
@@ -166,8 +166,8 @@ describe('duplicados', () => {
     const o = abierto();
     const e = marcacion(1);
     o.enqueue(e);
-    o.claimBatch();
-    o.acknowledge([e.event_id]);
+    const A = o.claimBatch();
+    o.acknowledge([e.event_id], { claimToken: A.claim_token });
 
     o.enqueue(e);   // el reloj reenvía el mismo lote
 
@@ -179,17 +179,17 @@ describe('duplicados', () => {
   test('el ACK repetido no falla ni cambia nada', () => {
     const o = abierto();
     const e = marcacion(1);
-    o.enqueue(e); o.claimBatch();
+    const A0 = (o.enqueue(e), o.claimBatch());
 
-    expect(o.acknowledge([e.event_id]).acknowledged).toBe(1);
-    expect(o.acknowledge([e.event_id]).acknowledged).toBe(0);   // ya estaba
+    expect(o.acknowledge([e.event_id], { claimToken: A0.claim_token }).acknowledged).toBe(1);
+    expect(o.acknowledge([e.event_id], { claimToken: A0.claim_token }).acknowledged).toBe(0);   // ya estaba
     expect(o.stats().by_status[STATUS.ACKNOWLEDGED]).toBe(1);
     o.close();
   });
 
   test('confirmar un event_id inexistente no rompe', () => {
     const o = abierto();
-    expect(o.acknowledge(['sha256:no-existe']).acknowledged).toBe(0);
+    expect(o.acknowledge(['sha256:no-existe'], { claimToken: 'cualquiera' }).acknowledged).toBe(0);
     o.close();
   });
 });
@@ -246,9 +246,9 @@ describe('reintentos', () => {
   test('liberar devuelve a pending con backoff', () => {
     const o = abierto();
     const e = marcacion(1);
-    o.enqueue(e); o.claimBatch();
+    const A1 = (o.enqueue(e), o.claimBatch());
 
-    const r = o.releaseForRetry([e.event_id], { errorCode: 'http_503', backoffMs: 60000 });
+    const r = o.releaseForRetry([e.event_id], { errorCode: 'http_503', backoffMs: 60000, claimToken: A1.claim_token });
 
     expect(r.released).toBe(1);
     expect(o.stats().by_status[STATUS.PENDING]).toBe(1);
@@ -267,8 +267,8 @@ describe('reintentos', () => {
     let futuro = Date.now();
     for (let i = 0; i < 3; i++) {
       futuro += 120000;
-      o.claimBatch({ now: new Date(futuro) });
-      o.releaseForRetry([e.event_id], { errorCode: 'http_500', backoffMs: 1000, now: new Date(futuro) });
+      const c = o.claimBatch({ now: new Date(futuro) });
+      o.releaseForRetry([e.event_id], { errorCode: 'http_500', backoffMs: 1000, now: new Date(futuro), claimToken: c.claim_token });
     }
 
     expect(o.stats().by_status[STATUS.DEAD_LETTER]).toBe(1);
@@ -289,7 +289,8 @@ describe('reintentos', () => {
   test('no se puede descartar algo ya confirmado', () => {
     const o = abierto();
     const e = marcacion(1);
-    o.enqueue(e); o.claimBatch(); o.acknowledge([e.event_id]);
+    const A2 = (o.enqueue(e), o.claimBatch());
+    o.acknowledge([e.event_id], { claimToken: A2.claim_token });
 
     expect(o.moveToDeadLetter([e.event_id]).dead_lettered).toBe(0);
     expect(o.stats().by_status[STATUS.ACKNOWLEDGED]).toBe(1);
@@ -301,7 +302,7 @@ describe('reintentos', () => {
     const e = marcacion(1);
     o.enqueue(e);   // pending, nunca reclamada
 
-    expect(o.releaseForRetry([e.event_id]).released).toBe(0);
+    expect(o.releaseForRetry([e.event_id], { claimToken: 'cualquiera' }).released).toBe(0);
     o.close();
   });
 });
@@ -480,8 +481,8 @@ describe('stats', () => {
     o.enqueue(marcacion(2), { now: new Date('2026-03-11T09:00:00Z') });
     const e3 = marcacion(3);
     o.enqueue(e3);
-    o.claimBatch({ limit: 1 });
-    o.acknowledge([marcacion(1).event_id]);
+    const A3 = o.claimBatch({ limit: 1 });
+    o.acknowledge([marcacion(1).event_id], { claimToken: A3.claim_token });
 
     const s = o.stats();
 
@@ -607,6 +608,97 @@ describe('SQLITE_BUSY se devuelve como resultado, no se lanza', () => {
     expect(r.error_code).toBe(OUTBOX_ERRORS.BUSY);
 
     o.db.transaction = real;
+    o.close();
+  });
+});
+
+describe('el token de reclamo es obligatorio, no opcional', () => {
+  /**
+   * La primera corrección lo dejó opcional razonando que "un ACK es
+   * idempotente y confirmar de más no pierde datos". Pero ese camino sin token
+   * conserva ÍNTEGRA la carrera que el token vino a cerrar: un consumidor
+   * rescatado tras el TTL confirmaría —o peor, devolvería a pending— el
+   * reclamo de otro. Como todavía no hay consumidores conectados, no hay
+   * compatibilidad que preservar.
+   */
+  test('acknowledge sin token se rechaza', () => {
+    const o = abierto();
+    const e = marcacion(1);
+    o.enqueue(e); o.claimBatch();
+
+    const r = o.acknowledge([e.event_id]);
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(OUTBOX_ERRORS.CLAIM_TOKEN_REQUIRED);
+    expect(o.stats().by_status[STATUS.ACKNOWLEDGED]).toBe(0);   // no cambió nada
+    o.close();
+  });
+
+  test('releaseForRetry sin token se rechaza', () => {
+    const o = abierto();
+    const e = marcacion(1);
+    o.enqueue(e); o.claimBatch();
+
+    const r = o.releaseForRetry([e.event_id]);
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(OUTBOX_ERRORS.CLAIM_TOKEN_REQUIRED);
+    expect(o.stats().by_status[STATUS.SENDING]).toBe(1);        // sigue en vuelo
+    o.close();
+  });
+
+  test('no queda ninguna rama que omita la condición del token', () => {
+    const src = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'src', 'outbox.js'), 'utf8');
+
+    // El patrón `claimToken ? ... : ...` era justamente el fallback inseguro.
+    expect(src).not.toMatch(/claimToken \?/);
+  });
+});
+
+describe('SQLITE_BUSY también se traduce al encolar', () => {
+  test('enqueue devuelve outbox_busy en vez de lanzar', () => {
+    // enqueue es la ruta de INGESTA: si el error escapara, la contención
+    // abortaría el ciclo que recibe la marcación del reloj, que es justo lo
+    // que el Outbox existe para evitar.
+    const o = abierto();
+    const real = o.db.prepare.bind(o.db);
+    o.db.prepare = (sql) => {
+      if (/INSERT INTO outbox_events/.test(sql)) {
+        return { run: () => { throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' }); } };
+      }
+      return real(sql);
+    };
+
+    let r;
+    expect(() => { r = o.enqueue(marcacion(1)); }).not.toThrow();
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(OUTBOX_ERRORS.BUSY);
+
+    o.db.prepare = real;
+    o.close();
+  });
+
+  test('ninguna operación pública lanza, con la base ocupada', () => {
+    const o = abierto();
+    o.enqueue(marcacion(1));
+
+    const real = o.db.prepare.bind(o.db);
+    const realTx = o.db.transaction.bind(o.db);
+    const romper = () => { throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' }); };
+    o.db.prepare = () => ({ run: romper, get: romper, all: romper });
+    o.db.transaction = () => { const t = romper; t.immediate = romper; return t; };
+
+    for (const llamada of [
+      () => o.enqueue(marcacion(2)),
+      () => o.claimBatch(),
+      () => o.acknowledge(['x'], { claimToken: 't' }),
+      () => o.releaseForRetry(['x'], { claimToken: 't' }),
+    ]) {
+      expect(llamada).not.toThrow();
+    }
+
+    o.db.prepare = real; o.db.transaction = realTx;
     o.close();
   });
 });

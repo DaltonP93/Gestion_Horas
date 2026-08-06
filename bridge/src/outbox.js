@@ -52,6 +52,7 @@ const OUTBOX_ERRORS = Object.freeze({
   NOT_OPEN:          'outbox_not_open',
   UNKNOWN_EVENT:     'outbox_unknown_event',
   BUSY:              'outbox_busy',
+  CLAIM_TOKEN_REQUIRED: 'outbox_claim_token_required',
 });
 
 const DEFAULTS = Object.freeze({
@@ -215,16 +216,26 @@ class Outbox {
     }
 
     const limpio = sanitizePayload(evento);
-    const fila = this.db.prepare(`
-      INSERT INTO outbox_events (event_id, device_id, payload, status, attempts, created_at)
-      VALUES (@event_id, @device_id, @payload, '${STATUS.PENDING}', 0, @created_at)
-      ON CONFLICT(event_id) DO NOTHING
-    `).run({
-      event_id: evento.event_id,
-      device_id: evento.device_id,
-      payload: JSON.stringify(limpio),
-      created_at: now.toISOString(),
-    });
+
+    // Esta escritura también puede recibir SQLITE_BUSY si otra conexión tiene
+    // el lock más allá del busy_timeout. Es la ruta de INGESTA: si escapara,
+    // la contención abortaría el ciclo que recibe la marcación del reloj —
+    // justo lo que el Outbox existe para evitar.
+    let fila;
+    try {
+      fila = this.db.prepare(`
+        INSERT INTO outbox_events (event_id, device_id, payload, status, attempts, created_at)
+        VALUES (@event_id, @device_id, @payload, '${STATUS.PENDING}', 0, @created_at)
+        ON CONFLICT(event_id) DO NOTHING
+      `).run({
+        event_id: evento.event_id,
+        device_id: evento.device_id,
+        payload: JSON.stringify(limpio),
+        created_at: now.toISOString(),
+      });
+    } catch (err) {
+      return { ok: false, error_code: OUTBOX_ERRORS.BUSY, detail: codigoDeError(err) };
+    }
 
     return { ok: true, inserted: fila.changes === 1, event_id: evento.event_id };
   }
@@ -312,21 +323,23 @@ class Outbox {
     const lista = Array.isArray(eventIds) ? eventIds : [eventIds];
     if (!lista.length) return { ok: true, acknowledged: 0 };
 
-    // Con `claimToken` sólo se confirma el reclamo propio. Sin él se confirma
-    // igual —un ACK es idempotente y confirmar de más no pierde datos— pero
-    // el consumidor real debería pasarlo siempre.
-    const condicion = claimToken ? 'AND claim_token = ?' : '';
+    // El token es OBLIGATORIO. La primera versión lo hacía opcional
+    // —"un ACK es idempotente, confirmar de más no pierde datos"— pero ese
+    // camino sin token conserva íntegra la carrera que el token vino a cerrar:
+    // un consumidor rescatado tras el TTL confirmaría el reclamo de otro.
+    // Como todavía no hay consumidores conectados, no hay compatibilidad que
+    // preservar: se rechaza la llamada en vez de omitir la condición.
+    if (!claimToken) return { ok: false, error_code: OUTBOX_ERRORS.CLAIM_TOKEN_REQUIRED };
+
     const stmt = this.db.prepare(`
       UPDATE outbox_events
          SET status = ?, acknowledged_at = ?, claimed_at = NULL, claim_token = NULL, last_error_code = NULL
-       WHERE event_id = ? AND status <> ? ${condicion}
+       WHERE event_id = ? AND status <> ? AND claim_token = ?
     `);
     const tx = this.db.transaction(() => {
       let n = 0;
       for (const id of lista) {
-        const args = [STATUS.ACKNOWLEDGED, now.toISOString(), id, STATUS.ACKNOWLEDGED];
-        if (claimToken) args.push(claimToken);
-        n += stmt.run(...args).changes;
+        n += stmt.run(STATUS.ACKNOWLEDGED, now.toISOString(), id, STATUS.ACKNOWLEDGED, claimToken).changes;
       }
       return n;
     });
@@ -342,13 +355,13 @@ class Outbox {
     if (!lista.length) return { ok: true, released: 0, dead_lettered: 0 };
 
     const proximo = new Date(now.getTime() + backoffMs).toISOString();
-    // Se exige el token del reclamo: si recoverStaleClaims devolvió la fila a
-    // pending y otro consumidor la reclamó, el consumidor viejo NO debe tocar
-    // el reclamo nuevo — devolverlo a pending o sumarle un intento hacia
-    // dead_letter sería castigar a un lote que está en vuelo y sano.
-    const leer = claimToken
-      ? this.db.prepare('SELECT id, attempts FROM outbox_events WHERE event_id = ? AND status = ? AND claim_token = ?')
-      : this.db.prepare('SELECT id, attempts FROM outbox_events WHERE event_id = ? AND status = ?');
+    // El token es OBLIGATORIO, por el mismo motivo que en acknowledge: la
+    // rama sin token conservaba la carrera. Acá el daño sería mayor —devolver
+    // a pending o empujar hacia dead_letter un lote ajeno que está sano.
+    if (!claimToken) return { ok: false, error_code: OUTBOX_ERRORS.CLAIM_TOKEN_REQUIRED };
+
+    const leer = this.db.prepare(
+      'SELECT id, attempts FROM outbox_events WHERE event_id = ? AND status = ? AND claim_token = ?');
     const reintentar = this.db.prepare(`
       UPDATE outbox_events
          SET status = ?, attempts = attempts + 1, next_attempt_at = ?,
@@ -365,7 +378,7 @@ class Outbox {
     const tx = this.db.transaction(() => {
       let released = 0, dead = 0;
       for (const id of lista) {
-        const fila = claimToken ? leer.get(id, STATUS.SENDING, claimToken) : leer.get(id, STATUS.SENDING);
+        const fila = leer.get(id, STATUS.SENDING, claimToken);
         if (!fila) continue;                       // no estaba en vuelo
         if (fila.attempts + 1 >= this.config.maxAttempts) {
           aMuertas.run(STATUS.DEAD_LETTER, errorCode, id);
