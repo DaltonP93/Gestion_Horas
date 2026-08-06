@@ -36,6 +36,20 @@ function isAllowed(sn) {
   return wl.includes(String(sn));
 }
 
+/**
+ * Puerto del servidor PUSH — UNA sola forma de resolverlo.
+ *
+ * Acá se leía `PUSH_PORT` mientras el health del Bridge leía
+ * `ZKTECO_PUSH_PORT`: con la segunda definida, /health anunciaba un puerto en
+ * el que nadie escuchaba. Se acepta el nombre documentado y se mantiene el
+ * heredado como alias para no romper una instalación que ya lo use.
+ */
+function resolvePushPort(env = process.env) {
+  const crudo = env.ZKTECO_PUSH_PORT || env.PUSH_PORT || '8080';
+  const n = parseInt(String(crudo).trim(), 10);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 8080;
+}
+
 function startPushServer(publishAttendance, logger, opts = {}) {
   const { redis } = opts;
   const app = express();
@@ -157,7 +171,7 @@ function startPushServer(publishAttendance, logger, opts = {}) {
   // Endpoint interno para consultar estado PUSH (usado por la API)
   app.get('/push-state', (req, res) => res.json(pushState));
 
-  const PUSH_PORT = parseInt(process.env.PUSH_PORT || '8080');
+  const PUSH_PORT = resolvePushPort();
   app.listen(PUSH_PORT, () => {
     logger.info(`📡 Servidor PUSH ZKTeco escuchando en puerto ${PUSH_PORT}`);
   });
@@ -165,4 +179,4 @@ function startPushServer(publishAttendance, logger, opts = {}) {
   return { pushState };
 }
 
-module.exports = { startPushServer, pushState };
+module.exports = { startPushServer, pushState, resolvePushPort };

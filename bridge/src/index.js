@@ -18,7 +18,7 @@ const winston = require('winston');
 const { buildPushStatusFor } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
-const { startPushServer, pushState } = require('./pushServer');
+const { startPushServer, pushState, resolvePushPort } = require('./pushServer');
 const { discoverSubnet, probeHost }  = require('./discovery');
 
 // ─── Logger ─────────────────────────────────────────────────────
@@ -152,7 +152,9 @@ function startBridgeApi(devices, resolution) {
   app.get('/health', (req, res) => {
     res.json(buildHealth(resolution, {
       pushEnabled: true,
-      pushPort: parseInt(process.env.ZKTECO_PUSH_PORT || '8080', 10),
+      // Mismo resolvedor que usa el servidor PUSH: si divergieran, /health
+      // anunciaría un puerto en el que nadie escucha.
+      pushPort: resolvePushPort(),
     }));
   });
 

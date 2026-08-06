@@ -311,3 +311,58 @@ describe('validadores', () => {
     }
   });
 });
+
+describe('el puerto PUSH se resuelve en un solo lugar', () => {
+  // `pushServer` leía PUSH_PORT y el health leía ZKTECO_PUSH_PORT: con la
+  // segunda definida, /health anunciaba un puerto en el que nadie escuchaba.
+  // El .env.example documentaba justamente el nombre que nadie leía.
+  const { resolvePushPort } = require('../src/pushServer');
+
+  test('acepta el nombre documentado', () => {
+    expect(resolvePushPort({ ZKTECO_PUSH_PORT: '9090' })).toBe(9090);
+  });
+
+  test('mantiene el heredado como alias', () => {
+    expect(resolvePushPort({ PUSH_PORT: '9091' })).toBe(9091);
+  });
+
+  test('el documentado gana sobre el heredado', () => {
+    expect(resolvePushPort({ ZKTECO_PUSH_PORT: '9090', PUSH_PORT: '9091' })).toBe(9090);
+  });
+
+  test('sin ninguno, 8080', () => {
+    expect(resolvePushPort({})).toBe(8080);
+  });
+
+  test('un valor inválido no deja el puerto en NaN', () => {
+    for (const v of ['abc', '', '0', '70000', '-1']) {
+      expect(resolvePushPort({ ZKTECO_PUSH_PORT: v })).toBe(8080);
+    }
+  });
+
+  test('health anuncia exactamente el puerto donde escucha el servidor PUSH', () => {
+    const env = { ZKTECO_PUSH_PORT: '9090' };
+    const h = buildHealth(resolveDevices({ NODE_ENV: 'production', ZKTECO_DEVICES: '10.0.0.11:4370' }),
+      { pushPort: resolvePushPort(env) });
+
+    expect(h.push_server.port).toBe(9090);
+  });
+
+  test('la variable se lee en un solo lugar, dentro del resolvedor', () => {
+    const fs2 = require('fs'), path2 = require('path');
+    const src = fs2.readFileSync(path2.join(__dirname, '..', 'src', 'pushServer.js'), 'utf8');
+    const idx = fs2.readFileSync(path2.join(__dirname, '..', 'src', 'index.js'), 'utf8');
+
+    // Cada nombre se lee exactamente una vez, y sólo dentro de resolvePushPort.
+    expect(src.match(/env\.ZKTECO_PUSH_PORT/g) || []).toHaveLength(1);
+    expect(src.match(/env\.PUSH_PORT/g) || []).toHaveLength(1);
+
+    const cuerpo = src.slice(src.indexOf('function resolvePushPort'), src.indexOf('function startPushServer'));
+    expect(cuerpo).toContain('env.ZKTECO_PUSH_PORT');
+    expect(cuerpo).toContain('env.PUSH_PORT');
+
+    // index.js no vuelve a leerla: usa el resolvedor.
+    expect(idx).not.toMatch(/process\.env\.(ZKTECO_)?PUSH_PORT/);
+    expect(idx).toContain('resolvePushPort()');
+  });
+});
