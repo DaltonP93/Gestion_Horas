@@ -10,7 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { createOutbox, Outbox, readConfig, sanitizePayload, STATUS, OUTBOX_ERRORS } = require('../src/outbox');
+const { createOutbox, Outbox, readConfig, sanitizePayload, STATUS, OUTBOX_ERRORS, CAMPOS_PERMITIDOS } = require('../src/outbox');
 const { buildEvent } = require('../../contracts/punchContractV1');
 
 let dir;
@@ -355,6 +355,35 @@ describe('no se guarda nada sensible', () => {
     expect(limpio.event_id).toBe(sucio.event_id);   // la identidad se conserva
   });
 
+  test('sólo sobreviven los campos del contrato, nada más', () => {
+    // La lista blanca es la garantía: una lista negra sólo detiene lo que
+    // alguien pensó en nombrar.
+    const limpio = sanitizePayload({ ...marcacion(1), cualquier_cosa_nueva: 'x' });
+    expect(Object.keys(limpio).every(k => CAMPOS_PERMITIDOS.includes(k))).toBe(true);
+  });
+
+  test('un campo sensible con nombre NO previsto tampoco pasa', () => {
+    // `auth_token` no estaba en la vieja lista de prohibidos, y `validateEvent`
+    // ignora las propiedades desconocidas: el evento era válido y el token
+    // terminaba en el SQLite sin cifrar.
+    const limpio = sanitizePayload({
+      ...marcacion(1),
+      auth_token: 'MARCA-TOKEN',
+      credencial_rara: 'MARCA-RARA',
+    });
+
+    expect(limpio.auth_token).toBeUndefined();
+    expect(limpio.credencial_rara).toBeUndefined();
+  });
+
+  test('un objeto anidado con secretos no pasa entero', () => {
+    // Una comprobación de primer nivel no ve `metadata.token`.
+    const limpio = sanitizePayload({ ...marcacion(1), metadata: { token: 'MARCA-ANIDADA' } });
+
+    expect(limpio.metadata).toBeUndefined();
+    expect(JSON.stringify(limpio)).not.toContain('MARCA-ANIDADA');
+  });
+
   test('lo guardado en disco tampoco los tiene', () => {
     const o = abierto();
     o.enqueue({ ...marcacion(1), selfie: 'AAAA', ip: '10.0.0.11' });
@@ -368,13 +397,18 @@ describe('no se guarda nada sensible', () => {
 
   test('el archivo en bruto tampoco los contiene', () => {
     const o = abierto();
-    o.enqueue({ ...marcacion(1), selfie: 'MARCA-SELFIE', comm_password: 'MARCA-CLAVE' });
+    o.enqueue({
+      ...marcacion(1),
+      selfie: 'MARCA-SELFIE', comm_password: 'MARCA-CLAVE',
+      auth_token: 'MARCA-TOKEN', metadata: { token: 'MARCA-ANIDADA' },
+    });
     o.close();
 
     const bytes = fs.readFileSync(path.join(dir, 'outbox.db')).toString('latin1');
 
-    expect(bytes).not.toContain('MARCA-SELFIE');
-    expect(bytes).not.toContain('MARCA-CLAVE');
+    for (const marca of ['MARCA-SELFIE', 'MARCA-CLAVE', 'MARCA-TOKEN', 'MARCA-ANIDADA']) {
+      expect(bytes).not.toContain(marca);
+    }
   });
 });
 
@@ -465,6 +499,114 @@ describe('stats', () => {
 
     expect(serializado).not.toContain('1001');       // device_user_id
     expect(serializado).not.toContain('sha256:');    // event_id
+    o.close();
+  });
+});
+
+describe('el reclamo viejo no pisa al nuevo (token de reclamo)', () => {
+  /**
+   * La carrera: el consumidor A reclama, se cuelga, `recoverStaleClaims`
+   * devuelve la fila a pending, el consumidor B la reclama — y recién ahí A
+   * revive y llama a `releaseForRetry`. Sin token, A devolvería a pending un
+   * lote que B tiene en vuelo y sano, o le sumaría un intento hacia
+   * dead_letter. Serializar la transacción no arregla esto: es una carrera
+   * semántica, no de concurrencia de escritura.
+   */
+  test('releaseForRetry del consumidor viejo no toca el reclamo nuevo', () => {
+    const o = abierto();
+    const e = marcacion(1);
+    o.enqueue(e);
+
+    const A = o.claimBatch();                       // consumidor A reclama
+    expect(A.claim_token).toBeTruthy();
+
+    // A se cuelga; pasa el TTL y la fila se rescata.
+    o.recoverStaleClaims({ now: new Date(Date.now() + 10 * 60 * 1000) });
+    const B = o.claimBatch();                       // consumidor B la reclama
+    expect(B.events).toHaveLength(1);
+    expect(B.claim_token).not.toBe(A.claim_token);
+
+    // A revive y quiere liberar SU reclamo.
+    const r = o.releaseForRetry([e.event_id], { claimToken: A.claim_token });
+
+    expect(r.released).toBe(0);                     // no hizo nada
+    expect(r.dead_lettered).toBe(0);
+    expect(o.stats().by_status[STATUS.SENDING]).toBe(1);   // B sigue en vuelo
+    o.close();
+  });
+
+  test('el ACK del consumidor viejo tampoco confirma el reclamo nuevo', () => {
+    const o = abierto();
+    const e = marcacion(1);
+    o.enqueue(e);
+
+    const A = o.claimBatch();
+    o.recoverStaleClaims({ now: new Date(Date.now() + 10 * 60 * 1000) });
+    o.claimBatch();                                  // B reclama
+
+    const r = o.acknowledge([e.event_id], { claimToken: A.claim_token });
+
+    expect(r.acknowledged).toBe(0);
+    expect(o.stats().by_status[STATUS.ACKNOWLEDGED]).toBe(0);
+    o.close();
+  });
+
+  test('con su propio token, el consumidor sí confirma', () => {
+    const o = abierto();
+    const e = marcacion(1);
+    o.enqueue(e);
+    const A = o.claimBatch();
+
+    expect(o.acknowledge([e.event_id], { claimToken: A.claim_token }).acknowledged).toBe(1);
+    o.close();
+  });
+
+  test('cada reclamo recibe un token distinto', () => {
+    const o = abierto();
+    o.enqueue(marcacion(1)); o.enqueue(marcacion(2));
+
+    const a = o.claimBatch({ limit: 1 });
+    const b = o.claimBatch({ limit: 1 });
+
+    expect(a.claim_token).not.toBe(b.claim_token);
+    o.close();
+  });
+
+  test('el token se limpia al confirmar y al rescatar', () => {
+    const o = abierto();
+    const e = marcacion(1);
+    o.enqueue(e);
+    const A = o.claimBatch();
+    o.acknowledge([e.event_id], { claimToken: A.claim_token });
+
+    // Reconfirmar con el mismo token ya no encuentra nada que cambiar.
+    expect(o.acknowledge([e.event_id], { claimToken: A.claim_token }).acknowledged).toBe(0);
+    o.close();
+  });
+});
+
+describe('SQLITE_BUSY se devuelve como resultado, no se lanza', () => {
+  test('el contrato "ninguna operación lanza" se cumple también con la base ocupada', () => {
+    const o = abierto();
+    o.enqueue(marcacion(1));
+
+    // Se simula el lock sostenido: `db.transaction` devuelve un objeto cuyo
+    // `.immediate` lanza el error que better-sqlite3 propaga ante un timeout
+    // de lock. (No se puede sobreescribir `.immediate` del objeto real: es de
+    // sólo lectura y la asignación falla en silencio.)
+    const real = o.db.transaction.bind(o.db);
+    o.db.transaction = () => {
+      const t = () => { throw new Error('no debería llamarse'); };
+      t.immediate = () => { throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' }); };
+      return t;
+    };
+
+    let r;
+    expect(() => { r = o.claimBatch(); }).not.toThrow();
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(OUTBOX_ERRORS.BUSY);
+
+    o.db.transaction = real;
     o.close();
   });
 });

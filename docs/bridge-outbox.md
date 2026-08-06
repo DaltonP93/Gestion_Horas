@@ -43,6 +43,7 @@ CREATE TABLE outbox_events (
   acknowledged_at  TEXT    NULL,
   last_error_code  TEXT    NULL,
   claimed_at       TEXT    NULL,              -- para rescatar lotes huérfanos
+  claim_token      TEXT    NULL,              -- identifica UN reclamo concreto
   CHECK (status IN ('pending','sending','acknowledged','dead_letter'))
 );
 ```
@@ -98,6 +99,18 @@ Por eso existe `outboxConcurrency.test.js`, que levanta **procesos hijos de verd
 
 Un lector no bloquea al escritor, y la base sobrevive a un corte sin quedar a medias.
 
+### Token de reclamo
+
+`claimBatch` devuelve un `claim_token`, y `acknowledge` / `releaseForRetry` lo aceptan para condicionar la transición.
+
+Sin él hay una carrera **semántica** que serializar la transacción no arregla: el consumidor A reclama, se cuelga, `recoverStaleClaims` devuelve la fila a `pending`, B la reclama — y recién ahí A revive y llama a `releaseForRetry`. A estaría devolviendo a `pending` un lote que B tiene en vuelo y sano, o sumándole un intento hacia `dead_letter`.
+
+Con token, la operación de A no encuentra nada que cambiar.
+
+### `SQLITE_BUSY` se devuelve, no se lanza
+
+Si otro escritor mantiene el lock más allá de `busy_timeout`, SQLite lanza. El contrato del módulo es que **ninguna operación lanza**, así que las transacciones se envuelven y el error se traduce a `{ ok: false, error_code: 'outbox_busy' }`. Una vez conectado, esto deja al consumidor reintentar en vez de morir.
+
 ### El contrato valida antes de tocar el disco
 
 `enqueue` corre `validateEvent` del contrato v1 **antes** de insertar. Una marcación que no pasa el contrato tampoco se va a poder transmitir después; guardarla sólo llenaría la cola de basura imposible de drenar.
@@ -106,9 +119,23 @@ Un lector no bloquea al escritor, y la base sobrevive a un corte sin quedar a me
 
 El Outbox es un archivo **sin cifrar** en el disco del Bridge, que vive en la misma LAN que los relojes. Guardar ahí selfies, plantillas biométricas o credenciales sería crear un objetivo nuevo.
 
-Se descartan antes de escribir: `selfie`, `photo`, `image`, `face`, `face_template`, `biometric`, `fingerprint`, `template`, `password`, `comm_password`, `token`, `api_key`, `authorization`, y también `ip` / `device_ip` — la IP no aporta a la identidad de la marcación y es topología de red.
+El payload se construye desde una **lista cerrada** de campos —exactamente los del contrato v1— y no desde una lista de prohibidos.
+
+La lista negra era insuficiente por construcción: `validateEvent` ignora las propiedades desconocidas, así que un evento perfectamente válido con `auth_token`, o con `metadata: { token }` anidado e invisible para una comprobación de primer nivel, pasaba entero al disco. Una lista negra sólo detiene lo que alguien pensó en nombrar.
+
+Queda fuera también la **IP**: no aporta a la identidad de la marcación y es topología de red.
 
 Hay un test que lee el **archivo `.db` en bruto** y verifica que las marcas no aparezcan, no sólo que el objeto devuelto no las tenga.
+
+## Driver y versión
+
+`better-sqlite3` **fijado a `^12.11.1`**, no a la última.
+
+`node:sqlite` no sirve: el repo declara `engines: node >=20` y CI corre en Node 20; `node:sqlite` recién existe en 22.5 y es experimental.
+
+Y dentro de `better-sqlite3`, la `13.x` declara `engines: node >=22` — instalarla habría roto CI y el `Dockerfile` del Bridge, que también usa Node 20. La `12.x` declara `20.x || 22.x || 23.x || 24.x`.
+
+Al ser un módulo nativo, si el despliegue lo compila desde fuente hace falta toolchain. Como el `require` es **perezoso**, una instalación donde falle no rompe el Bridge mientras la flag esté apagada.
 
 ## Configuración
 

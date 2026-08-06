@@ -32,6 +32,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { validateEvent } = require('../../contracts/punchContractV1');
@@ -50,6 +51,7 @@ const OUTBOX_ERRORS = Object.freeze({
   CONTRACT_INVALID:  'outbox_contract_invalid',
   NOT_OPEN:          'outbox_not_open',
   UNKNOWN_EVENT:     'outbox_unknown_event',
+  BUSY:              'outbox_busy',
 });
 
 const DEFAULTS = Object.freeze({
@@ -57,13 +59,6 @@ const DEFAULTS = Object.freeze({
   MAX_ATTEMPTS: 10,
   BUSY_TIMEOUT_MS: 5000,
 });
-
-/** Campos que NO se guardan nunca, vengan como vengan en el payload. */
-const CAMPOS_PROHIBIDOS = Object.freeze([
-  'selfie', 'photo', 'photo_base64', 'image', 'face', 'face_template',
-  'biometric', 'fingerprint', 'template', 'password', 'pwd', 'comm_password',
-  'token', 'api_key', 'apikey', 'authorization', 'ip', 'ip_address', 'device_ip',
-]);
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS outbox_events (
@@ -78,6 +73,11 @@ CREATE TABLE IF NOT EXISTS outbox_events (
   acknowledged_at  TEXT    NULL,
   last_error_code  TEXT    NULL,
   claimed_at       TEXT    NULL,
+  -- Identifica UN reclamo concreto. Sin esto, si recoverStaleClaims devuelve
+  -- una fila a pending y otro consumidor la reclama, el ACK o el retry del
+  -- consumidor viejo caen sobre el reclamo NUEVO. Serializar la transacción no
+  -- arregla esa carrera: es semántica, no de concurrencia de escritura.
+  claim_token      TEXT    NULL,
   CHECK (status IN ('pending','sending','acknowledged','dead_letter'))
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_claim   ON outbox_events (status, next_attempt_at);
@@ -106,18 +106,36 @@ function entero(valor, porDefecto) {
 // ── Saneado del payload ──────────────────────────────────────────────
 
 /**
- * Quita lo que no debe quedar en disco.
+ * Construye el payload desde una LISTA CERRADA de campos.
  *
  * El Outbox es un archivo sin cifrar en el disco del Bridge, que vive en la
  * misma LAN que los relojes. Guardar selfies, plantillas biométricas o
  * credenciales ahí sería crear un objetivo nuevo. La IP tampoco: no aporta a
  * la identidad de la marcación y es topología de red.
+ *
+ * Antes esto era una lista de PROHIBIDOS, y era insuficiente por construcción:
+ * `validateEvent` ignora las propiedades desconocidas, así que un evento
+ * perfectamente válido con `auth_token` —o con `metadata: { token }`, anidado y
+ * por lo tanto invisible para una comprobación de primer nivel— pasaba entero
+ * al disco. Una lista negra sólo detiene lo que alguien pensó en nombrar.
+ *
+ * La lista blanca es exactamente el contrato v1: si el contrato crece, esto se
+ * actualiza a propósito, y mientras tanto nada nuevo entra por descuido.
  */
+const CAMPOS_PERMITIDOS = Object.freeze([
+  'event_id',
+  'device_id',
+  'device_user_id',
+  'occurred_at',
+  'event_type',
+  'verify_mode',
+  'work_code',
+]);
+
 function sanitizePayload(evento) {
   const limpio = {};
-  for (const [k, v] of Object.entries(evento)) {
-    if (CAMPOS_PROHIBIDOS.includes(k.toLowerCase())) continue;
-    limpio[k] = v;
+  for (const k of CAMPOS_PERMITIDOS) {
+    if (evento[k] !== undefined) limpio[k] = evento[k];
   }
   return limpio;
 }
@@ -221,6 +239,7 @@ class Outbox {
   claimBatch({ limit = 50, now = new Date() } = {}) {
     if (!this.db) return { ok: false, error_code: OUTBOX_ERRORS.NOT_OPEN };
     const ahora = now.toISOString();
+    const token = crypto.randomUUID();
 
     const tx = this.db.transaction(() => {
       const candidatas = this.db.prepare(`
@@ -237,9 +256,9 @@ class Outbox {
       const marcas = ids.map(() => '?').join(',');
       this.db.prepare(`
         UPDATE outbox_events
-           SET status = ?, claimed_at = ?
+           SET status = ?, claimed_at = ?, claim_token = ?
          WHERE id IN (${marcas})
-      `).run(STATUS.SENDING, ahora, ...ids);
+      `).run(STATUS.SENDING, ahora, token, ...ids);
 
       return this.db.prepare(
         `SELECT id, event_id, device_id, payload, attempts FROM outbox_events WHERE id IN (${marcas}) ORDER BY id`
@@ -258,9 +277,20 @@ class Outbox {
     // Esto NO se puede probar dentro de un proceso: better-sqlite3 es síncrono
     // y nada puede interleavearse. El test que lo cubre levanta procesos hijos
     // de verdad.
-    const filas = tx.immediate();
+    // SQLITE_BUSY se traduce a resultado, no se propaga: el contrato del
+    // módulo es que ninguna operación lanza. Si esto escapara, una vez
+    // conectado el Outbox tumbaría el ciclo del consumidor en vez de dejarlo
+    // reintentar.
+    let filas;
+    try {
+      filas = tx.immediate();
+    } catch (err) {
+      return { ok: false, error_code: OUTBOX_ERRORS.BUSY, detail: codigoDeError(err) };
+    }
+
     return {
       ok: true,
+      claim_token: token,
       events: filas.map(f => ({
         id: f.id,
         event_id: f.event_id,
@@ -277,42 +307,57 @@ class Outbox {
    * Idempotente: un ACK repetido —el servidor reintenta, el consumidor
    * duplica el aviso— no cambia nada ni falla.
    */
-  acknowledge(eventIds, { now = new Date() } = {}) {
+  acknowledge(eventIds, { now = new Date(), claimToken = null } = {}) {
     if (!this.db) return { ok: false, error_code: OUTBOX_ERRORS.NOT_OPEN };
     const lista = Array.isArray(eventIds) ? eventIds : [eventIds];
     if (!lista.length) return { ok: true, acknowledged: 0 };
 
+    // Con `claimToken` sólo se confirma el reclamo propio. Sin él se confirma
+    // igual —un ACK es idempotente y confirmar de más no pierde datos— pero
+    // el consumidor real debería pasarlo siempre.
+    const condicion = claimToken ? 'AND claim_token = ?' : '';
     const stmt = this.db.prepare(`
       UPDATE outbox_events
-         SET status = ?, acknowledged_at = ?, claimed_at = NULL, last_error_code = NULL
-       WHERE event_id = ? AND status <> ?
+         SET status = ?, acknowledged_at = ?, claimed_at = NULL, claim_token = NULL, last_error_code = NULL
+       WHERE event_id = ? AND status <> ? ${condicion}
     `);
     const tx = this.db.transaction(() => {
       let n = 0;
-      for (const id of lista) n += stmt.run(STATUS.ACKNOWLEDGED, now.toISOString(), id, STATUS.ACKNOWLEDGED).changes;
+      for (const id of lista) {
+        const args = [STATUS.ACKNOWLEDGED, now.toISOString(), id, STATUS.ACKNOWLEDGED];
+        if (claimToken) args.push(claimToken);
+        n += stmt.run(...args).changes;
+      }
       return n;
     });
 
-    return { ok: true, acknowledged: tx() };
+    try { return { ok: true, acknowledged: tx.immediate() }; }
+    catch (err) { return { ok: false, error_code: OUTBOX_ERRORS.BUSY, detail: codigoDeError(err) }; }
   }
 
   /** Devuelve a `pending` con backoff. Al superar maxAttempts va a dead_letter. */
-  releaseForRetry(eventIds, { errorCode = null, backoffMs = 30000, now = new Date() } = {}) {
+  releaseForRetry(eventIds, { errorCode = null, backoffMs = 30000, now = new Date(), claimToken = null } = {}) {
     if (!this.db) return { ok: false, error_code: OUTBOX_ERRORS.NOT_OPEN };
     const lista = Array.isArray(eventIds) ? eventIds : [eventIds];
     if (!lista.length) return { ok: true, released: 0, dead_lettered: 0 };
 
     const proximo = new Date(now.getTime() + backoffMs).toISOString();
-    const leer = this.db.prepare('SELECT id, attempts FROM outbox_events WHERE event_id = ? AND status = ?');
+    // Se exige el token del reclamo: si recoverStaleClaims devolvió la fila a
+    // pending y otro consumidor la reclamó, el consumidor viejo NO debe tocar
+    // el reclamo nuevo — devolverlo a pending o sumarle un intento hacia
+    // dead_letter sería castigar a un lote que está en vuelo y sano.
+    const leer = claimToken
+      ? this.db.prepare('SELECT id, attempts FROM outbox_events WHERE event_id = ? AND status = ? AND claim_token = ?')
+      : this.db.prepare('SELECT id, attempts FROM outbox_events WHERE event_id = ? AND status = ?');
     const reintentar = this.db.prepare(`
       UPDATE outbox_events
          SET status = ?, attempts = attempts + 1, next_attempt_at = ?,
-             claimed_at = NULL, last_error_code = ?
+             claimed_at = NULL, claim_token = NULL, last_error_code = ?
        WHERE event_id = ?
     `);
     const aMuertas = this.db.prepare(`
       UPDATE outbox_events
-         SET status = ?, attempts = attempts + 1, claimed_at = NULL,
+         SET status = ?, attempts = attempts + 1, claimed_at = NULL, claim_token = NULL,
              next_attempt_at = NULL, last_error_code = ?
        WHERE event_id = ?
     `);
@@ -320,7 +365,7 @@ class Outbox {
     const tx = this.db.transaction(() => {
       let released = 0, dead = 0;
       for (const id of lista) {
-        const fila = leer.get(id, STATUS.SENDING);
+        const fila = claimToken ? leer.get(id, STATUS.SENDING, claimToken) : leer.get(id, STATUS.SENDING);
         if (!fila) continue;                       // no estaba en vuelo
         if (fila.attempts + 1 >= this.config.maxAttempts) {
           aMuertas.run(STATUS.DEAD_LETTER, errorCode, id);
@@ -333,7 +378,9 @@ class Outbox {
       return { released, dead };
     });
 
-    const r = tx();
+    let r;
+    try { r = tx.immediate(); }
+    catch (err) { return { ok: false, error_code: OUTBOX_ERRORS.BUSY, detail: codigoDeError(err) }; }
     return { ok: true, released: r.released, dead_lettered: r.dead };
   }
 
@@ -342,7 +389,7 @@ class Outbox {
     if (!this.db) return { ok: false, error_code: OUTBOX_ERRORS.NOT_OPEN };
     const lista = Array.isArray(eventIds) ? eventIds : [eventIds];
     const stmt = this.db.prepare(`
-      UPDATE outbox_events SET status = ?, claimed_at = NULL, next_attempt_at = NULL, last_error_code = ?
+      UPDATE outbox_events SET status = ?, claimed_at = NULL, claim_token = NULL, next_attempt_at = NULL, last_error_code = ?
        WHERE event_id = ? AND status <> ?
     `);
     const tx = this.db.transaction(() => {
@@ -363,7 +410,7 @@ class Outbox {
 
     const r = this.db.prepare(`
       UPDATE outbox_events
-         SET status = ?, claimed_at = NULL
+         SET status = ?, claimed_at = NULL, claim_token = NULL
        WHERE status = ? AND (claimed_at IS NULL OR claimed_at <= ?)
     `).run(STATUS.PENDING, STATUS.SENDING, limite);
 
@@ -411,5 +458,5 @@ module.exports = {
   STATUS,
   OUTBOX_ERRORS,
   DEFAULTS,
-  CAMPOS_PROHIBIDOS,
+  CAMPOS_PERMITIDOS,
 };
