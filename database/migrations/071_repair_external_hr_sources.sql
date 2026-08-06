@@ -72,9 +72,13 @@ CREATE TABLE IF NOT EXISTS external_hr_sources (
 -- En una base donde 007 SÍ corrió, la tabla ya existe y el CREATE de arriba
 -- no hace nada — incluido el índice nuevo. Se agrega por separado, tolerando
 -- que ya esté, para que ambas bases terminen con el mismo esquema.
-DROP PROCEDURE IF EXISTS _add_idx_enabled_schedule;
+--
+-- El procedimiento lleva el prefijo de la migración a propósito: un nombre
+-- genérico como `_add_idx_enabled_schedule` podría existir ya como rutina
+-- operativa, y el DROP inicial la borraría sin aviso.
+DROP PROCEDURE IF EXISTS mig_071_add_idx_enabled_schedule;
 DELIMITER //
-CREATE PROCEDURE _add_idx_enabled_schedule()
+CREATE PROCEDURE mig_071_add_idx_enabled_schedule()
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.STATISTICS
@@ -87,5 +91,5 @@ BEGIN
   END IF;
 END //
 DELIMITER ;
-CALL _add_idx_enabled_schedule();
-DROP PROCEDURE IF EXISTS _add_idx_enabled_schedule;
+CALL mig_071_add_idx_enabled_schedule();
+DROP PROCEDURE IF EXISTS mig_071_add_idx_enabled_schedule;

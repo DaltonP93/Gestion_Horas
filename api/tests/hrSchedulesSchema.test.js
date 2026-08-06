@@ -219,3 +219,59 @@ describe('detección de errores de esquema (schemaState)', () => {
     expect(missingTableName(Object.assign(new Error('otra cosa'), { code: 'ER_NO_SUCH_TABLE' }))).toBeNull();
   });
 });
+
+describe('el detector de deriva no inventa tablas', () => {
+  // La primera versión capturaba `IF` como nombre de tabla desde comentarios
+  // como `-- Idempotente (CREATE TABLE IF NOT EXISTS).`: el grupo opcional
+  // retrocedía porque después no venía el paréntesis de la definición. El
+  // efecto era una tabla fantasma `if` que nunca existe, así que el informe
+  // daba deriva SIEMPRE y el script salía 1 en una base sana — peor que no
+  // tenerlo.
+  const fs = require('fs');
+  const path = require('path');
+  const MIGRACIONES = path.join(__dirname, '..', '..', 'database', 'migrations');
+
+  // El script no exporta el parser (es un CLI), así que se replica su regex.
+  // Este test falla si alguien la cambia allá sin cambiarla acá — que es
+  // justamente cuando conviene mirar.
+  const FUENTE = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'check-schema-drift.js'), 'utf8');
+
+  test('el regex exige el paréntesis de apertura', () => {
+    expect(FUENTE).toMatch(/CREATE\\s\+TABLE[\s\S]{0,80}\\s\*\\\(/);
+  });
+
+  test('descarta comentarios antes de analizar', () => {
+    expect(FUENTE).toContain('sinComentarios');
+    expect(FUENTE).toContain('NO_ES_TABLA');
+  });
+
+  test('ninguna migración real produce una tabla llamada "if"', () => {
+    // Se ejecuta el mismo criterio contra los archivos reales del repo.
+    const regex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"]?(\w+)[`"]?\s*\(/gi;
+    const sinComentarios = (sql) => sql
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => ' '.repeat(m.length))
+      .replace(/--[^\n]*/g, (m) => ' '.repeat(m.length))
+      .replace(/#[^\n]*/g, (m) => ' '.repeat(m.length));
+
+    const nombres = new Set();
+    for (const f of fs.readdirSync(MIGRACIONES).filter(x => x.endsWith('.sql'))) {
+      const limpio = sinComentarios(fs.readFileSync(path.join(MIGRACIONES, f), 'utf8'));
+      let m; regex.lastIndex = 0;
+      while ((m = regex.exec(limpio)) !== null) nombres.add(m[1].toLowerCase());
+    }
+
+    expect(nombres.has('if')).toBe(false);
+    expect(nombres.has('not')).toBe(false);
+    expect(nombres.has('exists')).toBe(false);
+    expect(nombres.has('external_hr_sources')).toBe(true);   // sigue detectando lo real
+  });
+
+  test('la migración 071 usa un procedimiento con prefijo de migración', () => {
+    // Un nombre genérico podría existir ya como rutina operativa y el DROP
+    // inicial la borraría sin aviso.
+    const sql = fs.readFileSync(path.join(MIGRACIONES, '071_repair_external_hr_sources.sql'), 'utf8');
+
+    expect(sql).toMatch(/CREATE PROCEDURE mig_071_/);
+    expect(sql).not.toMatch(/PROCEDURE (?!mig_071_)_?add_idx/);
+  });
+});

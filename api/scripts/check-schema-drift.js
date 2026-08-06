@@ -46,14 +46,45 @@ const DB = {
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', 'database', 'migrations');
 const INIT_SQL = path.resolve(__dirname, '..', '..', 'database', 'init.sql');
 
-const CREATE_TABLE = /CREATE TABLE (?:IF NOT EXISTS )?`?(\w+)`?/gi;
+/**
+ * Exige el paréntesis de apertura de la definición.
+ *
+ * Sin él, el grupo opcional `IF NOT EXISTS` retrocede ante un texto como
+ * `CREATE TABLE IF NOT EXISTS).` —que aparece dentro de comentarios en las
+ * migraciones 056, 057, 064 y 071— y captura `IF` como nombre de tabla. El
+ * resultado era una tabla fantasma `if` que nunca existe: el informe daba
+ * deriva siempre y el script salía con código 1 en una base sana, que es peor
+ * que no tenerlo.
+ */
+const CREATE_TABLE = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"]?(\w+)[`"]?\s*\(/gi;
+
+/**
+ * Quita comentarios y literales antes de buscar sentencias.
+ *
+ * Un `CREATE TABLE` mencionado en un comentario no crea nada. Se reemplaza por
+ * espacios en vez de borrarse para no pegar tokens de líneas distintas.
+ */
+function sinComentarios(sql) {
+  return sql
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => ' '.repeat(m.length))   // /* ... */
+    .replace(/--[^\n]*/g, (m) => ' '.repeat(m.length))           // -- ...
+    .replace(/#[^\n]*/g, (m) => ' '.repeat(m.length))            // # ... (MySQL)
+    .replace(/'(?:[^'\\]|\\.)*'/g, (m) => ' '.repeat(m.length)); // 'literal'
+}
+
+/** Palabras que nunca son un nombre de tabla, por si el regex se relaja. */
+const NO_ES_TABLA = new Set(['if', 'not', 'exists', 'table', 'temporary']);
 
 /** Tablas que un archivo SQL dice crear. */
 function tablasDe(sql) {
   const encontradas = new Set();
+  const limpio = sinComentarios(sql);
   let m;
   CREATE_TABLE.lastIndex = 0;
-  while ((m = CREATE_TABLE.exec(sql)) !== null) encontradas.add(m[1].toLowerCase());
+  while ((m = CREATE_TABLE.exec(limpio)) !== null) {
+    const nombre = m[1].toLowerCase();
+    if (!NO_ES_TABLA.has(nombre)) encontradas.add(nombre);
+  }
   return encontradas;
 }
 
