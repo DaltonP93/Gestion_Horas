@@ -241,7 +241,7 @@ describe('el detector de deriva no inventa tablas', () => {
   });
 
   test('descarta comentarios antes de analizar', () => {
-    expect(FUENTE).toContain('sinComentarios');
+    expect(FUENTE).toContain('neutralizar');
     expect(FUENTE).toContain('NO_ES_TABLA');
   });
 
@@ -264,6 +264,50 @@ describe('el detector de deriva no inventa tablas', () => {
     expect(nombres.has('not')).toBe(false);
     expect(nombres.has('exists')).toBe(false);
     expect(nombres.has('external_hr_sources')).toBe(true);   // sigue detectando lo real
+  });
+
+  test('un literal con # no rompe el análisis del resto del archivo', () => {
+    // La primera corrección borraba comentarios `#` ANTES que los literales,
+    // así que el color '#0ea5e9' de la migración 042 se comía como comentario,
+    // dejaba una comilla desbalanceada y el reemplazo siguiente se tragaba las
+    // sentencias posteriores: se detectaba shift_templates y se PERDÍAN
+    // shift_schedules y shift_assignments.
+    //
+    // Sub-informar es peor que sobre-informar: el check salía con código 0
+    // mientras faltaban tablas de verdad.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'check-schema-drift.js'), 'utf8');
+    const cuerpo = src.match(/function neutralizar[\s\S]*?\n}\n/);
+    expect(cuerpo).toBeTruthy();
+    // eslint-disable-next-line no-eval
+    const neutralizar = eval(`(${cuerpo[0].replace(/^function /, 'function ')})`);
+
+    const sql = fs.readFileSync(path.join(MIGRACIONES, '042_shift_scheduling_turnera.sql'), 'utf8');
+    const regex = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"]?(\w+)[`"]?\s*\(/gi;
+    const halladas = [];
+    let m; regex.lastIndex = 0;
+    const limpio = neutralizar(sql);
+    while ((m = regex.exec(limpio)) !== null) halladas.push(m[1]);
+
+    expect(halladas).toEqual(
+      expect.arrayContaining(['shift_templates', 'shift_schedules', 'shift_assignments']));
+  });
+
+  test('el análisis es de una sola pasada, no replaces encadenados', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'check-schema-drift.js'), 'utf8');
+    expect(src).toContain('function neutralizar');
+    expect(src).not.toContain('function sinComentarios');
+  });
+
+  test('sólo se tolera que falte schema_migrations, no otros fallos', () => {
+    // Tragarse permisos o conexión caída hacía que las migraciones aparecieran
+    // como pendientes y que el informe recomendara `npm run migrate`, cuando
+    // en realidad figuran como aplicadas y ese comando no las repara.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'check-schema-drift.js'), 'utf8');
+
+    expect(src).toContain('isMissingTableError');
+    expect(src).toMatch(/if \(!isMissingTableError\(err\)\) throw err;/);
+    // Y el estado "no se sabe" tiene que existir, distinto de "no aplicada".
+    expect(src).toContain('hayTablaDeControl');
   });
 
   test('la migración 071 usa un procedimiento con prefijo de migración', () => {
