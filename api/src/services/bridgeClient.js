@@ -19,6 +19,10 @@ const DEFAULT_TIMEOUT_MS = parseInt(process.env.BRIDGE_TIMEOUT_MS || '4000', 10)
 /** Causas distinguibles. Cada una tiene su propio HTTP: nada de 502 para todo. */
 const BRIDGE_ERROR_CODES = Object.freeze({
   NOT_CONFIGURED: 'BRIDGE_NOT_CONFIGURED',   // falta BRIDGE_API_KEY de este lado
+  // El Bridge está sano y responde, pero no tiene relojes configurados. Es
+  // distinto de NOT_CONFIGURED (que es configuración NUESTRA) y muy distinto de
+  // BRIDGE_ERROR: no hay nada roto, falta ZKTECO_DEVICES del otro lado.
+  DEVICES_UNCONFIGURED: 'BRIDGE_DEVICES_UNCONFIGURED',
   UNAUTHORIZED:   'BRIDGE_UNAUTHORIZED',     // el Bridge rechazó la clave
   ROUTE_MISSING:  'BRIDGE_ROUTE_MISSING',    // Bridge viejo, sin el endpoint
   TIMEOUT:        'BRIDGE_TIMEOUT',
@@ -30,6 +34,7 @@ const BRIDGE_ERROR_CODES = Object.freeze({
 /** HTTP con el que la API responde a cada causa. */
 const HTTP_FOR_CODE = Object.freeze({
   [BRIDGE_ERROR_CODES.NOT_CONFIGURED]: 503,
+  [BRIDGE_ERROR_CODES.DEVICES_UNCONFIGURED]: 503,
   [BRIDGE_ERROR_CODES.UNAUTHORIZED]:   503,   // es configuración nuestra, no del cliente
   [BRIDGE_ERROR_CODES.ROUTE_MISSING]:  502,
   [BRIDGE_ERROR_CODES.TIMEOUT]:        504,
@@ -41,6 +46,7 @@ const HTTP_FOR_CODE = Object.freeze({
 /** Mensajes fijos y publicables: nunca el texto crudo del error ni la URL. */
 const MESSAGE_FOR_CODE = Object.freeze({
   [BRIDGE_ERROR_CODES.NOT_CONFIGURED]: 'El servicio de relojes no está configurado en el servidor.',
+  [BRIDGE_ERROR_CODES.DEVICES_UNCONFIGURED]: 'El servicio de relojes está activo pero no tiene ningún reloj configurado.',
   [BRIDGE_ERROR_CODES.UNAUTHORIZED]:   'El servidor no está autorizado a consultar el servicio de relojes.',
   [BRIDGE_ERROR_CODES.ROUTE_MISSING]:  'El servicio de relojes no ofrece este diagnóstico (versión desactualizada).',
   [BRIDGE_ERROR_CODES.TIMEOUT]:        'El servicio de relojes no respondió a tiempo.',
@@ -109,6 +115,20 @@ async function fetchPushStatus({ serial, ip, correlationId = newCorrelationId(),
   }
   if (res.status === 404) {
     return failure(BRIDGE_ERROR_CODES.ROUTE_MISSING, 'bridge respondió 404', correlationId);
+  }
+  // Un 503 del Bridge con su código propio significa "estoy vivo pero no tengo
+  // relojes". Sin este caso caía en BRIDGE_ERROR → 502, que manda a investigar
+  // una falla de red que no existe.
+  if (res.status === 503) {
+    let motivo = null;
+    try { motivo = await res.clone().json(); } catch { /* cuerpo no JSON */ }
+    if (motivo && motivo.code === 'bridge_not_configured') {
+      return failure(
+        BRIDGE_ERROR_CODES.DEVICES_UNCONFIGURED,
+        `bridge sin relojes configurados (device_source=${motivo.device_source})`,
+        correlationId,
+      );
+    }
   }
   if (!res.ok) {
     return failure(BRIDGE_ERROR_CODES.BRIDGE_ERROR, `bridge respondió ${res.status}`, correlationId);
