@@ -15,6 +15,7 @@
 const cron = require('node-cron');
 const { cronCallback } = require('../utils/cronRunner');
 const { serializeError, safeErrorCode } = require('../utils/errorInfo');
+const { isMissingTableError, missingTableName } = require('../utils/schemaState');
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 
@@ -234,12 +235,31 @@ async function runSync(sourceId) {
   }
 }
 
-// Cargar schedules desde BD al iniciar API
+/**
+ * Cargar schedules desde BD al iniciar la API.
+ *
+ * El módulo de fuentes HR externas es OPCIONAL: la instalación base no lo usa,
+ * y toda su configuración vive en `external_hr_sources`. De ahí se sigue algo
+ * que decide el manejo de errores de acá: **si la tabla no existe, no puede
+ * haber ninguna integración activa**. No hay nada que ocultar, porque no hay
+ * nada configurado.
+ *
+ * Por eso la tabla ausente se registra como `skipped` y no como error, pero
+ * SÓLO ese caso: cualquier otro fallo de base (permisos, conexión caída,
+ * deadlock) sigue siendo un error. Tratarlos a todos igual escondería una
+ * caída real detrás de un mensaje tranquilizador.
+ */
 async function loadHrSchedules() {
   try {
     const [rows] = await sequelize.query(
       'SELECT id, name, schedule_cron FROM external_hr_sources WHERE enabled=1 AND schedule_cron IS NOT NULL'
     );
+    if (!rows.length) {
+      logger.info('Fuentes HR externas: ninguna programada', {
+        job: 'hr_schedules_load', result: 'skipped', reason: 'no_active_sources', scheduled: 0,
+      });
+      return { state: 'no_active_sources', scheduled: 0 };
+    }
     for (const row of rows) {
       if (!cron.validate(row.schedule_cron)) {
         logger.warn(`Cron inválido para fuente "${row.name}": ${row.schedule_cron}`);
@@ -253,13 +273,30 @@ async function loadHrSchedules() {
       _jobs.set(row.id, task);
       logger.info(`📅 Sync HR "${row.name}" programado: ${row.schedule_cron}`);
     }
+    return { state: 'loaded', scheduled: _jobs.size };
   } catch (err) {
+    // Tabla ausente = módulo no instalado = ninguna integración configurada.
+    // Es un estado, no una falla: la API no depende de esto para funcionar.
+    if (isMissingTableError(err)) {
+      logger.warn('Fuentes HR externas: módulo no instalado, no se programa nada', {
+        job: 'hr_schedules_load',
+        result: 'skipped',
+        reason: 'table_missing',
+        missing_table: missingTableName(err) || 'external_hr_sources',
+        // Pista accionable: el error viene de una migración que quedó
+        // registrada como aplicada sin haberse ejecutado.
+        hint: 'aplicar migraciones: npm run migrate (ver docs/hr-sources-schema.md)',
+      });
+      return { state: 'table_missing', scheduled: 0 };
+    }
+
     logger.error('Error cargando schedules HR', {
       job: 'hr_schedules_load',
       result: 'error',
       error_code: safeErrorCode(err),
       error: serializeError(err, { stage: 'load_schedules' }),
     });
+    return { state: 'error', scheduled: 0 };
   }
 }
 
