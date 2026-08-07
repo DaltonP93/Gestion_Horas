@@ -18,7 +18,7 @@ const winston = require('winston');
 const { buildPushStatusFor } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
-const { startPushServer, pushState } = require('./pushServer');
+const { startPushServer, pushState, resolvePushPort } = require('./pushServer');
 const { discoverSubnet, probeHost }  = require('./discovery');
 
 // ─── Logger ─────────────────────────────────────────────────────
@@ -33,21 +33,14 @@ const logger = winston.createLogger({
   transports: [new winston.transports.Console()]
 });
 
-// ─── Relojes configurados (se pueden sobreescribir con ZKTECO_DEVICES) ──
-const DEFAULT_DEVICES = [
-  { id: 101, name: 'Reloj test',  ip: 'x.x.x.x', port: 4370 },
-];
-
-function getDevices() {
-  const envDevices = process.env.ZKTECO_DEVICES;
-  if (envDevices) {
-    return envDevices.split(',').map((entry, idx) => {
-      const [ip, port] = entry.trim().split(':');
-      return { id: idx + 1, name: `Reloj ${idx + 1}`, ip, port: parseInt(port || '4370') };
-    });
-  }
-  return DEFAULT_DEVICES;
-}
+// ─── Relojes configurados ───────────────────────────────────────
+// La resolución y la validación viven en deviceRegistry.js, que además
+// documenta la fuente canónica actual (entorno, NO MySQL).
+//
+// Acá había un DEFAULT_DEVICES con un "Reloj test" que se usaba cuando faltaba
+// ZKTECO_DEVICES. Un Bridge de producción no puede inventar un dispositivo:
+// /health informaba `devices: 1` sin que existiera ningún reloj.
+const { resolveDevices, buildHealth, configurationSummary, PROBLEM } = require('./deviceRegistry');
 
 // ─── Redis ──────────────────────────────────────────────────────
 let redis;
@@ -146,17 +139,23 @@ function mapZKState(state) {
 }
 
 // ─── API HTTP del Bridge (health + status) ──────────────────────
-function startBridgeApi(devices) {
+function startBridgeApi(devices, resolution) {
   const app = express();
   app.use(express.json());
 
-  // Health check (sin autenticación — solo expone conteo de relojes)
+  // Health check — sin autenticación, así que sin IP, sin serial y sin nombres
+  // de reloj: es lo primero que ve cualquiera que alcance el puerto.
+  //
+  // Devuelve 200 incluso degradado: el proceso ESTÁ vivo, y lo que falta es
+  // configuración. Un 503 acá haría que /api/health/detailed reportara el
+  // bridge como inalcanzable, que es un diagnóstico distinto y equivocado.
   app.get('/health', (req, res) => {
-    res.json({
-      status:    'ok',
-      devices:   devices.length,
-      timestamp: new Date().toISOString()
-    });
+    res.json(buildHealth(resolution, {
+      pushEnabled: true,
+      // Mismo resolvedor que usa el servidor PUSH: si divergieran, /health
+      // anunciaría un puerto en el que nadie escucha.
+      pushPort: resolvePushPort(),
+    }));
   });
 
   // ── Autenticación de la API del bridge ──────────────────────────
@@ -274,10 +273,24 @@ function startBridgeApi(devices) {
       return res.status(400).json({ error: 'serial o ip requerido' });
     }
 
+    // Ésta es la ruta que consume la API (fetchPushStatus), no la heredada
+    // /devices/:id/push-state. Sin esta comprobación acá, un Bridge sin
+    // relojes respondía 200 con found:false y la API informaba "never_seen":
+    // el operador leía "el reloj nunca se vio" cuando el problema real es que
+    // no hay ningún reloj configurado.
+    const faltaConfig = configurationSummary(resolution);
+    if (faltaConfig) return res.status(503).json({ error: 'Bridge sin configurar', ...faltaConfig });
+
     res.json(buildPushStatusFor(pushState, { serial, ip }));
   });
 
   app.get('/devices/:id/push-state', (req, res) => {
+    // "No hay relojes configurados" y "ese reloj no existe" son diagnósticos
+    // distintos, y devolver 404 para los dos manda a buscar el problema al
+    // lugar equivocado.
+    const faltaConfig = configurationSummary(resolution);
+    if (faltaConfig) return res.status(503).json({ error: 'Bridge sin configurar', ...faltaConfig });
+
     const device = devices.find(d => d.id == req.params.id);
     if (!device) return res.status(404).json({ error: 'Reloj no encontrado' });
     // Buscar por IP del dispositivo — el SN del reloj registrado debe coincidir o la IP
@@ -306,11 +319,38 @@ function startBridgeApi(devices) {
 async function main() {
   await initRedis();
 
-  const devices = getDevices();
+  const resolution = resolveDevices(process.env);
+  const devices = resolution.devices;
+
   logger.info(`\n${'═'.repeat(50)}`);
   logger.info('🕐 ZKTeco Bridge — Sistema de Asistencia');
   logger.info(`${'═'.repeat(50)}`);
-  devices.forEach(d => logger.info(`  📍 ${d.name.padEnd(18)} ${d.ip}:${d.port}`));
+
+  // Los problemas de configuración se dicen en voz alta. El arranque silencioso
+  // con un reloj inventado es exactamente lo que este módulo vino a eliminar.
+  for (const p of resolution.problems) {
+    const detalle = p.detail ? ` (${p.detail})` : '';
+    const entrada = p.entry !== undefined ? ` [entrada ${p.entry + 1}]` : '';
+    if (p.code === PROBLEM.TEST_DEVICE_IN_PRODUCTION) {
+      logger.error('❌ BRIDGE_ALLOW_TEST_DEVICE=true ignorado: no se admite un reloj ficticio con NODE_ENV=production.');
+    } else {
+      logger.error(`❌ ZKTECO_DEVICES${entrada}: ${p.code}${detalle}`);
+    }
+  }
+
+  if (devices.length === 0) {
+    logger.error('❌ Sin relojes configurados. El Bridge queda DEGRADADO:');
+    logger.error('   • /health responde status=degraded y configured_devices=0');
+    logger.error('   • no se intenta ninguna conexión a ningún reloj');
+    logger.error('   • configurar ZKTECO_DEVICES en bridge/.env, por ejemplo:');
+    logger.error('     ZKTECO_DEVICES=Gerencia@10.0.0.11:4370,Comedor@10.0.0.12:4370');
+  } else {
+    // El nombre y el puerto alcanzan para operar; la IP completa no se escribe
+    // en un log que se rota y se comparte.
+    devices.forEach(d => logger.info(
+      `  📍 ${d.name.padEnd(18)} puerto ${d.port}${d.test ? '  (FICTICIO — sólo desarrollo)' : ''}`));
+  }
+  logger.info(`   fuente: ${resolution.source} · relojes: ${devices.length}`);
   logger.info('');
 
   // Modo 1: Servidor PUSH (relojes envían datos en tiempo real)
@@ -349,7 +389,12 @@ async function main() {
   // DESACTIVADO por defecto — requiere ZKTECO_AUTO_POLL=true en .env
   // El protocolo ZKTeco solo admite UNA conexión TCP simultánea.
   // Con polling activo, la API no puede conectar a los relojes bajo demanda.
-  const autoPoll = process.env.ZKTECO_AUTO_POLL === 'true';
+  // Sin relojes no se hace polling: no hay a dónde conectarse. Antes, con el
+  // reloj inventado, esto abría sockets contra una IP que no es de nadie.
+  const autoPoll = process.env.ZKTECO_AUTO_POLL === 'true' && devices.length > 0;
+  if (process.env.ZKTECO_AUTO_POLL === 'true' && devices.length === 0) {
+    logger.error('⏸️  Auto-polling pedido pero no hay relojes configurados: no se inicia.');
+  }
   if (autoPoll) {
     const intervalMs = parseInt(process.env.ZKTECO_POLL_INTERVAL || '60000');
     logger.info(`🔁 Auto-polling activo cada ${intervalMs / 1000}s vía ZKLib`);
@@ -367,7 +412,7 @@ async function main() {
   }
 
   // API del Bridge
-  startBridgeApi(devices);
+  startBridgeApi(devices, resolution);
 }
 
 main().catch(err => {

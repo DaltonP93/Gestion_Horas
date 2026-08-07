@@ -12,7 +12,8 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "migrate": "node scripts/migrate.js",
-    "migrate:status": "node scripts/migrate.js --status"
+    "migrate:status": "node scripts/migrate.js --status",
+    "schema:drift": "node scripts/check-schema-drift.js"
   },
   "dependencies": {
     "axios": "^1.15.0",
