@@ -204,14 +204,27 @@ function matchesAllowlist({ sn, ip }, devices, allowlist) {
   const { device, ambiguous } = resolveDevice({ sn, ip }, devices);
   if (ambiguous) return { allowed: false, ambiguous: true, device: null };
 
-  // Los tokens que alcanzan a dos relojes se descartan antes de comparar. Uno
-  // solo bastaba para capturar a un reloj que nadie nombró —el nombre de uno
-  // puede ser el serial de otro— y suprimirle las marcaciones en silencio.
-  const enConflicto = tokensEnConflicto(allowlist, devices);
-  const efectiva = enConflicto.size === 0 ? allowlist : allowlist.filter(t => !enConflicto.has(t));
-  if (efectiva.length === 0) return { allowed: false, ambiguous: false, device };
+  // ── Tokens utilizables para ESTA observación ────────────────────────
+  //
+  // Un token sólo sirve si todo reloj CONFIGURADO al que alcanza es el que se
+  // acaba de resolver. Si alcanza a otro, el texto identifica a dos aparatos y
+  // no puede decidir sobre ninguno.
+  //
+  // La comprobación se hace contra la observación concreta, no una sola vez
+  // sobre la configuración, porque el segundo reloj puede aparecer RECIÉN en
+  // tiempo de ejecución: por PUSH un reloj se anuncia solo, y con la whitelist
+  // vacía cualquiera puede hacerlo. Un aparato no configurado que reporte
+  // `SN=Gerencia` colisiona con el token que nombra al reloj llamado
+  // `Gerencia`, y mirar sólo `ZKTECO_DEVICES` no lo vería nunca.
+  //
+  // Alcanzar a NINGÚN reloj configurado sí es válido: es cómo se nombra por
+  // serial a un reloj que todavía no está en la configuración.
+  const utilizables = allowlist.filter(t =>
+    devicesAlcanzadosPor(t, devices).every(d => d === device));
 
-  return { allowed: isDeviceAllowed({ sn, ip, device }, efectiva), ambiguous: false, device };
+  if (utilizables.length === 0) return { allowed: false, ambiguous: false, device };
+
+  return { allowed: isDeviceAllowed({ sn, ip, device }, utilizables), ambiguous: false, device };
 }
 
 /** IPv4 en notación decimal. Deliberadamente laxa: sólo distingue número de nombre. */
