@@ -289,6 +289,30 @@ La dirección de fallo segura es **publicar**: suprimir la publicación del relo
 
 > **Lo más robusto es declarar el `#serial`** en `ZKTECO_DEVICES` y nombrar el reloj por su serial en la allowlist: así la identidad no depende de la IP, que puede reasignarse.
 
+### Relojes configurados por hostname
+
+`ZKTECO_DEVICES` admite hostnames (`Gerencia@reloj-gerencia.local:4370`). Un reloj configurado así **y sin `#serial`** no se puede resolver: la configuración guarda el texto del hostname y la petición PUSH llega con una dirección numérica, y esa comparación no coincide nunca. Nombrarlo por su **nombre** en la allowlist no surtiría efecto — y en observe-only eso significa que el reloj publica asistencia igual.
+
+El Bridge lo detecta al arrancar y lo dice en voz alta:
+
+```
+❌ BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST: "gerencia" no va a surtir efecto —
+   el reloj se configuró con hostname y sin #serial: declarar el serial
+   ese reloj SEGUIRÍA PUBLICANDO asistencia. Corregir antes de configurarlo para ADMS.
+```
+
+También se expone en `GET /push-metrics` como `observe_only_config_problems`, para poder comprobarlo **antes** de tocar el reloj. La solución es declarar el `#serial`.
+
+> El modo de fallo natural de estas listas es **silencioso**: un token que no engancha con nada no produce ningún error, simplemente no aplica. Por eso el chequeo existe.
+
+### Despliegue con Docker
+
+`bridge/.env` **no llega al contenedor** — el `Dockerfile` sólo copia `package*.json` y `src/`. Toda flag del Bridge tiene que reenviarse explícitamente desde el `.env` raíz; `docker-compose.yml` ya lo hace para `BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST` y las de la sombra.
+
+Sin ese passthrough, un despliegue Docker arranca con la allowlist vacía y el reloj publica asistencia junto con el polling, aunque el operador haya seguido el ejemplo del `.env.example`.
+
+Si se define `BRIDGE_SHADOW_PATH`, la ruta debe caer en un volumen montado o la sombra se pierde en cada recreación del contenedor.
+
 ### Métricas
 
 `GET /push-metrics` (detrás de `x-api-key`):

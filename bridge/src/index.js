@@ -48,6 +48,7 @@ const { resolveDevices, buildHealth, configurationSummary, PROBLEM } = require('
 // no toca el flujo actual. Con BRIDGE_SHADOW_ENABLED distinto de "true" no se
 // abre ningún archivo ni se carga el driver de SQLite.
 const { createShadow } = require('./shadow');
+const { auditAllowlist } = require('./deviceIdentity');
 
 // ─── Redis ──────────────────────────────────────────────────────
 let redis;
@@ -309,8 +310,13 @@ function startBridgeApi(devices, resolution, shadow = null) {
   // Métricas agregadas del servidor PUSH. Sólo conteos: ni códigos de
   // empleado, ni IPs, ni payload. Va detrás de la clave, como todo lo demás.
   app.get('/push-metrics', (req, res) => {
+    const allowlist = getObserveOnlyAllowlist();
     res.json({
-      observe_only_allowlist_size: getObserveOnlyAllowlist().length,
+      observe_only_allowlist_size: allowlist.length,
+      // Tokens que NO van a surtir efecto. Se expone para poder comprobarlo
+      // ANTES de configurar el reloj para ADMS: un token que no engancha no
+      // da error, simplemente deja al reloj publicando.
+      observe_only_config_problems: auditAllowlist(allowlist, devices),
       ...pushMetrics,
     });
   });
@@ -453,6 +459,15 @@ async function main() {
   if (observeOnly.length > 0) {
     logger.info(`👁️  PUSH observe-only para ${observeOnly.length} reloj(es): se observan, no se publica su asistencia`);
     logger.info('   no hay XADD, ni PUBLISH, ni dedupe en Redis para esos relojes');
+
+    // El modo de fallo natural de esta lista es silencioso: un token que no
+    // engancha con nada no da error, simplemente no aplica — y el reloj sigue
+    // publicando mientras el operador cree haberlo puesto en observación. Se
+    // dice en voz alta ANTES de que el reloj empiece a mandar.
+    for (const p of auditAllowlist(observeOnly, devices)) {
+      logger.error(`❌ BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST: "${p.token}" no va a surtir efecto — ${p.detail}`);
+      logger.error('   ese reloj SEGUIRÍA PUBLICANDO asistencia. Corregir antes de configurarlo para ADMS.');
+    }
   }
 
   // Modo 1: Servidor PUSH (relojes envían datos en tiempo real)

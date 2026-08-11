@@ -191,8 +191,74 @@ function matchesAllowlist({ sn, ip }, devices, allowlist) {
   return { allowed: isDeviceAllowed({ sn, ip, device }, allowlist), ambiguous: false, device };
 }
 
+/** IPv4 en notación decimal. Deliberadamente laxa: sólo distingue número de nombre. */
+const ES_IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/**
+ * ¿Se puede identificar este reloj cuando llegue su PUSH?
+ *
+ * En una petición PUSH sólo hay dos datos: el `SN` que el reloj declara y la
+ * dirección numérica desde la que llega. Un reloj configurado se puede
+ * enganchar a eso de dos maneras:
+ *
+ *   · declara `#serial` → coincide con el SN, sin depender de la red;
+ *   · su host es una IP numérica → coincide con la dirección de origen.
+ *
+ * `ZKTECO_DEVICES` también admite hostnames (`Gerencia@reloj.local:4370`). Un
+ * reloj configurado así y SIN serial no se puede resolver: `d.ip` guarda el
+ * texto del hostname y la petición trae un número, y esa comparación no
+ * coincide nunca. Nombrarlo por su NOMBRE en una allowlist no surtiría efecto
+ * — y en observe-only eso significa que el reloj publica asistencia igual.
+ */
+function esIdentificableEnPush(device) {
+  if (!device) return false;
+  if (canonicalSerial(device.serial)) return true;
+  return ES_IPV4.test(String(device.ip || '').trim());
+}
+
+/**
+ * Revisa que cada token de una allowlist pueda surtir efecto de verdad.
+ *
+ * Existe porque el modo de fallo natural de estas listas es SILENCIOSO: un
+ * token que no engancha con nada no produce ningún error, simplemente no
+ * aplica, y en observe-only eso se traduce en un reloj que sigue publicando
+ * asistencia mientras el operador cree haberlo puesto en observación.
+ *
+ * Un token que no coincide con ningún reloj configurado NO es un problema: por
+ * PUSH el reloj se anuncia solo, y nombrarlo por su serial funciona aunque no
+ * esté en `ZKTECO_DEVICES`. El problema es el token que SÍ nombra a un reloj
+ * configurado que después no se va a poder identificar.
+ */
+function auditAllowlist(allowlist = [], devices = []) {
+  const problemas = [];
+
+  for (const token of allowlist) {
+    const porNombre = devices.filter(d => String(d.name || '').trim().toLowerCase() === token);
+    const porHost   = devices.filter(d => String(d.ip || '').trim().toLowerCase() === token);
+    const porSerial = devices.filter(d => canonicalSerial(d.serial) === canonicalSerial(token));
+
+    // Nombrado por serial: siempre funciona, el SN llega en cada PUSH.
+    if (porSerial.length > 0) continue;
+
+    const nombrados = [...porNombre, ...porHost];
+    if (nombrados.length === 0) continue;   // se resolverá por el SN reportado
+
+    if (nombrados.every(d => !esIdentificableEnPush(d))) {
+      problemas.push({
+        token,
+        code: 'token_no_identificable',
+        detail: 'el reloj se configuró con hostname y sin #serial: declarar el serial',
+      });
+    }
+  }
+
+  return problemas;
+}
+
 module.exports = {
   MATCH,
+  esIdentificableEnPush,
+  auditAllowlist,
   parseAllowlist,
   canonicalSerial,
   stableDeviceKey,

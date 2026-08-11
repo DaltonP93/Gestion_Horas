@@ -8,7 +8,7 @@
  * suprimir la publicación del reloj equivocado pierde marcaciones en silencio.
  */
 const {
-  MATCH, parseAllowlist, canonicalSerial, stableDeviceKey,
+  MATCH, parseAllowlist, canonicalSerial, stableDeviceKey, esIdentificableEnPush, auditAllowlist,
   resolveDevice, findConfiguredDevice, isDeviceAllowed, matchesAllowlist,
 } = require('../src/deviceIdentity');
 
@@ -212,6 +212,82 @@ describe('matchesAllowlist', () => {
 
   test('isDeviceAllowed no acepta una lista vacía como comodín', () => {
     expect(isDeviceAllowed({ sn: 'GER-0001', device: GERENCIA }, [])).toBe(false);
+  });
+});
+
+// ── Identificable en PUSH ────────────────────────────────────────────
+
+describe('esIdentificableEnPush', () => {
+  test('con serial declarado, sí', () => {
+    expect(esIdentificableEnPush({ name: 'A', ip: 'reloj.local', port: 4370, serial: 'A-1' })).toBe(true);
+  });
+
+  test('con IP numérica, sí', () => {
+    expect(esIdentificableEnPush({ name: 'A', ip: '10.0.0.11', port: 4370 })).toBe(true);
+  });
+
+  test('con hostname y sin serial, NO', () => {
+    // `d.ip` guarda el texto del hostname y la petición trae un número: esa
+    // comparación no coincide nunca.
+    expect(esIdentificableEnPush({ name: 'A', ip: 'reloj-gerencia.local', port: 4370 })).toBe(false);
+  });
+
+  test('sin reloj, no', () => {
+    expect(esIdentificableEnPush(null)).toBe(false);
+  });
+});
+
+describe('auditAllowlist', () => {
+  test('un token que nombra un reloj con hostname y sin serial se reporta', () => {
+    // ZKTECO_DEVICES=Gerencia@reloj-gerencia.local:4370
+    const conHostname = [{ id: 1, name: 'Gerencia', ip: 'reloj-gerencia.local', port: 4370 }];
+    const problemas = auditAllowlist(parseAllowlist('Gerencia'), conHostname);
+
+    expect(problemas).toHaveLength(1);
+    expect(problemas[0].token).toBe('gerencia');
+    expect(problemas[0].code).toBe('token_no_identificable');
+  });
+
+  test('el mismo reloj con #serial declarado no da problema', () => {
+    const conSerial = [{ id: 1, name: 'Gerencia', ip: 'reloj-gerencia.local', port: 4370, serial: 'GER-0001' }];
+    expect(auditAllowlist(parseAllowlist('Gerencia'), conSerial)).toEqual([]);
+  });
+
+  test('el mismo reloj con IP numérica tampoco', () => {
+    expect(auditAllowlist(parseAllowlist('Gerencia'), RELOJES)).toEqual([]);
+  });
+
+  test('nombrarlo por serial siempre funciona', () => {
+    const conHostname = [{ id: 1, name: 'Gerencia', ip: 'reloj-gerencia.local', port: 4370, serial: 'GER-0001' }];
+    expect(auditAllowlist(parseAllowlist('GER-0001'), conHostname)).toEqual([]);
+  });
+
+  test('un token que no nombra ningún reloj configurado NO es problema', () => {
+    // Por PUSH el reloj se anuncia solo: su SN puede engancharlo igual.
+    expect(auditAllowlist(parseAllowlist('RELOJ-NUEVO-9'), RELOJES)).toEqual([]);
+  });
+
+  test('una allowlist vacía no reporta nada', () => {
+    expect(auditAllowlist([], RELOJES)).toEqual([]);
+  });
+
+  test('sin relojes configurados tampoco', () => {
+    expect(auditAllowlist(parseAllowlist('Gerencia'), [])).toEqual([]);
+  });
+
+  test('reporta sólo el token roto de una lista mixta', () => {
+    const mezcla = [
+      { id: 1, name: 'Gerencia', ip: '10.0.0.11', port: 4370 },
+      { id: 2, name: 'Comedor',  ip: 'comedor.local', port: 4370 },
+    ];
+    const problemas = auditAllowlist(parseAllowlist('Gerencia,Comedor'), mezcla);
+
+    expect(problemas.map(p => p.token)).toEqual(['comedor']);
+  });
+
+  test('el hostname usado como token también se reporta', () => {
+    const conHostname = [{ id: 1, name: 'Gerencia', ip: 'reloj-gerencia.local', port: 4370 }];
+    expect(auditAllowlist(parseAllowlist('reloj-gerencia.local'), conHostname)).toHaveLength(1);
   });
 });
 
