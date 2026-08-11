@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * check-schema-drift.js — detecta tablas que las migraciones dicen haber
- * creado pero que no existen en la base.
+ * check-schema-drift.js — detecta deriva entre lo que las migraciones dicen
+ * haber creado y lo que la base tiene de verdad: tablas ausentes y, para un
+ * conjunto curado, columnas ausentes.
  *
  * SOLO LECTURA. No crea, no altera y no borra nada. Se puede correr en
  * producción sin riesgo.
@@ -24,11 +25,27 @@
  * Este script contesta la pregunta completa —cuáles faltan— en vez de
  * descubrirlas de a una por los logs.
  *
+ * ── Por qué además mira columnas ─────────────────────────────────────
+ *
+ * Este check informaba "✅ Sin deriva" mientras el cron
+ * `capacitaciones_vencimiento` fallaba todas las mañanas con
+ * ER_BAD_FIELD_ERROR / 42S22. No era una contradicción: sólo comparaba
+ * nombres de TABLA contra information_schema.TABLES y jamás miraba una
+ * columna. Una tabla presente con la forma equivocada le resultaba invisible.
+ *
+ * La extensión es deliberadamente angosta. NO compara la estructura completa
+ * de cada tabla contra el DDL —eso exige interpretar toda la cadena de ALTER,
+ * los tipos y las columnas que producción agregó a mano, y produce ruido que
+ * termina en que nadie lo corre—. Verifica una lista CURADA de columnas de las
+ * que depende SQL de runtime, cada una con el consumidor anotado. La lista se
+ * amplía a mano cuando una consulta nueva pasa a depender de una columna, y su
+ * valor está justamente en ser corta y cierta.
+ *
  * Uso:
  *   node api/scripts/check-schema-drift.js            # informe legible
  *   node api/scripts/check-schema-drift.js --json     # salida para scripts
  *
- * Salida: 0 si no hay deriva, 1 si faltan tablas.
+ * Salida: 0 si no hay deriva, 1 si falta alguna tabla o columna crítica.
  */
 require('dotenv').config();
 const fs = require('fs');
@@ -164,6 +181,67 @@ function tablasEsperadas() {
   return porTabla;
 }
 
+/**
+ * Columnas de las que depende SQL de runtime, con su consumidor.
+ *
+ * Lista CURADA a mano, no derivada del DDL: su utilidad depende de que sea
+ * corta y de que cada entrada sea verdad. Agregar una columna acá vale la pena
+ * cuando una consulta de runtime se rompe entera si falta —como pasó con el
+ * cron de capacitaciones—, no por completitud.
+ *
+ * `columna` es la que la consulta pide. Que exista una columna con ese nombre
+ * en OTRA tabla no sirve de nada: la consulta rota nombraba `status`, que
+ * existe en `employees` (ENUM active/inactive/suspended) y en varias tablas
+ * más, pero no en `course_assignments`, que es donde se la pedía. Por eso el
+ * par (tabla, columna) se verifica junto y nunca por nombre suelto.
+ */
+const COLUMNAS_CRITICAS = [
+  { tabla: 'course_assignments', columna: 'completed_at',
+    usadaPor: 'cron capacitaciones_vencimiento + GET /courses/my + /courses/:id/progress' },
+  { tabla: 'course_assignments', columna: 'due_date',
+    usadaPor: 'cron capacitaciones_vencimiento (ventana de vencimiento)' },
+  { tabla: 'courses',            columna: 'active',
+    usadaPor: 'cron capacitaciones_vencimiento + borrado lógico DELETE /courses/:id' },
+  { tabla: 'users',              columna: 'employee_id',
+    usadaPor: 'cron capacitaciones_vencimiento (destinatario) + GET /courses/my' },
+  { tabla: 'external_hr_sources', columna: 'schedule_cron',
+    usadaPor: 'loadHrSchedules (arranque de la API)' },
+];
+
+/**
+ * Columnas críticas ausentes.
+ *
+ * Se saltean las tablas que directamente no están: ya las reporta el chequeo
+ * de tablas, y volver a listarlas columna por columna sólo agrega ruido sobre
+ * un problema que ya tiene su línea en el informe.
+ */
+async function columnasFaltantes(conn, existentes) {
+  const porTabla = new Map();
+  for (const c of COLUMNAS_CRITICAS) {
+    if (!existentes.has(c.tabla.toLowerCase())) continue;
+    if (!porTabla.has(c.tabla)) porTabla.set(c.tabla, []);
+    porTabla.get(c.tabla).push(c);
+  }
+  if (!porTabla.size) return [];
+
+  const [filas] = await conn.query(
+    `SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = ? AND TABLE_NAME IN (?)`,
+    [DB.database, [...porTabla.keys()]]);
+
+  const presentes = new Set(
+    filas.map(f => `${String(f.TABLE_NAME).toLowerCase()}.${String(f.COLUMN_NAME).toLowerCase()}`));
+
+  const faltantes = [];
+  for (const lista of porTabla.values()) {
+    for (const c of lista) {
+      if (presentes.has(`${c.tabla.toLowerCase()}.${c.columna.toLowerCase()}`)) continue;
+      faltantes.push(c);
+    }
+  }
+  return faltantes;
+}
+
 async function main() {
   const comoJson = process.argv.includes('--json');
   const esperadas = tablasEsperadas();
@@ -207,6 +285,8 @@ async function main() {
       });
     }
 
+    const columnas = await columnasFaltantes(conn, existentes);
+
     if (comoJson) {
       console.log(JSON.stringify({
         database: DB.database,
@@ -214,6 +294,10 @@ async function main() {
         expected: esperadas.size,
         present: existentes.size,
         missing: faltantes,
+        critical_columns_checked: COLUMNAS_CRITICAS.length,
+        missing_columns: columnas.map(c => ({
+          table: c.tabla, column: c.columna, used_by: c.usadaPor,
+        })),
       }, null, 2));
     } else {
       console.log(`\nBase: ${DB.database}`);
@@ -221,9 +305,13 @@ async function main() {
         console.log('⚠️  No existe `schema_migrations`: el runner nunca se adoptó en esta base,');
         console.log('    así que no se puede saber qué migraciones figuran como aplicadas.\n');
       }
-      console.log(`Tablas esperadas: ${esperadas.size}   presentes: ${existentes.size}\n`);
-      if (!faltantes.length) {
-        console.log('✅ Sin deriva: todas las tablas declaradas existen.\n');
+      console.log(`Tablas esperadas: ${esperadas.size}   presentes: ${existentes.size}`);
+      console.log(`Columnas críticas verificadas: ${COLUMNAS_CRITICAS.length}\n`);
+      if (!faltantes.length && !columnas.length) {
+        console.log('✅ Sin deriva: todas las tablas declaradas existen y las');
+        console.log('   columnas críticas verificadas están presentes.\n');
+      } else if (!faltantes.length) {
+        console.log('✅ Todas las tablas declaradas existen.\n');
       } else {
         console.log(`❌ Faltan ${faltantes.length} tabla(s):\n`);
         for (const f of faltantes) {
@@ -239,8 +327,21 @@ async function main() {
         console.log('con CREATE TABLE IF NOT EXISTS — es la única que el runner ejecutará.');
         console.log('Ver database/migrations/071_repair_external_hr_sources.sql como modelo.\n');
       }
+
+      if (columnas.length) {
+        console.log(`❌ Faltan ${columnas.length} columna(s) crítica(s) en tablas que SÍ existen:\n`);
+        for (const c of columnas) {
+          console.log(`   ${`${c.tabla}.${c.columna}`.padEnd(40)}`);
+          console.log(`   ${''.padEnd(40)} la usa: ${c.usadaPor}`);
+        }
+        console.log('\nUna tabla presente con la forma equivocada da ER_BAD_FIELD_ERROR (42S22)');
+        console.log('en runtime, no ER_NO_SUCH_TABLE. Antes de agregar la columna, confirmá');
+        console.log('contra las migraciones si el que está mal es el esquema o la consulta:');
+        console.log('crear una columna para que una consulta deje de fallar, cuando el esquema');
+        console.log('siempre fue el correcto, deja el error real intacto y suma esquema muerto.\n');
+      }
     }
-    process.exitCode = faltantes.length ? 1 : 0;
+    process.exitCode = (faltantes.length || columnas.length) ? 1 : 0;
   } finally {
     await conn.end();
   }

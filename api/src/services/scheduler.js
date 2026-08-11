@@ -567,24 +567,62 @@ function startCoursesDueCron() {
     _coursesCron = cron.schedule(expr, cronCallback('capacitaciones_vencimiento', async () => {
       try {
         // Buscar asignaciones de cursos vencidas o a punto de vencer (próximos 3 días)
+        //
+        // ── Pendiente = completed_at IS NULL ────────────────────────────
+        //
+        // `course_assignments` NO tiene columna `status`: la migración 028 la
+        // creó con diez columnas y el estado de completitud vive en
+        // `completed_at` (NULL = pendiente). Esta consulta filtraba por
+        // `ca.status NOT IN ('completed','cancelled')` y por eso reventaba
+        // TODAS las corridas con ER_BAD_FIELD_ERROR / 42S22.
+        //
+        // El nombre salió de dos lugares que lo hacen parecer real:
+        //   · el índice `idx_emp_status (employee_id, completed_at)` de la 028,
+        //     que se llama "status" pero está construido sobre completed_at;
+        //   · el alias calculado `AS status` del CASE en GET /courses/:id/progress,
+        //     que deriva completed|overdue|due_soon|pending en tiempo de consulta.
+        // Ninguno de los dos es una columna almacenada. `'cancelled'`, además,
+        // es vocabulario de permisos/onboarding: capacitaciones nunca lo tuvo.
+        //
+        // ── Un correo por asignación ────────────────────────────────────
+        //
+        // `users.employee_id` no tiene UNIQUE, así que un empleado con dos
+        // cuentas activas duplicaba la fila por el LEFT JOIN y recibía el mismo
+        // recordatorio dos veces. La subconsulta escalar toma una sola cuenta,
+        // de forma determinística (la de menor id), y la envoltura filtra las
+        // que no tienen correo — antes eso lo hacía un WHERE sobre la tabla
+        // del LEFT JOIN, que lo volvía un INNER JOIN encubierto.
+        //
+        // `c.active = 1` acompaña a GET /courses/my y a DELETE /courses/:id
+        // (borrado lógico): un curso dado de baja no debe seguir generando
+        // recordatorios.
         const [rows] = await sequelize.query(`
-          SELECT
-            ca.id AS assignment_id,
-            ca.employee_id,
-            CONCAT(e.first_name,' ',e.last_name) AS employee_name,
-            u.email AS employee_email,
-            c.title AS course_title,
-            ca.due_date,
-            DATEDIFF(ca.due_date, CURDATE()) AS days_left
-          FROM course_assignments ca
-          JOIN courses c ON c.id = ca.course_id
-          JOIN employees e ON e.id = ca.employee_id
-          LEFT JOIN users u ON u.employee_id = e.id AND u.active = 1
-          WHERE ca.status NOT IN ('completed','cancelled')
-            AND ca.due_date IS NOT NULL
-            AND DATEDIFF(ca.due_date, CURDATE()) BETWEEN -1 AND 3
-            AND u.email IS NOT NULL AND u.email != ''
-          ORDER BY ca.due_date ASC
+          SELECT * FROM (
+            SELECT
+              ca.id AS assignment_id,
+              ca.employee_id,
+              CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+              (SELECT u.email
+                 FROM users u
+                WHERE u.employee_id = e.id
+                  AND u.active = 1
+                  AND u.email IS NOT NULL
+                  AND u.email != ''
+                ORDER BY u.id
+                LIMIT 1) AS employee_email,
+              c.title AS course_title,
+              ca.due_date,
+              DATEDIFF(ca.due_date, CURDATE()) AS days_left
+            FROM course_assignments ca
+            JOIN courses c ON c.id = ca.course_id
+            JOIN employees e ON e.id = ca.employee_id
+            WHERE ca.completed_at IS NULL
+              AND c.active = 1
+              AND ca.due_date IS NOT NULL
+              AND DATEDIFF(ca.due_date, CURDATE()) BETWEEN -1 AND 3
+          ) t
+          WHERE t.employee_email IS NOT NULL
+          ORDER BY t.due_date ASC
           LIMIT 200
         `);
 
