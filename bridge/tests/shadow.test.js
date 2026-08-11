@@ -760,10 +760,11 @@ describe('la sombra no produce nada hacia afuera', () => {
     expect(fuentes).not.toMatch(/ZKTECO_AUTO_POLL|pollDevice|setInterval/);
   });
 
-  test('sus dependencias son sólo el contrato y el almacén', () => {
+  test('sus dependencias son sólo el contrato, la identidad y el almacén', () => {
     const requires = [...fuentes.matchAll(/require\((['"])(.+?)\1\)/g)].map(m => m[2]);
     expect([...new Set(requires)].sort()).toEqual([
       '../../contracts/punchContractV1',
+      './deviceIdentity',
       './shadowStore',
       'better-sqlite3',
       'crypto',

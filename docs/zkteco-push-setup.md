@@ -4,6 +4,16 @@ Los relojes envían los marcajes directamente al Bridge vía HTTP (modo ADMS).
 Esto evita el límite de **una sola conexión TCP simultánea** del protocolo
 ZKTeco binario y elimina el conflicto con el Attendance Management Program.
 
+> ### ⚠️ Antes de configurar un reloj para ADMS
+>
+> Configurar un reloj para PUSH lo convierte en **productor de asistencia**: sus marcajes entran por `publishAttendance()`, que hace `XADD stream:attendance` y `PUBLISH attendance:new`.
+>
+> Si el polling sigue siendo el camino autoritativo para ese reloj, habrá **dos productores** para la misma marcación.
+>
+> **Encender la sombra no evita esto.** `BRIDGE_SHADOW_ENABLED=true` sólo guarda una copia para comparar; no suprime nada. La sombra es pasiva, pero el servidor sobre el que cuelga no lo es.
+>
+> Para recibir PUSH de un reloj **sin** que publique asistencia, nombralo en `BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST` — ver [modo observe-only](bridge-shadow-mode.md#push-en-modo-observe-only).
+
 ## Datos del servidor SisHoras
 
 | Campo | Valor |

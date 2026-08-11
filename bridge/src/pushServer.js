@@ -14,9 +14,53 @@
  */
 
 const express = require('express');
+const { parseAllowlist, matchesAllowlist } = require('./deviceIdentity');
 
 // Estado en memoria: último heartbeat y último marcaje recibido por SN/IP
-const pushState = {};   // { [sn]: { lastSeen, lastPunch, punches, ip } }
+const pushState = {};   // { [sn]: { lastSeen, lastPunch, punches, ip, observeOnly } }
+
+/**
+ * Contadores agregados del proceso. Sólo números: ni código de empleado, ni
+ * IP, ni payload, ni nada que identifique a una persona.
+ */
+const pushMetrics = {
+  observe_only_received: 0,
+  observe_only_suppressed_publish: 0,
+  observe_only_ambiguous: 0,
+};
+
+function resetPushMetrics() {
+  for (const k of Object.keys(pushMetrics)) pushMetrics[k] = 0;
+}
+
+/**
+ * Relojes en modo OBSERVE-ONLY: se recibe su PUSH y se observa, pero NO se
+ * publica su asistencia.
+ *
+ * ── Por qué hace falta ───────────────────────────────────────────────
+ *
+ * La sombra es pasiva, pero el servidor sobre el que cuelga no lo es: después
+ * de `shadow.capture()` viene `publishAttendance()`, que hace XADD a
+ * `stream:attendance` y PUBLISH a `attendance:new`. Configurar un reloj para
+ * ADMS con la sombra encendida no lo convertiría en un observado: lo
+ * convertiría en un SEGUNDO PRODUCTOR de asistencia mientras el polling sigue
+ * siendo el autoritativo. Eso es justo lo que el experimento existe para
+ * evitar.
+ *
+ * `BRIDGE_SHADOW_ENABLED=true` NO implica observe-only. Son dos decisiones
+ * distintas y se toman por separado: una dice qué se guarda para comparar, la
+ * otra dice qué NO se publica.
+ *
+ * ── Por reloj, nunca global ──────────────────────────────────────────
+ *
+ * Una flag global podría apagar la publicación de relojes que sí deben
+ * publicar, y esa pérdida sería silenciosa: el reloj recibe OK, el operador ve
+ * marcajes llegando y la asistencia simplemente no aparece. Por eso es una
+ * allowlist por identidad estable, vacía por defecto.
+ */
+function getObserveOnlyAllowlist(env = process.env) {
+  return parseAllowlist(env.BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST);
+}
 
 function mapZKStatus(status) {
   const n = parseInt(status);
@@ -51,8 +95,36 @@ function resolvePushPort(env = process.env) {
 }
 
 function startPushServer(publishAttendance, logger, opts = {}) {
-  const { redis, shadow = null } = opts;
+  const { redis, shadow = null, devices = [] } = opts;
   const app = express();
+
+  /**
+   * ¿Este reloj está en modo observe-only?
+   *
+   * Se lee del entorno en cada consulta, igual que `ZKTECO_PUSH_WHITELIST`:
+   * un `pm2 reload` basta para cambiarlo y no hay estado que se desincronice.
+   *
+   * La identidad la resuelve `deviceIdentity`, el MISMO módulo que usa la
+   * sombra. Si las reglas divergieran, un reloj podría quedar observado por la
+   * sombra y publicado por el PUSH a la vez — la combinación exacta que esto
+   * viene a impedir.
+   *
+   * Un reloj que no se puede identificar sin ambigüedad NO entra: suprimir la
+   * publicación del reloj equivocado perdería sus marcaciones en silencio.
+   */
+  function esObserveOnly(sn, ip) {
+    const allowlist = getObserveOnlyAllowlist();
+    if (allowlist.length === 0) return false;   // vacía = comportamiento histórico
+
+    const r = matchesAllowlist({ sn, ip }, devices, allowlist);
+    if (r.ambiguous) {
+      pushMetrics.observe_only_ambiguous++;
+      // Sin IP ni serial en el log: alcanza con saber que pasó.
+      logger.warn('⚠️  PUSH observe-only: reloj no identificable sin ambigüedad, se procesa normal');
+      return false;
+    }
+    return r.allowed;
+  }
 
   /**
    * Copia en modo sombra — best-effort y sin efecto sobre el PUSH.
@@ -126,9 +198,14 @@ function startPushServer(publishAttendance, logger, opts = {}) {
     const body = typeof req.body === 'string' ? req.body : (req.body?.toString?.() || '');
     pushState[SN] = { ...(pushState[SN] || {}), lastSeen: new Date().toISOString(), ip };
 
+    // Se resuelve UNA vez por lote, no por línea: todas las líneas de un POST
+    // vienen del mismo reloj.
+    const observeOnly = esObserveOnly(SN, ip);
+    if (observeOnly) pushState[SN].observeOnly = true;
+
     if (table === 'ATTLOG' && body.trim()) {
       const lines = body.split(/\r?\n/).filter(Boolean);
-      let parsed = 0, deduped = 0;
+      let parsed = 0, deduped = 0, observados = 0;
 
       for (const line of lines) {
         // ZKTeco ATTLOG: UserID \t DateTime \t Status \t Verify \t WorkCode \t Reserved1 \t Reserved2
@@ -160,6 +237,25 @@ function startPushServer(publishAttendance, logger, opts = {}) {
             workCode: workCode,
           });
 
+          // ── OBSERVE-ONLY: acá termina el recorrido ──────────────────
+          //
+          // Se corta ANTES del dedupe de Redis, no sólo antes de publicar. El
+          // dedupe hace SET NX, que es una ESCRITURA: dejarlo correr metería
+          // en Redis claves de un reloj que por definición no está
+          // produciendo asistencia. La sombra ya tiene su propia idempotencia
+          // por event_id, así que no hace falta ninguna otra.
+          //
+          // Este `continue` no depende de que la sombra haya funcionado: si
+          // `observarEnSombra` falló, se pierde la observación —que es
+          // best-effort— pero NO se publica igual. Un fallo de la herramienta
+          // de diagnóstico no puede convertir al reloj en productor.
+          if (observeOnly) {
+            observados++;
+            pushMetrics.observe_only_received++;
+            pushMetrics.observe_only_suppressed_publish++;
+            continue;
+          }
+
           // Dedupe: si ya vimos este (SN, userId, timestamp) en las últimas 24 h, saltar
           const dup = await alreadySeen(SN, userId.trim(), ts.toISOString());
           if (dup) { deduped++; continue; }
@@ -182,9 +278,20 @@ function startPushServer(publishAttendance, logger, opts = {}) {
         }
       }
 
+      // `lastPunch`, `lastSeen` y el conteo se mantienen también en
+      // observe-only: son el diagnóstico que permite saber que el reloj está
+      // vivo y emitiendo. Observar no es publicar, pero tampoco es no ver
+      // nada — sin esto, un reloj en observación se vería idéntico a uno
+      // desconectado.
       pushState[SN].lastPunch = new Date().toISOString();
-      pushState[SN].punches = (pushState[SN].punches || 0) + parsed;
-      logger.info(`📥 PUSH de SN=${SN} (${ip}): ${parsed}/${lines.length} procesados, ${deduped} duplicados`);
+      pushState[SN].punches = (pushState[SN].punches || 0) + parsed + observados;
+
+      if (observeOnly) {
+        // Sin IP en esta línea: es la que se agrega en este modo.
+        logger.info(`👁️  PUSH observe-only SN=${SN}: ${observados}/${lines.length} observados, 0 publicados`);
+      } else {
+        logger.info(`📥 PUSH de SN=${SN} (${ip}): ${parsed}/${lines.length} procesados, ${deduped} duplicados`);
+      }
     }
 
     res.type('text/plain').send('OK');
@@ -213,4 +320,11 @@ function startPushServer(publishAttendance, logger, opts = {}) {
   return { pushState };
 }
 
-module.exports = { startPushServer, pushState, resolvePushPort };
+module.exports = {
+  startPushServer,
+  pushState,
+  resolvePushPort,
+  pushMetrics,
+  resetPushMetrics,
+  getObserveOnlyAllowlist,
+};

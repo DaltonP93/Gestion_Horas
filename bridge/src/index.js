@@ -18,7 +18,7 @@ const winston = require('winston');
 const { buildPushStatusFor } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
-const { startPushServer, pushState, resolvePushPort } = require('./pushServer');
+const { startPushServer, pushState, resolvePushPort, pushMetrics, getObserveOnlyAllowlist } = require('./pushServer');
 const { discoverSubnet, probeHost }  = require('./discovery');
 
 // ─── Logger ─────────────────────────────────────────────────────
@@ -306,6 +306,15 @@ function startBridgeApi(devices, resolution, shadow = null) {
     res.json({ device: device.name, ip: device.ip, state });
   });
 
+  // Métricas agregadas del servidor PUSH. Sólo conteos: ni códigos de
+  // empleado, ni IPs, ni payload. Va detrás de la clave, como todo lo demás.
+  app.get('/push-metrics', (req, res) => {
+    res.json({
+      observe_only_allowlist_size: getObserveOnlyAllowlist().length,
+      ...pushMetrics,
+    });
+  });
+
   // ── Modo sombra ──────────────────────────────────────────────────
   // Todo lo que sigue va DESPUÉS del middleware de x-api-key: son datos
   // operativos y una operación destructiva. Nada de esto cuelga de /health.
@@ -436,8 +445,19 @@ async function main() {
     }
   }
 
+  // Relojes en observe-only: se recibe su PUSH y se observa, pero NO se
+  // publica su asistencia. `BRIDGE_SHADOW_ENABLED=true` no alcanza para esto
+  // y no debe alcanzar: la sombra dice qué se guarda para comparar, y esta
+  // allowlist dice qué NO se publica. Vacía = comportamiento de siempre.
+  const observeOnly = getObserveOnlyAllowlist();
+  if (observeOnly.length > 0) {
+    logger.info(`👁️  PUSH observe-only para ${observeOnly.length} reloj(es): se observan, no se publica su asistencia`);
+    logger.info('   no hay XADD, ni PUBLISH, ni dedupe en Redis para esos relojes');
+  }
+
   // Modo 1: Servidor PUSH (relojes envían datos en tiempo real)
-  startPushServer(publishAttendance, logger, { redis, shadow });
+  // `devices` va para resolver la identidad de la allowlist observe-only.
+  startPushServer(publishAttendance, logger, { redis, shadow, devices });
 
   // Watcher: detectar relojes caídos y publicar alerta
   const HEARTBEAT_ALERT_MS = parseInt(process.env.HEARTBEAT_ALERT_MS || String(15 * 60 * 1000));

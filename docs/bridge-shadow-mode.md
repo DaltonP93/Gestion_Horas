@@ -229,6 +229,79 @@ Para apagarlo, `BRIDGE_SHADOW_ENABLED=false` y `pm2 reload bridge`. El archivo q
 
 Como referencia de volumen, con polling (80 corridas/día): 424.941 registros leídos, 95 importados, ~40 MiB/día de tráfico, ~2,56 s promedio por corrida. La sombra sobre PUSH no agrega ninguna de esas lecturas — sólo escribe una fila por marcaje observado.
 
+## PUSH en modo observe-only
+
+> **`BRIDGE_SHADOW_ENABLED=true` NO implica observe-only.** Son dos decisiones distintas y se toman por separado.
+
+### El problema que resuelve
+
+La sombra es pasiva, pero el servidor sobre el que cuelga no lo es. El recorrido real de un ATTLOG es:
+
+```
+ATTLOG → shadow.capture() → dedupe Redis → publishAttendance()
+                                              ├─ XADD stream:attendance
+                                              └─ PUBLISH attendance:new
+```
+
+Configurar un reloj para ADMS con la sombra encendida **no** lo convierte en observado: lo convierte en un **segundo productor** de asistencia mientras el polling sigue siendo el autoritativo. Eso es exactamente lo que el experimento existe para evitar.
+
+### La flag
+
+```bash
+BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST=      # vacía = ningún reloj (comportamiento histórico)
+```
+
+Es una **allowlist por reloj**, nunca un interruptor global. Una flag global podría apagar la publicación de relojes que sí deben publicar, y esa pérdida sería silenciosa: el reloj recibe `OK`, el operador ve tráfico llegando, y la asistencia simplemente no aparece.
+
+Cada token puede nombrar al reloj por serial, por nombre (el de `ZKTECO_DEVICES`) o por IP, con la **misma** canonización que usa la sombra — las reglas viven en `deviceIdentity.js` y las comparten los dos. Si divergieran, un reloj podría quedar observado por la sombra y publicado por el PUSH a la vez.
+
+### Qué hace y qué no
+
+Para un reloj en la allowlist:
+
+| Sí | No |
+|---|---|
+| acepta `GET /iclock/cdata` (registro) | `publishAttendance()` |
+| acepta el heartbeat | `XADD stream:attendance` |
+| acepta `POST` ATTLOG | `PUBLISH attendance:new` |
+| ejecuta `shadow.capture()` | dedupe en Redis (`SET NX` es una **escritura**) |
+| mantiene `lastSeen` / `lastPunch` / conteo | insertar en MySQL o tocar `daily_summary` |
+| responde `OK`, protocolo idéntico | ACK distinto, borrar logs del reloj, tocar el polling o el Outbox |
+
+El corte ocurre **antes** del dedupe, no sólo antes de publicar: `SET NX` escribiría en Redis claves de un reloj que por definición no está produciendo asistencia. La sombra ya tiene su propia idempotencia por `event_id`.
+
+Y el corte **no depende de que la sombra funcione**. Con la sombra apagada, sin sombra, o con el almacén roto, el reloj observe-only sigue sin publicar: un fallo de la herramienta de diagnóstico no puede convertirlo en productor.
+
+### Relojes no identificables
+
+Un reloj que no se puede resolver sin ambigüedad **no entra** en observe-only y se procesa normal. El caso concreto: `resolveDevices` rechaza direcciones repetidas (`ip:puerto`) pero admite dos relojes en la misma IP con puertos distintos; si uno hace PUSH sin declarar serial, esa IP no alcanza para saber cuál es.
+
+La dirección de fallo segura es **publicar**: suprimir la publicación del reloj equivocado perdería sus marcaciones sin que nadie se entere. Se cuenta en `observe_only_ambiguous` y se registra una advertencia sin IP ni serial.
+
+### Métricas
+
+`GET /push-metrics` (detrás de `x-api-key`):
+
+```json
+{
+  "observe_only_allowlist_size": 1,
+  "observe_only_received": 0,
+  "observe_only_suppressed_publish": 0,
+  "observe_only_ambiguous": 0
+}
+```
+
+Sólo conteos: ni código de empleado, ni IP, ni payload. `pushState` sigue llevando `lastSeen`, `lastPunch` y el conteo también para los relojes observados —marcados con `observeOnly: true`—, porque sin eso un reloj en observación se vería idéntico a uno desconectado.
+
+### Encenderlo para Gerencia
+
+```bash
+# bridge/.env
+BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST=<serial de Gerencia>
+```
+
+`pm2 reload bridge`, y **recién entonces** configurar el reloj para ADMS. En ese orden: si el reloj empieza a hacer PUSH antes de que la flag esté puesta, publica.
+
 ## Qué falta para la comparación real
 
 Este cambio deja la mitad PUSH lista y la consulta escrita. Falta, en un cambio aparte:
