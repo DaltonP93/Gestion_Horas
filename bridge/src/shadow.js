@@ -41,6 +41,7 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const { buildEvent, validateEvent } = require('../../contracts/punchContractV1');
 const {
   createShadowStore,
@@ -80,19 +81,47 @@ function parseAllowlist(crudo) {
 // ── Identidad estable ────────────────────────────────────────────────
 
 /**
+ * Serial en forma canónica.
+ *
+ * La comparación con la allowlist y con `ZKTECO_DEVICES` ya ignora
+ * mayúsculas, así que `ger-0001` y `GER-0001` son el MISMO reloj para decidir
+ * si se observa. Si la clave conservara el texto original, ese mismo reloj
+ * produciría dos `device_id` distintos —la clave se hashea— y por lo tanto dos
+ * `event_id` distintos para el mismo marcaje.
+ *
+ * El caso concreto no es teórico: el serial que el reloj anuncia por PUSH y el
+ * que un operador tipea en `ZKTECO_DEVICES` para el polling son dos textos
+ * escritos por manos distintas. Si difieren sólo en capitalización, la
+ * comparación mostraría todo como `only_push` / `only_polling` sin que nada
+ * falle a la vista — justo el resultado que esta herramienta existe para
+ * producir de verdad, aquí falsificado por un detalle de tipeo.
+ */
+function canonicalSerial(v) {
+  return String(v || '').trim().toUpperCase();
+}
+
+/**
  * Clave estable del reloj para una observación PUSH.
  *
  * Preferencia: el serial que el propio reloj reporta (`SN`), que no depende de
- * la configuración del Bridge ni cambia si al reloj le cambian la IP. Si no
- * hay serial se cae a la dirección del reloj configurado, que es peor —una
- * reasignación de IP rompe la correlación— pero sigue sin depender del orden.
+ * la configuración del Bridge ni cambia si al reloj le cambian la IP.
+ *
+ * Sin serial se cae a la dirección, pero HASHEADA. La IP es topología de red y
+ * la garantía de este módulo es que se usa para correlacionar y no se guarda;
+ * escribirla en `device_key` la persistiría en claro y además la devolvería
+ * `stats()` en `by_device`. El hash mantiene lo único que hace falta —que el
+ * mismo reloj dé siempre la misma clave— sin dejar la topología en un archivo
+ * sin cifrar.
  */
 function stableDeviceKey({ sn, device }) {
-  const serial = String(sn || '').trim();
+  const serial = canonicalSerial(sn) || canonicalSerial(device?.serial);
   if (serial) return `sn:${serial}`;
-  if (device?.serial) return `sn:${String(device.serial).trim()}`;
-  if (device?.ip) return `addr:${device.ip}:${device.port}`;
+  if (device?.ip) return `addr:${hashDireccion(device.ip, device.port)}`;
   return null;
+}
+
+function hashDireccion(ip, port) {
+  return crypto.createHash('sha256').update(`${ip}:${port}`, 'utf8').digest('hex').slice(0, 16);
 }
 
 /** Reloj configurado que corresponde a una observación, por serial o por IP. */
@@ -326,6 +355,7 @@ module.exports = {
   Shadow,
   readShadowConfig,
   parseAllowlist,
+  canonicalSerial,
   stableDeviceKey,
   findConfiguredDevice,
   isDeviceAllowed,

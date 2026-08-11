@@ -13,8 +13,8 @@ const path = require('path');
 
 const {
   createShadowStore, ShadowStore, readStoreConfig,
-  sanitizeShadowPayload, deviceIdFromKey,
-  SHADOW_ERRORS, CAMPOS_PERSISTIDOS,
+  sanitizeShadowPayload, deviceIdFromKey, normalizeBefore,
+  SHADOW_ERRORS, CAMPOS_PERSISTIDOS, SHADOW_IDENTITY_VERSION,
 } = require('../src/shadowStore');
 const { buildEvent } = require('../../contracts/punchContractV1');
 
@@ -467,6 +467,111 @@ describe('no se borra solo', () => {
     s.close();
   });
 
+  test('un before mal formado NO borra nada', () => {
+    // La comparación de SQLite es lexicográfica: 'not-a-date' es mayor que
+    // cualquier timestamp ISO ('2' < 'n'), así que sin validación un corte mal
+    // tipeado no acotaba el borrado — lo volvía total.
+    const s = abierto();
+    for (let i = 0; i < 3; i++) s.record(observacion({ i }), { deviceKey: RELOJ });
+
+    const r = s.purge({ before: 'not-a-date' });
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    expect(s.stats().stored).toBe(3);
+    s.close();
+  });
+
+  test('una hora de pared sin offset se rechaza: habría que suponer una zona', () => {
+    const s = abierto();
+    s.record(observacion(), { deviceKey: RELOJ });
+
+    expect(s.purge({ before: '2026-03-11 12:00:00' }).error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    expect(s.stats().stored).toBe(1);
+    s.close();
+  });
+
+  test('una fecha civil imposible se rechaza', () => {
+    const s = abierto();
+    s.record(observacion(), { deviceKey: RELOJ });
+
+    expect(s.purge({ before: '2026-02-31T12:00:00Z' }).error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    expect(s.stats().stored).toBe(1);
+    s.close();
+  });
+
+  test('normalizeBefore acepta sólo ISO con offset explícito', () => {
+    expect(normalizeBefore(null)).toEqual({ ok: true, value: null });
+    expect(normalizeBefore(undefined)).toEqual({ ok: true, value: null });
+    expect(normalizeBefore('2026-03-11T12:00:00Z').ok).toBe(true);
+    expect(normalizeBefore('2026-03-11T09:00:00-03:00').ok).toBe(true);
+
+    for (const malo of ['not-a-date', '2026-03-11', '2026-03-11T12:00:00', 'ayer', '99999', '2026-13-01T00:00:00Z']) {
+      expect(normalizeBefore(malo).ok).toBe(false);
+    }
+  });
+
+  test('un corte presente pero falsy es inválido, no "ausente"', () => {
+    // `before: 0` desde un cliente con una variable de fecha sin inicializar
+    // colapsaba a null con la coerción vieja y ejecutaba el DELETE sin filtro.
+    for (const falsy of [0, false, '', '   ', NaN]) {
+      expect(normalizeBefore(falsy).ok).toBe(false);
+    }
+  });
+
+  test('un before falsy no vacía la tabla', () => {
+    const s = abierto();
+    for (let i = 0; i < 3; i++) s.record(observacion({ i }), { deviceKey: RELOJ });
+
+    for (const falsy of [0, false, '']) {
+      expect(s.purge({ before: falsy }).error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    }
+    expect(s.stats().stored).toBe(3);
+    s.close();
+  });
+
+  test('omitir el corte sigue vaciando entero', () => {
+    // La ausencia real de `before` es la forma documentada de purgar todo.
+    const s = abierto();
+    for (let i = 0; i < 3; i++) s.record(observacion({ i }), { deviceKey: RELOJ });
+
+    expect(s.purge().deleted).toBe(3);
+    s.close();
+  });
+
+  test('una fracción de segundo se rechaza en vez de truncarse', () => {
+    // Truncar `12:00:00.999Z` a `12:00:00Z` dejaría SIN borrar una fila de
+    // `12:00:00Z`, que sí es anterior al instante pedido. Y conservar la
+    // fracción tampoco sirve: 'Z' (0x5A) > '.' (0x2E), así que
+    // '12:00:00Z' < '12:00:00.999Z' es falso. Las dos fallan igual.
+    expect(normalizeBefore('2026-03-11T12:00:00.999Z').ok).toBe(false);
+    expect(normalizeBefore('2026-03-11T12:00:00.5-03:00').ok).toBe(false);
+  });
+
+  test('la fila del segundo exacto no se pierde por un corte con fracción', () => {
+    const s = abierto();
+    s.record(observacion({ i: 0 }), { deviceKey: RELOJ });   // 11:00:00Z
+
+    // Se rechaza el corte ambiguo; el operador tiene que decir el segundo.
+    expect(s.purge({ before: '2026-03-11T11:00:00.999Z' }).ok).toBe(false);
+    expect(s.stats().stored).toBe(1);
+
+    expect(s.purge({ before: '2026-03-11T11:00:01Z' }).deleted).toBe(1);
+    s.close();
+  });
+
+  test('un offset distinto de Z se normaliza al mismo instante', () => {
+    const s = abierto();
+    s.record(observacion({ i: 1 }), { deviceKey: RELOJ });    // 11:01Z
+    s.record(observacion({ i: 40 }), { deviceKey: RELOJ });   // 11:40Z
+
+    // 08:30-03:00 == 11:30Z
+    const r = s.purge({ before: '2026-03-11T08:30:00-03:00' });
+
+    expect(r.deleted).toBe(1);
+    s.close();
+  });
+
   test('purge puede acotarse por fecha', () => {
     const s = abierto();
     s.record(observacion({ i: 1 }), { deviceKey: RELOJ });    // 08:01 -03 → 11:01Z
@@ -533,6 +638,89 @@ describe('stats agregadas', () => {
     const s = abierto();
     s.record(observacion({ i: 11 }), { deviceKey: RELOJ });
     expect(JSON.stringify(s.stats())).not.toContain('1011');
+    s.close();
+  });
+});
+
+// ── Base con el formato de identidad anterior ────────────────────────
+
+describe('una base escrita por la versión anterior se rechaza', () => {
+  /** Reproduce el archivo que dejaba el formato de identidad 1. */
+  function baseVieja(ruta) {
+    const Database = require('better-sqlite3');
+    const db = new Database(ruta);
+    db.exec(`
+      CREATE TABLE shadow_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL, device_key TEXT NOT NULL, device_id INTEGER NOT NULL,
+        source TEXT NOT NULL, payload TEXT NOT NULL,
+        occurred_at TEXT NOT NULL, observed_at TEXT NOT NULL,
+        CHECK (source IN ('push','polling')), UNIQUE (source, event_id)
+      );
+    `);
+    // Claves del formato viejo: serial sin canonizar e IP en claro.
+    db.prepare(`INSERT INTO shadow_events
+      (event_id, device_key, device_id, source, payload, occurred_at, observed_at)
+      VALUES (?,?,?,?,?,?,?)`)
+      .run('sha256:viejo', 'sn:ger-0001', 42, 'push', '{}', '2026-03-11T11:00:00Z', '2026-03-11T11:00:00.000Z');
+    db.prepare(`INSERT INTO shadow_events
+      (event_id, device_key, device_id, source, payload, occurred_at, observed_at)
+      VALUES (?,?,?,?,?,?,?)`)
+      .run('sha256:viejo2', 'addr:10.0.0.11:4370', 43, 'push', '{}', '2026-03-11T11:00:00Z', '2026-03-11T11:00:00.000Z');
+    db.close();
+  }
+
+  test('open falla con schema_outdated en vez de mezclar identidades', () => {
+    const ruta = path.join(dir, 'shadow.db');
+    baseVieja(ruta);
+
+    const s = createShadowStore(envOn());
+    const r = s.open();
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(SHADOW_ERRORS.SCHEMA_OUTDATED);
+    expect(s.isOpen).toBe(false);
+  });
+
+  test('no se escribe nada sobre la base vieja', () => {
+    const ruta = path.join(dir, 'shadow.db');
+    baseVieja(ruta);
+
+    const s = createShadowStore(envOn());
+    s.open();
+    expect(s.record(observacion(), { deviceKey: RELOJ }).error_code).toBe(SHADOW_ERRORS.NOT_OPEN);
+
+    const Database = require('better-sqlite3');
+    const db = new Database(ruta);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM shadow_events').get().n).toBe(2);
+    db.close();
+  });
+
+  test('una base nueva queda marcada con la versión actual', () => {
+    const s = abierto();
+    expect(s.db.pragma('user_version', { simple: true })).toBe(SHADOW_IDENTITY_VERSION);
+    s.close();
+  });
+
+  test('reabrir una base propia funciona sin problema', () => {
+    const s1 = abierto();
+    s1.record(observacion(), { deviceKey: RELOJ });
+    s1.close();
+
+    const s2 = createShadowStore(envOn());
+    expect(s2.open().ok).toBe(true);
+    expect(s2.stats().stored).toBe(1);
+    s2.close();
+  });
+
+  test('un archivo vacío no se confunde con una base vieja', () => {
+    // Sin tabla no hay identidades que mezclar: es una base nueva.
+    const ruta = path.join(dir, 'shadow.db');
+    const Database = require('better-sqlite3');
+    new Database(ruta).close();
+
+    const s = createShadowStore(envOn());
+    expect(s.open().ok).toBe(true);
     s.close();
   });
 });

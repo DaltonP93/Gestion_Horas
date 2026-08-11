@@ -51,7 +51,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { validateEvent } = require('../../contracts/punchContractV1');
+const { validateEvent, normalizeTimestamp } = require('../../contracts/punchContractV1');
 
 /** Orígenes de observación. `polling` está previsto pero NO conectado. */
 const SHADOW_SOURCES = Object.freeze(['push', 'polling']);
@@ -65,7 +65,79 @@ const SHADOW_ERRORS = Object.freeze({
   SOURCE_INVALID:   'shadow_source_invalid',
   DEVICE_KEY_MISSING: 'shadow_device_key_missing',
   WRITE_FAILED:     'shadow_write_failed',
+  BEFORE_INVALID:   'shadow_before_invalid',
+  SCHEMA_OUTDATED:  'shadow_schema_outdated',
 });
+
+/**
+ * Versión del formato de IDENTIDAD, no del DDL.
+ *
+ * 1 → serial tal cual lo mandaba el reloj y dirección en claro (`addr:ip:puerto`)
+ * 2 → serial canonizado a mayúsculas y dirección hasheada
+ *
+ * Sube cuando cambia cómo se deriva `device_key`, porque de esa clave salen el
+ * `device_id` y el `event_id`: una base escrita con el formato viejo y otra
+ * con el nuevo asignan identificadores distintos AL MISMO marcaje, y mezclarlas
+ * parte la comparación en la mitad exacta donde el despliegue ocurrió.
+ */
+const SHADOW_IDENTITY_VERSION = 2;
+
+/**
+ * Instante ISO-8601 con offset EXPLÍCITO (`Z` o `±HH:MM`).
+ *
+ * El offset no es opcional acá. `occurred_at` se guarda siempre en UTC, y una
+ * hora de pared sin offset obligaría a suponer una zona para decidir qué se
+ * borra: en una operación destructiva, suponer está fuera de discusión.
+ */
+// Sin fracción de segundo, a propósito — ver `normalizeBefore`.
+const ISO_CON_OFFSET_ESTRICTO =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * Valida el corte de `purge`. Devuelve `{ ok, value }`.
+ *
+ * Sin esto, el valor viajaba tal cual a una comparación LEXICOGRÁFICA de
+ * SQLite. `occurred_at < 'not-a-date'` es verdadero para TODA marca de tiempo
+ * ISO —'2' < 'n'—, así que un `before` mal tipeado no acotaba el borrado: lo
+ * volvía total. Un purge que se pidió parcial no puede vaciar la tabla porque
+ * la fecha estaba mal escrita.
+ *
+ * ── Ausente ≠ presente e inválido ────────────────────────────────────
+ *
+ * Sólo `null`/`undefined` significan "sin corte". Cualquier otro valor tiene
+ * que ser una cadena ISO válida: `0`, `false` y `''` son inválidos, no
+ * "ausentes". Con la coerción anterior (`before || ''`) un `before: 0`
+ * —trivial de producir desde un cliente con una variable de fecha sin
+ * inicializar— se volvía `null` y ejecutaba el DELETE sin filtro, que es
+ * exactamente lo que esta validación existe para impedir.
+ *
+ * ── Sin fracción de segundo ──────────────────────────────────────────
+ *
+ * `occurred_at` se guarda siempre truncado al segundo, y la comparación es
+ * textual. Aceptar `12:00:00.999Z` no funciona de ninguna de las dos formas
+ * posibles:
+ *
+ *   · truncándolo a `12:00:00Z`, una fila de `12:00:00Z` —anterior al
+ *     instante pedido— deja de borrarse, porque ya no es MENOR que el corte;
+ *   · conservando la fracción, la comparación cruza dos formatos distintos y
+ *     `'12:00:00Z' < '12:00:00.999Z'` es FALSO: 'Z' (0x5A) es mayor que '.'
+ *     (0x2E), así que la fila tampoco se borra.
+ *
+ * Las dos alternativas fallan en el mismo caso. Se rechaza la fracción y así
+ * toda comparación queda entre cadenas de la misma forma exacta.
+ */
+function normalizeBefore(raw) {
+  if (raw === null || raw === undefined) return { ok: true, value: null };
+  if (typeof raw !== 'string') return { ok: false };
+
+  const s = raw.trim();
+  if (!ISO_CON_OFFSET_ESTRICTO.test(s)) return { ok: false };
+
+  // El contrato rechaza además fechas civiles imposibles (2026-02-31), que la
+  // expresión regular acepta por forma.
+  const canon = normalizeTimestamp(s);
+  return canon ? { ok: true, value: canon } : { ok: false };
+}
 
 const DEFAULTS = Object.freeze({
   BUSY_TIMEOUT_MS: 5000,
@@ -75,9 +147,10 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS shadow_events (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id       TEXT    NOT NULL,
-  -- Identidad ESTABLE del reloj (serial, o ip:puerto si no declara serial).
-  -- Nunca la posición dentro de ZKTECO_DEVICES: reordenar la variable no
-  -- puede cambiar a quién pertenece una fila ya escrita.
+  -- Identidad ESTABLE del reloj: serial canonizado en mayúsculas, o la
+  -- dirección HASHEADA si el reloj no declara serial. Nunca la posición
+  -- dentro de ZKTECO_DEVICES —reordenar la variable no puede cambiar a quién
+  -- pertenece una fila ya escrita— y nunca la IP en claro.
   device_key     TEXT    NOT NULL,
   -- Entero exigido por el contrato v1, derivado de device_key. Es un
   -- subrogado LOCAL de la sombra: no es devices.id de MySQL ni el índice de
@@ -190,7 +263,33 @@ class ShadowStore {
       // justamente lo que pasa alrededor de un corte de energía.
       db.pragma('synchronous = FULL');
       db.pragma(`busy_timeout = ${DEFAULTS.BUSY_TIMEOUT_MS}`);
+
+      // ── Base escrita con el formato de identidad anterior ────────────
+      //
+      // `CREATE TABLE IF NOT EXISTS` no migra nada: una base previa conserva
+      // claves como `sn:ger-0001` o `addr:10.0.0.11:4370`, y las capturas
+      // nuevas usan claves distintas para el MISMO reloj. Mezclarlas haría que
+      // un reenvío entre como evento nuevo, partiría la comparación en el
+      // punto del despliegue y dejaría direcciones en claro en `by_device`.
+      //
+      // Se rechaza en vez de migrar. La sombra es dato observacional sin
+      // consumidor todavía, así que descartarla no cuesta nada, y una
+      // migración que recalcula event_ids es mucho más riesgosa que empezar
+      // de cero. El Bridge sigue recibiendo marcaciones igual: la sombra es
+      // best-effort y con el almacén cerrado no interrumpe nada.
+      const version = db.pragma('user_version', { simple: true });
+      const yaTieneTabla = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shadow_events'")
+        .get();
+
+      if (yaTieneTabla && version !== SHADOW_IDENTITY_VERSION) {
+        db.close();
+        this.db = null;
+        return { ok: false, error_code: SHADOW_ERRORS.SCHEMA_OUTDATED, detail: `identity_v${version}` };
+      }
+
       db.exec(SCHEMA);
+      db.pragma(`user_version = ${SHADOW_IDENTITY_VERSION}`);
       this.db = db;
       return { ok: true };
     } catch (err) {
@@ -354,8 +453,15 @@ class ShadowStore {
    */
   purge({ before = null } = {}) {
     if (!this.db) return { ok: false, error_code: SHADOW_ERRORS.NOT_OPEN };
-    const r = before
-      ? this.db.prepare('DELETE FROM shadow_events WHERE occurred_at < @before').run({ before })
+
+    // Se valida ACÁ y no sólo en la ruta HTTP: es el borrado, y quien lo llame
+    // —una ruta, un script, un test— no puede acabar vaciando la tabla entera
+    // por una fecha mal formada.
+    const corte = normalizeBefore(before);
+    if (!corte.ok) return { ok: false, error_code: SHADOW_ERRORS.BEFORE_INVALID };
+
+    const r = corte.value
+      ? this.db.prepare('DELETE FROM shadow_events WHERE occurred_at < @before').run({ before: corte.value })
       : this.db.prepare('DELETE FROM shadow_events').run();
     return { ok: true, deleted: r.changes };
   }
@@ -375,7 +481,9 @@ module.exports = {
   readStoreConfig,
   sanitizeShadowPayload,
   deviceIdFromKey,
+  normalizeBefore,
   SHADOW_SOURCES,
   SHADOW_ERRORS,
+  SHADOW_IDENTITY_VERSION,
   CAMPOS_PERSISTIDOS,
 };

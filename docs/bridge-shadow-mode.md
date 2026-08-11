@@ -57,8 +57,18 @@ La sombra usa `device_key`, que sale de la identidad estable:
 
 | Preferencia | Valor | Estabilidad |
 |---|---|---|
-| 1ª | `sn:<SERIAL>` reportado por el reloj | sobrevive a cambio de IP y a reordenar la variable |
-| 2ª | `addr:<ip>:<puerto>` del reloj configurado | se rompe si se reasigna la IP, pero no depende del orden |
+| 1ª | `sn:<SERIAL>` reportado por el reloj, en mayúsculas | sobrevive a cambio de IP y a reordenar la variable |
+| 2ª | `addr:<sha256(ip:puerto)[:16]>` del reloj configurado | se rompe si se reasigna la IP, pero no depende del orden |
+
+### El serial se canoniza
+
+La allowlist y `ZKTECO_DEVICES` ya comparan sin distinguir mayúsculas, así que `ger-0001` y `GER-0001` son el mismo reloj para decidir si se observa. La clave se normaliza a mayúsculas para que también sean el mismo reloj para **correlacionar**.
+
+Sin eso, el serial que el reloj anuncia por PUSH y el que un operador tipea en `ZKTECO_DEVICES` para el polling —dos textos escritos por manos distintas— podían diferir sólo en capitalización y producir dos `event_id` para el mismo marcaje. La comparación habría mostrado todo como `only_push` / `only_polling` sin que nada fallara a la vista: un resultado falso con aspecto de hallazgo.
+
+### La dirección de respaldo va hasheada
+
+El fallback `addr:` se usa sólo si el reloj hace PUSH sin declarar serial. La dirección se hashea antes de formar la clave: la IP es topología de red, y escribirla en `device_key` la habría persistido en claro y devuelto en `by_device`, contradiciendo la garantía de que se usa para correlacionar y se descarta. El hash conserva lo único que hace falta —que el mismo reloj dé siempre la misma clave— sin dejar topología en un archivo sin cifrar.
 
 El contrato v1 exige un `device_id` **entero** positivo. Se deriva por hash de `device_key`, así que el mismo reloj da siempre el mismo número sin coordinación entre procesos — que es lo que necesita el `event_id` para ser comparable. Ese entero es un **subrogado local de la sombra**: no es `devices.id` de MySQL ni el índice de `ZKTECO_DEVICES`.
 
@@ -174,7 +184,30 @@ curl -X POST http://127.0.0.1:8081/shadow/purge \
   -d '{"confirm": true}'
 ```
 
-`confirm: true` es obligatorio. Acepta `before` (ISO) para acotar por fecha.
+`confirm: true` es obligatorio. Acepta `before` para acotar por fecha, que debe ser **ISO-8601 con offset explícito y sin fracción de segundo** — por ejemplo `2026-03-11T12:00:00Z` o `2026-03-11T09:00:00-03:00`.
+
+Un `before` mal formado se rechaza con **400**; no se interpreta. La comparación de SQLite es lexicográfica, así que `occurred_at < 'not-a-date'` es verdadero para toda marca ISO —`'2' < 'n'`— y un corte mal tipeado no acotaba el borrado: lo volvía total.
+
+Tres reglas que salen de ahí:
+
+- **Una hora de pared sin offset se rechaza.** Decidir qué se borra obligaría a suponer una zona, y en una operación destructiva suponer está fuera de discusión.
+- **Ausente ≠ presente e inválido.** Sólo omitir `before` (o mandarlo `null`) significa "purgar todo". `0`, `false` y `""` son inválidos y dan 400 — son triviales de producir desde un cliente con una variable de fecha sin inicializar, y colapsarlos a "sin corte" anularía la validación entera.
+- **La fracción de segundo se rechaza.** `occurred_at` se guarda truncado al segundo y la comparación es textual, así que `12:00:00.999Z` no funciona de ninguna de las dos formas posibles: truncándolo a `12:00:00Z` deja sin borrar una fila de `12:00:00Z` que sí es anterior, y conservándolo la comparación cruza dos formatos y `'12:00:00Z' < '12:00:00.999Z'` resulta **falso** porque `Z` (0x5A) > `.` (0x2E). Rechazarla mantiene toda comparación entre cadenas de la misma forma.
+
+### Bases del formato de identidad anterior
+
+El archivo lleva su versión de identidad en `PRAGMA user_version`:
+
+| Versión | Formato de `device_key` |
+|---|---|
+| 1 | serial tal cual lo mandó el reloj, dirección en claro |
+| 2 | serial en mayúsculas, dirección hasheada |
+
+Una base escrita con la versión 1 **se rechaza** al abrir (`shadow_open_failed` / `shadow_schema_outdated`) en vez de mezclarse. `CREATE TABLE IF NOT EXISTS` no migra nada: las filas viejas conservan claves distintas para el mismo reloj, así que un reenvío entraría como evento nuevo, la comparación quedaría partida en el punto del despliegue y las direcciones viejas seguirían en claro en `by_device`.
+
+Se rechaza en vez de migrar porque la sombra es dato observacional sin consumidor todavía: descartarla no cuesta nada, y recalcular `event_id` de filas existentes es bastante más riesgoso que empezar de cero. El Bridge sigue recibiendo marcaciones igual — la sombra es best-effort y con el almacén cerrado no interrumpe nada.
+
+Para recuperarse: borrar o mover el archivo y dejar que se cree de nuevo.
 
 ## Encenderlo para Gerencia
 
