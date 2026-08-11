@@ -34,6 +34,11 @@
 
 'use strict';
 
+// La canonización del serial vive en deviceIdentity: si el registro dedupe
+// con una regla y los consumidores comparan con otra, un reloj puede quedar
+// duplicado para uno y ambiguo para el otro.
+const { canonicalSerial } = require('./deviceIdentity');
+
 /** Formatos aceptados por ZKTECO_DEVICES. */
 const DEVICE_SOURCE = Object.freeze({
   ENV_LIST:  'zkteco_devices_env',
@@ -278,7 +283,15 @@ function resolveDevices(env = process.env) {
       problemas.push({ code: PROBLEM.DUPLICATE_ADDRESS, entry: i });
       return;
     }
-    if (d.serial && porSerial.has(d.serial)) {
+    // Sin distinguir mayúsculas, igual que el nombre justo abajo.
+    //
+    // Era sensible a mayúsculas y eso dejaba pasar `#ABC` junto a `#abc` como
+    // si fueran dos relojes. Para todo consumidor que canonice el serial
+    // —deviceIdentity, y por lo tanto la sombra y el PUSH observe-only— son el
+    // MISMO reloj, así que cada marcaje quedaba irresoluble por ambiguo: el
+    // reloj no entraba en observe-only y seguía publicando asistencia, sin que
+    // el arranque reportara ningún problema de configuración.
+    if (d.serial && porSerial.has(canonicalSerial(d.serial))) {
       problemas.push({ code: PROBLEM.DUPLICATE_SERIAL, entry: i });
       return;
     }
@@ -287,7 +300,7 @@ function resolveDevices(env = process.env) {
       return;
     }
     porDireccion.add(direccion);
-    if (d.serial) porSerial.add(d.serial);
+    if (d.serial) porSerial.add(canonicalSerial(d.serial));
     if (d.name) porNombre.add(d.name.toLowerCase());
 
     devices.push({

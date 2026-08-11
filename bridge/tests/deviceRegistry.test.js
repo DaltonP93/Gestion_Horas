@@ -192,6 +192,19 @@ describe('duplicados', () => {
     expect(r.problems.map(p => p.code)).toContain(PROBLEM.DUPLICATE_SERIAL);
   });
 
+  test('serial duplicado se rechaza, sin importar mayúsculas', () => {
+    // Canonizados son el mismo serial. Dejar pasar los dos hacía que todo
+    // consumidor que canonice —la sombra, el PUSH observe-only— viera una
+    // identidad ambigua y no pudiera resolver el reloj, sin que el arranque
+    // reportara nada.
+    const r = resolveDevices(env({
+      ZKTECO_DEVICES: 'Gerencia@10.0.0.11:4370#ABC,Otro@10.0.0.12:4370#abc',
+    }));
+
+    expect(r.devices).toHaveLength(1);
+    expect(r.problems.map(p => p.code)).toContain(PROBLEM.DUPLICATE_SERIAL);
+  });
+
   test('nombre duplicado se rechaza, sin importar mayúsculas', () => {
     const r = resolveDevices(env({ ZKTECO_DEVICES: 'Comedor@10.0.0.11:4370,COMEDOR@10.0.0.12:4370' }));
 

@@ -101,6 +101,21 @@ services:
       # Formato: [nombre@]host[:puerto][#serial], separados por coma. Ej:
       #   ZKTECO_DEVICES=Gerencia@10.0.0.11:4370,Comedor@10.0.0.12:4370
       ZKTECO_DEVICES: ${ZKTECO_DEVICES:?ZKTECO_DEVICES requerido — ver bridge/.env.example}
+      # Mismo motivo que ZKTECO_DEVICES: `bridge/.env` no llega al contenedor,
+      # así que toda flag del Bridge tiene que reenviarse explícitamente. Sin
+      # esto, `BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST` queda VACÍA dentro del
+      # contenedor y un reloj que se configuró para observarse publica
+      # asistencia igual, en silencio y junto al polling — el fallo exacto que
+      # el modo observe-only existe para impedir.
+      BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST: ${BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST:-}
+      # Modo sombra. Sin reenviar, un despliegue Docker con la sombra
+      # "encendida" en bridge/.env no observa nada y no avisa.
+      BRIDGE_SHADOW_ENABLED: ${BRIDGE_SHADOW_ENABLED:-false}
+      BRIDGE_SHADOW_DEVICE_ALLOWLIST: ${BRIDGE_SHADOW_DEVICE_ALLOWLIST:-}
+      BRIDGE_SHADOW_CAPTURE_PUSH: ${BRIDGE_SHADOW_CAPTURE_PUSH:-true}
+      # Ojo: si se define, la ruta debe caer en un volumen montado o la sombra
+      # se pierde en cada recreación del contenedor.
+      BRIDGE_SHADOW_PATH: ${BRIDGE_SHADOW_PATH:-}
     ports:
       - "8080:8080"   # Puerto para recibir PUSH del reloj ZKTeco
     network_mode: host  # Necesario para acceder a relojes en LAN

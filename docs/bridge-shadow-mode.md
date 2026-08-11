@@ -229,6 +229,114 @@ Para apagarlo, `BRIDGE_SHADOW_ENABLED=false` y `pm2 reload bridge`. El archivo q
 
 Como referencia de volumen, con polling (80 corridas/día): 424.941 registros leídos, 95 importados, ~40 MiB/día de tráfico, ~2,56 s promedio por corrida. La sombra sobre PUSH no agrega ninguna de esas lecturas — sólo escribe una fila por marcaje observado.
 
+## PUSH en modo observe-only
+
+> **`BRIDGE_SHADOW_ENABLED=true` NO implica observe-only.** Son dos decisiones distintas y se toman por separado.
+
+### El problema que resuelve
+
+La sombra es pasiva, pero el servidor sobre el que cuelga no lo es. El recorrido real de un ATTLOG es:
+
+```
+ATTLOG → shadow.capture() → dedupe Redis → publishAttendance()
+                                              ├─ XADD stream:attendance
+                                              └─ PUBLISH attendance:new
+```
+
+Configurar un reloj para ADMS con la sombra encendida **no** lo convierte en observado: lo convierte en un **segundo productor** de asistencia mientras el polling sigue siendo el autoritativo. Eso es exactamente lo que el experimento existe para evitar.
+
+### La flag
+
+```bash
+BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST=      # vacía = ningún reloj (comportamiento histórico)
+```
+
+Es una **allowlist por reloj**, nunca un interruptor global. Una flag global podría apagar la publicación de relojes que sí deben publicar, y esa pérdida sería silenciosa: el reloj recibe `OK`, el operador ve tráfico llegando, y la asistencia simplemente no aparece.
+
+Cada token puede nombrar al reloj por serial, por nombre (el de `ZKTECO_DEVICES`) o por IP, con la **misma** canonización que usa la sombra — las reglas viven en `deviceIdentity.js` y las comparten los dos. Si divergieran, un reloj podría quedar observado por la sombra y publicado por el PUSH a la vez.
+
+### Qué hace y qué no
+
+Para un reloj en la allowlist:
+
+| Sí | No |
+|---|---|
+| acepta `GET /iclock/cdata` (registro) | `publishAttendance()` |
+| acepta el heartbeat | `XADD stream:attendance` |
+| acepta `POST` ATTLOG | `PUBLISH attendance:new` |
+| ejecuta `shadow.capture()` | dedupe en Redis (`SET NX` es una **escritura**) |
+| mantiene `lastSeen` / `lastPunch` / conteo | insertar en MySQL o tocar `daily_summary` |
+| responde `OK`, protocolo idéntico | ACK distinto, borrar logs del reloj, tocar el polling o el Outbox |
+
+El corte ocurre **antes** del dedupe, no sólo antes de publicar: `SET NX` escribiría en Redis claves de un reloj que por definición no está produciendo asistencia. La sombra ya tiene su propia idempotencia por `event_id`.
+
+Y el corte **no depende de que la sombra funcione**. Con la sombra apagada, sin sombra, o con el almacén roto, el reloj observe-only sigue sin publicar: un fallo de la herramienta de diagnóstico no puede convertirlo en productor.
+
+### Cómo se resuelve el reloj
+
+En orden:
+
+1. **Por serial**, si el reloj lo reporta y coincide con un `#serial` de `ZKTECO_DEVICES`.
+2. **Por IP**, si el serial no coincide con ninguno configurado. El `#serial` es **opcional** y el formato habitual no lo lleva (`Gerencia@10.0.0.11:4370`), así que sin este paso el reloj quedaría sin resolver y una allowlist por nombre no activaría observe-only.
+
+En el paso 2 sólo compiten los relojes que **no** declaran serial. Uno configurado con un serial distinto del reportado es demostrablemente otro aparato, y emparejarlo por compartir la IP atribuiría el marcaje al reloj equivocado.
+
+### Relojes no identificables
+
+Un reloj que no se puede resolver sin ambigüedad **no entra** en observe-only y se procesa normal. El caso concreto: `resolveDevices` rechaza direcciones repetidas (`ip:puerto`) pero admite dos relojes en la misma IP con puertos distintos; si ninguno declara serial, esa IP no alcanza para saber cuál es.
+
+La dirección de fallo segura es **publicar**: suprimir la publicación del reloj equivocado perdería sus marcaciones sin que nadie se entere. Se cuenta en `observe_only_ambiguous` y se registra una advertencia sin IP ni serial.
+
+> **Lo más robusto es declarar el `#serial`** en `ZKTECO_DEVICES` y nombrar el reloj por su serial en la allowlist: así la identidad no depende de la IP, que puede reasignarse.
+
+### Relojes configurados por hostname
+
+`ZKTECO_DEVICES` admite hostnames (`Gerencia@reloj-gerencia.local:4370`). Un reloj configurado así **y sin `#serial`** no se puede resolver: la configuración guarda el texto del hostname y la petición PUSH llega con una dirección numérica, y esa comparación no coincide nunca. Nombrarlo por su **nombre** en la allowlist no surtiría efecto — y en observe-only eso significa que el reloj publica asistencia igual.
+
+El Bridge lo detecta al arrancar y lo dice en voz alta:
+
+```
+❌ BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST: "gerencia" no va a surtir efecto —
+   el reloj se configuró con hostname y sin #serial: declarar el serial
+   ese reloj SEGUIRÍA PUBLICANDO asistencia. Corregir antes de configurarlo para ADMS.
+```
+
+También se expone en `GET /push-metrics` como `observe_only_config_problems`, para poder comprobarlo **antes** de tocar el reloj. La solución es declarar el `#serial`.
+
+> El modo de fallo natural de estas listas es **silencioso**: un token que no engancha con nada no produce ningún error, simplemente no aplica. Por eso el chequeo existe.
+
+### Despliegue con Docker
+
+`bridge/.env` **no llega al contenedor** — el `Dockerfile` sólo copia `package*.json` y `src/`. Toda flag del Bridge tiene que reenviarse explícitamente desde el `.env` raíz; `docker-compose.yml` ya lo hace para `BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST` y las de la sombra.
+
+Sin ese passthrough, un despliegue Docker arranca con la allowlist vacía y el reloj publica asistencia junto con el polling, aunque el operador haya seguido el ejemplo del `.env.example`.
+
+Si se define `BRIDGE_SHADOW_PATH`, la ruta debe caer en un volumen montado o la sombra se pierde en cada recreación del contenedor.
+
+### Métricas
+
+`GET /push-metrics` (detrás de `x-api-key`):
+
+```json
+{
+  "observe_only_allowlist_size": 1,
+  "observe_only_received": 0,
+  "observe_only_suppressed_publish": 0,
+  "observe_only_ambiguous": 0
+}
+```
+
+Sólo conteos: ni código de empleado, ni IP, ni payload. `pushState` sigue llevando `lastSeen`, `lastPunch` y el conteo también para los relojes observados —marcados con `observeOnly: true`—, porque sin eso un reloj en observación se vería idéntico a uno desconectado.
+
+### Encenderlo para Gerencia
+
+```bash
+# bridge/.env
+BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST=<serial de Gerencia>
+```
+
+`pm2 reload bridge`, y **recién entonces** configurar el reloj para ADMS. En ese orden: si el reloj empieza a hacer PUSH antes de que la flag esté puesta, publica.
+
 ## Qué falta para la comparación real
 
 Este cambio deja la mitad PUSH lista y la consulta escrita. Falta, en un cambio aparte:

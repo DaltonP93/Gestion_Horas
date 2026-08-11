@@ -41,8 +41,14 @@
 
 'use strict';
 
-const crypto = require('crypto');
 const { buildEvent, validateEvent } = require('../../contracts/punchContractV1');
+const {
+  parseAllowlist,
+  canonicalSerial,
+  stableDeviceKey,
+  findConfiguredDevice,
+  isDeviceAllowed,
+} = require('./deviceIdentity');
 const {
   createShadowStore,
   deviceIdFromKey,
@@ -66,101 +72,15 @@ function readShadowConfig(env = process.env) {
   };
 }
 
-/**
- * Tokens de la allowlist. Cada token puede nombrar al reloj por serial, por
- * nombre (el de `ZKTECO_DEVICES`) o por IP. Se comparan sin distinguir
- * mayúsculas porque los tres se tipean a mano en un `.env`.
- */
-function parseAllowlist(crudo) {
-  return String(crudo || '')
-    .split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
-}
-
 // ── Identidad estable ────────────────────────────────────────────────
-
-/**
- * Serial en forma canónica.
- *
- * La comparación con la allowlist y con `ZKTECO_DEVICES` ya ignora
- * mayúsculas, así que `ger-0001` y `GER-0001` son el MISMO reloj para decidir
- * si se observa. Si la clave conservara el texto original, ese mismo reloj
- * produciría dos `device_id` distintos —la clave se hashea— y por lo tanto dos
- * `event_id` distintos para el mismo marcaje.
- *
- * El caso concreto no es teórico: el serial que el reloj anuncia por PUSH y el
- * que un operador tipea en `ZKTECO_DEVICES` para el polling son dos textos
- * escritos por manos distintas. Si difieren sólo en capitalización, la
- * comparación mostraría todo como `only_push` / `only_polling` sin que nada
- * falle a la vista — justo el resultado que esta herramienta existe para
- * producir de verdad, aquí falsificado por un detalle de tipeo.
- */
-function canonicalSerial(v) {
-  return String(v || '').trim().toUpperCase();
-}
-
-/**
- * Clave estable del reloj para una observación PUSH.
- *
- * Preferencia: el serial que el propio reloj reporta (`SN`), que no depende de
- * la configuración del Bridge ni cambia si al reloj le cambian la IP.
- *
- * Sin serial se cae a la dirección, pero HASHEADA. La IP es topología de red y
- * la garantía de este módulo es que se usa para correlacionar y no se guarda;
- * escribirla en `device_key` la persistiría en claro y además la devolvería
- * `stats()` en `by_device`. El hash mantiene lo único que hace falta —que el
- * mismo reloj dé siempre la misma clave— sin dejar la topología en un archivo
- * sin cifrar.
- */
-function stableDeviceKey({ sn, device }) {
-  const serial = canonicalSerial(sn) || canonicalSerial(device?.serial);
-  if (serial) return `sn:${serial}`;
-  if (device?.ip) return `addr:${hashDireccion(device.ip, device.port)}`;
-  return null;
-}
-
-function hashDireccion(ip, port) {
-  return crypto.createHash('sha256').update(`${ip}:${port}`, 'utf8').digest('hex').slice(0, 16);
-}
-
-/** Reloj configurado que corresponde a una observación, por serial o por IP. */
-function findConfiguredDevice({ sn, ip }, devices = []) {
-  const serial = String(sn || '').trim().toLowerCase();
-  if (serial) {
-    const porSerial = devices.find(d => String(d.serial || '').trim().toLowerCase() === serial);
-    if (porSerial) return porSerial;
-  }
-  const dir = String(ip || '').trim();
-  if (dir) {
-    const porIp = devices.find(d => d.ip === dir);
-    if (porIp) return porIp;
-  }
-  return null;
-}
-
-/**
- * ¿Está este reloj explícitamente permitido?
- *
- * Se acepta que el token nombre el serial reportado aunque el reloj no esté en
- * `ZKTECO_DEVICES`: por PUSH el reloj se anuncia solo, y exigir que además
- * esté declarado agregaría un modo de fallo silencioso.
- */
-function isDeviceAllowed({ sn, ip, device }, allowlist = []) {
-  if (allowlist.length === 0) return false;   // vacía = nadie
-
-  const candidatos = [
-    String(sn || '').trim(),
-    device?.serial,
-    device?.name,
-    device?.ip,
-    ip,
-  ]
-    .map(v => String(v || '').trim().toLowerCase())
-    .filter(Boolean);
-
-  return candidatos.some(c => allowlist.includes(c));
-}
+//
+// Las reglas viven en `deviceIdentity.js`, compartidas con el servidor PUSH.
+// Estaban acá cuando la sombra era su único consumidor; el modo observe-only
+// necesita responder la MISMA pregunta —"¿este marcaje viene del reloj que
+// nombré?"— y dos copias que se separen producirían el peor resultado
+// posible: un reloj observado por la sombra y publicado igual por el PUSH.
+//
+// Se reexportan al final para no romper a quien ya las importaba desde acá.
 
 // ── Contadores ───────────────────────────────────────────────────────
 

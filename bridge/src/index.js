@@ -18,7 +18,7 @@ const winston = require('winston');
 const { buildPushStatusFor } = require('./pushStatusContract');
 
 const { syncDevice, connectToDevice, getDeviceUsers, diagnoseDevice } = require('./zkManager');
-const { startPushServer, pushState, resolvePushPort } = require('./pushServer');
+const { startPushServer, pushState, resolvePushPort, pushMetrics, getObserveOnlyAllowlist } = require('./pushServer');
 const { discoverSubnet, probeHost }  = require('./discovery');
 
 // ─── Logger ─────────────────────────────────────────────────────
@@ -48,6 +48,7 @@ const { resolveDevices, buildHealth, configurationSummary, PROBLEM } = require('
 // no toca el flujo actual. Con BRIDGE_SHADOW_ENABLED distinto de "true" no se
 // abre ningún archivo ni se carga el driver de SQLite.
 const { createShadow } = require('./shadow');
+const { auditAllowlist } = require('./deviceIdentity');
 
 // ─── Redis ──────────────────────────────────────────────────────
 let redis;
@@ -306,6 +307,20 @@ function startBridgeApi(devices, resolution, shadow = null) {
     res.json({ device: device.name, ip: device.ip, state });
   });
 
+  // Métricas agregadas del servidor PUSH. Sólo conteos: ni códigos de
+  // empleado, ni IPs, ni payload. Va detrás de la clave, como todo lo demás.
+  app.get('/push-metrics', (req, res) => {
+    const allowlist = getObserveOnlyAllowlist();
+    res.json({
+      observe_only_allowlist_size: allowlist.length,
+      // Tokens que NO van a surtir efecto. Se expone para poder comprobarlo
+      // ANTES de configurar el reloj para ADMS: un token que no engancha no
+      // da error, simplemente deja al reloj publicando.
+      observe_only_config_problems: auditAllowlist(allowlist, devices),
+      ...pushMetrics,
+    });
+  });
+
   // ── Modo sombra ──────────────────────────────────────────────────
   // Todo lo que sigue va DESPUÉS del middleware de x-api-key: son datos
   // operativos y una operación destructiva. Nada de esto cuelga de /health.
@@ -436,8 +451,28 @@ async function main() {
     }
   }
 
+  // Relojes en observe-only: se recibe su PUSH y se observa, pero NO se
+  // publica su asistencia. `BRIDGE_SHADOW_ENABLED=true` no alcanza para esto
+  // y no debe alcanzar: la sombra dice qué se guarda para comparar, y esta
+  // allowlist dice qué NO se publica. Vacía = comportamiento de siempre.
+  const observeOnly = getObserveOnlyAllowlist();
+  if (observeOnly.length > 0) {
+    logger.info(`👁️  PUSH observe-only para ${observeOnly.length} reloj(es): se observan, no se publica su asistencia`);
+    logger.info('   no hay XADD, ni PUBLISH, ni dedupe en Redis para esos relojes');
+
+    // El modo de fallo natural de esta lista es silencioso: un token que no
+    // engancha con nada no da error, simplemente no aplica — y el reloj sigue
+    // publicando mientras el operador cree haberlo puesto en observación. Se
+    // dice en voz alta ANTES de que el reloj empiece a mandar.
+    for (const p of auditAllowlist(observeOnly, devices)) {
+      logger.error(`❌ BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST: "${p.token}" no va a surtir efecto — ${p.detail}`);
+      logger.error('   ese reloj SEGUIRÍA PUBLICANDO asistencia. Corregir antes de configurarlo para ADMS.');
+    }
+  }
+
   // Modo 1: Servidor PUSH (relojes envían datos en tiempo real)
-  startPushServer(publishAttendance, logger, { redis, shadow });
+  // `devices` va para resolver la identidad de la allowlist observe-only.
+  startPushServer(publishAttendance, logger, { redis, shadow, devices });
 
   // Watcher: detectar relojes caídos y publicar alerta
   const HEARTBEAT_ALERT_MS = parseInt(process.env.HEARTBEAT_ALERT_MS || String(15 * 60 * 1000));
