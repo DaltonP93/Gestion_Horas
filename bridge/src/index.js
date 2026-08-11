@@ -344,11 +344,17 @@ function startBridgeApi(devices, resolution, shadow = null) {
     if (req.body?.confirm !== true) {
       return res.status(400).json({ error: 'Se requiere confirm: true', code: 'shadow_purge_unconfirmed' });
     }
-    // `before` mal formado se rechaza, no se interpreta. La comparación de
-    // SQLite es lexicográfica: 'not-a-date' es mayor que cualquier timestamp
-    // ISO, así que un corte mal tipeado borraba TODO en vez de acotar.
-    const before = (req.body?.before || '').toString().trim() || null;
-    const r = shadow.store.purge({ before });
+    // `before` va CRUDO al almacén, sin coerción. La comparación de SQLite es
+    // lexicográfica: 'not-a-date' es mayor que cualquier timestamp ISO, así
+    // que un corte mal tipeado borraba TODO en vez de acotar.
+    //
+    // Acá había un `(req.body?.before || '').toString().trim() || null` que
+    // reintroducía el mismo agujero por otra puerta: `before: 0` o
+    // `before: false` —triviales de producir desde un cliente con una variable
+    // de fecha sin inicializar— colapsaban a null y volvían a ejecutar el
+    // DELETE sin filtro. Distinguir "ausente" de "presente e inválido" es
+    // trabajo de `normalizeBefore`, no de una coerción en la ruta.
+    const r = shadow.store.purge({ before: req.body?.before ?? null });
     if (!r.ok) {
       return res.status(400).json({ error: 'before inválido: se espera ISO-8601 con offset explícito', code: r.error_code });
     }

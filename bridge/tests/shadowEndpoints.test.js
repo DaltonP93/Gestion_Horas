@@ -294,6 +294,55 @@ describe('POST /shadow/purge', () => {
     s.stop();
   });
 
+  test('un before presente pero falsy responde 400 y no borra', async () => {
+    // `before: 0` es trivial de producir desde un cliente con una variable de
+    // fecha sin inicializar. La coerción `before || ''` lo volvía null y
+    // ejecutaba el DELETE sin filtro: la validación quedaba anulada por la
+    // puerta de al lado.
+    for (const falsy of [0, false, '']) {
+      const s = sombraEncendida();
+      s.capture(obs({ deviceUserId: '1' }));
+      s.capture(obs({ deviceUserId: '2' }));
+
+      const res = await request(bootApi(s))
+        .post('/shadow/purge')
+        .set('x-api-key', CLAVE)
+        .send({ confirm: true, before: falsy });
+
+      expect(res.status).toBe(400);
+      expect(s.store.stats().stored).toBe(2);
+      s.stop();
+    }
+  });
+
+  test('un before con fracción de segundo se rechaza', async () => {
+    const s = sombraEncendida();
+    s.capture(obs());
+
+    const res = await request(bootApi(s))
+      .post('/shadow/purge')
+      .set('x-api-key', CLAVE)
+      .send({ confirm: true, before: '2026-03-11T12:00:00.999Z' });
+
+    expect(res.status).toBe(400);
+    expect(s.store.stats().stored).toBe(1);
+    s.stop();
+  });
+
+  test('omitir before sigue vaciando entero', async () => {
+    const s = sombraEncendida();
+    s.capture(obs({ deviceUserId: '1' }));
+
+    const res = await request(bootApi(s))
+      .post('/shadow/purge')
+      .set('x-api-key', CLAVE)
+      .send({ confirm: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    s.stop();
+  });
+
   test('una hora sin offset también se rechaza', async () => {
     const s = sombraEncendida();
     s.capture(obs());
