@@ -285,6 +285,24 @@ describe('auditAllowlist', () => {
     expect(problemas.map(p => p.token)).toEqual(['comedor']);
   });
 
+  test('dos seriales que sólo difieren en mayúsculas se reportan', () => {
+    // Canonizados son el MISMO serial, así que `resolveDevice` los da por
+    // ambiguos y el reloj nunca entra en observe-only. Sin este chequeo el
+    // arranque no decía nada y el reloj seguía publicando.
+    const duplicados = [
+      { id: 1, name: 'Gerencia', ip: '10.0.0.11', port: 4370, serial: 'ABC' },
+      { id: 2, name: 'Otro',     ip: '10.0.0.12', port: 4370, serial: 'abc' },
+    ];
+    const problemas = auditAllowlist(parseAllowlist('ABC'), duplicados);
+
+    expect(problemas).toHaveLength(1);
+    expect(problemas[0].code).toBe('serial_duplicado');
+  });
+
+  test('un serial que lleva un solo reloj no se reporta', () => {
+    expect(auditAllowlist(parseAllowlist('GER-0001'), RELOJES)).toEqual([]);
+  });
+
   test('el hostname usado como token también se reporta', () => {
     const conHostname = [{ id: 1, name: 'Gerencia', ip: 'reloj-gerencia.local', port: 4370 }];
     expect(auditAllowlist(parseAllowlist('reloj-gerencia.local'), conHostname)).toHaveLength(1);

@@ -237,8 +237,22 @@ function auditAllowlist(allowlist = [], devices = []) {
     const porHost   = devices.filter(d => String(d.ip || '').trim().toLowerCase() === token);
     const porSerial = devices.filter(d => canonicalSerial(d.serial) === canonicalSerial(token));
 
-    // Nombrado por serial: siempre funciona, el SN llega en cada PUSH.
-    if (porSerial.length > 0) continue;
+    // Nombrado por serial: funciona porque el SN llega en cada PUSH — pero
+    // sólo si UN reloj lo lleva. Dos entradas cuyo serial difiere apenas en
+    // mayúsculas son el mismo serial una vez canonizado, y `resolveDevice` las
+    // da por ambiguas: el reloj nunca entra en observe-only y sigue
+    // publicando. `deviceRegistry` ya rechaza ese duplicado al leer la
+    // configuración; esto lo vuelve a comprobar acá para que la lista tampoco
+    // dependa de por dónde llegaron los relojes.
+    if (porSerial.length === 1) continue;
+    if (porSerial.length > 1) {
+      problemas.push({
+        token,
+        code: 'serial_duplicado',
+        detail: 'dos relojes comparten ese serial al canonizarlo: dejar uno solo',
+      });
+      continue;
+    }
 
     const nombrados = [...porNombre, ...porHost];
     if (nombrados.length === 0) continue;   // se resolverá por el SN reportado
