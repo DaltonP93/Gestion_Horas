@@ -57,8 +57,18 @@ La sombra usa `device_key`, que sale de la identidad estable:
 
 | Preferencia | Valor | Estabilidad |
 |---|---|---|
-| 1ª | `sn:<SERIAL>` reportado por el reloj | sobrevive a cambio de IP y a reordenar la variable |
-| 2ª | `addr:<ip>:<puerto>` del reloj configurado | se rompe si se reasigna la IP, pero no depende del orden |
+| 1ª | `sn:<SERIAL>` reportado por el reloj, en mayúsculas | sobrevive a cambio de IP y a reordenar la variable |
+| 2ª | `addr:<sha256(ip:puerto)[:16]>` del reloj configurado | se rompe si se reasigna la IP, pero no depende del orden |
+
+### El serial se canoniza
+
+La allowlist y `ZKTECO_DEVICES` ya comparan sin distinguir mayúsculas, así que `ger-0001` y `GER-0001` son el mismo reloj para decidir si se observa. La clave se normaliza a mayúsculas para que también sean el mismo reloj para **correlacionar**.
+
+Sin eso, el serial que el reloj anuncia por PUSH y el que un operador tipea en `ZKTECO_DEVICES` para el polling —dos textos escritos por manos distintas— podían diferir sólo en capitalización y producir dos `event_id` para el mismo marcaje. La comparación habría mostrado todo como `only_push` / `only_polling` sin que nada fallara a la vista: un resultado falso con aspecto de hallazgo.
+
+### La dirección de respaldo va hasheada
+
+El fallback `addr:` se usa sólo si el reloj hace PUSH sin declarar serial. La dirección se hashea antes de formar la clave: la IP es topología de red, y escribirla en `device_key` la habría persistido en claro y devuelto en `by_device`, contradiciendo la garantía de que se usa para correlacionar y se descarta. El hash conserva lo único que hace falta —que el mismo reloj dé siempre la misma clave— sin dejar topología en un archivo sin cifrar.
 
 El contrato v1 exige un `device_id` **entero** positivo. Se deriva por hash de `device_key`, así que el mismo reloj da siempre el mismo número sin coordinación entre procesos — que es lo que necesita el `event_id` para ser comparable. Ese entero es un **subrogado local de la sombra**: no es `devices.id` de MySQL ni el índice de `ZKTECO_DEVICES`.
 
@@ -174,7 +184,9 @@ curl -X POST http://127.0.0.1:8081/shadow/purge \
   -d '{"confirm": true}'
 ```
 
-`confirm: true` es obligatorio. Acepta `before` (ISO) para acotar por fecha.
+`confirm: true` es obligatorio. Acepta `before` para acotar por fecha, que debe ser **ISO-8601 con offset explícito** (`Z` o `±HH:MM`).
+
+Un `before` mal formado se rechaza con 400; no se interpreta. La comparación de SQLite es lexicográfica, así que `occurred_at < 'not-a-date'` es verdadero para toda marca ISO —`'2' < 'n'`— y un corte mal tipeado no acotaba el borrado: lo volvía total. Una hora de pared sin offset también se rechaza: decidir qué se borra obligaría a suponer una zona, y en una operación destructiva suponer está fuera de discusión.
 
 ## Encenderlo para Gerencia
 

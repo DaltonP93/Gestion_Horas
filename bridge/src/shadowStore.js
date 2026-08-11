@@ -51,7 +51,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { validateEvent } = require('../../contracts/punchContractV1');
+const { validateEvent, normalizeTimestamp } = require('../../contracts/punchContractV1');
 
 /** Orígenes de observación. `polling` está previsto pero NO conectado. */
 const SHADOW_SOURCES = Object.freeze(['push', 'polling']);
@@ -65,7 +65,40 @@ const SHADOW_ERRORS = Object.freeze({
   SOURCE_INVALID:   'shadow_source_invalid',
   DEVICE_KEY_MISSING: 'shadow_device_key_missing',
   WRITE_FAILED:     'shadow_write_failed',
+  BEFORE_INVALID:   'shadow_before_invalid',
 });
+
+/**
+ * Instante ISO-8601 con offset EXPLÍCITO (`Z` o `±HH:MM`).
+ *
+ * El offset no es opcional acá. `occurred_at` se guarda siempre en UTC, y una
+ * hora de pared sin offset obligaría a suponer una zona para decidir qué se
+ * borra: en una operación destructiva, suponer está fuera de discusión.
+ */
+const ISO_CON_OFFSET_ESTRICTO =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * Valida el corte de `purge`. Devuelve `{ ok, value }`.
+ *
+ * Sin esto, el valor viajaba tal cual a una comparación LEXICOGRÁFICA de
+ * SQLite. `occurred_at < 'not-a-date'` es verdadero para TODA marca de tiempo
+ * ISO —'2' < 'n'—, así que un `before` mal tipeado no acotaba el borrado: lo
+ * volvía total. Un purge que se pidió parcial no puede vaciar la tabla porque
+ * la fecha estaba mal escrita.
+ */
+function normalizeBefore(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return { ok: true, value: null };
+  }
+  const s = String(raw).trim();
+  if (!ISO_CON_OFFSET_ESTRICTO.test(s)) return { ok: false };
+
+  // El contrato rechaza además fechas civiles imposibles (2026-02-31), que la
+  // expresión regular acepta por forma.
+  const canon = normalizeTimestamp(s);
+  return canon ? { ok: true, value: canon } : { ok: false };
+}
 
 const DEFAULTS = Object.freeze({
   BUSY_TIMEOUT_MS: 5000,
@@ -354,8 +387,15 @@ class ShadowStore {
    */
   purge({ before = null } = {}) {
     if (!this.db) return { ok: false, error_code: SHADOW_ERRORS.NOT_OPEN };
-    const r = before
-      ? this.db.prepare('DELETE FROM shadow_events WHERE occurred_at < @before').run({ before })
+
+    // Se valida ACÁ y no sólo en la ruta HTTP: es el borrado, y quien lo llame
+    // —una ruta, un script, un test— no puede acabar vaciando la tabla entera
+    // por una fecha mal formada.
+    const corte = normalizeBefore(before);
+    if (!corte.ok) return { ok: false, error_code: SHADOW_ERRORS.BEFORE_INVALID };
+
+    const r = corte.value
+      ? this.db.prepare('DELETE FROM shadow_events WHERE occurred_at < @before').run({ before: corte.value })
       : this.db.prepare('DELETE FROM shadow_events').run();
     return { ok: true, deleted: r.changes };
   }
@@ -375,6 +415,7 @@ module.exports = {
   readStoreConfig,
   sanitizeShadowPayload,
   deviceIdFromKey,
+  normalizeBefore,
   SHADOW_SOURCES,
   SHADOW_ERRORS,
   CAMPOS_PERSISTIDOS,

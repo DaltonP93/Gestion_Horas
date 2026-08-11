@@ -13,7 +13,7 @@ const path = require('path');
 
 const {
   createShadowStore, ShadowStore, readStoreConfig,
-  sanitizeShadowPayload, deviceIdFromKey,
+  sanitizeShadowPayload, deviceIdFromKey, normalizeBefore,
   SHADOW_ERRORS, CAMPOS_PERSISTIDOS,
 } = require('../src/shadowStore');
 const { buildEvent } = require('../../contracts/punchContractV1');
@@ -464,6 +464,62 @@ describe('no se borra solo', () => {
 
     expect(r.deleted).toBe(3);
     expect(s.stats().stored).toBe(0);
+    s.close();
+  });
+
+  test('un before mal formado NO borra nada', () => {
+    // La comparación de SQLite es lexicográfica: 'not-a-date' es mayor que
+    // cualquier timestamp ISO ('2' < 'n'), así que sin validación un corte mal
+    // tipeado no acotaba el borrado — lo volvía total.
+    const s = abierto();
+    for (let i = 0; i < 3; i++) s.record(observacion({ i }), { deviceKey: RELOJ });
+
+    const r = s.purge({ before: 'not-a-date' });
+
+    expect(r.ok).toBe(false);
+    expect(r.error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    expect(s.stats().stored).toBe(3);
+    s.close();
+  });
+
+  test('una hora de pared sin offset se rechaza: habría que suponer una zona', () => {
+    const s = abierto();
+    s.record(observacion(), { deviceKey: RELOJ });
+
+    expect(s.purge({ before: '2026-03-11 12:00:00' }).error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    expect(s.stats().stored).toBe(1);
+    s.close();
+  });
+
+  test('una fecha civil imposible se rechaza', () => {
+    const s = abierto();
+    s.record(observacion(), { deviceKey: RELOJ });
+
+    expect(s.purge({ before: '2026-02-31T12:00:00Z' }).error_code).toBe(SHADOW_ERRORS.BEFORE_INVALID);
+    expect(s.stats().stored).toBe(1);
+    s.close();
+  });
+
+  test('normalizeBefore acepta sólo ISO con offset explícito', () => {
+    expect(normalizeBefore(null)).toEqual({ ok: true, value: null });
+    expect(normalizeBefore('')).toEqual({ ok: true, value: null });
+    expect(normalizeBefore('2026-03-11T12:00:00Z').ok).toBe(true);
+    expect(normalizeBefore('2026-03-11T09:00:00-03:00').ok).toBe(true);
+
+    for (const malo of ['not-a-date', '2026-03-11', '2026-03-11T12:00:00', 'ayer', '99999', '2026-13-01T00:00:00Z']) {
+      expect(normalizeBefore(malo).ok).toBe(false);
+    }
+  });
+
+  test('un offset distinto de Z se normaliza al mismo instante', () => {
+    const s = abierto();
+    s.record(observacion({ i: 1 }), { deviceKey: RELOJ });    // 11:01Z
+    s.record(observacion({ i: 40 }), { deviceKey: RELOJ });   // 11:40Z
+
+    // 08:30-03:00 == 11:30Z
+    const r = s.purge({ before: '2026-03-11T08:30:00-03:00' });
+
+    expect(r.deleted).toBe(1);
     s.close();
   });
 

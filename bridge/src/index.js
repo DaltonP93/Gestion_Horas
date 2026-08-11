@@ -344,8 +344,14 @@ function startBridgeApi(devices, resolution, shadow = null) {
     if (req.body?.confirm !== true) {
       return res.status(400).json({ error: 'Se requiere confirm: true', code: 'shadow_purge_unconfirmed' });
     }
+    // `before` mal formado se rechaza, no se interpreta. La comparación de
+    // SQLite es lexicográfica: 'not-a-date' es mayor que cualquier timestamp
+    // ISO, así que un corte mal tipeado borraba TODO en vez de acotar.
     const before = (req.body?.before || '').toString().trim() || null;
     const r = shadow.store.purge({ before });
+    if (!r.ok) {
+      return res.status(400).json({ error: 'before inválido: se espera ISO-8601 con offset explícito', code: r.error_code });
+    }
     logger.warn(`🕶️  Sombra vaciada por operación administrativa: ${r.deleted} fila(s)`);
     res.json(r);
   });

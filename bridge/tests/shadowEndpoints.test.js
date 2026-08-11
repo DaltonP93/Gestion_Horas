@@ -276,6 +276,38 @@ describe('POST /shadow/purge', () => {
     s.stop();
   });
 
+  test('un before mal formado responde 400 y no borra nada', async () => {
+    const s = sombraEncendida();
+    s.capture(obs({ deviceUserId: '1' }));
+    s.capture(obs({ deviceUserId: '2' }));
+
+    const res = await request(bootApi(s))
+      .post('/shadow/purge')
+      .set('x-api-key', CLAVE)
+      .send({ confirm: true, before: 'not-a-date' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('shadow_before_invalid');
+    // Sin validación esto borraba las DOS: 'not-a-date' es lexicográficamente
+    // mayor que cualquier timestamp ISO.
+    expect(s.store.stats().stored).toBe(2);
+    s.stop();
+  });
+
+  test('una hora sin offset también se rechaza', async () => {
+    const s = sombraEncendida();
+    s.capture(obs());
+
+    const res = await request(bootApi(s))
+      .post('/shadow/purge')
+      .set('x-api-key', CLAVE)
+      .send({ confirm: true, before: '2026-03-11 12:00:00' });
+
+    expect(res.status).toBe(400);
+    expect(s.store.stats().stored).toBe(1);
+    s.stop();
+  });
+
   test('no existe ninguna otra ruta que borre', async () => {
     const s = sombraEncendida();
     s.capture(obs());

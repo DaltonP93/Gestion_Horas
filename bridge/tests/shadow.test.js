@@ -12,7 +12,7 @@ const path = require('path');
 
 const {
   createShadow, Shadow, readShadowConfig, parseAllowlist,
-  stableDeviceKey, findConfiguredDevice, isDeviceAllowed, SHADOW_SKIP,
+  canonicalSerial, stableDeviceKey, findConfiguredDevice, isDeviceAllowed, SHADOW_SKIP,
 } = require('../src/shadow');
 const { createShadowStore, deviceIdFromKey, SHADOW_ERRORS } = require('../src/shadowStore');
 const { resolveDevices } = require('../src/deviceRegistry');
@@ -292,8 +292,92 @@ describe('la correlación no depende del orden de ZKTECO_DEVICES', () => {
     expect(stableDeviceKey({ sn: 'REPORTADO', device: { serial: 'CONFIGURADO' } })).toBe('sn:REPORTADO');
   });
 
-  test('sin serial cae a la dirección, que tampoco es posicional', () => {
-    expect(stableDeviceKey({ sn: '', device: { ip: '10.0.0.11', port: 4370 } })).toBe('addr:10.0.0.11:4370');
+  test('sin serial cae a la dirección, hasheada', () => {
+    const k = stableDeviceKey({ sn: '', device: { ip: '10.0.0.11', port: 4370 } });
+
+    expect(k).toMatch(/^addr:[0-9a-f]{16}$/);
+    expect(k).not.toContain('10.0.0.11');
+  });
+
+  test('la dirección hasheada es estable entre procesos', () => {
+    const a = stableDeviceKey({ sn: '', device: { ip: '10.0.0.11', port: 4370 } });
+    const b = stableDeviceKey({ sn: '', device: { ip: '10.0.0.11', port: 4370 } });
+    const c = stableDeviceKey({ sn: '', device: { ip: '10.0.0.12', port: 4370 } });
+
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
+  });
+
+  test('por el camino de respaldo tampoco llega una IP al disco', () => {
+    // El fallback `addr:` era la única vía por la que una IP terminaba
+    // persistida: iba en claro a device_key y stats() la devolvía en by_device.
+    const { s } = sombra({ BRIDGE_SHADOW_DEVICE_ALLOWLIST: '10.0.0.11' });
+    const r = s.capture(obs({ sn: '' }));
+
+    expect(r.ok).toBe(true);
+
+    const fila = s.store.db.prepare('SELECT * FROM shadow_events').get();
+    expect(JSON.stringify(fila)).not.toContain('10.0.0.11');
+    expect(JSON.stringify(fila)).not.toMatch(/\b\d{1,3}(\.\d{1,3}){3}\b/);
+    expect(JSON.stringify(s.store.stats().by_device)).not.toContain('10.0.0.11');
+    s.stop();
+  });
+});
+
+// ── Serial canónico ──────────────────────────────────────────────────
+
+describe('el serial se canoniza antes de derivar la identidad', () => {
+  // La allowlist y ZKTECO_DEVICES ya comparan sin distinguir mayúsculas. Si la
+  // clave conservara el texto original, el MISMO reloj daría dos device_id y
+  // por lo tanto dos event_id, y la comparación PUSH↔polling mostraría todo
+  // como only_push / only_polling sin que nada falle a la vista.
+
+  test('mayúsculas y minúsculas dan la misma clave', () => {
+    expect(stableDeviceKey({ sn: 'ger-0001' })).toBe(stableDeviceKey({ sn: 'GER-0001' }));
+  });
+
+  test('los espacios sobrantes no cambian la clave', () => {
+    expect(stableDeviceKey({ sn: '  GER-0001  ' })).toBe('sn:GER-0001');
+  });
+
+  test('canonicalSerial normaliza a mayúsculas sin espacios', () => {
+    expect(canonicalSerial('  ger-0001 ')).toBe('GER-0001');
+    expect(canonicalSerial(null)).toBe('');
+    expect(canonicalSerial(undefined)).toBe('');
+  });
+
+  test('el device_id derivado es el mismo con cualquier capitalización', () => {
+    const a = deviceIdFromKey(stableDeviceKey({ sn: 'ger-0001' }));
+    const b = deviceIdFromKey(stableDeviceKey({ sn: 'GER-0001' }));
+    expect(a).toBe(b);
+  });
+
+  test('el mismo marcaje con el serial en otra capitalización da el MISMO event_id', () => {
+    // Éste es el caso que rompía la comparación: el serial que el reloj
+    // anuncia por PUSH y el que un operador tipea en ZKTECO_DEVICES para el
+    // polling son dos textos escritos por manos distintas.
+    const s1 = createShadow({ env: env({ BRIDGE_SHADOW_PATH: path.join(dir, 'a.db') }), devices: RELOJES });
+    const s2 = createShadow({ env: env({ BRIDGE_SHADOW_PATH: path.join(dir, 'b.db') }), devices: RELOJES });
+    s1.start(); s2.start();
+
+    const r1 = s1.capture(obs({ sn: 'GER-0001' }));
+    const r2 = s2.capture(obs({ sn: 'ger-0001' }));
+
+    expect(r1.ok).toBe(true);
+    expect(r2.ok).toBe(true);
+    expect(r1.event_id).toBe(r2.event_id);
+    s1.stop(); s2.stop();
+  });
+
+  test('se guarda una sola fila aunque el serial llegue de las dos formas', () => {
+    const { s } = sombra();
+    s.capture(obs({ sn: 'GER-0001' }));
+    s.capture(obs({ sn: 'ger-0001' }));
+
+    expect(s.store.stats().stored).toBe(1);
+    expect(s.metrics.duplicates).toBe(1);
+    expect(Object.keys(s.store.stats().by_device)).toEqual(['sn:GER-0001']);
+    s.stop();
   });
 
   test('sin serial y sin reloj configurado no hay identidad y no se guarda', () => {
