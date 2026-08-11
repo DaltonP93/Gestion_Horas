@@ -272,11 +272,22 @@ El corte ocurre **antes** del dedupe, no sólo antes de publicar: `SET NX` escri
 
 Y el corte **no depende de que la sombra funcione**. Con la sombra apagada, sin sombra, o con el almacén roto, el reloj observe-only sigue sin publicar: un fallo de la herramienta de diagnóstico no puede convertirlo en productor.
 
+### Cómo se resuelve el reloj
+
+En orden:
+
+1. **Por serial**, si el reloj lo reporta y coincide con un `#serial` de `ZKTECO_DEVICES`.
+2. **Por IP**, si el serial no coincide con ninguno configurado. El `#serial` es **opcional** y el formato habitual no lo lleva (`Gerencia@10.0.0.11:4370`), así que sin este paso el reloj quedaría sin resolver y una allowlist por nombre no activaría observe-only.
+
+En el paso 2 sólo compiten los relojes que **no** declaran serial. Uno configurado con un serial distinto del reportado es demostrablemente otro aparato, y emparejarlo por compartir la IP atribuiría el marcaje al reloj equivocado.
+
 ### Relojes no identificables
 
-Un reloj que no se puede resolver sin ambigüedad **no entra** en observe-only y se procesa normal. El caso concreto: `resolveDevices` rechaza direcciones repetidas (`ip:puerto`) pero admite dos relojes en la misma IP con puertos distintos; si uno hace PUSH sin declarar serial, esa IP no alcanza para saber cuál es.
+Un reloj que no se puede resolver sin ambigüedad **no entra** en observe-only y se procesa normal. El caso concreto: `resolveDevices` rechaza direcciones repetidas (`ip:puerto`) pero admite dos relojes en la misma IP con puertos distintos; si ninguno declara serial, esa IP no alcanza para saber cuál es.
 
 La dirección de fallo segura es **publicar**: suprimir la publicación del reloj equivocado perdería sus marcaciones sin que nadie se entere. Se cuenta en `observe_only_ambiguous` y se registra una advertencia sin IP ni serial.
+
+> **Lo más robusto es declarar el `#serial`** en `ZKTECO_DEVICES` y nombrar el reloj por su serial en la allowlist: así la identidad no depende de la IP, que puede reasignarse.
 
 ### Métricas
 

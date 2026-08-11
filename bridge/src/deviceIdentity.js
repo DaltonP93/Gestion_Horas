@@ -111,17 +111,34 @@ function stableDeviceKey({ sn, device }) {
 function resolveDevice({ sn, ip }, devices = []) {
   const serial = canonicalSerial(sn);
 
+  // Candidatos para la búsqueda por IP. Arrancan siendo todos y se recortan
+  // sólo si el reloj declaró un serial que no coincide con ninguno.
+  let candidatos = devices;
+
   if (serial) {
     const porSerial = devices.filter(d => canonicalSerial(d.serial) === serial);
     if (porSerial.length === 1) return { device: porSerial[0], ambiguous: false, matchedBy: MATCH.SERIAL };
     if (porSerial.length > 1)  return { device: null, ambiguous: true, matchedBy: MATCH.AMBIGUOUS };
-    // El reloj declaró serial y no está configurado: identidad clara igual.
-    return { device: null, ambiguous: false, matchedBy: MATCH.NONE };
+
+    // ── Sin coincidencia por serial: se sigue por IP ──────────────────
+    //
+    // En `ZKTECO_DEVICES` el `#serial` es OPCIONAL y el formato habitual no lo
+    // lleva (`Gerencia@10.0.0.11:4370`). El POST ADMS sí trae `SN`, así que
+    // cortar acá dejaría sin resolver al reloj entero: una allowlist por
+    // nombre —la que recomiendan el `.env.example` y la documentación— no
+    // activaría observe-only y el reloj volvería a publicar asistencia, que es
+    // exactamente lo que este modo existe para impedir.
+    //
+    // Pero los candidatos se recortan a los que NO declaran serial: un reloj
+    // configurado con un serial DISTINTO del reportado es demostrablemente
+    // otro aparato, y emparejarlo por compartir la IP sería atribuir el
+    // marcaje al reloj equivocado.
+    candidatos = devices.filter(d => !canonicalSerial(d.serial));
   }
 
   const dir = String(ip || '').trim();
   if (dir) {
-    const porIp = devices.filter(d => d.ip === dir);
+    const porIp = candidatos.filter(d => d.ip === dir);
     if (porIp.length === 1) return { device: porIp[0], ambiguous: false, matchedBy: MATCH.IP };
     if (porIp.length > 1)  return { device: null, ambiguous: true, matchedBy: MATCH.AMBIGUOUS };
   }

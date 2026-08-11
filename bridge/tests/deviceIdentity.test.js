@@ -70,6 +70,58 @@ describe('resolveDevice', () => {
     });
   });
 
+  // ── El #serial de ZKTECO_DEVICES es OPCIONAL ───────────────────────
+  //
+  // El formato habitual —`Gerencia@10.0.0.11:4370`— no lo lleva, pero el POST
+  // ADMS sí trae SN. Si la resolución cortara al no encontrar el serial, el
+  // reloj quedaría sin resolver entero: una allowlist por nombre no activaría
+  // observe-only y el reloj volvería a publicar asistencia.
+
+  test('con el serial sin configurar, se resuelve por IP', () => {
+    const sinSerial = [{ id: 1, name: 'Gerencia', ip: '10.0.0.11', port: 4370 }];
+
+    expect(resolveDevice({ sn: 'GER-0001', ip: '10.0.0.11' }, sinSerial)).toEqual({
+      device: sinSerial[0], ambiguous: false, matchedBy: MATCH.IP,
+    });
+  });
+
+  test('y así la allowlist por nombre sigue funcionando', () => {
+    const sinSerial = [{ id: 1, name: 'Gerencia', ip: '10.0.0.11', port: 4370 }];
+    const r = matchesAllowlist({ sn: 'GER-0001', ip: '10.0.0.11' }, sinSerial, parseAllowlist('Gerencia'));
+
+    expect(r.allowed).toBe(true);
+    expect(r.device.name).toBe('Gerencia');
+  });
+
+  test('un serial CONFLICTIVO no se empareja por compartir la IP', () => {
+    // El reloj dice OTRO-9; la config dice que en esa IP vive GER-0001. Son
+    // aparatos demostrablemente distintos: emparejarlos atribuiría el marcaje
+    // al reloj equivocado.
+    expect(resolveDevice({ sn: 'OTRO-9', ip: '10.0.0.11' }, RELOJES)).toEqual({
+      device: null, ambiguous: false, matchedBy: MATCH.NONE,
+    });
+  });
+
+  test('dos relojes sin serial en la misma IP siguen siendo ambiguos', () => {
+    const mismos = [
+      { id: 1, name: 'A', ip: '10.0.0.20', port: 4370 },
+      { id: 2, name: 'B', ip: '10.0.0.20', port: 4371 },
+    ];
+    expect(resolveDevice({ sn: 'X-1', ip: '10.0.0.20' }, mismos).ambiguous).toBe(true);
+  });
+
+  test('el reloj con serial declarado no compite con los que no lo declaran', () => {
+    const mezcla = [
+      { id: 1, name: 'ConSerial', ip: '10.0.0.30', port: 4370, serial: 'CS-1' },
+      { id: 2, name: 'SinSerial', ip: '10.0.0.30', port: 4371 },
+    ];
+    // El reloj reporta un serial que no es CS-1: sólo SinSerial es candidato.
+    const r = resolveDevice({ sn: 'OTRO-9', ip: '10.0.0.30' }, mezcla);
+
+    expect(r.ambiguous).toBe(false);
+    expect(r.device.name).toBe('SinSerial');
+  });
+
   test('sin serial y sin IP conocida tampoco es ambiguo', () => {
     expect(resolveDevice({ sn: '', ip: '192.168.1.1' }, RELOJES).ambiguous).toBe(false);
   });

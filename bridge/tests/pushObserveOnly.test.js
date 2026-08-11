@@ -200,6 +200,27 @@ describe('a quién se le aplica', () => {
     expect(publishAttendance).not.toHaveBeenCalled();
   });
 
+  test('funciona con ZKTECO_DEVICES sin #serial, que es el formato habitual', async () => {
+    // El `#serial` es opcional y el formato documentado no lo lleva. El reloj
+    // igual anuncia su SN por ADMS, así que se resuelve por IP y la allowlist
+    // por nombre tiene que seguir activando observe-only.
+    process.env.BRIDGE_PUSH_OBSERVE_ONLY_ALLOWLIST = 'Gerencia';
+    const sinSerial = [{ id: 1, name: 'Gerencia', ip: '127.0.0.1', port: 4370 }];
+
+    const originalListen = express.application.listen;
+    let app;
+    express.application.listen = function () { app = this; return { close() {} }; };
+    const publishAttendance = jest.fn();
+    const { startPushServer } = require('../src/pushServer');
+    startPushServer(publishAttendance, logger, { devices: sinSerial, redis: redisFalso() });
+    express.application.listen = originalListen;
+
+    const res = await enviar(app, ATTLOG('1042', '2026-03-11 08:15:00'), 'GER-0001');
+
+    expect(res.status).toBe(200);
+    expect(publishAttendance).not.toHaveBeenCalled();
+  });
+
   test('la identidad la resuelve el mismo módulo que usa la sombra', () => {
     // Si las reglas divergieran, un reloj podría quedar observado por la
     // sombra y publicado por el PUSH a la vez.
