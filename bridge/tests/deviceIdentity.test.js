@@ -213,6 +213,36 @@ describe('matchesAllowlist', () => {
   test('isDeviceAllowed no acepta una lista vacía como comodín', () => {
     expect(isDeviceAllowed({ sn: 'GER-0001', device: GERENCIA }, [])).toBe(false);
   });
+
+  // ── La IP observada no contradice un serial ───────────────────────
+  //
+  // Suprimir al reloj equivocado es la peor falla posible acá: se pierden
+  // marcaciones en silencio.
+
+  test('un reloj que llega por NAT desde la IP de otro NO cae en su allowlist', () => {
+    // Comedor (COM-0002) llega desde 10.0.0.11, la IP de Gerencia. La
+    // allowlist nombra esa IP para observar Gerencia — no a Comedor.
+    const r = matchesAllowlist({ sn: 'COM-0002', ip: '10.0.0.11' }, RELOJES, parseAllowlist('10.0.0.11'));
+
+    expect(r.allowed).toBe(false);
+    expect(r.device).toBe(COMEDOR);   // se resolvió bien, sólo no está nombrado
+  });
+
+  test('el reloj correcto sí entra por su IP configurada', () => {
+    const r = matchesAllowlist({ sn: 'GER-0001', ip: '10.0.0.11' }, RELOJES, parseAllowlist('10.0.0.11'));
+    expect(r.allowed).toBe(true);
+  });
+
+  test('sin serial, la IP observada sigue siendo identidad válida', () => {
+    // Es la única disponible: ahí sí tiene que contar.
+    const r = matchesAllowlist({ sn: '', ip: '10.0.0.11' }, RELOJES, parseAllowlist('10.0.0.11'));
+    expect(r.allowed).toBe(true);
+  });
+
+  test('un reloj sin configurar tampoco se captura por la IP ajena', () => {
+    const r = matchesAllowlist({ sn: 'NUEVO-9', ip: '10.0.0.11' }, RELOJES, parseAllowlist('10.0.0.11'));
+    expect(r.allowed).toBe(false);
+  });
 });
 
 // ── Identificable en PUSH ────────────────────────────────────────────
@@ -301,6 +331,42 @@ describe('auditAllowlist', () => {
 
   test('un serial que lleva un solo reloj no se reporta', () => {
     expect(auditAllowlist(parseAllowlist('GER-0001'), RELOJES)).toEqual([]);
+  });
+
+  test('dos relojes sin serial que comparten IP se reportan', () => {
+    // `A@10.0.0.20:4370,B@10.0.0.20:4371` es configuración válida. Los dos
+    // pasan esIdentificableEnPush —la IP es numérica— pero resolveDevice da
+    // por ambiguo todo PUSH que llegue de ahí, así que observe-only nunca se
+    // aplica y el reloj sigue publicando.
+    const compartida = [
+      { id: 1, name: 'A', ip: '10.0.0.20', port: 4370 },
+      { id: 2, name: 'B', ip: '10.0.0.20', port: 4371 },
+    ];
+    const problemas = auditAllowlist(parseAllowlist('A'), compartida);
+
+    expect(problemas).toHaveLength(1);
+    expect(problemas[0].code).toBe('ip_ambigua');
+  });
+
+  test('nombrar esa IP directamente también se reporta', () => {
+    const compartida = [
+      { id: 1, name: 'A', ip: '10.0.0.20', port: 4370 },
+      { id: 2, name: 'B', ip: '10.0.0.20', port: 4371 },
+    ];
+    expect(auditAllowlist(parseAllowlist('10.0.0.20'), compartida)).toHaveLength(1);
+  });
+
+  test('si declaran serial, compartir IP deja de ser problema', () => {
+    const conSerial = [
+      { id: 1, name: 'A', ip: '10.0.0.20', port: 4370, serial: 'A1' },
+      { id: 2, name: 'B', ip: '10.0.0.20', port: 4371, serial: 'B1' },
+    ];
+    expect(auditAllowlist(parseAllowlist('A'), conSerial)).toEqual([]);
+  });
+
+  test('una IP no compartida no se reporta', () => {
+    const solo = [{ id: 1, name: 'A', ip: '10.0.0.20', port: 4370 }];
+    expect(auditAllowlist(parseAllowlist('A'), solo)).toEqual([]);
   });
 
   test('el hostname usado como token también se reporta', () => {

@@ -161,17 +161,33 @@ function findConfiguredDevice(observacion, devices = []) {
 function isDeviceAllowed({ sn, ip, device }, allowlist = []) {
   if (allowlist.length === 0) return false;   // vacía = nadie
 
+  const serial = canonicalSerial(sn);
+
   const candidatos = [
-    String(sn || '').trim(),
+    serial,
     device?.serial,
     device?.name,
-    device?.ip,
-    ip,
-  ]
+    device?.ip,          // la IP CONFIGURADA del reloj resuelto
+  ];
+
+  // ── La IP observada sólo cuenta si no hay serial ────────────────────
+  //
+  // Un reloj que declaró su serial ya tiene identidad determinada, y la red no
+  // puede contradecirla. Incluir siempre la dirección de origen permitía que
+  // la allowlist de OTRO reloj lo capturara: Comedor llegando por NAT desde la
+  // IP de Gerencia quedaba dentro de una allowlist que decía `10.0.0.11`, y el
+  // servidor suprimía las marcaciones de Comedor —que nadie pidió observar—.
+  //
+  // Suprimir al reloj equivocado es la peor de las fallas posibles acá: se
+  // pierden marcaciones en silencio. Sin serial, en cambio, la dirección es la
+  // única identidad disponible y sigue valiendo.
+  if (!serial) candidatos.push(ip);
+
+  const normalizados = candidatos
     .map(v => String(v || '').trim().toLowerCase())
     .filter(Boolean);
 
-  return candidatos.some(c => allowlist.includes(c));
+  return normalizados.some(c => allowlist.includes(c));
 }
 
 /**
@@ -262,6 +278,30 @@ function auditAllowlist(allowlist = [], devices = []) {
         token,
         code: 'token_no_identificable',
         detail: 'el reloj se configuró con hostname y sin #serial: declarar el serial',
+      });
+      continue;
+    }
+
+    // ── La IP tiene que ser única entre los relojes SIN serial ─────────
+    //
+    // Un reloj sin `#serial` sólo se puede resolver por su dirección, y
+    // `resolveDevice` da por ambiguo todo PUSH que llegue de una IP que
+    // comparten dos relojes así (`A@10.0.0.20:4370,B@10.0.0.20:4371` es
+    // configuración válida). Ambiguo significa que observe-only NUNCA se
+    // aplica: sin este chequeo el arranque afirmaba que la configuración
+    // servía mientras el reloj seguía publicando.
+    //
+    // Un reloj que SÍ declara serial no entra en esta cuenta: se resuelve por
+    // el serial y comparte IP sin consecuencias.
+    const soloPorIp = nombrados.filter(d => !canonicalSerial(d.serial));
+    const conIpCompartida = soloPorIp.some(d =>
+      devices.filter(o => !canonicalSerial(o.serial) && o.ip === d.ip).length > 1);
+
+    if (conIpCompartida) {
+      problemas.push({
+        token,
+        code: 'ip_ambigua',
+        detail: 'dos relojes sin #serial comparten esa IP: declarar el serial',
       });
     }
   }
