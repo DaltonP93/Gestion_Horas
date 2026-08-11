@@ -161,6 +161,27 @@ describe('la consulta del cron sólo pide columnas que existen', () => {
     expect(consulta).toMatch(/ca\.completed_at IS NULL/);
   });
 
+  test('descarta las asignaciones sin fecha de vencimiento', () => {
+    // `due_date` es NULL-able en la 028. Sin este filtro, DATEDIFF(NULL, ...)
+    // da NULL, el BETWEEN da NULL y la fila no entra igual — pero el correo
+    // diría "vence el null" si algún día el rango dejara de decidir. Que la
+    // cláusula sea explícita es lo que hace que no dependa de eso.
+    expect(consulta).toMatch(/ca\.due_date IS NOT NULL/);
+  });
+
+  test('la ventana de aviso es de -1 a 3 días', () => {
+    // El -1 y no 0: una asignación vencida AYER todavía tiene que avisar,
+    // que es el caso "overdue" del asunto del correo. Un BETWEEN 0 AND 3
+    // compila igual y silencia justamente el aviso más urgente.
+    expect(consulta).toMatch(/DATEDIFF\(ca\.due_date, CURDATE\(\)\) BETWEEN -1 AND 3/);
+  });
+
+  test('el rango se mide contra CURDATE(), no contra NOW()', () => {
+    // NOW() incluye la hora: una asignación que vence hoy quedaría dentro o
+    // fuera según la hora a la que corra el cron.
+    expect(consulta).not.toMatch(/DATEDIFF\([^)]*NOW\(\)/);
+  });
+
   test('cada columna pedida existe en su tabla', () => {
     // El chequeo cruza (alias → tabla) contra el DDL real. Que una columna
     // exista en OTRA tabla no alcanza: `status` existe en `employees` y eso
