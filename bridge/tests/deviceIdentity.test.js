@@ -8,7 +8,7 @@
  * suprimir la publicación del reloj equivocado pierde marcaciones en silencio.
  */
 const {
-  MATCH, parseAllowlist, canonicalSerial, stableDeviceKey, esIdentificableEnPush, auditAllowlist,
+  MATCH, parseAllowlist, canonicalSerial, stableDeviceKey, esIdentificableEnPush, auditAllowlist, tokensEnConflicto,
   resolveDevice, findConfiguredDevice, isDeviceAllowed, matchesAllowlist,
 } = require('../src/deviceIdentity');
 
@@ -242,6 +242,56 @@ describe('matchesAllowlist', () => {
   test('un reloj sin configurar tampoco se captura por la IP ajena', () => {
     const r = matchesAllowlist({ sn: 'NUEVO-9', ip: '10.0.0.11' }, RELOJES, parseAllowlist('10.0.0.11'));
     expect(r.allowed).toBe(false);
+  });
+
+  // ── Colisión entre tipos de identificador ─────────────────────────
+  //
+  // Serial, nombre e IP comparten un espacio de nombres sin tipo, así que un
+  // token puede alcanzar dos relojes por vías distintas.
+
+  const CRUZADOS = [
+    { id: 1, name: 'Gerencia', ip: '10.0.0.11', port: 4370, serial: 'GER-1' },
+    { id: 2, name: 'Comedor',  ip: '10.0.0.12', port: 4370, serial: 'Gerencia' },
+  ];
+
+  test('un token que alcanza dos relojes no se aplica a ninguno', () => {
+    // `Gerencia` entra por el NOMBRE del primero y por el SERIAL del segundo.
+    // Aplicarlo habría suprimido las marcaciones de Comedor, que nadie nombró.
+    const lista = parseAllowlist('Gerencia');
+
+    expect(matchesAllowlist({ sn: 'GER-1', ip: '10.0.0.11' }, CRUZADOS, lista).allowed).toBe(false);
+    expect(matchesAllowlist({ sn: 'Gerencia', ip: '10.0.0.12' }, CRUZADOS, lista).allowed).toBe(false);
+  });
+
+  test('la colisión se reporta en la auditoría', () => {
+    const problemas = auditAllowlist(parseAllowlist('Gerencia'), CRUZADOS);
+
+    expect(problemas).toHaveLength(1);
+    expect(problemas[0].code).toBe('token_colision');
+  });
+
+  test('tokensEnConflicto nombra exactamente el token ambiguo', () => {
+    const enConflicto = tokensEnConflicto(parseAllowlist('Gerencia,Comedor'), CRUZADOS);
+
+    expect([...enConflicto]).toEqual(['gerencia']);
+  });
+
+  test('los tokens sanos de la misma lista siguen funcionando', () => {
+    // Descartar el token en conflicto no puede desarmar el resto de la lista.
+    const lista = parseAllowlist('Gerencia,Comedor');
+
+    expect(matchesAllowlist({ sn: 'Gerencia', ip: '10.0.0.12' }, CRUZADOS, lista).allowed).toBe(true);
+  });
+
+  test('sin colisión, nada cambia', () => {
+    expect(tokensEnConflicto(parseAllowlist('Gerencia'), RELOJES).size).toBe(0);
+    expect(matchesAllowlist({ sn: 'GER-0001' }, RELOJES, parseAllowlist('Gerencia')).allowed).toBe(true);
+  });
+
+  test('un token que alcanza al MISMO reloj por dos vías no es colisión', () => {
+    // Nombre e IP del mismo aparato: sigue siendo uno solo.
+    const uno = [{ id: 1, name: '10.0.0.11', ip: '10.0.0.11', port: 4370, serial: 'X-1' }];
+    expect(tokensEnConflicto(parseAllowlist('10.0.0.11'), uno).size).toBe(0);
   });
 });
 

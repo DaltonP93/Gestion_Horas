@@ -204,7 +204,14 @@ function matchesAllowlist({ sn, ip }, devices, allowlist) {
   const { device, ambiguous } = resolveDevice({ sn, ip }, devices);
   if (ambiguous) return { allowed: false, ambiguous: true, device: null };
 
-  return { allowed: isDeviceAllowed({ sn, ip, device }, allowlist), ambiguous: false, device };
+  // Los tokens que alcanzan a dos relojes se descartan antes de comparar. Uno
+  // solo bastaba para capturar a un reloj que nadie nombró —el nombre de uno
+  // puede ser el serial de otro— y suprimirle las marcaciones en silencio.
+  const enConflicto = tokensEnConflicto(allowlist, devices);
+  const efectiva = enConflicto.size === 0 ? allowlist : allowlist.filter(t => !enConflicto.has(t));
+  if (efectiva.length === 0) return { allowed: false, ambiguous: false, device };
+
+  return { allowed: isDeviceAllowed({ sn, ip, device }, efectiva), ambiguous: false, device };
 }
 
 /** IPv4 en notación decimal. Deliberadamente laxa: sólo distingue número de nombre. */
@@ -245,6 +252,38 @@ function esIdentificableEnPush(device) {
  * esté en `ZKTECO_DEVICES`. El problema es el token que SÍ nombra a un reloj
  * configurado que después no se va a poder identificar.
  */
+/**
+ * Relojes que un token puede alcanzar, por CUALQUIER tipo de identificador.
+ *
+ * Serial, nombre e IP viven en un mismo espacio de nombres sin tipo —así se
+ * documentó la allowlist y así se tipea en un `.env`—, de modo que un token
+ * puede alcanzar a dos relojes distintos por vías distintas.
+ */
+function devicesAlcanzadosPor(token, devices = []) {
+  const t = String(token || '').trim().toLowerCase();
+  return devices.filter(d =>
+    canonicalSerial(d.serial) === canonicalSerial(t) ||
+    String(d.name || '').trim().toLowerCase() === t ||
+    String(d.ip || '').trim().toLowerCase() === t);
+}
+
+/**
+ * Tokens que alcanzan a MÁS DE UN reloj.
+ *
+ * El caso que lo motiva es una colisión cruzada: el nombre de un reloj igual
+ * al serial de otro —`Gerencia@…#GER-1,Comedor@…#Gerencia`—. Un token
+ * `Gerencia` entra por el nombre del primero y por el serial del segundo, y
+ * las marcaciones de Comedor se suprimen aunque nadie pidiera observarlo.
+ *
+ * Un token así se descarta en tiempo de ejecución: es preferible que
+ * observe-only no se aplique —el reloj publica, que es visible y reversible—
+ * antes que aplicarlo sobre un reloj que nadie nombró y perder sus marcaciones
+ * en silencio.
+ */
+function tokensEnConflicto(allowlist = [], devices = []) {
+  return new Set(allowlist.filter(t => devicesAlcanzadosPor(t, devices).length > 1));
+}
+
 function auditAllowlist(allowlist = [], devices = []) {
   const problemas = [];
 
@@ -253,22 +292,25 @@ function auditAllowlist(allowlist = [], devices = []) {
     const porHost   = devices.filter(d => String(d.ip || '').trim().toLowerCase() === token);
     const porSerial = devices.filter(d => canonicalSerial(d.serial) === canonicalSerial(token));
 
-    // Nombrado por serial: funciona porque el SN llega en cada PUSH — pero
-    // sólo si UN reloj lo lleva. Dos entradas cuyo serial difiere apenas en
-    // mayúsculas son el mismo serial una vez canonizado, y `resolveDevice` las
-    // da por ambiguas: el reloj nunca entra en observe-only y sigue
-    // publicando. `deviceRegistry` ya rechaza ese duplicado al leer la
-    // configuración; esto lo vuelve a comprobar acá para que la lista tampoco
-    // dependa de por dónde llegaron los relojes.
-    if (porSerial.length === 1) continue;
-    if (porSerial.length > 1) {
-      problemas.push({
-        token,
-        code: 'serial_duplicado',
-        detail: 'dos relojes comparten ese serial al canonizarlo: dejar uno solo',
-      });
+    // Un token que alcanza a dos relojes no puede aplicarse a ninguno.
+    const alcanzados = devicesAlcanzadosPor(token, devices);
+    if (alcanzados.length > 1) {
+      problemas.push(porSerial.length > 1
+        ? {
+          token,
+          code: 'serial_duplicado',
+          detail: 'dos relojes comparten ese serial al canonizarlo: dejar uno solo',
+        }
+        : {
+          token,
+          code: 'token_colision',
+          detail: 'ese texto identifica a dos relojes distintos (p. ej. el nombre de uno es el serial de otro): usar un identificador único',
+        });
       continue;
     }
+
+    // Nombrado por serial: funciona porque el SN llega en cada PUSH.
+    if (porSerial.length === 1) continue;
 
     const nombrados = [...porNombre, ...porHost];
     if (nombrados.length === 0) continue;   // se resolverá por el SN reportado
@@ -313,6 +355,8 @@ module.exports = {
   MATCH,
   esIdentificableEnPush,
   auditAllowlist,
+  tokensEnConflicto,
+  devicesAlcanzadosPor,
   parseAllowlist,
   canonicalSerial,
   stableDeviceKey,
