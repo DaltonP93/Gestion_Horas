@@ -288,6 +288,37 @@ describe('matchesAllowlist', () => {
     expect(matchesAllowlist({ sn: 'GER-0001' }, RELOJES, parseAllowlist('Gerencia')).allowed).toBe(true);
   });
 
+  // ── La colisión puede aparecer recién en tiempo de ejecución ───────
+  //
+  // Por PUSH un reloj se anuncia solo, y con `ZKTECO_PUSH_WHITELIST` vacía
+  // cualquiera puede hacerlo. Mirar únicamente `ZKTECO_DEVICES` no alcanza:
+  // el segundo aparato de la colisión puede no estar configurado.
+
+  test('un reloj NO configurado que reporta el nombre de otro no se suprime', () => {
+    // SN='Gerencia' colisiona con el token que nombra al reloj Gerencia.
+    const r = matchesAllowlist({ sn: 'Gerencia', ip: '10.0.0.99' }, RELOJES, parseAllowlist('Gerencia'));
+
+    expect(r.allowed).toBe(false);
+    expect(r.device).toBeNull();
+  });
+
+  test('y el reloj que sí se nombró sigue entrando', () => {
+    const r = matchesAllowlist({ sn: 'GER-0001', ip: '10.0.0.11' }, RELOJES, parseAllowlist('Gerencia'));
+    expect(r.allowed).toBe(true);
+  });
+
+  test('un reloj no configurado nombrado por SU PROPIO serial sí entra', () => {
+    // Alcanzar a ningún reloj configurado es válido: es cómo se nombra por
+    // serial a uno que todavía no está en la configuración.
+    const r = matchesAllowlist({ sn: 'NUEVO-1', ip: '10.0.0.99' }, RELOJES, parseAllowlist('NUEVO-1'));
+    expect(r.allowed).toBe(true);
+  });
+
+  test('el token que colisiona con una IP configurada tampoco captura al ajeno', () => {
+    const r = matchesAllowlist({ sn: '10.0.0.11', ip: '10.0.0.99' }, RELOJES, parseAllowlist('10.0.0.11'));
+    expect(r.allowed).toBe(false);
+  });
+
   test('un token que alcanza al MISMO reloj por dos vías no es colisión', () => {
     // Nombre e IP del mismo aparato: sigue siendo uno solo.
     const uno = [{ id: 1, name: '10.0.0.11', ip: '10.0.0.11', port: 4370, serial: 'X-1' }];
