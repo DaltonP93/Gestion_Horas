@@ -42,6 +42,13 @@ const logger = winston.createLogger({
 // /health informaba `devices: 1` sin que existiera ningún reloj.
 const { resolveDevices, buildHealth, configurationSummary, PROBLEM } = require('./deviceRegistry');
 
+// ─── Modo sombra (apagado por defecto) ──────────────────────────
+// Observa una copia de lo que ya llega por PUSH y la guarda normalizada para
+// poder compararla más adelante contra el polling. No publica, no transmite y
+// no toca el flujo actual. Con BRIDGE_SHADOW_ENABLED distinto de "true" no se
+// abre ningún archivo ni se carga el driver de SQLite.
+const { createShadow } = require('./shadow');
+
 // ─── Redis ──────────────────────────────────────────────────────
 let redis;
 
@@ -139,7 +146,7 @@ function mapZKState(state) {
 }
 
 // ─── API HTTP del Bridge (health + status) ──────────────────────
-function startBridgeApi(devices, resolution) {
+function startBridgeApi(devices, resolution, shadow = null) {
   const app = express();
   app.use(express.json());
 
@@ -299,6 +306,50 @@ function startBridgeApi(devices, resolution) {
     res.json({ device: device.name, ip: device.ip, state });
   });
 
+  // ── Modo sombra ──────────────────────────────────────────────────
+  // Todo lo que sigue va DESPUÉS del middleware de x-api-key: son datos
+  // operativos y una operación destructiva. Nada de esto cuelga de /health.
+
+  // Métricas agregadas. Nunca devuelve marcaciones: sólo conteos, marcas de
+  // tiempo y la identidad de los relojes observados.
+  app.get('/shadow/status', (req, res) => {
+    if (!shadow) return res.json({ enabled: false, reason: 'shadow_not_initialized' });
+    res.json(shadow.status());
+  });
+
+  // Comparación PUSH ↔ polling, de sólo lectura.
+  //
+  // La mitad `polling` está vacía hoy porque nadie escribe todavía con ese
+  // origen: el worker no está enganchado y este PR no lo engancha. La
+  // respuesta lo dice en `polling_connected` para que un informe con
+  // only_push == push no se lea como "el polling no vio nada".
+  app.get('/shadow/compare', (req, res) => {
+    if (!shadow?.opened) {
+      return res.status(503).json({ error: 'Sombra no disponible', code: shadow?.openError || 'shadow_disabled' });
+    }
+    const from = (req.query.from || '').toString().trim() || null;
+    const to   = (req.query.to || '').toString().trim() || null;
+    const deviceKey = (req.query.device_key || '').toString().trim() || null;
+    res.json(shadow.store.compare({ from, to, deviceKey }));
+  });
+
+  // Vaciado administrativo EXPLÍCITO. No hay limpieza automática por edad ni
+  // por tamaño, y ésta es la única forma de borrar. Exige confirm=true en el
+  // cuerpo para que un GET mal tipeado o un cliente curioso no vacíen el
+  // período que se está midiendo.
+  app.post('/shadow/purge', (req, res) => {
+    if (!shadow?.opened) {
+      return res.status(503).json({ error: 'Sombra no disponible', code: shadow?.openError || 'shadow_disabled' });
+    }
+    if (req.body?.confirm !== true) {
+      return res.status(400).json({ error: 'Se requiere confirm: true', code: 'shadow_purge_unconfirmed' });
+    }
+    const before = (req.body?.before || '').toString().trim() || null;
+    const r = shadow.store.purge({ before });
+    logger.warn(`🕶️  Sombra vaciada por operación administrativa: ${r.deleted} fila(s)`);
+    res.json(r);
+  });
+
   // Obtener usuarios registrados en un reloj
   app.get('/devices/:id/users', async (req, res) => {
     const device = devices.find(d => d.id == req.params.id);
@@ -353,8 +404,28 @@ async function main() {
   logger.info(`   fuente: ${resolution.source} · relojes: ${devices.length}`);
   logger.info('');
 
+  // Modo sombra — apagado salvo BRIDGE_SHADOW_ENABLED=true.
+  //
+  // Se construye siempre porque construirlo no hace nada: con la flag apagada
+  // `start()` devuelve shadow_disabled sin tocar el disco ni cargar SQLite, y
+  // `capture()` sale en la primera línea. Lo que decide es la flag, no si el
+  // objeto existe.
+  const shadow = createShadow({ env: process.env, devices, logger });
+  if (shadow.enabled) {
+    const r = shadow.start();
+    if (r.ok) {
+      logger.info(`🕶️  Modo SOMBRA activo — ${shadow.config.allowlist.length} reloj(es) en la allowlist`);
+      logger.info('   observa y guarda una copia normalizada; no publica, no transmite, no altera asistencia');
+      if (shadow.config.allowlist.length === 0) {
+        logger.warn('   ⚠️  allowlist vacía: no se observará ningún reloj (vacío = nadie, no = todos)');
+      }
+    } else {
+      logger.warn(`🕶️  Modo SOMBRA pedido pero inactivo: ${r.error_code}`);
+    }
+  }
+
   // Modo 1: Servidor PUSH (relojes envían datos en tiempo real)
-  startPushServer(publishAttendance, logger, { redis });
+  startPushServer(publishAttendance, logger, { redis, shadow });
 
   // Watcher: detectar relojes caídos y publicar alerta
   const HEARTBEAT_ALERT_MS = parseInt(process.env.HEARTBEAT_ALERT_MS || String(15 * 60 * 1000));
@@ -412,10 +483,18 @@ async function main() {
   }
 
   // API del Bridge
-  startBridgeApi(devices, resolution);
+  startBridgeApi(devices, resolution, shadow);
 }
 
-main().catch(err => {
-  logger.error('Error fatal: ' + err.message);
-  process.exit(1);
-});
+// Sólo arranca cuando se lo ejecuta como entrada (`node src/index.js`, PM2).
+// Importarlo desde un test no debe abrir Redis ni escuchar en ningún puerto:
+// sin esta guarda, `require` del módulo levantaba el Bridge entero, que es
+// justamente por lo que las rutas de la API no tenían tests.
+if (require.main === module) {
+  main().catch(err => {
+    logger.error('Error fatal: ' + err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { startBridgeApi, main };

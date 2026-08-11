@@ -51,8 +51,22 @@ function resolvePushPort(env = process.env) {
 }
 
 function startPushServer(publishAttendance, logger, opts = {}) {
-  const { redis } = opts;
+  const { redis, shadow = null } = opts;
   const app = express();
+
+  /**
+   * Copia en modo sombra — best-effort y sin efecto sobre el PUSH.
+   *
+   * `shadow.capture()` ya se compromete a no lanzar; este try/catch existe
+   * igual porque la garantía que importa se sostiene ACÁ: si la observación
+   * llegara a fallar de una forma no prevista, la marcación tiene que seguir
+   * su camino de todos modos. Sin `shadow` en las opciones esto es una
+   * comparación contra null y nada más.
+   */
+  function observarEnSombra(observacion) {
+    if (!shadow) return;
+    try { shadow.capture(observacion, { source: 'push' }); } catch { /* nunca corta el PUSH */ }
+  }
 
   // Dedupe vía Redis SET con TTL — clave: push:dedupe:<SN>:<userId>:<timestamp>
   async function alreadySeen(sn, userId, ts) {
@@ -125,6 +139,26 @@ function startPushServer(publishAttendance, logger, opts = {}) {
         try {
           const ts = new Date(timestamp.trim().replace(' ', 'T'));
           if (isNaN(ts.getTime())) continue;
+
+          // La sombra observa ANTES del dedupe de Redis, a propósito: mide lo
+          // que el reloj emitió, no lo que este pipeline decidió conservar.
+          // Filtrar acá la volvería ciega justamente a los reenvíos que se
+          // quiere cuantificar. Su idempotencia es propia (UNIQUE por
+          // (source, event_id)), así que un reenvío suma a `duplicates` en vez
+          // de duplicar la fila.
+          //
+          // Se le pasa la hora de pared CRUDA del reloj, no `ts`: `ts` ya
+          // quedó anclado a la zona del proceso y el contrato v1 existe para
+          // no arrastrar esa dependencia.
+          observarEnSombra({
+            sn: SN,
+            ip,
+            deviceUserId: userId.trim(),
+            occurredAtRaw: timestamp.trim(),
+            eventType: mapZKStatus(status),
+            verifyMode: verify,
+            workCode: workCode,
+          });
 
           // Dedupe: si ya vimos este (SN, userId, timestamp) en las últimas 24 h, saltar
           const dup = await alreadySeen(SN, userId.trim(), ts.toISOString());
