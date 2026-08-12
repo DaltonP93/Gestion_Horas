@@ -15,6 +15,7 @@
 
 const express = require('express');
 const { parseAllowlist, matchesAllowlist } = require('./deviceIdentity');
+const { parseAttlogLine, lineasDe } = require('./attlog');
 
 // Estado en memoria: último heartbeat y último marcaje recibido por SN/IP
 const pushState = {};   // { [sn]: { lastSeen, lastPunch, punches, ip, observeOnly } }
@@ -27,6 +28,15 @@ const pushMetrics = {
   observe_only_received: 0,
   observe_only_suppressed_publish: 0,
   observe_only_ambiguous: 0,
+
+  // Recepción de ATTLOG. Sin estos contadores, un cuerpo que no parsea se ve
+  // igual que un reloj sin tráfico: el reloj recibe OK, no hay error en el log
+  // y la sombra queda en cero. Es exactamente cómo se perdió tiempo con el
+  // Content-Type ausente.
+  attlog_lines_received: 0,
+  attlog_lines_valid: 0,
+  attlog_malformed_fields: 0,
+  attlog_invalid_timestamp: 0,
 };
 
 function resetPushMetrics() {
@@ -154,8 +164,29 @@ function startPushServer(publishAttendance, logger, opts = {}) {
     }
   }
 
-  // ZKTeco envía payloads como text/plain; forzar parseo crudo.
-  app.use('/iclock', express.text({ type: '*/*', limit: '5mb' }));
+  /**
+   * Cuerpo de /iclock: SIEMPRE texto, decidido por la ruta y no por el header.
+   *
+   * ── Por qué una función y no el comodín ──────────────────────────────
+   *
+   * El firmware ZKTeco NO envía `Content-Type`. Verificado contra una captura
+   * de tráfico real: el POST llega con `Content-Length` y `User-Agent: iClock
+   * Proxy`, y ningún Content-Type.
+   *
+   * `express.text({ type: '*∕*' })` parece aceptar todo, pero no: body-parser
+   * resuelve `type` CONTRA el Content-Type de la petición, así que sin ese
+   * header no hay nada que comparar y no parsea — `req.body` queda en `{}`.
+   * El comodín cubre "cualquier tipo declarado", no "tipo ausente".
+   *
+   * La función decide por ruta: este middleware está montado sólo en
+   * `/iclock`, así que el alcance es el del reloj y nada más. Un GET sin
+   * cuerpo lo saltea igual, porque body-parser exige `Content-Length` o
+   * `Transfer-Encoding` antes de llamar a `type`.
+   *
+   * No se infiere el tipo del contenido: el aparato que hay que soportar es
+   * justamente el que no lo declara.
+   */
+  app.use('/iclock', express.text({ type: () => true, limit: '5mb' }));
 
   // Registro inicial del reloj
   app.get('/iclock/cdata', (req, res) => {
@@ -195,7 +226,10 @@ function startPushServer(publishAttendance, logger, opts = {}) {
       return res.status(403).type('text/plain').send('FORBIDDEN');
     }
 
-    const body = typeof req.body === 'string' ? req.body : (req.body?.toString?.() || '');
+    // `lineasDe` sólo acepta texto (string o Buffer). El `.toString()` que
+    // había acá convertía el `{}` de un cuerpo no parseado en la cadena
+    // "[object Object]", que se contaba como una línea ATTLOG ilegible.
+    const lines = lineasDe(req.body);
     pushState[SN] = { ...(pushState[SN] || {}), lastSeen: new Date().toISOString(), ip };
 
     // Se resuelve UNA vez por lote, no por línea: todas las líneas de un POST
@@ -203,19 +237,34 @@ function startPushServer(publishAttendance, logger, opts = {}) {
     const observeOnly = esObserveOnly(SN, ip);
     if (observeOnly) pushState[SN].observeOnly = true;
 
-    if (table === 'ATTLOG' && body.trim()) {
-      const lines = body.split(/\r?\n/).filter(Boolean);
-      let parsed = 0, deduped = 0, observados = 0;
+    if (table === 'ATTLOG') {
+      // Se marca la recepción del POST aunque no haya ni una línea legible: es
+      // lo que distingue "el reloj no habla" de "el reloj habla y no lo
+      // entendemos".
+      pushState[SN].lastAttlogReceived = new Date().toISOString();
+      let parsed = 0, deduped = 0, observados = 0, validas = 0;
+
+      pushMetrics.attlog_lines_received += lines.length;
 
       for (const line of lines) {
-        // ZKTeco ATTLOG: UserID \t DateTime \t Status \t Verify \t WorkCode \t Reserved1 \t Reserved2
-        const parts = line.trim().split('\t');
-        if (parts.length < 2) continue;
+        const campos = parseAttlogLine(line);
+        if (!campos.ok) {
+          if (campos.motivo === 'timestamp_invalido') pushMetrics.attlog_invalid_timestamp++;
+          else pushMetrics.attlog_malformed_fields++;
+          continue;
+        }
+        pushMetrics.attlog_lines_valid++;
+        validas++;
 
-        const [userId, timestamp, status, verify, workCode] = parts;
+        // Ya vienen recortados y validados por `parseAttlogLine`.
+        const userId = campos.deviceUserId;
+        const timestamp = campos.occurredAtRaw;
+        const { status, verify, workCode } = campos;
         try {
-          const ts = new Date(timestamp.trim().replace(' ', 'T'));
-          if (isNaN(ts.getTime())) continue;
+          // `parseAttlogLine` ya garantizó forma y rangos, así que esto no
+          // puede quedar en Invalid Date. La validación vive allá, donde se
+          // puede probar sin levantar el servidor.
+          const ts = new Date(timestamp.replace(' ', 'T'));
 
           // La sombra observa ANTES del dedupe de Redis, a propósito: mide lo
           // que el reloj emitió, no lo que este pipeline decidió conservar.
@@ -230,8 +279,8 @@ function startPushServer(publishAttendance, logger, opts = {}) {
           observarEnSombra({
             sn: SN,
             ip,
-            deviceUserId: userId.trim(),
-            occurredAtRaw: timestamp.trim(),
+            deviceUserId: userId,
+            occurredAtRaw: timestamp,
             eventType: mapZKStatus(status),
             verifyMode: verify,
             workCode: workCode,
@@ -257,18 +306,18 @@ function startPushServer(publishAttendance, logger, opts = {}) {
           }
 
           // Dedupe: si ya vimos este (SN, userId, timestamp) en las últimas 24 h, saltar
-          const dup = await alreadySeen(SN, userId.trim(), ts.toISOString());
+          const dup = await alreadySeen(SN, userId, ts.toISOString());
           if (dup) { deduped++; continue; }
 
           await publishAttendance({
-            employeeCode: userId.trim(),
+            employeeCode: userId,
             timestamp:    ts.toISOString(),
             deviceIp:     ip,
             deviceSn:     SN,
             deviceId:     null,
             type:         mapZKStatus(status),
             raw: {
-              sn: SN, userId: userId.trim(), timestamp: timestamp.trim(),
+              sn: SN, userId: userId, timestamp: timestamp,
               status: status, verify: verify, workCode: workCode
             }
           });
@@ -278,13 +327,35 @@ function startPushServer(publishAttendance, logger, opts = {}) {
         }
       }
 
-      // `lastPunch`, `lastSeen` y el conteo se mantienen también en
-      // observe-only: son el diagnóstico que permite saber que el reloj está
-      // vivo y emitiendo. Observar no es publicar, pero tampoco es no ver
-      // nada — sin esto, un reloj en observación se vería idéntico a uno
-      // desconectado.
-      pushState[SN].lastPunch = new Date().toISOString();
-      pushState[SN].punches = (pushState[SN].punches || 0) + parsed + observados;
+      // ── Tres marcas de tiempo, tres preguntas distintas ─────────────
+      //
+      //   lastSeen            — ¿el reloj habla? (cualquier petición suya)
+      //   lastAttlogReceived  — ¿mandó marcajes? (llegó un POST ATTLOG)
+      //   lastPunch           — ¿le ENTENDIMOS alguno? (≥1 línea aceptada)
+      //
+      // `lastPunch` se escribía en todo POST ATTLOG, hubiera o no una línea
+      // legible. Con el Content-Type ausente eso producía el estado imposible
+      // que se vio en producción: `lastPunch` con fecha reciente y `punches`
+      // en 0 — un reloj con cara de sano que no entregó un solo marcaje.
+      //
+      // La marca del medio es la que hacía falta para no perder el "sí llegó
+      // tráfico" al dejar de mentir con la de abajo.
+      const aceptadas = parsed + observados;
+      if (aceptadas > 0) {
+        // Se mantiene también en observe-only: observar no es publicar, pero
+        // tampoco es no ver nada.
+        pushState[SN].lastPunch = new Date().toISOString();
+        pushState[SN].punches = (pushState[SN].punches || 0) + aceptadas;
+      }
+
+      // Llegó texto y NO se entendió ni una línea. Este aviso es el que
+      // faltaba: el modo de fallo del Content-Type ausente era indistinguible
+      // de un reloj tranquilo, porque el reloj recibía OK y nadie registraba
+      // nada. Sin PIN ni payload en el mensaje — sólo cuántas y por qué.
+      if (lines.length > 0 && validas === 0) {
+        logger.warn(`⚠️  PUSH SN=${SN}: ${lines.length} línea(s) ATTLOG recibidas y NINGUNA legible ` +
+                    '— revisar formato del cuerpo (¿llegó sin Content-Type o con otro separador?)');
+      }
 
       if (observeOnly) {
         // Sin IP en esta línea: es la que se agrega en este modo.
