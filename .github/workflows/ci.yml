@@ -21,7 +21,22 @@ jobs:
           cache: 'npm'
           cache-dependency-path: bridge/package-lock.json
       - run: npm ci || npm install
-      - run: npm test
+      # Tres zonas, no una. El Bridge convierte hora de pared del reloj a
+      # instantes, así que la zona del proceso es una entrada real: un runner
+      # en UTC no ejerce el caso de producción (America/Asuncion, UTC-4/-3) ni
+      # el del otro lado del meridiano, donde la fecha local ya cambió.
+      - name: Unit tests (TZ=UTC)
+        run: npm test
+        env:
+          TZ: UTC
+      - name: Unit tests (TZ=America/Asuncion)
+        run: npm test
+        env:
+          TZ: America/Asuncion
+      - name: Unit tests (TZ=Asia/Tokyo)
+        run: npm test
+        env:
+          TZ: Asia/Tokyo
 
   api-build:
     name: API — install + syntax
@@ -47,6 +62,10 @@ jobs:
         run: npm test
         env:
           TZ: America/Asuncion
+      - name: Unit tests (TZ=Asia/Tokyo)
+        run: npm test
+        env:
+          TZ: Asia/Tokyo
 
   web-build:
     name: Web — build Next.js
