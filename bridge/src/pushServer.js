@@ -340,11 +340,26 @@ function startPushServer(publishAttendance, logger, opts = {}) {
       //
       // La marca del medio es la que hacía falta para no perder el "sí llegó
       // tráfico" al dejar de mentir con la de abajo.
+      // El umbral de `lastPunch` es `validas`, NO las aceptadas: la pregunta
+      // que responde es si ENTENDIMOS una línea, y un duplicado se entendió
+      // perfectamente —sólo no era nuevo—. Un reloj que reenvía su buffer
+      // produce lotes enteramente duplicados; contarlos como "no entendimos
+      // nada" dejaba esta marca vieja mientras el reloj empujaba sin problemas.
+      //
+      // Eso importa aguas abajo: `lastPunch` viaja como `last_event_at`, y el
+      // diagnóstico de la API resuelve `last_event_at || last_push_at`. Una
+      // fecha vieja sigue siendo truthy, así que le ganaba a un `last_push_at`
+      // fresco y el reloj se reportaba como "no está empujando todavía".
+      //
+      // `punches` sí sigue contando sólo lo nuevo: es un conteo de eventos
+      // incorporados, y sumarle los reenvíos lo inflaría.
       const aceptadas = parsed + observados;
-      if (aceptadas > 0) {
+      if (validas > 0) {
         // Se mantiene también en observe-only: observar no es publicar, pero
         // tampoco es no ver nada.
         pushState[SN].lastPunch = new Date().toISOString();
+      }
+      if (aceptadas > 0) {
         pushState[SN].punches = (pushState[SN].punches || 0) + aceptadas;
       }
 

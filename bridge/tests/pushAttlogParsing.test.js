@@ -444,6 +444,48 @@ describe('lastPunch sólo cuando se entendió un marcaje', () => {
     s.stop();
   });
 
+  // ── Un lote entero de duplicados SÍ se entendió ────────────────────
+  //
+  // Los ZKTeco reenvían su buffer, así que un lote donde todas las líneas ya
+  // se vieron es normal, no una anomalía. `lastPunch` responde "¿entendimos
+  // alguna?", y un duplicado se entendió: sólo no era nuevo.
+
+  test('un reenvío de líneas ya vistas refresca lastPunch', async () => {
+    // set() → null es "la clave ya existía" = duplicado.
+    const redis = { ...redisFalso(), set: jest.fn(async () => null) };
+    const { app, publishAttendance } = bootApp({ redis });
+
+    await enviarSinContentType(app, LINEA_REAL + '\n', 'COM-0002');
+
+    expect(pushState['COM-0002'].lastPunch).toBeTruthy();
+    // No se incorporó nada nuevo: el conteo no se infla con reenvíos.
+    expect(pushState['COM-0002'].punches ?? 0).toBe(0);
+    expect(publishAttendance).not.toHaveBeenCalled();
+  });
+
+  test('y la línea cuenta como válida en las métricas', async () => {
+    const redis = { ...redisFalso(), set: jest.fn(async () => null) };
+    const { app } = bootApp({ redis });
+
+    await enviarSinContentType(app, LINEA_REAL + '\n', 'COM-0002');
+
+    expect(pushMetrics.attlog_lines_valid).toBe(1);
+    expect(pushMetrics.attlog_malformed_fields).toBe(0);
+    expect(pushMetrics.attlog_invalid_timestamp).toBe(0);
+  });
+
+  test('un lote ilegible sigue sin refrescarlo, aunque Redis diría duplicado', async () => {
+    // Guarda contra pasarse de largo: el arreglo mira `validas`, no el
+    // resultado del dedupe. Sin una línea entendida no hay marca.
+    const redis = { ...redisFalso(), set: jest.fn(async () => null) };
+    const { app } = bootApp({ redis });
+
+    await enviarSinContentType(app, 'basura sin tabs\n', 'COM-0002');
+
+    expect(pushState['COM-0002'].lastPunch).toBeUndefined();
+    expect(redis.set).not.toHaveBeenCalled();
+  });
+
   test('un cuerpo vacío no inventa un marcaje', async () => {
     const { app } = bootApp({ redis: redisFalso() });
 
