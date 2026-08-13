@@ -129,6 +129,23 @@ describe('planilla mensual en PDF', () => {
     expect(buf.length).toBeGreaterThan(0);
   });
 
+  test('★ un firmante con datos larguísimos no agrega una hoja', async () => {
+    // Los campos del firmante son texto libre sin límite en la configuración.
+    // Con el bloque anclado al pie, si envolvieran a varias líneas pdfkit
+    // paginaría solo y volvería la hoja extra. Se recortan con elipsis.
+    mockQuery
+      .mockResolvedValueOnce([filasDe(1, 2025, 1)])
+      .mockResolvedValueOnce([[
+        { setting_key: 'system_signer_name', setting_value: 'María Fernanda de los Ángeles Rodríguez Benítez de Villalba y Gauto'.repeat(4) },
+        { setting_key: 'system_signer_position', setting_value: 'Directora General de Gestión y Desarrollo del Talento Humano'.repeat(4) },
+        { setting_key: 'system_signer_doc_id', setting_value: 'CI 1.234.567 — Registro Profesional 987654321'.repeat(4) },
+      ]]);
+
+    const { status, buf } = await getPdf('/api/reports/monthly/export?year=2025&month=1&format=pdf');
+    expect(status).toBe(200);
+    expect(contarPaginas(buf)).toBe(1);
+  });
+
   test('el PDF sale en A4 apaisado', async () => {
     prepararDatos(1, 2025, 1);
     const { buf } = await getPdf('/api/reports/monthly/export?year=2025&month=1&format=pdf');

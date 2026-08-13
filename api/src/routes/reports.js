@@ -520,12 +520,22 @@ router.get('/monthly/export', async (req, res) => {
         if (signaturePath) {
           try { doc.image(signaturePath, xLeft + 50, blockY, { width: 160, height: 60 }); } catch {}
         }
+        // Los tres campos del firmante son texto libre sin límite de longitud
+        // en la configuración. Si envolvieran a varias líneas con el bloque
+        // anclado al pie, pdfkit paginaría solo y volvería a aparecer la hoja
+        // extra que este cambio elimina.
+        //
+        // Lo que acota la caja es `height`: medido, `lineBreak: false` por sí
+        // solo NO evita la paginación —pdfkit igual desborda hacia abajo—.
+        // Con `height` + `ellipsis` el texto se recorta con puntos suspensivos
+        // antes que romper el documento.
+        const unaLinea = { width: 200, align: 'center', height: 11, ellipsis: true };
         doc.fontSize(9).fillColor('#475569');
-        doc.text(sig.system_signer_name || '', xLeft + 30, blockY + 65, { width: 200, align: 'center' });
+        doc.text(sig.system_signer_name || '', xLeft + 30, blockY + 65, unaLinea);
         doc.fontSize(8).fillColor('#94a3b8');
-        doc.text(sig.system_signer_position || '', xLeft + 30, blockY + 78, { width: 200, align: 'center' });
+        doc.text(sig.system_signer_position || '', xLeft + 30, blockY + 78, unaLinea);
         if (sig.system_signer_doc_id) {
-          doc.text(sig.system_signer_doc_id, xLeft + 30, blockY + 90, { width: 200, align: 'center' });
+          doc.text(sig.system_signer_doc_id, xLeft + 30, blockY + 90, unaLinea);
         }
 
         // Sello a la derecha
