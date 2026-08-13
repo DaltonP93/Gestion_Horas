@@ -49,10 +49,20 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
   const from  = dateFrom || today;
   const to    = dateTo   || today;
 
+  // Los placeholders de `empFilter` aparecen en el SQL ANTES del rango de
+  // fechas, así que sus valores tienen que ir antes en `replacements`: el
+  // enlace es posicional. Se acumulan aparte y el rango se agrega al final.
+  //
+  // Antes se inicializaba `params` con [from, to] y se hacía push de los
+  // filtros encima, de modo que en cuanto había un filtro el orden se
+  // desalineaba: `e.department_id = ?` recibía `from` y el BETWEEN recibía
+  // `to` y el id del departamento. Devolvía cero filas. El caso sin filtros
+  // funcionaba por coincidencia —dos placeholders, dos valores, mismo orden—,
+  // que es justamente por qué no se notaba.
   let empFilter = 'WHERE e.status = "active"';
-  const params  = [from, to];
-  if (employeeId) { empFilter += ' AND e.id = ?'; params.push(employeeId); }
-  if (deptId)     { empFilter += ' AND e.department_id = ?'; params.push(deptId); }
+  const empParams = [];
+  if (employeeId) { empFilter += ' AND e.id = ?'; empParams.push(employeeId); }
+  if (deptId)     { empFilter += ' AND e.department_id = ?'; empParams.push(deptId); }
 
   if (scope && !scope.unrestricted) {
     const ids = scope.ids || [];
@@ -61,8 +71,10 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
       return { data: [], period: { from, to } };
     }
     empFilter += ` AND e.department_id IN (${ids.map(() => '?').join(',')})`;
-    params.push(...ids);
+    empParams.push(...ids);
   }
+
+  const params = [...empParams, from, to];
 
   // Obtener todos los logs del período
   const [logs] = await sequelize.query(`
@@ -75,7 +87,7 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     FROM attendance_logs al
     JOIN employees e ON al.employee_id = e.id
     LEFT JOIN departments d ON e.department_id = d.id
-    ${empFilter.replace('WHERE e.status = "active"', 'WHERE e.status = "active"')}
+    ${empFilter}
       AND DATE(al.timestamp) BETWEEN ? AND ?
     ORDER BY e.last_name, al.timestamp
   `, { replacements: params });
