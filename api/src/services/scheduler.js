@@ -192,9 +192,30 @@ function minsToHM(mins) {
   return `${h}:${String(m).padStart(2,'0')}`;
 }
 
+/**
+ * Mayor cantidad de pares entrada/salida de un conjunto de filas.
+ *
+ * Se calcula con reduce y NO con `Math.max(...filas.map(…))`. El spread pasa
+ * cada elemento como un argumento distinto, y V8 desborda el stack con
+ * `RangeError: Maximum call stack size exceeded` alrededor de los 125.000
+ * argumentos. Ese umbral es alcanzable acá: el array del PDF tiene un elemento
+ * por combinación (empleado × día con marcajes), así que un rango de un año
+ * sobre varios cientos de empleados lo supera y el reporte falla con una
+ * excepción, no con lentitud. Era una de las causas del 502 en períodos
+ * históricos.
+ *
+ * El mínimo es 1 para que la tabla siempre tenga al menos una columna de par.
+ */
+function maxPairsOf(rows) {
+  return (rows || []).reduce((max, r) => {
+    const n = r && r.pairs ? r.pairs.length : 0;
+    return n > max ? n : max;
+  }, 1);
+}
+
 // ─── Construir tabla HTML del reporte marcadas ────────────────────
 function buildMarcadasTableHtml(empData) {
-  const maxPairs = Math.max(...empData.rows.map(r => r.pairs.length), 1);
+  const maxPairs = maxPairsOf(empData.rows);
 
   let headers = '<th>Fecha</th>';
   for (let i = 0; i < maxPairs; i++) {
@@ -680,6 +701,7 @@ module.exports = {
   stopJob,
   generateMarcadasReport,
   buildMarcadasTableHtml,
+  maxPairsOf,
   minsToHM,
   fmtTime,
   bulkRecalcDailySummary,

@@ -6,6 +6,7 @@ import { es } from 'date-fns/locale'
 import { BarChart2, RefreshCw, Plus, Trash2, Mail, Clock, Download, CheckCircle, XCircle, Calendar } from 'lucide-react'
 import { api, downloadUrl } from '@/lib/api'
 import { marcadasParams, marcadasEmailBody } from '@/lib/reportParams'
+import { maxPairsOf } from '@/lib/marcadasTable'
 import { useI18n } from '@/i18n/I18nProvider'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 
@@ -84,9 +85,7 @@ function TabMarcadas() {
   }
 
   const employees: any[] = data?.data || []
-  const maxPairs = employees.length
-    ? Math.max(...employees.flatMap((e: any) => e.rows).map((r: any) => r.pairs.length), 1)
-    : 1
+  const maxPairs = maxPairsOf(employees)
 
   return (
     <div className="space-y-5">
