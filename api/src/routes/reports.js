@@ -522,12 +522,22 @@ router.get('/monthly/export', async (req, res) => {
         if (signaturePath) {
           try { doc.image(signaturePath, xLeft + 50, blockY, { width: 160, height: 60 }); } catch {}
         }
+        // Los tres campos del firmante son texto libre sin límite de longitud
+        // en la configuración. Si envolvieran a varias líneas con el bloque
+        // anclado al pie, pdfkit paginaría solo y volvería a aparecer la hoja
+        // extra que este cambio elimina.
+        //
+        // Lo que acota la caja es `height`: medido, `lineBreak: false` por sí
+        // solo NO evita la paginación —pdfkit igual desborda hacia abajo—.
+        // Con `height` + `ellipsis` el texto se recorta con puntos suspensivos
+        // antes que romper el documento.
+        const unaLinea = { width: 200, align: 'center', height: 11, ellipsis: true };
         doc.fontSize(9).fillColor('#475569');
-        doc.text(sig.system_signer_name || '', xLeft + 30, blockY + 65, { width: 200, align: 'center' });
+        doc.text(sig.system_signer_name || '', xLeft + 30, blockY + 65, unaLinea);
         doc.fontSize(8).fillColor('#94a3b8');
-        doc.text(sig.system_signer_position || '', xLeft + 30, blockY + 78, { width: 200, align: 'center' });
+        doc.text(sig.system_signer_position || '', xLeft + 30, blockY + 78, unaLinea);
         if (sig.system_signer_doc_id) {
-          doc.text(sig.system_signer_doc_id, xLeft + 30, blockY + 90, { width: 200, align: 'center' });
+          doc.text(sig.system_signer_doc_id, xLeft + 30, blockY + 90, unaLinea);
         }
 
         // Sello a la derecha
@@ -538,60 +548,158 @@ router.get('/monthly/export', async (req, res) => {
       // exponer en closure para uso al final
       doc._drawSignatureBlock = drawSignatureBlock;
 
-      for (let ei = 0; ei < employees.length; ei++) {
-        const emp = employees[ei];
-        if (ei > 0) doc.addPage();
-        doc.fontSize(14).fillColor('#1e40af').text(`Planilla Mensual — ${period}`, { align: 'center' });
-        doc.moveDown(0.3);
-        doc.fontSize(10).fillColor('#000').text(`Empleado: ${emp.name} [${emp.code}]`);
-        doc.text(`Departamento: ${emp.department || '—'}`);
-        doc.moveDown(0.5);
+      // ─── Layout de la planilla mensual ──────────────────────────
+      //
+      // Objetivo: un empleado = una hoja A4 apaisada.
+      //
+      // La versión anterior apilaba los 31 días en una sola columna, lo que
+      // consumía ~370 pt de alto y dejaba la firma sin lugar: la condición
+      // `sigY < height - 130` no se cumplía NUNCA con un mes completo, así
+      // que cada planilla terminaba con una segunda página que sólo llevaba
+      // la firma. Al mismo tiempo usaba 375 pt de los ~780 disponibles a lo
+      // ancho: el apaisado estaba desaprovechado.
+      //
+      // Acá los días se reparten en DOS tablas lado a lado, que es la forma
+      // natural de usar una hoja apaisada. Con eso el alto de la grilla baja
+      // a la mitad y entran cómodamente encabezado, totales, firma y pie.
+      const COLS = [
+        { label: 'Día',     w: 28, align: 'left'   },
+        { label: 'Estado',  w: 62, align: 'left'   },
+        { label: 'Entrada', w: 50, align: 'center' },
+        { label: 'Salida',  w: 50, align: 'center' },
+        { label: 'Trab.',   w: 52, align: 'right'  },
+        { label: 'Atraso',  w: 48, align: 'right'  },
+        { label: 'Extra',   w: 48, align: 'right'  },
+      ];
+      const TABLE_W  = COLS.reduce((a, c) => a + c.w, 0);
+      const GAP      = 30;
+      const MARGIN   = doc.page.margins.left;
+      const PAGE_W   = doc.page.width;
+      const PAGE_H   = doc.page.height;
+      const GRID_X   = (PAGE_W - (TABLE_W * 2 + GAP)) / 2;   // centrado
+      // El pie tiene que quedar DENTRO del área de contenido: pdfkit pagina
+      // solo, y un `text()` por debajo del margen inferior agrega una página
+      // en blanco. Es lo que hacía aparecer una segunda hoja por empleado.
+      const FOOTER_Y = PAGE_H - doc.page.margins.bottom - 10;
 
-        const headers = ['Día', 'Estado', 'Entrada', 'Salida', 'Trab.', 'Atraso', 'Extra'];
-        const colW = [35, 60, 55, 55, 60, 55, 55];
-        const startX = doc.x;
-        let y = doc.y;
+      // Etiquetas legibles: la planilla es un documento impreso, no un dump.
+      const ESTADO = {
+        present: 'Presente', late: 'Tarde', absent: 'Ausente',
+        permission: 'Permiso', holiday: 'Feriado', weekend: 'Fin de sem.',
+      };
 
-        doc.fontSize(9).fillColor('#475569');
-        headers.forEach((h, i) => {
-          doc.text(h, startX + colW.slice(0, i).reduce((a,b)=>a+b,0), y, { width: colW[i] });
-        });
-        y += 14;
-        doc.moveTo(startX, y - 2).lineTo(startX + colW.reduce((a,b)=>a+b,0), y - 2).stroke();
+      /** Dibuja una de las dos tablas de días. Devuelve el `y` final. */
+      function drawDayTable(emp, x, yTop, desde, hasta, rowH) {
+        let y = yTop;
 
-        doc.fillColor('#111');
-        for (let d = 1; d <= daysInMonth; d++) {
+        doc.rect(x, y, TABLE_W, 15).fill('#1e40af');
+        doc.fontSize(7.5).fillColor('#fff').font('Helvetica-Bold');
+        let cx = x;
+        for (const c of COLS) {
+          doc.text(c.label, cx + 3, y + 4.5, { width: c.w - 6, align: c.align });
+          cx += c.w;
+        }
+        y += 15;
+
+        doc.font('Helvetica').fontSize(7.5);
+        for (let d = desde; d <= hasta; d++) {
           const rec = emp.days[d] || {};
-          const row = [
-            String(d).padStart(2,'0'),
-            rec.status || '—',
+          if ((d - desde) % 2 === 0) doc.rect(x, y, TABLE_W, rowH).fill('#f8fafc');
+
+          const valores = [
+            String(d).padStart(2, '0'),
+            ESTADO[rec.status] || (rec.status ? String(rec.status) : '—'),
             dbTimeHHmm(rec.first_in),
             dbTimeHHmm(rec.last_out),
             minsToHM(rec.worked_minutes || 0),
-            rec.late_minutes || 0,
-            minsToHM(rec.overtime_minutes || 0),
+            rec.late_minutes ? String(rec.late_minutes) : '',
+            rec.overtime_minutes ? minsToHM(rec.overtime_minutes) : '',
           ];
-          row.forEach((v, i) => {
-            doc.text(String(v), startX + colW.slice(0, i).reduce((a,b)=>a+b,0), y, { width: colW[i] });
+
+          // El atraso en rojo: es el dato que se busca de un vistazo.
+          cx = x;
+          valores.forEach((v, i) => {
+            doc.fillColor(i === 5 && rec.late_minutes ? '#dc2626' : '#0f172a');
+            doc.text(String(v), cx + 3, y + (rowH - 7.5) / 2 + 0.5, {
+              width: COLS[i].w - 6, align: COLS[i].align, lineBreak: false,
+            });
+            cx += COLS[i].w;
           });
-          y += 12;
-          if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
+          y += rowH;
         }
 
-        y += 6;
-        doc.fontSize(10).fillColor('#1e40af').text(
-          `Totales → Trabajado: ${minsToHM(emp.totals.worked)} · Atrasos: ${emp.totals.late} min · Extras: ${minsToHM(emp.totals.overtime)} · Presente: ${emp.totals.present} · Ausente: ${emp.totals.absent}`,
-          startX, y
+        doc.rect(x, yTop + 15, TABLE_W, y - yTop - 15).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
+        return y;
+      }
+
+      for (let ei = 0; ei < employees.length; ei++) {
+        const emp = employees[ei];
+        if (ei > 0) doc.addPage();
+
+        // ── Encabezado ──
+        let y = MARGIN;
+        doc.fontSize(15).fillColor('#1e40af').font('Helvetica-Bold')
+          .text('Planilla Mensual de Asistencia', MARGIN, y, { width: PAGE_W - MARGIN * 2, align: 'center' });
+        y += 19;
+        doc.fontSize(9.5).fillColor('#64748b').font('Helvetica')
+          .text(`Período ${period}`, MARGIN, y, { width: PAGE_W - MARGIN * 2, align: 'center' });
+        y += 17;
+
+        doc.rect(GRID_X, y, TABLE_W * 2 + GAP, 24).fill('#f1f5f9');
+        doc.fontSize(10).fillColor('#0f172a').font('Helvetica-Bold')
+          .text(`${emp.name}`, GRID_X + 8, y + 7, { width: TABLE_W, lineBreak: false });
+        doc.fontSize(8.5).fillColor('#475569').font('Helvetica')
+          .text(`Cód. ${emp.code}${emp.department ? '   ·   ' + emp.department : ''}`,
+            GRID_X + TABLE_W, y + 8, { width: TABLE_W + GAP - 8, align: 'right', lineBreak: false });
+        y += 33;
+
+        // ── Grilla de días, en dos columnas ──
+        const mitad  = Math.ceil(daysInMonth / 2);
+        // Alto disponible hasta donde arranca el bloque de totales+firma.
+        // Se ajusta la altura de fila para que SIEMPRE entre en la página:
+        // así el salto de página deja de depender del largo del mes.
+        const dispo  = (FOOTER_Y - 150) - (y + 15);
+        const rowH   = Math.min(12.5, Math.max(8, dispo / mitad));
+
+        const yFin = Math.max(
+          drawDayTable(emp, GRID_X, y, 1, mitad, rowH),
+          drawDayTable(emp, GRID_X + TABLE_W + GAP, y, mitad + 1, daysInMonth, rowH),
         );
+        y = yFin + 14;
 
-        // Firma al pie de cada planilla
-        const sigY = y + 40;
-        if (sigY < doc.page.height - 130) {
-          doc._drawSignatureBlock(sigY);
-        } else {
-          doc.addPage();
-          doc._drawSignatureBlock(80);
-        }
+        // ── Totales ──
+        const totalW = TABLE_W * 2 + GAP;
+        doc.rect(GRID_X, y, totalW, 30).fill('#eff6ff');
+        const celdas = [
+          ['Trabajado', minsToHM(emp.totals.worked)],
+          ['Atrasos',   `${emp.totals.late} min`],
+          ['Extras',    minsToHM(emp.totals.overtime)],
+          ['Presentes', String(emp.totals.present)],
+          ['Ausentes',  String(emp.totals.absent)],
+        ];
+        const celdaW = totalW / celdas.length;
+        celdas.forEach(([etiqueta, valor], i) => {
+          const cx2 = GRID_X + i * celdaW;
+          doc.fontSize(7).fillColor('#64748b').font('Helvetica')
+            .text(etiqueta.toUpperCase(), cx2, y + 6, { width: celdaW, align: 'center' });
+          doc.fontSize(11).fillColor('#1e40af').font('Helvetica-Bold')
+            .text(valor, cx2, y + 15, { width: celdaW, align: 'center' });
+        });
+        doc.font('Helvetica');
+        y += 44;
+
+        // ── Firma, en la MISMA página y anclada al pie ──
+        // Se ancla abajo, como en cualquier documento que se firma, en vez de
+        // quedar flotando debajo de los totales con un vacío grande abajo.
+        // Si un mes anómalo empujara la grilla hacia abajo, se dibuja donde
+        // haya quedado: se prefiere apretar antes que abrir una hoja nueva.
+        const SIG_H = 115;
+        doc._drawSignatureBlock(y <= FOOTER_Y - SIG_H ? FOOTER_Y - SIG_H : y);
+
+        // ── Pie ──
+        doc.fontSize(7).fillColor('#94a3b8').font('Helvetica')
+          .text(`Página ${ei + 1} de ${employees.length}`,
+            MARGIN, FOOTER_Y, { width: PAGE_W - MARGIN * 2, align: 'center' });
       }
       doc.end();
       return;
