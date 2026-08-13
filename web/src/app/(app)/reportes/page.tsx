@@ -5,6 +5,7 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { BarChart2, RefreshCw, Plus, Trash2, Mail, Clock, Download, CheckCircle, XCircle, Calendar } from 'lucide-react'
 import { api, downloadUrl } from '@/lib/api'
+import { marcadasParams, marcadasEmailBody } from '@/lib/reportParams'
 import { useI18n } from '@/i18n/I18nProvider'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 
@@ -61,7 +62,7 @@ function TabMarcadas() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['marcadas', from, to, empId, deptId],
     queryFn: () => api.get('/api/reports/marcadas', {
-      params: { from, to, employeeId: empId || undefined, departmentId: deptId || undefined }
+      params: marcadasParams({ from, to, empId, deptId })
     }).then(r => r.data),
     enabled: queried,
   })
@@ -72,11 +73,10 @@ function TabMarcadas() {
     if (!emailTo.trim()) return alert('Ingresa un email destino')
     setSending(true)
     try {
-      await api.post('/api/reports/marcadas/email', {
-        from, to,
-        employeeId: empId || undefined,
-        recipients: emailTo.split(',').map((e: string) => e.trim()),
-      })
+      await api.post('/api/reports/marcadas/email', marcadasEmailBody(
+        { from, to, empId, deptId },
+        emailTo.split(',').map((e: string) => e.trim()),
+      ))
       alert('Reporte enviado por email ✅')
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Error al enviar')
@@ -135,11 +135,9 @@ function TabMarcadas() {
               </button>
               <button
                 onClick={() => {
-                  window.open(downloadUrl('/api/reports/marcadas/pdf', {
-                    from, to,
-                    ...(empId  ? { employeeId: empId }  : {}),
-                    ...(deptId ? { deptId }             : {}),
-                  }), '_blank')
+                  window.open(downloadUrl('/api/reports/marcadas/pdf',
+                    marcadasParams({ from, to, empId, deptId })
+                  ), '_blank')
                 }}
                 className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">
                 <Download size={14} /> PDF para imprimir
