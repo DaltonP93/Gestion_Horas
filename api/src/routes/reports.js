@@ -3,7 +3,7 @@ const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { dbTimeHHmm } = require('../utils/dbTime');
-const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM } = require('../services/scheduler');
+const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM, maxPairsOf } = require('../services/scheduler');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
 const {
   getVisibleDepartmentIds,
@@ -185,7 +185,9 @@ router.get('/marcadas/pdf', async (req, res) => {
       return;
     }
 
-    const maxPairs = Math.max(...employees.flatMap(e => e.rows).map(r => r.pairs.length), 1);
+    // Sin spread: este array tiene un elemento por empleado × día, y el
+    // `Math.max(...)` que había acá desbordaba el stack en rangos grandes.
+    const maxPairs = employees.reduce((max, e) => Math.max(max, maxPairsOf(e.rows)), 1);
 
     employees.forEach((emp, idx) => {
       if (idx > 0) doc.addPage();
