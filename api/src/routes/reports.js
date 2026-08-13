@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
+const { dbTimeHHmm } = require('../utils/dbTime');
 const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM } = require('../services/scheduler');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
 const {
@@ -562,8 +563,8 @@ router.get('/monthly/export', async (req, res) => {
           const row = [
             String(d).padStart(2,'0'),
             rec.status || '—',
-            rec.first_in ? String(rec.first_in).slice(11,16) : '',
-            rec.last_out ? String(rec.last_out).slice(11,16) : '',
+            dbTimeHHmm(rec.first_in),
+            dbTimeHHmm(rec.last_out),
             minsToHM(rec.worked_minutes || 0),
             rec.late_minutes || 0,
             minsToHM(rec.overtime_minutes || 0),
@@ -649,8 +650,8 @@ router.get('/monthly/export', async (req, res) => {
         ws.addRow([
           d,
           rec.status || '',
-          rec.first_in ? String(rec.first_in).slice(11,16) : '',
-          rec.last_out ? String(rec.last_out).slice(11,16) : '',
+          dbTimeHHmm(rec.first_in),
+          dbTimeHHmm(rec.last_out),
           minsToHM(rec.worked_minutes || 0),
           rec.late_minutes || 0,
           minsToHM(rec.overtime_minutes || 0),
