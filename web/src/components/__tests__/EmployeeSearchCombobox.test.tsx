@@ -219,6 +219,59 @@ describe('EmployeeSearchCombobox', () => {
     expect(apiGet.mock.calls.at(-1)![1].params.department_id).toBe('3')
   })
 
+  test('★ aria-activedescendant desaparece al cerrar la lista', async () => {
+    // Al cerrar, el <ul> se desmonta. Si el atributo sobreviviera, apuntaría
+    // a un id inexistente y rompería el foco virtual para lectores de
+    // pantalla. Se verifica en los dos caminos que sólo cerraban: Tab y
+    // clic fuera.
+    const u = user()
+    renderCombo()
+
+    const input = screen.getByRole('combobox')
+    await u.type(input, 'e0')
+    await pasarDebounce()
+    await waitFor(() => screen.getByText('María Rodríguez'))
+    await u.keyboard('{ArrowDown}')
+    expect(input).toHaveAttribute('aria-activedescendant')
+
+    await u.keyboard('{Tab}')
+    expect(input).not.toHaveAttribute('aria-activedescendant')
+
+    // …y con clic fuera.
+    await u.click(input)
+    await pasarDebounce()
+    await waitFor(() => screen.getByText('María Rodríguez'))
+    await u.keyboard('{ArrowDown}')
+    expect(input).toHaveAttribute('aria-activedescendant')
+
+    await act(async () => { document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
+    expect(input).not.toHaveAttribute('aria-activedescendant')
+  })
+
+  test('★ si el padre no acepta la selección, el campo no la muestra', async () => {
+    // Componente controlado: la fuente de verdad es `value`. Un padre que
+    // rechace o normalice el onChange y conserve el value anterior no debe
+    // quedar con el campo mostrando un empleado que no está seleccionado.
+    const u = user()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const onChange = jest.fn()   // padre que ignora el cambio: value sigue en ''
+
+    render(
+      <QueryClientProvider client={client}>
+        <EmployeeSearchCombobox value="" onChange={onChange} />
+      </QueryClientProvider>,
+    )
+
+    await u.type(screen.getByRole('combobox'), 'mar')
+    await pasarDebounce()
+    await waitFor(() => screen.getByText('María Rodríguez'))
+    await u.click(screen.getByText('María Rodríguez'))
+
+    expect(onChange).toHaveBeenCalledWith('7')
+    // El padre no lo aceptó → el campo se reconcilia y queda vacío.
+    await waitFor(() => expect(screen.getByRole('combobox')).toHaveValue(''))
+  })
+
   test('si el padre limpia el value, el campo se vacía', async () => {
     const u = user()
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })

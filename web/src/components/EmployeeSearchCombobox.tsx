@@ -54,10 +54,31 @@ export default function EmployeeSearchCombobox({
   const inputRef = useRef<HTMLInputElement>(null)
   const listboxId = `emp-combobox-${useId()}`
 
-  // El padre puede limpiar la selección (p. ej. al cambiar de departamento).
+  /** Cierra la lista. Resetea el índice activo: dejarlo vivo haría que
+   *  `aria-activedescendant` apunte a una opción ya desmontada. */
+  function cerrar() {
+    setOpen(false)
+    setActive(-1)
+  }
+
+  // Reconciliación con el padre. Es un componente controlado: la fuente de
+  // verdad es `value`, no el estado interno.
+  //
+  // Cubre dos casos. El obvio, que el padre limpie la selección —p. ej. al
+  // cambiar de departamento—. Y uno menos obvio: que el padre RECHACE o
+  // normalice el onChange y conserve el value anterior. Ahí la actualización
+  // optimista dejaría el campo mostrando un empleado que el padre no aceptó,
+  // y como `value` no cambia, un efecto que dependiera sólo de `value` nunca
+  // se enteraría. Por eso `selected` también es dependencia.
+  //
+  // Deliberadamente NO se toca el texto cuando no hay selección: si no,
+  // limpiar la selección al empezar a escribir borraría lo recién tipeado.
   useEffect(() => {
-    if (!value) { setSelected(null); setTerm('') }
-  }, [value])
+    if (selected && String(selected.id) !== value) {
+      setSelected(null)
+      setTerm('')
+    }
+  }, [value, selected])
 
   // Debounce del término.
   useEffect(() => {
@@ -87,7 +108,7 @@ export default function EmployeeSearchCombobox({
   // Cerrar al hacer clic fuera.
   useEffect(() => {
     function onDocDown(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false)
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) cerrar()
     }
     document.addEventListener('mousedown', onDocDown)
     return () => document.removeEventListener('mousedown', onDocDown)
@@ -96,8 +117,7 @@ export default function EmployeeSearchCombobox({
   function elegir(emp: EmpleadoOpcion) {
     setSelected(emp)
     setTerm(employeeInputText(emp))
-    setOpen(false)
-    setActive(-1)
+    cerrar()
     onChange(String(emp.id))
   }
 
@@ -105,8 +125,7 @@ export default function EmployeeSearchCombobox({
     setSelected(null)
     setTerm('')
     setDeb('')
-    setOpen(false)
-    setActive(-1)
+    cerrar()
     onChange('')
     inputRef.current?.focus()
   }
@@ -127,14 +146,13 @@ export default function EmployeeSearchCombobox({
       }
     } else if (e.key === 'Escape') {
       e.preventDefault()
-      setOpen(false)
-      setActive(-1)
+      cerrar()
     } else if (e.key === 'Home' && open) {
       e.preventDefault(); setActive(opciones.length ? 0 : -1)
     } else if (e.key === 'End' && open) {
       e.preventDefault(); setActive(opciones.length - 1)
     } else if (e.key === 'Tab') {
-      setOpen(false)
+      cerrar()
     }
   }
 
@@ -155,7 +173,7 @@ export default function EmployeeSearchCombobox({
           aria-expanded={open}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          aria-activedescendant={activeIdx >= 0 ? `${listboxId}-opt-${activeIdx}` : undefined}
+          aria-activedescendant={open && activeIdx >= 0 ? `${listboxId}-opt-${activeIdx}` : undefined}
           aria-label="Buscar empleado"
           autoComplete="off"
           disabled={disabled}
