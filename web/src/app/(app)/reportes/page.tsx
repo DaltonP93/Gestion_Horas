@@ -7,6 +7,7 @@ import { BarChart2, RefreshCw, Plus, Trash2, Mail, Clock, Download, CheckCircle,
 import { api, downloadUrl } from '@/lib/api'
 import { marcadasParams, marcadasEmailBody } from '@/lib/reportParams'
 import { maxPairsOf } from '@/lib/marcadasTable'
+import EmployeeSearchCombobox from '@/components/EmployeeSearchCombobox'
 import { useI18n } from '@/i18n/I18nProvider'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 
@@ -47,12 +48,6 @@ function TabMarcadas() {
   const [emailTo, setEmailTo] = useState('')
   const [sending, setSending] = useState(false)
   const [queried, setQueried] = useState(false)
-
-  const { data: empsData } = useQuery({
-    queryKey: ['employees-select'],
-    queryFn: () => api.get('/api/employees', { params: { limit: 500, status: 'active' } }).then(r => r.data),
-    staleTime: 60_000,
-  })
 
   const { data: deptsData } = useQuery({
     queryKey: ['departments'],
@@ -112,15 +107,9 @@ function TabMarcadas() {
               ))}
             </select>
           </div>
-          <div className="min-w-[200px]">
+          <div className="min-w-[260px]">
             <label className="block text-xs text-slate-500 mb-1 font-medium dark:text-white/40">Empleado</label>
-            <select value={empId} onChange={e => setEmpId(e.target.value)}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
-              <option value="">Todos</option>
-              {(empsData?.data || []).map((e: any) => (
-                <option key={e.id} value={e.id}>[{e.code}] {e.full_name}</option>
-              ))}
-            </select>
+            <EmployeeSearchCombobox value={empId} onChange={setEmpId} deptId={deptId} />
           </div>
           <button onClick={handleGenerar}
             className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors">
