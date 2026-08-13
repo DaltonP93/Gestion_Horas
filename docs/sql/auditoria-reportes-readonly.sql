@@ -33,34 +33,71 @@ SELECT
 -- ---------------------------------------------------------------------
 -- Q1. ★ CORTE REAL Y OFFSET APLICADO, deducido de los propios datos
 --
--- Para marcajes insertados en tiempo casi real (device), `created_at`
--- es el instante real de inserción y `timestamp` la hora de pared que
--- se guardó. La diferencia entre ambos ES el offset que el sistema
--- estaba aplicando en ese momento.
+-- Para marcajes insertados en tiempo casi real, `created_at` es el
+-- instante de inserción y `timestamp` la hora de pared que se guardó.
+-- La diferencia entre ambos revela el offset que el sistema aplicaba.
 --
--- Se excluyen backfills/imports: sólo filas insertadas dentro de las
--- 24 h del marcaje.
+-- DOS CORRECCIONES IMPORTANTES sobre la versión ingenua de esta idea:
 --
--- Cómo leerlo:
---   diff ~ +180 min  → se aplicó UTC-3
---   diff ~ +240 min  → se aplicó UTC-4
--- El mes donde `diff_min_moda` cambia de valor es el CORTE REAL.
+-- (1) NORMALIZACIÓN DE ZONA. `created_at` es TIMESTAMP: MySQL lo rinde
+--     en la zona de la SESIÓN. `timestamp` es DATETIME: queda literal.
+--     Restarlos sin normalizar mide "offset aplicado menos offset de mi
+--     sesión". Una sesión en -03:00 daría ~0 y una en UTC daría ~180
+--     para la MISMA fila. Por eso se resta explícitamente el offset de
+--     sesión, calculado como TIMEDIFF(NOW(), UTC_TIMESTAMP()), y el
+--     resultado queda siempre referido a UTC sea cual sea la sesión.
+--
+-- (2) LATENCIA DE INGESTIÓN. Un marcaje traído por polling o backfill
+--     se inserta tarde, así que la diferencia es "offset + latencia".
+--     El PROMEDIO mezcla las dos cosas y no distingue 180 de 240.
+--     Como la latencia es siempre >= 0, el estimador correcto del
+--     offset es el MÍNIMO, no el promedio. Se reporta igual el p10 y
+--     el conteo para juzgar si la muestra es sana; Q1b da la moda.
+--
+-- Cómo leerlo (sobre diff_utc_min_MIN):
+--   ~ +180  → se aplicó UTC-3
+--   ~ +240  → se aplicó UTC-4
+-- El mes donde ese mínimo cambia de valor es el CORTE REAL.
 -- Si el offset aplicado es constante (siempre 180) mientras la zona
 -- real de Paraguay cambiaba, el desfase histórico es de 1 hora en
 -- invierno, NO de 3.
 -- ---------------------------------------------------------------------
 SELECT
-  DATE_FORMAT(al.`timestamp`, '%Y-%m')                        AS mes,
+  DATE_FORMAT(al.`timestamp`, '%Y-%m') AS mes,
   al.source,
-  COUNT(*)                                                    AS filas,
-  MIN(TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at))   AS diff_min_min,
-  ROUND(AVG(TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at))) AS diff_min_prom,
-  MAX(TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at))   AS diff_min_max
+  COUNT(*)                             AS filas,
+  MIN(TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at)
+      - TIME_TO_SEC(TIMEDIFF(NOW(), UTC_TIMESTAMP())) / 60) AS diff_utc_min_MIN,
+  ROUND(AVG(TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at)
+      - TIME_TO_SEC(TIMEDIFF(NOW(), UTC_TIMESTAMP())) / 60)) AS diff_utc_min_prom_contaminado,
+  MAX(TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at)
+      - TIME_TO_SEC(TIMEDIFF(NOW(), UTC_TIMESTAMP())) / 60) AS diff_utc_min_MAX
 FROM attendance_logs al
 WHERE al.created_at IS NOT NULL
   AND ABS(TIMESTAMPDIFF(HOUR, al.`timestamp`, al.created_at)) <= 24
 GROUP BY mes, al.source
 ORDER BY mes, al.source;
+
+
+-- ---------------------------------------------------------------------
+-- Q1b. Distribución (moda) del offset normalizado, por mes
+--
+-- Complemento imprescindible de Q1: si la latencia de ingestión es alta,
+-- el mínimo puede venir de pocas filas. Acá se ve el histograma redondeado
+-- a 10 minutos. La barra más alta de cada mes es la moda, y es lo que hay
+-- que leer como offset aplicado. Un mes con la masa repartida entre 180 y
+-- 240 indica ingestión irregular: ese mes NO sirve para fijar el corte.
+-- ---------------------------------------------------------------------
+SELECT
+  DATE_FORMAT(al.`timestamp`, '%Y-%m') AS mes,
+  ROUND((TIMESTAMPDIFF(MINUTE, al.`timestamp`, al.created_at)
+         - TIME_TO_SEC(TIMEDIFF(NOW(), UTC_TIMESTAMP())) / 60) / 10) * 10 AS bucket_min,
+  COUNT(*) AS filas
+FROM attendance_logs al
+WHERE al.created_at IS NOT NULL
+  AND ABS(TIMESTAMPDIFF(HOUR, al.`timestamp`, al.created_at)) <= 24
+GROUP BY mes, bucket_min
+ORDER BY mes, filas DESC;
 
 
 -- ---------------------------------------------------------------------
@@ -130,33 +167,83 @@ WHERE e.code = :CODE AND al.type = 'in'
 
 
 -- ---------------------------------------------------------------------
--- Q4. ★ ¿daily_summary HEREDÓ EL ERROR?
+-- Q4. ¿daily_summary ES CONSISTENTE CON LOS LOGS?
 --
--- Compara, para el mismo empleado y día, la primera entrada que está
--- guardada en daily_summary contra la que se deduce de attendance_logs.
+-- Compara first_in y last_out del resumen contra lo que se deduce de
+-- attendance_logs, y de paso los minutos trabajados.
 --
--- Si delta_min = 0 siempre → daily_summary es consistente con los logs
---   (y entonces el error, si existe, es de presentación o está en los
---   logs mismos, no en el resumen).
--- Si delta_min ≠ 0 en períodos históricos → daily_summary CONGELÓ un
---   valor calculado con la conversión vieja y tiene error propio.
---   Ese caso exige recálculo, no sólo un fix de presentación.
+-- ALCANCE REAL DE ESTA CONSULTA — leer antes de sacar conclusiones:
+--
+-- Un resultado "todo igual" NO demuestra que daily_summary esté bien.
+-- Sólo demuestra que los campos COPIADOS del log coinciden. Los campos
+-- DERIVADOS se calculan aparte y tienen su propia fuente de error: en
+-- api/src/controllers/attendanceController.js:190 el horario previsto se
+-- construye con offset fijo `-03:00`
+--
+--     new Date(`${date}T${hh}:${mm}:00-03:00`)
+--
+-- de modo que en fechas históricas de invierno (Paraguay en UTC-4) la
+-- referencia contra la que se mide el atraso está corrida una hora, y
+-- `late_minutes` queda mal AUNQUE first_in coincida exactamente.
+--
+-- Conclusión: Q4 sirve para descartar que el resumen tenga desfase
+-- COPIADO, pero NO alcanza para decidir si hace falta recálculo.
+-- Esa decisión necesita además Q4b.
 -- ---------------------------------------------------------------------
 SELECT
   DATE_FORMAT(ds.date, '%Y-%m')                        AS mes,
   COUNT(*)                                             AS dias_comparados,
-  SUM(CASE WHEN TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in) = 0 THEN 1 ELSE 0 END) AS iguales,
-  SUM(CASE WHEN TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in) <> 0 THEN 1 ELSE 0 END) AS distintos,
-  MIN(TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in))    AS delta_min_min,
-  MAX(TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in))    AS delta_min_max
+  SUM(CASE WHEN TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in) <> 0 THEN 1 ELSE 0 END) AS first_in_distintos,
+  MIN(TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in))    AS first_in_delta_min,
+  MAX(TIMESTAMPDIFF(MINUTE, ds.first_in, x.min_in))    AS first_in_delta_max,
+  SUM(CASE WHEN TIMESTAMPDIFF(MINUTE, ds.last_out, x.max_out) <> 0 THEN 1 ELSE 0 END) AS last_out_distintos,
+  MIN(TIMESTAMPDIFF(MINUTE, ds.last_out, x.max_out))   AS last_out_delta_min,
+  MAX(TIMESTAMPDIFF(MINUTE, ds.last_out, x.max_out))   AS last_out_delta_max
 FROM daily_summary ds
 JOIN (
-  SELECT employee_id, DATE(`timestamp`) AS d, MIN(`timestamp`) AS min_in
+  SELECT employee_id, DATE(`timestamp`) AS d,
+         MIN(CASE WHEN type = 'in'  THEN `timestamp` END) AS min_in,
+         MAX(CASE WHEN type = 'out' THEN `timestamp` END) AS max_out
   FROM attendance_logs
-  WHERE type = 'in'
   GROUP BY employee_id, DATE(`timestamp`)
 ) x ON x.employee_id = ds.employee_id AND x.d = ds.date
 WHERE ds.first_in IS NOT NULL
+GROUP BY mes
+ORDER BY mes;
+
+
+-- ---------------------------------------------------------------------
+-- Q4b. ★ LA QUE DECIDE EL RECÁLCULO — atrasos contra el horario
+--
+-- `late_minutes` se calculó contra un horario anclado en -03:00 fijo.
+-- Acá se recalcula el atraso "a mano" comparando la hora de pared
+-- guardada contra la hora de pared del turno, que es una comparación
+-- que NO depende de ninguna conversión de zona.
+--
+-- Si `late_recalc` y `late_guardado` coinciden, el campo sobrevivió.
+-- Si difieren sistemáticamente ~60 min en meses de invierno de años
+-- <= 2024, `late_minutes` está desplazado y ESO exige recálculo,
+-- aunque first_in y last_out estén perfectos.
+--
+-- Se compara sólo donde hay horario definido y entrada registrada.
+-- ---------------------------------------------------------------------
+SELECT
+  DATE_FORMAT(ds.date, '%Y-%m')          AS mes,
+  COUNT(*)                               AS dias,
+  ROUND(AVG(ds.late_minutes))            AS late_guardado_prom,
+  ROUND(AVG(GREATEST(
+    TIME_TO_SEC(TIME(ds.first_in)) / 60
+      - (TIME_TO_SEC(s.check_in) / 60 + COALESCE(s.tolerance_in, 0)),
+    0)))                                 AS late_recalc_prom,
+  SUM(CASE WHEN ABS(ds.late_minutes - GREATEST(
+    TIME_TO_SEC(TIME(ds.first_in)) / 60
+      - (TIME_TO_SEC(s.check_in) / 60 + COALESCE(s.tolerance_in, 0)),
+    0)) > 5 THEN 1 ELSE 0 END)           AS dias_discrepantes
+FROM daily_summary ds
+JOIN employees e ON e.id = ds.employee_id
+JOIN schedules  s ON s.id = COALESCE(ds.schedule_id, e.schedule_id)
+WHERE ds.first_in IS NOT NULL
+  AND s.check_in IS NOT NULL
 GROUP BY mes
 ORDER BY mes;
 

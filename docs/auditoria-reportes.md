@@ -18,7 +18,7 @@ tocar producción) o si es una **hipótesis** que requiere las consultas.
 | 7 | Segunda página sólo para la firma | `sigY` siempre supera el umbral con un mes completo | **Demostrado** |
 | 4 | 502 en períodos grandes | `Math.max(...)` revienta > ~125.000 elementos | **Demostrado** |
 | 4 | 502 en períodos grandes | El filtro por departamento se ignora → siempre consulta toda la empresa | **Demostrado** |
-| 4 | 502 en períodos grandes | Doble request en `handleGenerar` | **Demostrado** |
+| 4 | 502 en períodos grandes | ~~Doble request en `handleGenerar`~~ | **Descartado** — ver B3 |
 | 5 | Selector de empleado incómodo | `<select>` plano, y tope de 500 empleados | **Demostrado** |
 | 2, 3 | Horas históricas incorrectas | Desfase de **1 hora estacional**, no de 3 | **Hipótesis fuerte** — requiere Q1–Q4 |
 
@@ -78,6 +78,23 @@ recientes son correctas**, exactamente como se observó.
 valores string. Hoy no se activa —mysql2 devuelve `Date`, no string— pero es la
 misma clase de error esperando otro driver o configuración.
 
+### Un cuarto sitio con `-03:00` fijo, y este sí produce error propio
+
+`api/src/controllers/attendanceController.js:190` construye el horario previsto
+contra el que se mide el atraso:
+
+```js
+const scheduleTime = new Date(`${date}T${hh}:${mm}:00-03:00`);
+```
+
+En una fecha histórica de invierno la referencia queda corrida una hora, de modo
+que **`late_minutes` está mal aunque `first_in` sea exacto**. Es un error del
+dato derivado, no de la presentación, y no se arregla tocando el formateo.
+
+Esto sube a cuatro los criterios de zona conviviendo en el sistema: el offset
+fijo de sequelize, el `-03:00` de `toDate`, el `-03:00` de `attendanceController`
+y la tzdata real de `Intl` en `fmtTime`.
+
 ### ¿Datos o presentación?
 
 **Todavía no se puede afirmar.** El código explica un error de *presentación*
@@ -91,10 +108,18 @@ distinguen:
 - Si `daily_summary` congeló valores calculados con la conversión vieja, el
   resumen tiene error propio y hay que recalcularlo aunque los logs estén bien.
 
-Las consultas **Q1** (deduce el offset aplicado comparando `timestamp` contra
-`created_at`), **Q3** (mismo empleado en cuatro ventanas) y **Q4**
-(`daily_summary` vs. logs) responden exactamente esto. **Q4 es la que decide si
-hace falta recálculo.**
+Las consultas **Q1/Q1b** (deducen el offset aplicado comparando `timestamp`
+contra `created_at`, normalizando la zona de sesión y usando el mínimo en vez
+del promedio para no confundir offset con latencia de ingestión), **Q3** (mismo
+empleado en cuatro ventanas) y **Q4/Q4b** (`daily_summary` vs. logs) responden
+esto.
+
+**La que decide el recálculo es Q4b, no Q4.** Q4 compara los campos *copiados*
+del log —`first_in`, `last_out`—; si salen idénticos sólo prueba que no hay
+desfase copiado. `late_minutes` es un campo *derivado*, calculado contra el
+horario anclado en `-03:00` fijo, y puede estar corrido aunque Q4 dé todo igual.
+Q4b recalcula el atraso comparando horas de pared, que es una comparación
+independiente de cualquier conversión de zona.
 
 ### Un síntoma cruzado que sirve de confirmación
 
@@ -138,19 +163,33 @@ departamento consulta igual a toda la empresa.**
 
 Es un bug por sí solo y además multiplica el volumen que dispara B1.
 
-### B3. Doble request por cada click
+### B3. El "doble request" — descartado
+
+Una versión anterior de este informe afirmaba que
 
 ```js
 function handleGenerar() { setQueried(true); refetch() }
 ```
 
-Con `queried` en `false`, la query está deshabilitada (`enabled: queried`).
-`setQueried(true)` ya dispara el fetch; el `refetch()` explícito dispara un
-**segundo request idéntico** en paralelo. Se duplica el trabajo del servidor en
-la consulta más cara del sistema.
+dispara dos requests idénticos: uno por el `refetch()` explícito y otro por la
+transición de `enabled: false → true`. **Eso es incorrecto y queda retirado.**
 
-Tampoco hay `AbortController`: cambiar el rango mientras corre una consulta
-pesada deja la anterior corriendo en el servidor.
+Ambas llamadas llegan al mismo `Query` de TanStack Query (v5.17), que coalesce
+los fetch concurrentes de una misma clave: la segunda reutiliza la promesa en
+vuelo en lugar de ejecutar otra vez `queryFn`. Y a partir del segundo click
+`queried` ya vale `true`, así que `setQueried(true)` ni siquiera cambia el
+estado. No hay duplicación de trabajo en el servidor.
+
+Lo que **sí** se sostiene, y es un problema distinto: `queryFn` no reenvía el
+`AbortSignal` que TanStack le pasa —
+
+```js
+queryFn: () => api.get('/api/reports/marcadas', { params: { ... } })
+```
+
+— así que cambiar el rango mientras corre una consulta pesada no cancela nada:
+la anterior sigue ocupando el servidor hasta terminar. Pasar el `signal` a axios
+es un arreglo de una línea y de bajo riesgo.
 
 ### Sobre los índices
 
@@ -247,7 +286,7 @@ En orden de riesgo creciente. Cada uno es independiente y verificable.
 | 1 | Esta auditoría + SQL read-only | Ninguno (sólo documentos) |
 | 2 | Formato `HH:mm` en PDF y Excel mensual (C1) | Bajo — corrige salida rota |
 | 3 | Alinear `deptId`/`departmentId` (B2) | Bajo — restaura un filtro |
-| 4 | Quitar el doble request (B3) | Bajo — sólo frontend |
+| 4 | Reenviar el `AbortSignal` a axios (B3) | Bajo — sólo frontend |
 | 5 | Reemplazar `Math.max(...)` por reduce (B1) | Bajo — quita un crash |
 | 6 | Rediseño del layout mensual (C2) | Medio — cambia la salida impresa |
 | 7 | Combobox buscable + usarlo en Reportes (D) | Medio — componente nuevo |
