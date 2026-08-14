@@ -2,7 +2,7 @@ const { sequelize } = require('../config/database');
 const { getIO, emitAttendance } = require('../socket/socketServer');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('../services/recalcLock');
-const { dbMinutesOfDay, dbDateISO } = require('../utils/dbTime');
+const { dbSecondsOfDay, dbDateISO } = require('../utils/dbTime');
 const calc = require('../services/dailySummaryCalc');
 const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
@@ -113,9 +113,14 @@ async function processAttendanceEvent(data) {
 
 // Determinar si es entrada o salida según historial del día
 async function detectMarkType(employeeId, timestamp) {
-  const date = new Intl.DateTimeFormat('sv', { timeZone: 'America/Asuncion' }).format(
-    timestamp instanceof Date ? timestamp : new Date(timestamp)
-  );
+  // MISMA semántica de fecha que recalcDailySummary. Si acá se usara la
+  // conversión a America/Asuncion, un marcaje de madrugada en una fecha de
+  // invierno anterior al 2024-10-06 contaría las marcas del día ANTERIOR y
+  // se inferiría un in/out equivocado, que después consume el resumen.
+  const date = dbDateISO(timestamp)
+    || new Intl.DateTimeFormat('sv', { timeZone: 'UTC' }).format(
+         timestamp instanceof Date ? timestamp : new Date(timestamp)
+       );
   const [[row]] = await sequelize.query(
     'SELECT COUNT(*) AS cnt FROM attendance_logs WHERE employee_id = ? AND DATE(timestamp) = ?',
     { replacements: [employeeId, date] }
@@ -183,10 +188,10 @@ async function recalcDailySummary(employeeId, timestamp) {
   // históricamente —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en
   // fechas de invierno anteriores el atraso salía corrido una hora aunque
   // first_in fuese exacto.
-  const inMin  = firstIn ? dbMinutesOfDay(firstIn.timestamp)  : null;
-  const outMin = lastOut ? dbMinutesOfDay(lastOut.timestamp) : null;
+  const inSec  = firstIn ? dbSecondsOfDay(firstIn.timestamp)  : null;
+  const outSec = lastOut ? dbSecondsOfDay(lastOut.timestamp) : null;
 
-  const workedMinutes = calc.workedMinutes({ firstInMinutes: inMin, lastOutMinutes: outMin });
+  const workedMinutes = calc.workedMinutes({ firstInSeconds: inSec, lastOutSeconds: outSec });
 
   // Obtener horario del empleado
   const [[emp]] = await sequelize.query(
@@ -196,8 +201,8 @@ async function recalcDailySummary(employeeId, timestamp) {
 
   const lateMinutes = (firstIn && emp)
     ? calc.lateMinutes({
-        firstInMinutes: inMin,
-        checkInMinutes: calc.scheduleMinutes(emp.check_in),
+        firstInSeconds: inSec,
+        checkInSeconds: calc.scheduleSeconds(emp.check_in),
         toleranceMin: emp.tolerance_in || 0,
       })
     : 0;

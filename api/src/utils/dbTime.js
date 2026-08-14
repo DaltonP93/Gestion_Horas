@@ -108,12 +108,14 @@ function dbWallClock(value, tz = TZ_POR_DEFECTO) {
     return {
       date: `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`,
       minutes: d.getUTCHours() * 60 + d.getUTCMinutes(),
+      seconds: d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds(),
     };
   }
 
-  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/.exec(String(value));
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(value));
   if (!m) return null;
-  return { date: m[1], minutes: Number(m[2]) * 60 + Number(m[3]) };
+  const h = Number(m[2]), mi = Number(m[3]), se = Number(m[4] || 0);
+  return { date: m[1], minutes: h * 60 + mi, seconds: h * 3600 + mi * 60 + se };
 }
 
 /** Fecha civil "YYYY-MM-DD" de la hora de pared guardada. */
@@ -128,8 +130,15 @@ function dbMinutesOfDay(value, tz = TZ_POR_DEFECTO) {
   return wc ? wc.minutes : null;
 }
 
+/** Segundo del día (0..86399) de la hora de pared guardada. */
+function dbSecondsOfDay(value, tz = TZ_POR_DEFECTO) {
+  const wc = dbWallClock(value, tz);
+  return wc ? wc.seconds : null;
+}
+
 module.exports = {
   dbTimeHHmm,
+  dbSecondsOfDay,
   parseOffsetMinutes,
   dbWallClock,
   dbDateISO,

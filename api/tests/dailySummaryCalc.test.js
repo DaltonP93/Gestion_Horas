@@ -7,7 +7,7 @@
  */
 
 const calc = require('../src/services/dailySummaryCalc');
-const { dbMinutesOfDay, dbDateISO } = require('../src/utils/dbTime');
+const { dbSecondsOfDay, dbDateISO } = require('../src/utils/dbTime');
 
 /** Hora de pared "HH:mm" de una fecha dada, como la entrega el driver. */
 function comoLoDevuelveElDriver(fecha, hhmm, offsetMin = -180) {
@@ -16,64 +16,73 @@ function comoLoDevuelveElDriver(fecha, hhmm, offsetMin = -180) {
   return new Date(Date.UTC(Y, M - 1, D, h, m) - offsetMin * 60000);
 }
 
-const min = (hhmm) => calc.scheduleMinutes(hhmm);
+const sec = (hhmmss) => calc.scheduleSeconds(hhmmss);
+const min = sec;   // alias: los casos se escriben con horas de pared
 
-describe('scheduleMinutes', () => {
+describe('scheduleSeconds', () => {
   test('acepta HH:mm y HH:mm:ss', () => {
-    expect(calc.scheduleMinutes('07:00')).toBe(420);
-    expect(calc.scheduleMinutes('07:00:00')).toBe(420);
-    expect(calc.scheduleMinutes('23:59')).toBe(1439);
-    expect(calc.scheduleMinutes('00:00')).toBe(0);
+    expect(calc.scheduleSeconds('07:00')).toBe(7 * 3600);
+    expect(calc.scheduleSeconds('07:00:00')).toBe(7 * 3600);
+    expect(calc.scheduleSeconds('07:00:30')).toBe(7 * 3600 + 30);
+    expect(calc.scheduleSeconds('23:59')).toBe(23 * 3600 + 59 * 60);
+    expect(calc.scheduleSeconds('00:00')).toBe(0);
   });
 
   test('rechaza basura en vez de devolver 0', () => {
     // Devolver 0 haría que todo el día contara como atraso desde medianoche.
-    expect(calc.scheduleMinutes(null)).toBeNull();
-    expect(calc.scheduleMinutes('')).toBeNull();
-    expect(calc.scheduleMinutes('mediodía')).toBeNull();
-    expect(calc.scheduleMinutes('25:00')).toBeNull();
-    expect(calc.scheduleMinutes('07:99')).toBeNull();
+    expect(calc.scheduleSeconds(null)).toBeNull();
+    expect(calc.scheduleSeconds('')).toBeNull();
+    expect(calc.scheduleSeconds('mediodía')).toBeNull();
+    expect(calc.scheduleSeconds('25:00')).toBeNull();
+    expect(calc.scheduleSeconds('07:99')).toBeNull();
   });
 });
 
 describe('lateMinutes — turno normal', () => {
   test('llegar en hora no es atraso', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('07:00'), checkInMinutes: min('07:00') })).toBe(0);
+    expect(calc.lateMinutes({ firstInSeconds: min('07:00'), checkInSeconds: min('07:00') })).toBe(0);
   });
 
   test('llegar antes tampoco, y nunca da negativo', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('06:40'), checkInMinutes: min('07:00') })).toBe(0);
+    expect(calc.lateMinutes({ firstInSeconds: min('06:40'), checkInSeconds: min('07:00') })).toBe(0);
   });
 
   test('llegar tarde cuenta los minutos', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('07:12'), checkInMinutes: min('07:00') })).toBe(12);
+    expect(calc.lateMinutes({ firstInSeconds: min('07:12'), checkInSeconds: min('07:00') })).toBe(12);
   });
 
   test('sin marcaje de entrada no hay atraso', () => {
-    expect(calc.lateMinutes({ firstInMinutes: null, checkInMinutes: min('07:00') })).toBe(0);
+    expect(calc.lateMinutes({ firstInSeconds: null, checkInSeconds: min('07:00') })).toBe(0);
   });
 
   test('sin horario definido tampoco', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('09:00'), checkInMinutes: null })).toBe(0);
+    expect(calc.lateMinutes({ firstInSeconds: min('09:00'), checkInSeconds: null })).toBe(0);
+  });
+
+  test('★ una llegada muy tarde del mismo día se cuenta entera', () => {
+    // Con la envoltura simétrica esto daba 0: el atraso mayor a media jornada
+    // se interpretaba como "es del día anterior" y desaparecía.
+    expect(calc.lateMinutes({ firstInSeconds: min('20:00'), checkInSeconds: min('07:00') }))
+      .toBe(780);
   });
 });
 
 describe('lateMinutes — tolerancia', () => {
   test('dentro de la tolerancia no es atraso', () => {
     expect(calc.lateMinutes({
-      firstInMinutes: min('07:08'), checkInMinutes: min('07:00'), toleranceMin: 10,
+      firstInSeconds: min('07:08'), checkInSeconds: min('07:00'), toleranceMin: 10,
     })).toBe(0);
   });
 
   test('pasada la tolerancia se cuenta desde el límite, no desde el horario', () => {
     expect(calc.lateMinutes({
-      firstInMinutes: min('07:25'), checkInMinutes: min('07:00'), toleranceMin: 10,
+      firstInSeconds: min('07:25'), checkInSeconds: min('07:00'), toleranceMin: 10,
     })).toBe(15);
   });
 
   test('justo en el borde de la tolerancia todavía no es atraso', () => {
     expect(calc.lateMinutes({
-      firstInMinutes: min('07:10'), checkInMinutes: min('07:00'), toleranceMin: 10,
+      firstInSeconds: min('07:10'), checkInSeconds: min('07:00'), toleranceMin: 10,
     })).toBe(0);
   });
 });
@@ -82,39 +91,72 @@ describe('lateMinutes — turno nocturno y cruce de medianoche', () => {
   test('★ entra 23:00 y marca 00:30 → 90 minutos, no un número negativo', () => {
     // En aritmética directa daría -1350. El marcaje es del día siguiente.
     expect(calc.lateMinutes({
-      firstInMinutes: min('00:30'), checkInMinutes: min('23:00'),
+      firstInSeconds: min('00:30'), checkInSeconds: min('23:00'),
     })).toBe(90);
   });
 
   test('entra 22:00 y marca 22:05 el mismo día', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('22:05'), checkInMinutes: min('22:00') })).toBe(5);
+    expect(calc.lateMinutes({ firstInSeconds: min('22:05'), checkInSeconds: min('22:00') })).toBe(5);
   });
 
   test('entra 23:00 y marca 22:50 (anticipado) no es atraso', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('22:50'), checkInMinutes: min('23:00') })).toBe(0);
+    expect(calc.lateMinutes({ firstInSeconds: min('22:50'), checkInSeconds: min('23:00') })).toBe(0);
   });
 
-  test('entra 00:00 y marca 23:50 del día anterior tampoco', () => {
-    expect(calc.lateMinutes({ firstInMinutes: min('23:50'), checkInMinutes: min('00:00') })).toBe(0);
+  test('horario 00:00 con marca 23:50 del MISMO día es atraso, no anticipación', () => {
+    // Caso deliberadamente incómodo. Podría leerse como "llegó 10 minutos
+    // antes del turno de mañana", pero recalcDailySummary sólo ve los
+    // marcajes de UN día: para él la persona debía entrar 00:00 y marcó
+    // 23:50 de ese mismo día.
+    //
+    // Envolverlo a 0 exigiría envolver diferencias positivas, y eso es
+    // justamente lo que convertía una jornada de 13 horas en cero minutos
+    // trabajados. Se prefiere el valor literal: la ambigüedad de turnos que
+    // cruzan la medianoche se resuelve asignando bien la fecha laboral, no
+    // adivinando en la aritmética.
+    expect(calc.lateMinutes({ firstInSeconds: min('23:50'), checkInSeconds: min('00:00') }))
+      .toBe(23 * 60 + 50);
   });
 });
 
 describe('workedMinutes', () => {
   test('jornada normal', () => {
     expect(calc.workedMinutes({
-      firstInMinutes: min('08:00'), lastOutMinutes: min('17:00'),
+      firstInSeconds: min('08:00'), lastOutSeconds: min('17:00'),
     })).toBe(540);
   });
 
   test('★ turno nocturno: entra 22:00, sale 02:00 → 240', () => {
     expect(calc.workedMinutes({
-      firstInMinutes: min('22:00'), lastOutMinutes: min('02:00'),
+      firstInSeconds: min('22:00'), lastOutSeconds: min('02:00'),
     })).toBe(240);
   });
 
   test('falta una de las dos marcas → 0', () => {
-    expect(calc.workedMinutes({ firstInMinutes: min('08:00'), lastOutMinutes: null })).toBe(0);
-    expect(calc.workedMinutes({ firstInMinutes: null, lastOutMinutes: min('17:00') })).toBe(0);
+    expect(calc.workedMinutes({ firstInSeconds: min('08:00'), lastOutSeconds: null })).toBe(0);
+    expect(calc.workedMinutes({ firstInSeconds: null, lastOutSeconds: min('17:00') })).toBe(0);
+  });
+
+  test('★ jornada larga del mismo día: 13 horas son 780, no cero', () => {
+    // Envolver las diferencias positivas —tratándolas como cruce de
+    // medianoche— convertía esta jornada en -660 y por lo tanto en CERO
+    // minutos trabajados. Peor que el defecto que este PR corrige.
+    expect(calc.workedMinutes({
+      firstInSeconds: min('08:00'), lastOutSeconds: min('21:00'),
+    })).toBe(780);
+  });
+
+  test('★ los segundos no se pierden antes de restar', () => {
+    // 08:00:59 → 17:00:00 son 539 minutos COMPLETOS. Pasar antes por minutos
+    // del día daba 540: sobrestimaba un minuto siempre que los segundos de la
+    // entrada superaran a los de la salida.
+    expect(calc.workedMinutes({
+      firstInSeconds: sec('08:00:59'), lastOutSeconds: sec('17:00:00'),
+    })).toBe(539);
+
+    expect(calc.workedMinutes({
+      firstInSeconds: sec('08:00:00'), lastOutSeconds: sec('17:00:59'),
+    })).toBe(540);
   });
 });
 
@@ -149,8 +191,8 @@ describe('★ invariancia histórica — el defecto que se corrige', () => {
     for (const fecha of [INVIERNO_2024, VERANO_2025]) {
       const marcaje = comoLoDevuelveElDriver(fecha, '07:12');
       const atraso = calc.lateMinutes({
-        firstInMinutes: dbMinutesOfDay(marcaje),
-        checkInMinutes: min('07:00'),
+        firstInSeconds: dbSecondsOfDay(marcaje),
+        checkInSeconds: min('07:00'),
       });
       expect(atraso).toBe(12);
     }
@@ -165,7 +207,7 @@ describe('★ invariancia histórica — el defecto que se corrige', () => {
     }).format(marcaje);
 
     expect(conTzdata).toBe('06:12');                    // una hora menos…
-    expect(dbMinutesOfDay(marcaje)).toBe(min('07:12')); // …y el cálculo usa la guardada
+    expect(dbSecondsOfDay(marcaje)).toBe(min('07:12')); // …y el cálculo usa la guardada
   });
 
   test('la fecha del día tampoco se corre', () => {
@@ -180,14 +222,21 @@ describe('★ invariancia histórica — el defecto que se corrige', () => {
 });
 
 describe('wallDelta', () => {
-  test('resuelve el cruce en ambos sentidos', () => {
-    expect(calc.wallDelta(min('23:00'), min('00:30'))).toBe(90);
-    expect(calc.wallDelta(min('00:30'), min('23:00'))).toBe(-90);
-    expect(calc.wallDelta(min('08:00'), min('17:00'))).toBe(540);
+  test('resuelve el cruce hacia el día siguiente', () => {
+    expect(calc.wallDelta(min('23:00'), min('00:30'))).toBe(90 * 60);
+    expect(calc.wallDelta(min('08:00'), min('17:00'))).toBe(540 * 60);
   });
 
-  test('media jornada es el punto de corte', () => {
-    expect(calc.wallDelta(0, calc.HALF_DAY)).toBe(calc.HALF_DAY);
-    expect(calc.wallDelta(0, calc.HALF_DAY + 1)).toBe(calc.HALF_DAY + 1 - calc.DAY);
+  test('★ las diferencias POSITIVAS nunca se envuelven', () => {
+    // recalcDailySummary lee un solo día: una diferencia positiva grande no
+    // puede ser cruce de medianoche. Envolverla convertía una jornada de 13
+    // horas en cero minutos trabajados.
+    expect(calc.wallDelta(0, calc.HALF_DAY + 3600)).toBe(calc.HALF_DAY + 3600);
+    expect(calc.wallDelta(min('08:00'), min('21:00'))).toBe(13 * 3600);
+  });
+
+  test('sólo se envuelve lo muy negativo', () => {
+    expect(calc.wallDelta(min('23:00'), min('00:30'))).toBe(90 * 60);   // cruce
+    expect(calc.wallDelta(min('07:00'), min('06:00'))).toBe(-3600);     // anticipación
   });
 });
