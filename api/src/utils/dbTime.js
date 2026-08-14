@@ -34,6 +34,20 @@
 
 const { DB_TIMEZONE } = require('../config/database');
 
+/**
+ * Offset a usar por defecto.
+ *
+ * `DB_TIMEZONE` es una constante literal de la config, no una variable de
+ * entorno: que llegue vacía no significa "mal configurado" sino "el módulo de
+ * base está mockeado", que es lo que pasa en gran parte de la suite. Por eso
+ * acá se cae al mismo valor en vez de romper.
+ *
+ * La validación estricta sigue viva donde sí importa: `parseOffsetMinutes`
+ * lanza ante un offset MAL ESCRITO, que es el caso que desplazaría en
+ * silencio todas las horas del sistema.
+ */
+const TZ_POR_DEFECTO = DB_TIMEZONE || '-03:00';
+
 /** "-03:00" | "+05:30" → minutos con signo. */
 function parseOffsetMinutes(tz) {
   const m = /^([+-])(\d{2}):(\d{2})$/.exec(String(tz || '').trim());
@@ -52,7 +66,7 @@ const pad2 = (n) => String(n).padStart(2, '0');
  * Devuelve '' para nulos y para valores no interpretables — nunca lanza, para
  * que un dato aislado corrupto no tumbe la generación de un reporte entero.
  */
-function dbTimeHHmm(value, tz = DB_TIMEZONE) {
+function dbTimeHHmm(value, tz = TZ_POR_DEFECTO) {
   if (value == null || value === '') return '';
 
   if (value instanceof Date) {
@@ -75,4 +89,49 @@ function dbTimeHHmm(value, tz = DB_TIMEZONE) {
   return '';
 }
 
-module.exports = { dbTimeHHmm, parseOffsetMinutes };
+/**
+ * Partes de la hora de pared guardada: { date: 'YYYY-MM-DD', minutes }.
+ *
+ * `minutes` es el minuto del día (0..1439). Devuelve null si el valor no se
+ * puede interpretar.
+ *
+ * Igual que dbTimeHHmm, deshace la conversión del driver con el offset fijo,
+ * así que el resultado NO depende de la zona del proceso ni aplica la tzdata
+ * histórica.
+ */
+function dbWallClock(value, tz = TZ_POR_DEFECTO) {
+  if (value == null || value === '') return null;
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const d = new Date(value.getTime() + parseOffsetMinutes(tz) * 60000);
+    return {
+      date: `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`,
+      minutes: d.getUTCHours() * 60 + d.getUTCMinutes(),
+    };
+  }
+
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/.exec(String(value));
+  if (!m) return null;
+  return { date: m[1], minutes: Number(m[2]) * 60 + Number(m[3]) };
+}
+
+/** Fecha civil "YYYY-MM-DD" de la hora de pared guardada. */
+function dbDateISO(value, tz = TZ_POR_DEFECTO) {
+  const wc = dbWallClock(value, tz);
+  return wc ? wc.date : null;
+}
+
+/** Minuto del día (0..1439) de la hora de pared guardada. */
+function dbMinutesOfDay(value, tz = TZ_POR_DEFECTO) {
+  const wc = dbWallClock(value, tz);
+  return wc ? wc.minutes : null;
+}
+
+module.exports = {
+  dbTimeHHmm,
+  parseOffsetMinutes,
+  dbWallClock,
+  dbDateISO,
+  dbMinutesOfDay,
+};

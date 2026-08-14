@@ -2,6 +2,8 @@ const { sequelize } = require('../config/database');
 const { getIO, emitAttendance } = require('../socket/socketServer');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('../services/recalcLock');
+const { dbMinutesOfDay, dbDateISO } = require('../utils/dbTime');
+const calc = require('../services/dailySummaryCalc');
 const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
 let fireWebhooks;
@@ -124,10 +126,17 @@ async function detectMarkType(employeeId, timestamp) {
 
 // Recalcular resumen diario del empleado
 async function recalcDailySummary(employeeId, timestamp) {
-  // Usar fecha en Paraguay para el resumen
-  const date = new Intl.DateTimeFormat('sv', { timeZone: 'America/Asuncion' }).format(
-    timestamp instanceof Date ? timestamp : new Date(timestamp)
-  );
+  // Fecha del resumen = fecha de la hora de pared guardada, sin conversión.
+  //
+  // Antes se formateaba el instante en `America/Asuncion`, lo que aplica la
+  // tzdata histórica: para un marcaje de madrugada en una fecha de invierno
+  // anterior al 2024-10-06 (Paraguay en UTC-4) el resultado caía en el DÍA
+  // ANTERIOR, y el resumen se escribía contra la clave equivocada. La fecha
+  // que corresponde es la que está guardada en la columna.
+  const date = dbDateISO(timestamp)
+    || new Intl.DateTimeFormat('sv', { timeZone: 'UTC' }).format(
+         timestamp instanceof Date ? timestamp : new Date(timestamp)
+       );
 
   // Rango SARGABLE [inicio, díaSiguiente): usa el índice idx_ts/idx_emp_ts y
   // acota los locks de rango (a diferencia de DATE(timestamp), que fuerza
@@ -167,11 +176,17 @@ async function recalcDailySummary(employeeId, timestamp) {
   const firstIn  = logs.find(l => l.type === 'in');
   const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
 
-  let workedMinutes = 0;
-  if (firstIn && lastOut) {
-    const ms = new Date(lastOut.timestamp) - new Date(firstIn.timestamp);
-    workedMinutes = Math.floor(ms / 60000);
-  }
+  // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
+  // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
+  // no necesita zona horaria. La versión anterior construía el horario
+  // previsto con offset fijo `-03:00`, que no representa a America/Asuncion
+  // históricamente —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en
+  // fechas de invierno anteriores el atraso salía corrido una hora aunque
+  // first_in fuese exacto.
+  const inMin  = firstIn ? dbMinutesOfDay(firstIn.timestamp)  : null;
+  const outMin = lastOut ? dbMinutesOfDay(lastOut.timestamp) : null;
+
+  const workedMinutes = calc.workedMinutes({ firstInMinutes: inMin, lastOutMinutes: outMin });
 
   // Obtener horario del empleado
   const [[emp]] = await sequelize.query(
@@ -179,23 +194,15 @@ async function recalcDailySummary(employeeId, timestamp) {
     { replacements: [employeeId] }
   );
 
-  let lateMinutes = 0;
-  let status = firstIn ? 'present' : 'absent';
+  const lateMinutes = (firstIn && emp)
+    ? calc.lateMinutes({
+        firstInMinutes: inMin,
+        checkInMinutes: calc.scheduleMinutes(emp.check_in),
+        toleranceMin: emp.tolerance_in || 0,
+      })
+    : 0;
 
-  if (firstIn && emp) {
-    // Construir horario previsto en Paraguay: fecha laboral + hora del turno
-    const [h, m] = emp.check_in.split(':').map(Number);
-    const tolerMin = emp.tolerance_in || 0;
-    // scheduleTime = fecha Paraguay + hora check_in + tolerancia, en UTC
-    const scheduleTime = new Date(`${date}T${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:00-03:00`);
-    scheduleTime.setTime(scheduleTime.getTime() + tolerMin * 60 * 1000);
-
-    const inTime = new Date(firstIn.timestamp);
-    if (inTime > scheduleTime) {
-      lateMinutes = Math.floor((inTime - scheduleTime) / 60000);
-      status = 'late';
-    }
-  }
+  const status = calc.dayStatus({ hasFirstIn: Boolean(firstIn), late: lateMinutes });
 
   // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
   // y con reintento acotado ante deadlock/lock-wait.
