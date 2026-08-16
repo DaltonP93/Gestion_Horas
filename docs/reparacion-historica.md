@@ -62,9 +62,10 @@ node scripts/historical-attendance-repair.js --employee 3091 --limit 500 --out .
 total device      N
 MATCH_180         N     ← corregible: +3 h
 MATCH_240         N     ← corregible: +4 h
-ALREADY_CORRECT   N     ← la hora guardada ya existe en ATT2000; no se toca
+ALREADY_CORRECT   N     ← la guardada es la ÚNICA coincidencia; no se toca
 NO_MATCH          N     ← sin respaldo en ATT2000; NO se actualiza
 AMBIGUOUS         N     ← coincide con más de un desplazamiento; NO se actualiza
+                          (incluye los casos donde también coincide el 0)
 COLLISION         N     ← la hora corregida chocaría con el UNIQUE; NO se actualiza
 APLICABLES        N
 cambian de día    N     ← requieren recalcular DOS resúmenes
@@ -93,8 +94,10 @@ Antes de aplicar, mirar como mínimo:
 
 1. **`NO_MATCH` alto en un mes o dispositivo concreto.** Puede indicar que
    ATT2000 no tiene ese período cargado — no que los datos estén bien.
-2. **`AMBIGUOUS`.** Marcajes muy próximos entre sí en los que +180 y +240 caen
-   ambos sobre un registro real. Se resuelven a mano o se dejan.
+2. **`AMBIGUOUS`.** Marcajes en los que más de un desplazamiento cae sobre un
+   registro real — incluido el caso en que la hora guardada ya coincide y
+   además hay otro candidato. El `reason` lista los `CHECKTYPE` vistos en cada
+   desplazamiento, que suele alcanzar para resolverlo a mano.
 3. **`COLLISION`.** La corrección chocaría con el índice único
    `(employee_id, timestamp, IFNULL(device_id,0))`. Suele significar que el
    registro correcto ya fue insertado por otro flujo y este es un duplicado
@@ -197,8 +200,12 @@ lista de `recalcular.json`.
 ## Idempotencia
 
 Correr el dry-run una segunda vez sobre datos ya corregidos devuelve
-`ALREADY_CORRECT`, no `MATCH_*`: la hora guardada pasa a existir en ATT2000 y el
-shift 0 tiene prioridad.
+`ALREADY_CORRECT`, no `MATCH_*`: tras la corrección la hora guardada coincide
+con ATT2000 y pasa a ser la única coincidencia.
+
+Si además apareciera una coincidencia en +180 o +240 —porque la persona marcó
+también a esa hora—, la fila queda `AMBIGUOUS` y no se toca. Es el
+comportamiento buscado: ante duda, no escribir.
 
 Reaplicar el mismo manifest no vuelve a escribir: el guard exige el
 `old_timestamp` original, que ya no está.
