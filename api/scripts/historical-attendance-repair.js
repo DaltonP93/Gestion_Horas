@@ -107,9 +107,13 @@ async function dryRun(args) {
 
   log(`\n▶ Dry-run — source='${args.source}'${args.from ? ` desde ${args.from}` : ''}${args.to ? ` hasta ${args.to}` : ''}`);
 
+  // DATE_FORMAT devuelve la hora de pared COMO STRING. Traer la columna
+  // cruda la entregaría como Date, y el driver la interpreta con el offset
+  // fijo de la config: '02:42:29' llegaría como el instante 05:42:29Z y toda
+  // la comparación contra ATT2000 quedaría corrida 180 minutos.
   const [logs] = await sequelize.query(`
     SELECT al.id, al.employee_id, e.code AS employee_code, al.device_id,
-           al.source, al.timestamp, al.type
+           al.source, DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp, al.type
     FROM attendance_logs al
     JOIN employees e ON e.id = al.employee_id
     WHERE ${where.join(' AND ')}
@@ -125,7 +129,8 @@ async function dryRun(args) {
   // fuera de la ventana analizada.
   const empIds = [...new Set(logs.map(l => l.employee_id))];
   const [existentes] = await sequelize.query(`
-    SELECT employee_id, timestamp, device_id FROM attendance_logs
+    SELECT employee_id, DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp, device_id
+    FROM attendance_logs
     WHERE employee_id IN (${empIds.map(() => '?').join(',')})
   `, { replacements: empIds });
 
@@ -141,7 +146,12 @@ async function dryRun(args) {
   for (const code of codigos) {
     try {
       const filas = await queryAtt2000(
-        'SELECT USERID, CHECKTIME, CHECKTYPE FROM CHECKINOUT WHERE USERID = @userid',
+        // CONVERT(..., 120) fija el formato 'YYYY-MM-DD HH:mm:ss' del lado
+        // del servidor: el driver de SQL Server también devolvería Date.
+        `SELECT USERID,
+                CONVERT(varchar(19), CHECKTIME, 120) AS CHECKTIME,
+                CHECKTYPE
+           FROM CHECKINOUT WHERE USERID = @userid`,
         { userid: code }
       );
       candidatesByCode.set(code, (filas || []).map(r => ({ checktime: r.CHECKTIME, checktype: r.CHECKTYPE })));
@@ -238,23 +248,73 @@ async function apply(args) {
     const t = await sequelize.transaction();
     try {
       for (const f of lote) {
-        // Guard optimista: sólo se escribe si el registro sigue EXACTAMENTE
-        // como estaba cuando se generó el manifest. Si alguien lo tocó en el
-        // medio, no se pisa.
-        //
-        // El valor se escribe como STRING de hora de pared. Pasar un Date
-        // haría que el driver lo convierta otra vez y reintroduciría el
-        // mismo defecto que se está reparando.
-        const [, meta] = await sequelize.query(`
-          UPDATE attendance_logs
-          SET timestamp = ?
-          WHERE id = ? AND timestamp = ? AND source = ?
+        // Revalidación del UNIQUE DENTRO de la transacción. El conjunto de
+        // claves del dry-run refleja el momento en que se generó el manifest:
+        // si una ingesta posterior insertó esa hora, el UPDATE chocaría con
+        // el índice y voltearía el lote entero. Se detecta antes y se rechaza
+        // sólo esa fila.
+        const [[choque]] = await sequelize.query(`
+          SELECT id FROM attendance_logs
+          WHERE employee_id = ?
+            AND timestamp = ?
+            AND IFNULL(device_id, 0) = ?
+            AND id <> ?
+          LIMIT 1
         `, {
-          replacements: [f.proposed_timestamp, f.attendance_log_id, f.old_timestamp, f.source],
+          replacements: [
+            f.employee_id, f.proposed_timestamp,
+            f.device_id == null ? 0 : f.device_id, f.attendance_log_id,
+          ],
           transaction: t,
         });
+        if (choque) {
+          rechazados++;
+          rechazos.push({ id: f.attendance_log_id, motivo: `colisión sobrevenida con el registro ${choque.id}` });
+          continue;
+        }
 
-        const n = (meta && (meta.affectedRows ?? meta.changedRows)) ?? 0;
+        // Guard optimista sobre TODOS los campos que intervinieron en la
+        // decisión, no sólo el timestamp. Si entre el dry-run y ahora
+        // cambiaron el empleado, el dispositivo o el tipo, la propuesta ya no
+        // corresponde: una reasignación de empleado aplicaría una hora
+        // deducida del USERID anterior.
+        //
+        // El valor se escribe como STRING de hora de pared. Pasar un Date
+        // haría que el driver lo convierta otra vez y reintroduciría el mismo
+        // defecto que se está reparando.
+        let meta;
+        try {
+          ([, meta] = await sequelize.query(`
+            UPDATE attendance_logs
+            SET timestamp = ?
+            WHERE id = ?
+              AND timestamp = ?
+              AND source = ?
+              AND employee_id = ?
+              AND IFNULL(device_id, 0) = ?
+              AND type = ?
+          `, {
+            replacements: [
+              f.proposed_timestamp, f.attendance_log_id, f.old_timestamp, f.source,
+              f.employee_id, f.device_id == null ? 0 : f.device_id, f.type,
+            ],
+            transaction: t,
+          }));
+        } catch (err) {
+          // Carrera perdida contra otra inserción: se aísla por fila en vez
+          // de tumbar el lote.
+          if (/duplicate/i.test(err.message) || err?.parent?.code === 'ER_DUP_ENTRY') {
+            rechazados++;
+            rechazos.push({ id: f.attendance_log_id, motivo: 'colisión UNIQUE al escribir' });
+            continue;
+          }
+          throw err;
+        }
+
+        // `affectedRows` cuenta las filas que MATCHEARON el WHERE; changedRows
+        // sólo las que cambiaron de valor. Acá interesa el primero: una fila
+        // que matcheó pero cuyo valor ya era el propuesto no es un rechazo.
+        const n = (meta && meta.affectedRows) ?? 0;
         if (n === 1) actualizados++;
         else { rechazados++; rechazos.push({ id: f.attendance_log_id, motivo: 'el registro cambió desde el dry-run' }); }
       }

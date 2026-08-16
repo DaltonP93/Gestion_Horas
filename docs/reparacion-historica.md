@@ -130,8 +130,15 @@ Garantías del modo `--apply`:
 
 - **Sólo consume un manifest previamente generado.** No re-analiza ni re-decide.
 - **Sólo escribe filas `MATCH_180` / `MATCH_240`.** El resto se ignora.
-- **Guard optimista**: el `UPDATE` exige `id`, `timestamp` original y `source`.
-  Si el registro cambió desde el dry-run, no se pisa: se cuenta como rechazado.
+- **Guard optimista sobre todos los campos que decidieron la propuesta**: el
+  `UPDATE` exige `id`, `timestamp` original, `source`, `employee_id`,
+  `device_id` (con `IFNULL(...,0)`) y `type`. Una reasignación de empleado
+  aplicaría una hora deducida del USERID anterior, así que no alcanza con el
+  timestamp.
+- **Revalidación del UNIQUE dentro de la transacción**: el conjunto de claves
+  del dry-run refleja ese momento. Si una ingesta posterior insertó la hora
+  propuesta, se rechaza esa fila en vez de voltear el lote. Un duplicado en
+  carrera también se aísla por fila.
 - **El valor se escribe como string de hora de pared**, nunca como objeto
   `Date` — pasar un `Date` haría que el driver lo convierta otra vez y
   reintroduciría el mismo defecto.

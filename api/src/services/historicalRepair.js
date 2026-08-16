@@ -110,15 +110,31 @@ function normalizeCheckType(checkType) {
 /**
  * Clasifica UN registro contra los candidatos de ATT2000 del mismo USERID.
  *
- * `candidates` son filas { checktime, checktype } ya acotadas al empleado. Se
- * prueba cada desplazamiento y se exige coincidencia EXACTA de hora de pared;
- * no hay ventana de tolerancia, porque una ventana volvería ambiguos los
- * marcajes cercanos entre sí.
+ * `candidates` son filas { checktime, checktype } ya acotadas al empleado, con
+ * `checktime` como hora de pared. Se exige coincidencia EXACTA; no hay
+ * ventana de tolerancia, porque una ventana volvería ambiguos los marcajes
+ * cercanos entre sí.
  *
- * El CHECKTYPE se usa sólo para DESEMPATAR: si sin él quedan dos
- * desplazamientos posibles y con él queda uno solo, se toma ese. Nunca se usa
- * para descartar la única coincidencia disponible, porque el tipo del lado
- * MySQL puede haber sido inferido (detectMarkType) y no es fuente de verdad.
+ * LA REGLA ES UNA SOLA: se corrige únicamente cuando EXACTAMENTE UNO de los
+ * desplazamientos —0, +180, +240— encuentra candidato. Cualquier otra cosa es
+ * ambigua y no se toca.
+ *
+ * Dos consecuencias que valen explicitarse, porque en versiones anteriores de
+ * este archivo se resolvían mal:
+ *
+ * 1. Coincidir a shift 0 NO prueba que ese sea el evento de esta fila. Sólo
+ *    prueba que ATT2000 tiene ALGÚN marcaje a esa hora. Si alguien marcó a
+ *    las 03:00 y a las 06:00, y el evento de las 06:00 quedó guardado como
+ *    03:00 por el desfase, los dos candidatos existen: declararlo
+ *    ALREADY_CORRECT dejaría la fila corrupta en silencio. Por eso el shift 0
+ *    sólo gana cuando es la ÚNICA coincidencia.
+ *
+ * 2. El CHECKTYPE NO se usa para desempatar. El tipo del lado MySQL puede
+ *    venir de detectMarkType, que alterna por paridad de marcas del día: si
+ *    falta una marca histórica la paridad se invierte, y con dos candidatos
+ *    separados exactamente una hora ese tipo inferido elegiría el
+ *    desplazamiento equivocado y corrompería el timestamp. Los tipos vistos
+ *    se reportan en `reason` para que decida una persona.
  */
 function classify({ timestamp, type }, candidates = []) {
   const wall = toWall(timestamp);
@@ -132,39 +148,31 @@ function classify({ timestamp, type }, candidates = []) {
     porHora.get(w).push(normalizeCheckType(c.checktype));
   }
 
-  const tipoLog = normalizeCheckType(type);
-  const golpes = [];       // desplazamientos con alguna coincidencia
-  const golpesTipados = [];// idem, exigiendo tipo compatible
-
+  const golpes = [];
   for (const shift of [0, ...SHIFTS]) {
-    const objetivo = addMinutesWall(wall, shift);
-    const tipos = porHora.get(objetivo);
-    if (!tipos) continue;
-    golpes.push(shift);
-    if (tipoLog && tipos.some(t => t === tipoLog)) golpesTipados.push(shift);
+    if (porHora.has(addMinutesWall(wall, shift))) golpes.push(shift);
   }
 
-  // El shift 0 manda: la hora guardada YA existe en la fuente de verdad, así
-  // que es un marcaje real y desplazarlo sería inventar. Conservador a
-  // propósito, incluso si además coincidiera algún desplazamiento.
-  if (golpes.includes(0)) {
-    return { status: STATUS.ALREADY_CORRECT, proposed: wall, delta: 0, reason: null };
-  }
-
-  // El tipo sólo desempata; nunca descarta la única opción disponible.
-  const efectivos = (golpesTipados.length === 1 && golpes.length > 1) ? golpesTipados : golpes;
-
-  if (efectivos.length === 0) {
+  if (golpes.length === 0) {
     return { status: STATUS.NO_MATCH, proposed: null, delta: null, reason: 'sin candidato en ATT2000' };
   }
-  if (efectivos.length > 1) {
+
+  if (golpes.length > 1) {
+    // Se informan los tipos vistos en cada desplazamiento: es la evidencia
+    // que necesita una persona para resolverlo a mano.
+    const detalle = golpes
+      .map(s => `${s}=[${(porHora.get(addMinutesWall(wall, s)) || []).map(t => t || '?').join(',')}]`)
+      .join(' ');
     return {
       status: STATUS.AMBIGUOUS, proposed: null, delta: null,
-      reason: `coincide con más de un desplazamiento: ${efectivos.join(', ')}`,
+      reason: `coincide con más de un desplazamiento (tipo del log: ${normalizeCheckType(type) || '?'}) → ${detalle}`,
     };
   }
 
-  const shift = efectivos[0];
+  const shift = golpes[0];
+  if (shift === 0) {
+    return { status: STATUS.ALREADY_CORRECT, proposed: wall, delta: 0, reason: null };
+  }
   return {
     status: shift === 180 ? STATUS.MATCH_180 : STATUS.MATCH_240,
     proposed: addMinutesWall(wall, shift),
@@ -199,6 +207,10 @@ function buildManifest({ logs, candidatesByCode, existingKeys = new Set() }) {
       employee_code:      log.employee_code,
       device_id:          log.device_id ?? null,
       source:             log.source,
+      // `type` viaja en el manifest porque el guard optimista del apply lo
+      // compara: si cambió entre el dry-run y la escritura, la fila ya no es
+      // la que se evaluó.
+      type:               log.type ?? null,
       old_timestamp:      wall,
       proposed_timestamp: r.proposed,
       delta_minutes:      r.delta,

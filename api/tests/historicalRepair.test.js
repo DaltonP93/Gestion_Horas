@@ -78,14 +78,17 @@ describe('classify', () => {
     expect(res.delta).toBe(0);
   });
 
-  test('el shift 0 gana incluso si otro desplazamiento también coincide', () => {
-    // Conservador a propósito: si la hora guardada existe en la fuente de
-    // verdad, es un marcaje real y desplazarlo sería inventar.
+  test('★ coincidir a shift 0 NO alcanza si otro desplazamiento también coincide', () => {
+    // Caso realista: la persona marcó 03:00 y 06:00, y el evento de las 06:00
+    // quedó guardado como 03:00 por el desfase. Los dos candidatos existen.
+    // Declararlo ALREADY_CORRECT dejaría la fila corrupta EN SILENCIO, que es
+    // el peor resultado posible para un reparador.
     const res = r.classify(
       { timestamp: '2025-01-02 03:50:41', type: 'in' },
-      [cand('2025-01-02 03:50:41', 'I'), cand('2025-01-02 06:50:41', 'I')],
+      [cand('2025-01-02 03:50:41', 'I'), cand('2025-01-02 06:50:41', 'O')],
     );
-    expect(res.status).toBe(S.ALREADY_CORRECT);
+    expect(res.status).toBe(S.AMBIGUOUS);
+    expect(res.proposed).toBeNull();
   });
 
   test('★ sin candidato', () => {
@@ -110,17 +113,22 @@ describe('classify', () => {
     expect(res.proposed).toBeNull();
   });
 
-  test('el CHECKTYPE desempata cuando hay dos candidatos', () => {
+  test('★ el CHECKTYPE NO desempata: sigue siendo ambiguo', () => {
+    // El tipo del lado MySQL puede venir de detectMarkType, que alterna por
+    // paridad de marcas del día. Si falta una marca histórica la paridad se
+    // invierte, y con dos candidatos separados una hora ese tipo inferido
+    // elegiría el desplazamiento equivocado. Preferimos no corregir.
     const res = r.classify(
       { timestamp: '2024-04-29 02:42:29', type: 'out' },
       [cand('2024-04-29 05:42:29', 'I'), cand('2024-04-29 06:42:29', 'O')],
     );
-    expect(res.status).toBe(S.MATCH_240);
+    expect(res.status).toBe(S.AMBIGUOUS);
+    // Pero los tipos vistos se reportan, para resolverlo a mano.
+    expect(res.reason).toMatch(/180=\[in\]/);
+    expect(res.reason).toMatch(/240=\[out\]/);
   });
 
-  test('el CHECKTYPE nunca descarta la ÚNICA coincidencia', () => {
-    // El tipo del lado MySQL puede haber sido inferido por detectMarkType, y
-    // no es fuente de verdad: sirve para desempatar, no para vetar.
+  test('el CHECKTYPE tampoco descarta la ÚNICA coincidencia', () => {
     const res = r.classify(
       { timestamp: '2024-04-29 02:42:29', type: 'out' },
       [cand('2024-04-29 06:42:29', 'I')],
@@ -149,7 +157,7 @@ describe('buildManifest', () => {
 
     expect(f).toEqual({
       attendance_log_id: 1, employee_id: 10, employee_code: '3091',
-      device_id: 5, source: 'device',
+      device_id: 5, source: 'device', type: 'in',
       old_timestamp: '2024-04-29 02:42:29',
       proposed_timestamp: '2024-04-29 06:42:29',
       delta_minutes: 240, status: S.MATCH_240, reason: null,

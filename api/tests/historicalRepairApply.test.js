@@ -44,6 +44,14 @@ afterEach(() => {
   process.exitCode = 0;
 });
 
+/** Revalidación sin colisión + UPDATE que afecta 1 fila. */
+function okQuery(affectedRows = 1) {
+  mockQuery.mockImplementation((sql) =>
+    /SELECT id FROM attendance_logs/i.test(String(sql))
+      ? Promise.resolve([[]])
+      : Promise.resolve([[], { affectedRows }]));
+}
+
 const ARGS = { apply: false, out: null, source: 'device', from: null, to: null, employee: null, limit: null, batchSize: 500, manifest: null };
 
 function manifestCon(filas) {
@@ -54,7 +62,7 @@ function manifestCon(filas) {
 
 const FILA_OK = {
   attendance_log_id: 1, employee_id: 10, employee_code: '3091', device_id: 5,
-  source: 'device', old_timestamp: '2024-04-29 02:42:29',
+  source: 'device', type: 'in', old_timestamp: '2024-04-29 02:42:29',
   proposed_timestamp: '2024-04-29 06:42:29', delta_minutes: 240,
   status: 'MATCH_240', reason: null, date_changes: false,
 };
@@ -136,7 +144,7 @@ describe('apply', () => {
   });
 
   test('★ sólo escribe las filas aplicables', async () => {
-    mockQuery.mockResolvedValue([[], { affectedRows: 1 }]);
+    okQuery();
     const f = manifestCon([
       FILA_OK,
       { ...FILA_OK, attendance_log_id: 2, status: 'NO_MATCH', proposed_timestamp: null },
@@ -155,7 +163,7 @@ describe('apply', () => {
   test('★ el valor se escribe como STRING de pared, no como Date', async () => {
     // Pasar un Date haría que el driver lo convierta otra vez y reintroduzca
     // exactamente el defecto que se está reparando.
-    mockQuery.mockResolvedValue([[], { affectedRows: 1 }]);
+    okQuery();
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
 
     const [, opts] = mockQuery.mock.calls.find(c => /UPDATE/i.test(String(c[0])));
@@ -165,21 +173,62 @@ describe('apply', () => {
     expect(nuevo instanceof Date).toBe(false);
   });
 
-  test('★ guard optimista: el UPDATE exige el old_timestamp original', async () => {
-    mockQuery.mockResolvedValue([[], { affectedRows: 1 }]);
+  test('★ el guard compara TODOS los campos que decidieron la propuesta', async () => {
+    // No alcanza con id/timestamp/source: si alguien reasignó el empleado, la
+    // hora propuesta salió del USERID anterior; si cambió el dispositivo, la
+    // verificación del UNIQUE ya no vale; si cambió el tipo, tampoco.
+    okQuery();
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
 
     const [sql, opts] = mockQuery.mock.calls.find(c => /UPDATE/i.test(String(c[0])));
-    expect(sql).toMatch(/WHERE id = \? AND timestamp = \? AND source = \?/);
+    for (const campo of ['id = ?', 'timestamp = ?', 'source = ?', 'employee_id = ?',
+                         'IFNULL(device_id, 0) = ?', 'type = ?']) {
+      expect(sql).toContain(campo);
+    }
     expect(opts.replacements).toEqual([
-      '2024-04-29 06:42:29', 1, '2024-04-29 02:42:29', 'device',
+      '2024-04-29 06:42:29', 1, '2024-04-29 02:42:29', 'device', 10, 5, 'in',
     ]);
+  });
+
+  test('device_id nulo se compara como 0, igual que en el UNIQUE', async () => {
+    okQuery();
+    await apply({ ...ARGS, apply: true, manifest: manifestCon([{ ...FILA_OK, device_id: null }]) });
+    const [, opts] = mockQuery.mock.calls.find(c => /UPDATE/i.test(String(c[0])));
+    expect(opts.replacements[5]).toBe(0);
+  });
+
+  test('★ colisión sobrevenida: se revalida el UNIQUE dentro de la transacción', async () => {
+    // Entre el dry-run y el apply otra ingesta insertó esa hora. Sin revalidar,
+    // el UPDATE chocaría con el índice y voltearía el lote entero.
+    mockQuery.mockImplementation((sql) =>
+      /SELECT id FROM attendance_logs/i.test(String(sql))
+        ? Promise.resolve([[{ id: 99 }]])
+        : Promise.resolve([[], { affectedRows: 1 }]));
+
+    await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
+
+    expect(mockQuery.mock.calls.filter(c => /UPDATE/i.test(String(c[0])))).toHaveLength(0);
+    expect(console.log.mock.calls.flat().join('\n')).toMatch(/rechazados\s+1/);
+  });
+
+  test('★ un duplicado en carrera se aísla por fila, no tumba el lote', async () => {
+    const rollback = jest.fn(async () => {});
+    mockTransaction.mockResolvedValue({ commit: async () => {}, rollback });
+    mockQuery.mockImplementation((sql) =>
+      /SELECT id FROM attendance_logs/i.test(String(sql))
+        ? Promise.resolve([[]])
+        : Promise.reject(new Error("Duplicate entry for key 'uk_emp_ts_dev'")));
+
+    await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
+
+    expect(rollback).not.toHaveBeenCalled();
+    expect(console.log.mock.calls.flat().join('\n')).toMatch(/rechazados\s+1/);
   });
 
   test('★ manifest desactualizado: el registro cambió y no se pisa', async () => {
     // affectedRows 0 = el guard no encontró la fila con el old_timestamp
     // esperado, así que alguien la modificó después del dry-run.
-    mockQuery.mockResolvedValue([[], { affectedRows: 0 }]);
+    okQuery(0);
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
 
     const salida = console.log.mock.calls.flat().join('\n');
@@ -201,7 +250,7 @@ describe('apply', () => {
   test('★ idempotencia: reaplicar el mismo manifest no vuelve a escribir', async () => {
     // Tras la primera pasada el timestamp ya es el propuesto, así que el
     // guard (que exige el old_timestamp) no matchea y devuelve 0 filas.
-    mockQuery.mockResolvedValue([[], { affectedRows: 0 }]);
+    okQuery(0);
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
 
     const salida = console.log.mock.calls.flat().join('\n');
@@ -209,7 +258,7 @@ describe('apply', () => {
   });
 
   test('no recalcula resúmenes automáticamente', async () => {
-    mockQuery.mockResolvedValue([[], { affectedRows: 1 }]);
+    okQuery();
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
 
     const sqls = mockQuery.mock.calls.map(c => String(c[0]));
