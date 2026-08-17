@@ -34,8 +34,32 @@ registros presentes en ambos lados) y **no se toca**.
 |---|---|
 | `source = 'device'` | `zkteco_direct`, `att2000`, `push`, `manual`, cualquier otro |
 
-El origen es parametrizable (`--source`) pero el default es `device` y no hay
-motivo demostrado para cambiarlo.
+El bloqueo es de tres capas, no una convención:
+
+1. `--apply` con cualquier `--source` distinto de `device` **falla**.
+2. Un `--source` distinto en dry-run exige `--diagnostic`, y ese manifest queda
+   marcado `aplicable: false` — el `--apply` lo rechaza.
+3. Al aplicar se valida el origen **fila por fila**, por si un archivo mezcla
+   orígenes.
+
+---
+
+## Paso 0 — Entorno
+
+El script carga **`api/.env` con `override: true`** antes de abrir cualquier
+conexión. Importa: en producción el shell tiene un `DB_PASSWORD` distinto al del
+archivo, y sin `override` gana el del shell y la conexión falla con un error de
+autenticación desconcertante.
+
+```bash
+cd api
+node scripts/historical-attendance-repair.js --help     # usa api/.env
+node scripts/historical-attendance-repair.js --env /ruta/otro.env ...
+node scripts/historical-attendance-repair.js --no-env ...   # sólo el shell
+```
+
+El script informa **qué archivo cargó** y **qué variables están definidas, por
+nombre**. Nunca imprime valores: su salida termina pegada en tickets.
 
 ---
 
@@ -44,11 +68,15 @@ motivo demostrado para cambiarlo.
 No escribe absolutamente nada en `attendance_logs`.
 
 ```bash
-cd api
 node scripts/historical-attendance-repair.js \
      --from 2024-01-01 --to 2026-07-31 \
      --out ./reparacion-2026-08
 ```
+
+`--from` y `--to` son **inclusivos**: el rango es `[from 00:00:00,
+díaSiguiente(to) 00:00:00)`, así que un marcaje a las `23:59:59` del último día
+entra. La versión anterior usaba `< 'to 23:59:59'` y excluía exactamente ese
+segundo.
 
 Conviene empezar acotado, con un empleado del que ya haya evidencia:
 
@@ -149,6 +177,30 @@ Garantías del modo `--apply`:
   lote completo y aborta.
 - **No borra registros** en ningún caso.
 - **No recalcula resúmenes.**
+
+### Por qué un manifest editado a mano no sirve
+
+Promover una fila de `AMBIGUOUS` a `MATCH_240` en el archivo **no alcanza** para
+que se escriba. Hay tres barreras, y la tercera es la que importa:
+
+1. **Versión del algoritmo.** El manifest lleva `repair_algorithm_version`; el
+   apply rechaza cualquier otra. La regla de clasificación cambió durante el
+   desarrollo, así que un manifest viejo propondría correcciones que el criterio
+   vigente no aprueba.
+2. **Huellas.** Cada fila lleva un `digest` sobre sus campos decisivos, y el
+   manifest una huella global. Editar una fila, agregarla o borrarla las
+   invalida. Esto ataja el **error humano**: quien conozca el algoritmo puede
+   recalcularlas, no es una firma.
+3. **Revalidación contra ATT2000.** El apply **no cree el `status` del
+   archivo**: vuelve a clasificar cada fila contra la fuente de verdad con el
+   algoritmo vigente y exige el mismo veredicto y la misma hora propuesta. Una
+   fila ambigua sigue siendo ambigua por más que el archivo diga otra cosa.
+
+Como consecuencia, **el apply también necesita ATT2000**. Si no responde,
+aborta sin escribir.
+
+> No existe una vía de promoción manual de ambiguos. Resolverlos es una decisión
+> humana que, por ahora, no tiene camino automatizado — y eso es deliberado.
 
 ---
 

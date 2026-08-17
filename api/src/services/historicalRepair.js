@@ -26,8 +26,37 @@
  * (scripts/historical-attendance-repair.js) aporta la E/S.
  */
 
+const crypto = require('crypto');
+
 /** Desplazamientos candidatos, en minutos. */
 const SHIFTS = [180, 240];
+
+/**
+ * Versión del ALGORITMO de clasificación.
+ *
+ * Se sube cada vez que cambia el criterio con el que se decide qué corregir.
+ * El apply rechaza manifests de otra versión.
+ *
+ * Historia:
+ *   1 — versión inicial: el shift 0 tenía prioridad y el CHECKTYPE desempataba.
+ *   2 — vigente: se corrige sólo si EXACTAMENTE UNO de los desplazamientos
+ *       coincide; el CHECKTYPE no desempata. El criterio 1 podía dejar filas
+ *       corruptas en silencio y elegir mal el desplazamiento, así que un
+ *       manifest generado con él NO debe poder aplicarse.
+ */
+const REPAIR_ALGORITHM_VERSION = 2;
+
+/** Versión del FORMATO del archivo de manifest. */
+const MANIFEST_VERSION = 1;
+
+/**
+ * Único origen autorizado a escribir.
+ *
+ * La reparación se autorizó sólo para el flujo histórico `device`.
+ * `zkteco_direct` guarda bien y el resto no fue analizado, así que el apply
+ * rechaza cualquier otro origen tanto a nivel de parámetro como fila por fila.
+ */
+const APPLICABLE_SOURCE = 'device';
 
 /** Estados posibles de cada fila del manifest. */
 const STATUS = {
@@ -82,6 +111,18 @@ function addMinutesWall(wall, minutes) {
   const d = new Date(t);
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`
     + ` ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
+}
+
+/**
+ * Día siguiente de una fecha civil "YYYY-MM-DD".
+ *
+ * Sirve para armar el intervalo semiabierto [desde, díaSiguiente(hasta)), que
+ * es la única forma de que `--to` sea realmente inclusivo: un `< 'to 23:59:59'`
+ * excluye exactamente los marcajes de 23:59:59.
+ */
+function nextDayISO(date) {
+  const wall = addMinutesWall(`${date} 00:00:00`, 1440);
+  return wall ? wall.slice(0, 10) : null;
 }
 
 /** Parte de fecha de una hora de pared. */
@@ -234,15 +275,53 @@ function buildManifest({ logs, candidatesByCode, existingKeys = new Set() }) {
       }
     }
 
+    fila.digest = rowDigest(fila);
     filas.push(fila);
   }
 
   return filas;
 }
 
+/**
+ * Huella de una fila del manifest.
+ *
+ * Cubre los campos que DECIDEN la escritura más la versión del algoritmo. Su
+ * propósito es detectar ediciones del archivo: cambiar a mano un AMBIGUOUS a
+ * MATCH_240 invalida la huella y el apply rechaza la fila.
+ *
+ * NO es una firma criptográfica: quien conozca el algoritmo puede recalcularla.
+ * La defensa real contra un manifest fabricado es la revalidación contra
+ * ATT2000 que hace el apply antes de escribir; esto ataja el error humano.
+ */
+function rowDigest(fila) {
+  const canonico = [
+    REPAIR_ALGORITHM_VERSION,
+    fila.attendance_log_id, fila.employee_id, fila.employee_code,
+    fila.device_id == null ? 0 : fila.device_id,
+    fila.source, fila.type,
+    fila.old_timestamp, fila.proposed_timestamp,
+    fila.delta_minutes, fila.status,
+  ].join('|');
+  return crypto.createHash('sha256').update(canonico).digest('hex').slice(0, 32);
+}
+
+/** Huella del conjunto, para detectar filas agregadas o borradas. */
+function manifestDigest(filas) {
+  const h = crypto.createHash('sha256');
+  h.update(`v${REPAIR_ALGORITHM_VERSION}:${MANIFEST_VERSION}:${filas.length}`);
+  for (const f of filas) h.update(`|${f.digest || rowDigest(f)}`);
+  return h.digest('hex').slice(0, 32);
+}
+
+/** ¿La huella de la fila corresponde a su contenido y al algoritmo vigente? */
+function rowDigestOk(fila) {
+  return Boolean(fila && fila.digest) && fila.digest === rowDigest(fila);
+}
+
 /** ¿Esta fila del manifest habilita escritura? */
 function isApplicable(fila) {
   return APPLICABLE.has(fila.status)
+    && fila.source === APPLICABLE_SOURCE
     && Boolean(fila.proposed_timestamp)
     && fila.proposed_timestamp !== fila.old_timestamp;
 }
@@ -305,6 +384,13 @@ module.exports = {
   SHIFTS,
   STATUS,
   APPLICABLE,
+  APPLICABLE_SOURCE,
+  REPAIR_ALGORITHM_VERSION,
+  MANIFEST_VERSION,
+  nextDayISO,
+  rowDigest,
+  manifestDigest,
+  rowDigestOk,
   toWall,
   addMinutesWall,
   wallDate,
