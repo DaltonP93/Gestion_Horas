@@ -162,6 +162,7 @@ describe('buildManifest', () => {
       proposed_timestamp: '2024-04-29 06:42:29',
       delta_minutes: 240, status: S.MATCH_240, reason: null,
       date_changes: false,
+      digest: expect.any(String),
     });
     // Nada de nombre, documento ni datos personales.
     expect(Object.keys(f)).not.toContain('employee_name');
@@ -277,6 +278,102 @@ describe('recalcTargets', () => {
   });
 });
 
+describe('nextDayISO — el intervalo semiabierto', () => {
+  test('día siguiente, incluidos cruces de mes y año', () => {
+    expect(r.nextDayISO('2024-04-29')).toBe('2024-04-30');
+    expect(r.nextDayISO('2024-04-30')).toBe('2024-05-01');
+    expect(r.nextDayISO('2024-12-31')).toBe('2025-01-01');
+    expect(r.nextDayISO('2024-02-28')).toBe('2024-02-29');   // bisiesto
+    expect(r.nextDayISO('2025-02-28')).toBe('2025-03-01');   // no bisiesto
+  });
+
+  test('fecha inválida devuelve null en vez de un rango silenciosamente roto', () => {
+    expect(r.nextDayISO('no-es-fecha')).toBeNull();
+    expect(r.nextDayISO('')).toBeNull();
+    expect(r.nextDayISO(null)).toBeNull();
+  });
+
+  test('★ rechaza fechas civiles INEXISTENTES en vez de normalizarlas', () => {
+    // Date.UTC normaliza lo que está fuera de rango: 2025-02-29 se convertiría
+    // en el 1 de marzo y `--to 2025-02-29` abarcaría días de más sin avisar.
+    // 2024-13-01 era todavía peor: caía en enero del año siguiente.
+    expect(r.nextDayISO('2025-02-29')).toBeNull();   // 2025 no es bisiesto
+    expect(r.nextDayISO('2024-02-30')).toBeNull();
+    expect(r.nextDayISO('2024-04-31')).toBeNull();
+    expect(r.nextDayISO('2024-13-01')).toBeNull();
+    expect(r.nextDayISO('2024-00-10')).toBeNull();
+
+    // Y sigue aceptando las que sí existen.
+    expect(r.nextDayISO('2024-02-29')).toBe('2024-03-01');   // 2024 sí es bisiesto
+  });
+
+  test('isCivilDate distingue existente de inexistente', () => {
+    expect(r.isCivilDate('2024-02-29')).toBe(true);
+    expect(r.isCivilDate('2025-02-29')).toBe(false);
+    expect(r.isCivilDate('2024-4-5')).toBe(false);      // exige dos dígitos
+    expect(r.isCivilDate('2024-04-05 10:00')).toBe(false);
+  });
+});
+
+describe('versionado y huellas', () => {
+  test('la huella cambia si cambia cualquier campo decisivo', () => {
+    const base = {
+      attendance_log_id: 1, employee_id: 10, employee_code: '3091', device_id: 5,
+      source: 'device', type: 'in', old_timestamp: '2024-04-29 02:42:29',
+      proposed_timestamp: '2024-04-29 06:42:29', delta_minutes: 240, status: S.MATCH_240,
+    };
+    const d = r.rowDigest(base);
+
+    for (const cambio of [
+      { status: S.AMBIGUOUS },
+      { proposed_timestamp: '2024-04-29 05:42:29' },
+      { employee_id: 11 },
+      { device_id: 6 },
+      { source: 'zkteco_direct' },
+      { type: 'out' },
+      { old_timestamp: '2024-04-29 02:42:30' },
+    ]) {
+      expect(r.rowDigest({ ...base, ...cambio })).not.toBe(d);
+    }
+  });
+
+  test('★ promover el estado a mano invalida la huella', () => {
+    const ambigua = {
+      attendance_log_id: 7, employee_id: 10, employee_code: '3091', device_id: 5,
+      source: 'device', type: 'in', old_timestamp: '2024-04-29 02:42:29',
+      proposed_timestamp: null, delta_minutes: null, status: S.AMBIGUOUS,
+    };
+    const conHuella = { ...ambigua, digest: r.rowDigest(ambigua) };
+    expect(r.rowDigestOk(conHuella)).toBe(true);
+
+    const promovida = { ...conHuella, status: S.MATCH_240, proposed_timestamp: '2024-04-29 06:42:29', delta_minutes: 240 };
+    expect(r.rowDigestOk(promovida)).toBe(false);
+  });
+
+  test('una fila sin huella no se considera válida', () => {
+    expect(r.rowDigestOk({ status: S.MATCH_240 })).toBe(false);
+  });
+
+  test('la huella global cambia al agregar o quitar filas', () => {
+    const f1 = { attendance_log_id: 1, employee_id: 10, employee_code: 'a', device_id: 1, source: 'device', type: 'in', old_timestamp: '2024-01-01 00:00:00', proposed_timestamp: '2024-01-01 03:00:00', delta_minutes: 180, status: S.MATCH_180 };
+    const f2 = { ...f1, attendance_log_id: 2 };
+    const uno = r.manifestDigest([{ ...f1, digest: r.rowDigest(f1) }]);
+    const dos = r.manifestDigest([{ ...f1, digest: r.rowDigest(f1) }, { ...f2, digest: r.rowDigest(f2) }]);
+    expect(uno).not.toBe(dos);
+  });
+
+  test('isApplicable exige el origen autorizado', () => {
+    const fila = {
+      status: S.MATCH_240, source: 'device',
+      old_timestamp: '2024-04-29 02:42:29', proposed_timestamp: '2024-04-29 06:42:29',
+    };
+    expect(r.isApplicable(fila)).toBe(true);
+    for (const src of ['zkteco_direct', 'att2000', 'push', 'manual', '', null]) {
+      expect(r.isApplicable({ ...fila, source: src })).toBe(false);
+    }
+  });
+});
+
 describe('CLI — argumentos', () => {
   test('★ el modo por defecto NO aplica', () => {
     expect(parseArgs([]).apply).toBe(false);
@@ -289,6 +386,25 @@ describe('CLI — argumentos', () => {
 
   test('el origen por defecto es device y no se tocan los demás', () => {
     expect(parseArgs([]).source).toBe('device');
+  });
+
+  test('★ --apply rechaza cualquier source distinto de device', () => {
+    for (const src of ['zkteco_direct', 'att2000', 'push', 'manual']) {
+      expect(() => parseArgs(['--apply', '--manifest', 'm.json', '--source', src]))
+        .toThrow(/sólo está autorizado para source='device'/);
+    }
+  });
+
+  test('★ un source distinto exige --diagnostic, y ése no puede aplicar', () => {
+    expect(() => parseArgs(['--source', 'zkteco_direct'])).toThrow(/requiere --diagnostic/);
+    expect(parseArgs(['--source', 'zkteco_direct', '--diagnostic']).source).toBe('zkteco_direct');
+    // Diagnóstico + apply sigue rechazado por el primer chequeo.
+    expect(() => parseArgs(['--source', 'zkteco_direct', '--diagnostic', '--apply']))
+      .toThrow(/sólo está autorizado/);
+  });
+
+  test('--diagnostic con device es inocuo', () => {
+    expect(parseArgs(['--diagnostic']).source).toBe('device');
   });
 
   test('rechaza argumentos desconocidos en vez de ignorarlos', () => {
