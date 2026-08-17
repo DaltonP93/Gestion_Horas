@@ -163,10 +163,26 @@ function tabla(titulo, obj) {
   }
 }
 
-/** Candidatos de ATT2000 por código de empleado. Lanza si la fuente no responde. */
-async function cargarCandidatos(codigos, queryAtt2000) {
+/**
+ * Candidatos de ATT2000 por código de empleado. Lanza si la fuente no responde.
+ *
+ * `ventana` acota CHECKTIME a donde pueden estar los candidatos: +0, +180 y
+ * +240 minutos respecto del rango analizado. Sin acotar, analizar un mes
+ * traía la historia completa de cada empleado — medido en producción: 331.270
+ * CHECKINOUT para 10.849 logs de enero 2025.
+ *
+ * Cuando no hay rango (`ventana` nula) se consulta sin acotar, que es el
+ * comportamiento histórico.
+ */
+async function cargarCandidatos(codigos, queryAtt2000, ventana = null) {
   const porCodigo = new Map();
   let leidos = 0;
+
+  const filtro = [];
+  const params = {};
+  if (ventana && ventana.desde) { filtro.push('CHECKTIME >= @desde'); params.desde = ventana.desde; }
+  if (ventana && ventana.hasta) { filtro.push('CHECKTIME <= @hasta'); params.hasta = ventana.hasta; }
+
   for (const code of codigos) {
     // CONVERT(..., 120) fija el formato 'YYYY-MM-DD HH:mm:ss' del lado del
     // servidor: el driver de SQL Server también devolvería Date.
@@ -174,8 +190,9 @@ async function cargarCandidatos(codigos, queryAtt2000) {
       `SELECT USERID,
               CONVERT(varchar(19), CHECKTIME, 120) AS CHECKTIME,
               CHECKTYPE
-         FROM CHECKINOUT WHERE USERID = @userid`,
-      { userid: code }
+         FROM CHECKINOUT
+        WHERE USERID = @userid${filtro.length ? `\n          AND ${filtro.join('\n          AND ')}` : ''}`,
+      { userid: code, ...params }
     );
     porCodigo.set(String(code), (filas || []).map(r => ({ checktime: r.CHECKTIME, checktype: r.CHECKTYPE })));
     leidos += (filas || []).length;
@@ -214,8 +231,14 @@ async function dryRun(args) {
   }
   if (args.employee) { where.push('e.code = ?'); params.push(args.employee); }
 
+  // Ventana de candidatos y de claves. Nula cuando no hay rango: ahí se
+  // consulta sin acotar, como antes.
+  const ventana = repair.candidateWindow({ from: args.from, to: args.to });
+
   log(`\n▶ Dry-run — source='${args.source}'${args.diagnostic ? ' [DIAGNÓSTICO: no aplicable]' : ''}`);
   log(`  rango: ${args.from || 'inicio'} … ${args.to || 'fin'} (ambos inclusive)`);
+  if (ventana) log(`  ventana de candidatos: ${ventana.desde || '…'} → ${ventana.hasta || '…'}`);
+  else log(`  ventana de candidatos: sin acotar (no se pasó --from/--to)`);
   informarEnv();
 
   // DATE_FORMAT devuelve la hora de pared COMO STRING. Traer la columna cruda
@@ -235,25 +258,36 @@ async function dryRun(args) {
   log(`\n  ${logs.length} registro(s) a analizar`);
   if (!logs.length) { log('  Nada que hacer.'); return; }
 
-  // Claves UNIQUE ya existentes: se traen TODAS las de los empleados
-  // involucrados, no sólo las del rango, porque la hora corregida puede caer
-  // fuera de la ventana analizada.
+  // Claves UNIQUE existentes, acotadas a la VENTANA donde pueden caer las horas
+  // propuestas: una propuesta es la hora vieja + 180 o + 240 minutos, así que
+  // nunca cae fuera de [inicio del rango, fin del rango + 240min].
+  //
+  // Antes se traían TODAS las claves históricas de cada empleado involucrado:
+  // medido en producción, 346.134 claves para analizar 10.849 logs. La ventana
+  // no pierde ninguna colisión posible, porque ninguna propuesta puede caer
+  // fuera de ella.
   const empIds = [...new Set(logs.map(l => l.employee_id))];
+  const filtroClaves = [`employee_id IN (${empIds.map(() => '?').join(',')})`];
+  const paramsClaves = [...empIds];
+  if (ventana && ventana.desde) { filtroClaves.push('timestamp >= ?'); paramsClaves.push(ventana.desde); }
+  if (ventana && ventana.hasta) { filtroClaves.push('timestamp <= ?'); paramsClaves.push(ventana.hasta); }
+
   const [existentes] = await sequelize.query(`
     SELECT employee_id, DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp, device_id
     FROM attendance_logs
-    WHERE employee_id IN (${empIds.map(() => '?').join(',')})
-  `, { replacements: empIds });
+    WHERE ${filtroClaves.join(' AND ')}
+  `, { replacements: paramsClaves });
 
   const existingKeys = new Set(
     existentes.map(r => repair.uniqueKey(r.employee_id, repair.toWall(r.timestamp), r.device_id))
   );
-  log(`  ${existingKeys.size} clave(s) únicas existentes cargadas`);
+  log(`  ${existingKeys.size} clave(s) únicas existentes cargadas`
+    + (ventana ? ` (ventana ${ventana.desde || '…'} → ${ventana.hasta || '…'})` : ' (sin ventana: historia completa)'));
 
   const codigos = [...new Set(logs.map(l => String(l.employee_code)))];
   let candidatesByCode, leidos;
   try {
-    ({ porCodigo: candidatesByCode, leidos } = await cargarCandidatos(codigos, queryAtt2000));
+    ({ porCodigo: candidatesByCode, leidos } = await cargarCandidatos(codigos, queryAtt2000, ventana));
   } catch (err) {
     fallar(`ATT2000 inaccesible: ${err.message}\n`
       + '  Sin la fuente de verdad no se puede proponer ninguna corrección. Se aborta sin escribir nada.');
@@ -385,10 +419,16 @@ async function apply(args) {
   // `status` del archivo. Vuelve a clasificar cada fila contra ATT2000 con el
   // algoritmo vigente y exige el mismo veredicto y la misma hora propuesta.
   // Editar a mano un AMBIGUOUS a MATCH_240 no alcanza para que se escriba.
+  // Ventana derivada de las filas del manifest, no de los parámetros del
+  // dry-run: se calcula sobre las horas viejas —las que se vuelven a
+  // clasificar— más el margen de los desplazamientos.
+  const ventana = repair.candidateWindowForRows(aplicables);
+  if (ventana) log(`  ventana de revalidación: ${ventana.desde} → ${ventana.hasta}`);
+
   let candidatos;
   try {
     ({ porCodigo: candidatos } = await cargarCandidatos(
-      [...new Set(aplicables.map(f => String(f.employee_code)))], queryAtt2000));
+      [...new Set(aplicables.map(f => String(f.employee_code)))], queryAtt2000, ventana));
   } catch (err) {
     fallar(`ATT2000 inaccesible: ${err.message}\n`
       + '  Sin la fuente de verdad no se revalida ninguna propuesta. Se aborta sin escribir nada.');

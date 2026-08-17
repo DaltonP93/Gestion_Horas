@@ -114,6 +114,13 @@ function addMinutesWall(wall, minutes) {
 }
 
 /**
+ * Suma segundos a una hora de pared. Misma aritmética pura que addMinutesWall.
+ */
+function addSecondsWall(wall, seconds) {
+  return addMinutesWall(wall, seconds / 60);
+}
+
+/**
  * Valida una fecha civil "YYYY-MM-DD" y devuelve su instante UTC, o null.
  *
  * La validación es ESTRICTA a propósito. `Date.UTC` normaliza los valores
@@ -149,6 +156,77 @@ function nextDayISO(date) {
   if (t == null) return null;
   const d = new Date(t + 24 * 3600 * 1000);
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+/**
+ * Margen, en minutos, que hay que mirar MÁS ALLÁ del rango de attendance_logs.
+ *
+ * Los candidatos válidos de un registro están en +0, +180 y +240 minutos, así
+ * que para un lote de logs acotado a [desde, hasta) los candidatos posibles
+ * caen en [desde, hasta + 240min]. Ese 240 es el máximo de SHIFTS y no un
+ * número elegido a dedo: si algún día se agregara un desplazamiento mayor, el
+ * margen tiene que crecer con él.
+ */
+const WINDOW_MARGIN_MINUTES = Math.max(...SHIFTS);
+
+/**
+ * Ventana de horas de pared donde pueden caer los candidatos y las horas
+ * propuestas, para un rango de fechas civiles [from, to] ambas inclusive.
+ *
+ * Devuelve límites INCLUSIVOS { desde, hasta }, o null si no hay rango —en ese
+ * caso el llamador consulta sin acotar, que es el comportamiento histórico.
+ *
+ * Sirve para dos consultas distintas y por el mismo motivo:
+ *
+ * - los CHECKINOUT de ATT2000 que hay que traer;
+ * - las claves UNIQUE de attendance_logs con las que se detectan colisiones,
+ *   porque una hora propuesta = hora vieja + 180 o + 240.
+ *
+ * Es deliberadamente un SUPERCONJUNTO de lo estrictamente necesario: se
+ * prefiere traer alguna fila de más antes que perder una coincidencia o una
+ * colisión. Sin acotar, analizar un mes obligaba a cargar la historia completa
+ * de cada empleado involucrado.
+ */
+function candidateWindow({ from, to } = {}) {
+  if (!from && !to) return null;
+  const desde = from ? `${from} 00:00:00` : null;
+  let hasta = null;
+  if (to) {
+    const finExclusivo = nextDayISO(to);
+    if (!finExclusivo) return null;
+    hasta = addMinutesWall(`${finExclusivo} 00:00:00`, WINDOW_MARGIN_MINUTES);
+  }
+  if (from && !isCivilDate(from)) return null;
+  return { desde, hasta };
+}
+
+/**
+ * Ventana derivada de las filas de un manifest, para revalidar en el apply.
+ *
+ * Se calcula sobre las horas VIEJAS —que son las que se vuelven a clasificar—
+ * más el margen de los desplazamientos. Así el apply no necesita reconstruir
+ * los parámetros del dry-run ni volver a leer toda la historia.
+ *
+ * EL SEGUNDO EXTRA DEL LÍMITE SUPERIOR no es paranoia: `CHECKTIME` es un
+ * `datetime` de SQL Server, con precisión de ~3 ms, y la comparación se hace
+ * contra la columna CRUDA mientras que `classify` compara el valor truncado
+ * por `CONVERT(varchar(19), …, 120)`. Un candidato en `06:42:29.003` se
+ * trunca a `06:42:29` —y classify lo acepta— pero `CHECKTIME <= '06:42:29'`
+ * lo excluye.
+ *
+ * Sin ese segundo, una fila cuyo candidato cae exactamente en `vieja + 240`
+ * con milisegundos daba MATCH_240 en el dry-run —cuya ventana tiene holgura,
+ * porque se deriva de límites de día— y NO_MATCH al revalidar en el apply: la
+ * reparación se perdía en silencio y aparecía como un rechazo confuso.
+ */
+function candidateWindowForRows(filas) {
+  const viejas = (filas || []).map(f => f && f.old_timestamp).filter(Boolean).sort();
+  if (!viejas.length) return null;
+  const tope = addMinutesWall(viejas[viejas.length - 1], WINDOW_MARGIN_MINUTES);
+  return {
+    desde: viejas[0],
+    hasta: addSecondsWall(tope, 1),
+  };
 }
 
 /** Parte de fecha de una hora de pared. */
@@ -415,11 +493,15 @@ module.exports = {
   MANIFEST_VERSION,
   nextDayISO,
   isCivilDate,
+  WINDOW_MARGIN_MINUTES,
+  candidateWindow,
+  candidateWindowForRows,
   rowDigest,
   manifestDigest,
   rowDigestOk,
   toWall,
   addMinutesWall,
+  addSecondsWall,
   wallDate,
   uniqueKey,
   normalizeCheckType,
