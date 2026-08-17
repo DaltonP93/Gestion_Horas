@@ -114,6 +114,13 @@ function addMinutesWall(wall, minutes) {
 }
 
 /**
+ * Suma segundos a una hora de pared. Misma aritmética pura que addMinutesWall.
+ */
+function addSecondsWall(wall, seconds) {
+  return addMinutesWall(wall, seconds / 60);
+}
+
+/**
  * Valida una fecha civil "YYYY-MM-DD" y devuelve su instante UTC, o null.
  *
  * La validación es ESTRICTA a propósito. `Date.UTC` normaliza los valores
@@ -199,13 +206,26 @@ function candidateWindow({ from, to } = {}) {
  * Se calcula sobre las horas VIEJAS —que son las que se vuelven a clasificar—
  * más el margen de los desplazamientos. Así el apply no necesita reconstruir
  * los parámetros del dry-run ni volver a leer toda la historia.
+ *
+ * EL SEGUNDO EXTRA DEL LÍMITE SUPERIOR no es paranoia: `CHECKTIME` es un
+ * `datetime` de SQL Server, con precisión de ~3 ms, y la comparación se hace
+ * contra la columna CRUDA mientras que `classify` compara el valor truncado
+ * por `CONVERT(varchar(19), …, 120)`. Un candidato en `06:42:29.003` se
+ * trunca a `06:42:29` —y classify lo acepta— pero `CHECKTIME <= '06:42:29'`
+ * lo excluye.
+ *
+ * Sin ese segundo, una fila cuyo candidato cae exactamente en `vieja + 240`
+ * con milisegundos daba MATCH_240 en el dry-run —cuya ventana tiene holgura,
+ * porque se deriva de límites de día— y NO_MATCH al revalidar en el apply: la
+ * reparación se perdía en silencio y aparecía como un rechazo confuso.
  */
 function candidateWindowForRows(filas) {
   const viejas = (filas || []).map(f => f && f.old_timestamp).filter(Boolean).sort();
   if (!viejas.length) return null;
+  const tope = addMinutesWall(viejas[viejas.length - 1], WINDOW_MARGIN_MINUTES);
   return {
     desde: viejas[0],
-    hasta: addMinutesWall(viejas[viejas.length - 1], WINDOW_MARGIN_MINUTES),
+    hasta: addSecondsWall(tope, 1),
   };
 }
 
@@ -481,6 +501,7 @@ module.exports = {
   rowDigestOk,
   toWall,
   addMinutesWall,
+  addSecondsWall,
   wallDate,
   uniqueKey,
   normalizeCheckType,

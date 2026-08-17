@@ -336,6 +336,43 @@ describe('★ el apply revalida con la ventana derivada de las filas', () => {
     status: 'MATCH_180', reason: null, date_changes: false,
   };
 
+  test('★ el límite superior cubre el segundo entero, por los milisegundos de CHECKTIME', async () => {
+    // CHECKTIME es un datetime de SQL Server (~3 ms de precisión) y el filtro
+    // compara la columna CRUDA, mientras classify compara el valor truncado
+    // por CONVERT(varchar(19),…,120). Un candidato en 06:42:29.003 se trunca a
+    // 06:42:29 y classify lo acepta, pero `CHECKTIME <= '06:42:29'` lo excluye.
+    //
+    // Sin el segundo extra, esta fila daba MATCH_240 en el dry-run —cuya
+    // ventana tiene holgura de día— y NO_MATCH al revalidar en el apply: la
+    // reparación se perdía en silencio.
+    const conFraccion = {
+      ...FILA, attendance_log_id: 5,
+      old_timestamp: '2024-04-29 02:42:29', proposed_timestamp: '2024-04-29 06:42:29',
+      delta_minutes: 240, status: 'MATCH_240',
+    };
+
+    // El mock filtra con la hora REAL, con milisegundos, y devuelve el valor
+    // truncado como haría CONVERT.
+    mockQuery.mockImplementation((sql) =>
+      /SELECT id FROM attendance_logs/i.test(String(sql))
+        ? Promise.resolve([[]])
+        : Promise.resolve([[], { affectedRows: 1 }]));
+    mockAtt.mockImplementation((sql, params) => {
+      const real = '2024-04-29 06:42:29.003';
+      const dentro = (params.desde == null || real >= params.desde)
+                  && (params.hasta == null || real <= params.hasta);
+      return Promise.resolve(dentro
+        ? [{ USERID: '3091', CHECKTIME: real.slice(0, 19), CHECKTYPE: 'I' }]
+        : []);
+    });
+
+    await apply({ ...ARGS, apply: true, manifest: manifestCon([conFraccion]) });
+
+    expect(attParams().hasta).toBe('2024-04-29 06:42:30');
+    // Y la reparación se aplica, en vez de perderse como NO_MATCH.
+    expect(mockQuery.mock.calls.filter(c => /UPDATE/i.test(String(c[0])))).toHaveLength(1);
+  });
+
   test('la ventana sale de las horas viejas más el margen', async () => {
     montar({
       logs: [],
@@ -347,7 +384,9 @@ describe('★ el apply revalida con la ventana derivada de las filas', () => {
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA, segunda]) });
 
     expect(attParams().desde).toBe('2025-01-02 03:50:41');      // la más vieja
-    expect(attParams().hasta).toBe('2025-01-20 12:00:00');      // la más nueva + 240
+    // La más nueva + 240 min + 1 s: el segundo extra cubre los milisegundos
+    // de CHECKTIME.
+    expect(attParams().hasta).toBe('2025-01-20 12:00:01');
   });
 
   test('la revalidación sigue encontrando el candidato con la ventana puesta', async () => {
@@ -374,7 +413,7 @@ describe('★ el apply revalida con la ventana derivada de las filas', () => {
     });
     await apply({ ...ARGS, apply: true, manifest: manifestCon([cruza]) });
 
-    expect(attParams().hasta).toBe('2025-02-01 02:30:00');
+    expect(attParams().hasta).toBe('2025-02-01 02:30:01');
     expect(mockQuery.mock.calls.filter(c => /UPDATE/i.test(String(c[0])))).toHaveLength(1);
   });
 });

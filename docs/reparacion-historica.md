@@ -110,7 +110,12 @@ MySQL y 331.270 `CHECKINOUT`, ~378 MiB de RSS y 44 s. El histórico total son
 400.031 registros de 542 empleados: sin ventana no escala.
 
 El `--apply` deriva su propia ventana de las horas viejas del manifest, así que
-no necesita que le repitas el rango.
+no necesita que le repitas el rango. Su límite superior lleva **un segundo
+extra**: `CHECKTIME` es un `datetime` de SQL Server con precisión de ~3 ms, y el
+filtro compara la columna cruda mientras la clasificación compara el valor
+truncado a segundos por `CONVERT`. Sin ese segundo, un candidato en
+`06:42:29.003` quedaba fuera del filtro aunque la clasificación lo aceptaba, y
+la reparación se perdía en silencio.
 
 Conviene empezar acotado, con un empleado del que ya haya evidencia:
 
