@@ -128,15 +128,29 @@ function fallar(msg) {
   process.exitCode = 1;
 }
 
+// Nombres que LEE de verdad cada conector. Los de ATT2000 son `ATT_*`, no
+// `ATT2000_*`: config/att2000.js lee ATT_HOST/PORT/USER/PASSWORD/DATABASE.
+// Listar los nombres equivocados hacía que un entorno bien configurado
+// apareciera como "sin variables de ATT", que es justo lo contrario de lo que
+// este diagnóstico tiene que decir.
+const VARS_DB  = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD'];
+const VARS_ATT = ['ATT_HOST', 'ATT_PORT', 'ATT_USER', 'ATT_PASSWORD', 'ATT_DATABASE'];
+
 function informarEnv() {
   // Sólo NOMBRES de variables, nunca valores: este script se corre en
   // producción y su salida termina pegada en tickets.
-  const presentes = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD',
-                     'ATT2000_HOST', 'ATT2000_PORT', 'ATT2000_USER', 'ATT2000_PASSWORD']
-    .filter(k => process.env[k] != null && process.env[k] !== '');
+  const definidas = ks => ks.filter(k => process.env[k] != null && process.env[k] !== '');
   log(`  entorno: ${ENV.modo === 'archivo' ? `${ENV.archivo} (override)` : 'shell'}`);
   if (ENV.faltante) log(`           ⚠ no existe ${ENV.archivo}; se usa el entorno del shell`);
-  log(`  variables definidas: ${presentes.join(', ') || '(ninguna)'}`);
+  log(`  MySQL   definidas: ${definidas(VARS_DB).join(', ') || '(ninguna)'}`);
+  log(`  ATT2000 definidas: ${definidas(VARS_ATT).join(', ') || '(ninguna)'}`);
+
+  // Trampa real: CLAUDE.md documenta ATT2000_*, pero el conector lee ATT_*.
+  // Quien siga la documentación configura variables que nadie mira.
+  const conPrefijoViejo = definidas(VARS_ATT.map(k => k.replace(/^ATT_/, 'ATT2000_')));
+  if (conPrefijoViejo.length && !definidas(VARS_ATT).length) {
+    log(`           ⚠ hay ${conPrefijoViejo.join(', ')} definidas, pero el conector lee ATT_*`);
+  }
 }
 
 function tabla(titulo, obj) {
@@ -184,11 +198,19 @@ async function dryRun(args) {
   // 23:59:59, que en un reloj biométrico existen.
   const where = ['al.source = ?'];
   const params = [args.source];
-  if (args.from) { where.push('al.timestamp >= ?'); params.push(`${args.from} 00:00:00`); }
+  if (args.from) {
+    // Validación estricta: una fecha inexistente como 2025-02-29 se
+    // normalizaría en silencio y correría el rango.
+    if (!repair.isCivilDate(args.from)) { fallar(`--from no es una fecha válida: ${args.from}`); return; }
+    where.push('al.timestamp >= ?'); params.push(`${args.from} 00:00:00`);
+  }
   if (args.to) {
     const finExclusivo = repair.nextDayISO(args.to);
-    if (!finExclusivo) { fallar(`--to inválido: ${args.to}`); return; }
+    if (!finExclusivo) { fallar(`--to no es una fecha válida: ${args.to}`); return; }
     where.push('al.timestamp < ?'); params.push(`${finExclusivo} 00:00:00`);
+  }
+  if (args.from && args.to && args.from > args.to) {
+    fallar(`el rango está invertido: --from ${args.from} es posterior a --to ${args.to}`); return;
   }
   if (args.employee) { where.push('e.code = ?'); params.push(args.employee); }
 
@@ -332,8 +354,17 @@ async function apply(args) {
   }
 
   // ── Integridad del archivo ──
-  const digestEsperado = repair.manifestDigest(manifest.filas);
-  if (manifest.digest && manifest.digest !== digestEsperado) {
+  // La huella global es OBLIGATORIA. Tratarla como opcional dejaba la puerta
+  // abierta a borrarla y saltear la verificación por completo: con eso se
+  // podían agregar, quitar o duplicar filas que ya tuvieran una huella
+  // individual válida —copiadas de otro manifest, por ejemplo— sin que el
+  // cambio de estructura se detectara.
+  if (!manifest.digest) {
+    fallar('El manifest no tiene huella global (`digest`).\n'
+      + '  Sin ella no se puede verificar que no se agregaron ni quitaron filas. Regeneralo.');
+    return;
+  }
+  if (manifest.digest !== repair.manifestDigest(manifest.filas)) {
     fallar('La huella del manifest no coincide con su contenido: el archivo fue modificado.\n'
       + '  Regeneralo con un dry-run en vez de editarlo a mano.');
     return;

@@ -290,6 +290,28 @@ describe('nextDayISO — el intervalo semiabierto', () => {
   test('fecha inválida devuelve null en vez de un rango silenciosamente roto', () => {
     expect(r.nextDayISO('no-es-fecha')).toBeNull();
     expect(r.nextDayISO('')).toBeNull();
+    expect(r.nextDayISO(null)).toBeNull();
+  });
+
+  test('★ rechaza fechas civiles INEXISTENTES en vez de normalizarlas', () => {
+    // Date.UTC normaliza lo que está fuera de rango: 2025-02-29 se convertiría
+    // en el 1 de marzo y `--to 2025-02-29` abarcaría días de más sin avisar.
+    // 2024-13-01 era todavía peor: caía en enero del año siguiente.
+    expect(r.nextDayISO('2025-02-29')).toBeNull();   // 2025 no es bisiesto
+    expect(r.nextDayISO('2024-02-30')).toBeNull();
+    expect(r.nextDayISO('2024-04-31')).toBeNull();
+    expect(r.nextDayISO('2024-13-01')).toBeNull();
+    expect(r.nextDayISO('2024-00-10')).toBeNull();
+
+    // Y sigue aceptando las que sí existen.
+    expect(r.nextDayISO('2024-02-29')).toBe('2024-03-01');   // 2024 sí es bisiesto
+  });
+
+  test('isCivilDate distingue existente de inexistente', () => {
+    expect(r.isCivilDate('2024-02-29')).toBe(true);
+    expect(r.isCivilDate('2025-02-29')).toBe(false);
+    expect(r.isCivilDate('2024-4-5')).toBe(false);      // exige dos dígitos
+    expect(r.isCivilDate('2024-04-05 10:00')).toBe(false);
   });
 });
 

@@ -114,15 +114,41 @@ function addMinutesWall(wall, minutes) {
 }
 
 /**
- * Día siguiente de una fecha civil "YYYY-MM-DD".
+ * Valida una fecha civil "YYYY-MM-DD" y devuelve su instante UTC, o null.
+ *
+ * La validación es ESTRICTA a propósito. `Date.UTC` normaliza los valores
+ * fuera de rango en vez de rechazarlos: `2025-02-29` —que no existe— se
+ * convierte en el 1 de marzo, y `2024-13-01` en enero del año siguiente. Si
+ * eso llegara a `--to`, el rango "inclusive" abarcaría días de más sin avisar.
+ * Por eso se comprueba que la fecha reconstruida coincida con la escrita.
+ */
+function parseCivilDate(date) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date == null ? '' : date).trim());
+  if (!m) return null;
+  const Y = +m[1], M = +m[2], D = +m[3];
+  const t = Date.UTC(Y, M - 1, D);
+  const d = new Date(t);
+  if (d.getUTCFullYear() !== Y || d.getUTCMonth() !== M - 1 || d.getUTCDate() !== D) return null;
+  return t;
+}
+
+/** ¿Es una fecha civil existente? */
+function isCivilDate(date) {
+  return parseCivilDate(date) != null;
+}
+
+/**
+ * Día siguiente de una fecha civil "YYYY-MM-DD". null si la fecha no existe.
  *
  * Sirve para armar el intervalo semiabierto [desde, díaSiguiente(hasta)), que
  * es la única forma de que `--to` sea realmente inclusivo: un `< 'to 23:59:59'`
  * excluye exactamente los marcajes de 23:59:59.
  */
 function nextDayISO(date) {
-  const wall = addMinutesWall(`${date} 00:00:00`, 1440);
-  return wall ? wall.slice(0, 10) : null;
+  const t = parseCivilDate(date);
+  if (t == null) return null;
+  const d = new Date(t + 24 * 3600 * 1000);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 }
 
 /** Parte de fecha de una hora de pared. */
@@ -388,6 +414,7 @@ module.exports = {
   REPAIR_ALGORITHM_VERSION,
   MANIFEST_VERSION,
   nextDayISO,
+  isCivilDate,
   rowDigest,
   manifestDigest,
   rowDigestOk,

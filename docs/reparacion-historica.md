@@ -61,6 +61,12 @@ node scripts/historical-attendance-repair.js --no-env ...   # sólo el shell
 El script informa **qué archivo cargó** y **qué variables están definidas, por
 nombre**. Nunca imprime valores: su salida termina pegada en tickets.
 
+> **Ojo con los nombres de ATT2000.** El conector (`api/src/config/att2000.js`)
+> lee `ATT_HOST`, `ATT_PORT`, `ATT_USER`, `ATT_PASSWORD` y `ATT_DATABASE` — **no**
+> `ATT2000_*`, que es lo que documenta `CLAUDE.md`. Quien siga la documentación
+> configura variables que el conector nunca mira. El script detecta ese caso y
+> lo avisa explícitamente.
+
 ---
 
 ## Paso 1 — Dry-run
@@ -77,6 +83,10 @@ node scripts/historical-attendance-repair.js \
 díaSiguiente(to) 00:00:00)`, así que un marcaje a las `23:59:59` del último día
 entra. La versión anterior usaba `< 'to 23:59:59'` y excluía exactamente ese
 segundo.
+
+Las fechas se validan **estrictamente**: una que no exista —`2025-02-29`,
+`2024-04-31`, `2024-13-01`— aborta. Sin eso, `Date.UTC` las normalizaba en
+silencio y el rango "inclusive" abarcaba días de más.
 
 Conviene empezar acotado, con un empleado del que ya haya evidencia:
 
@@ -188,7 +198,8 @@ que se escriba. Hay tres barreras, y la tercera es la que importa:
    desarrollo, así que un manifest viejo propondría correcciones que el criterio
    vigente no aprueba.
 2. **Huellas.** Cada fila lleva un `digest` sobre sus campos decisivos, y el
-   manifest una huella global. Editar una fila, agregarla o borrarla las
+   manifest una huella global **obligatoria** — borrarla no saltea la
+   verificación, la hace fallar. Editar, agregar, duplicar o quitar una fila las
    invalida. Esto ataja el **error humano**: quien conozca el algoritmo puede
    recalcularlas, no es una firma.
 3. **Revalidación contra ATT2000.** El apply **no cree el `status` del

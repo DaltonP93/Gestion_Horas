@@ -191,6 +191,27 @@ describe('--to inclusivo', () => {
     expect(process.exitCode).toBe(1);
     expect(fs.existsSync(path.join(dir, 'manifest.json'))).toBe(false);
   });
+
+  test('★ una fecha inexistente aborta en vez de correr el rango', async () => {
+    for (const fecha of ['2025-02-29', '2024-13-01', '2024-04-31']) {
+      process.exitCode = 0;
+      logsDe([]);
+      await dryRun({ ...ARGS, out: dir, to: fecha });
+      expect(process.exitCode).toBe(1);
+    }
+  });
+
+  test('--from inexistente también aborta', async () => {
+    logsDe([]);
+    await dryRun({ ...ARGS, out: dir, from: '2025-02-29', to: '2025-03-31' });
+    expect(process.exitCode).toBe(1);
+  });
+
+  test('un rango invertido aborta', async () => {
+    logsDe([]);
+    await dryRun({ ...ARGS, out: dir, from: '2025-03-01', to: '2025-01-01' });
+    expect(process.exitCode).toBe(1);
+  });
 });
 
 describe('carga de entorno', () => {
@@ -220,13 +241,42 @@ describe('carga de entorno', () => {
 
   test('la salida no imprime valores de variables sensibles', async () => {
     process.env.DB_PASSWORD = 'secreto-no-imprimible';
+    process.env.ATT_PASSWORD = 'otro-secreto';
     mockQuery.mockResolvedValue([[]]);
     await dryRun({ ...ARGS, out: dir });
 
     const salida = console.log.mock.calls.flat().join('\n');
     expect(salida).not.toContain('secreto-no-imprimible');
-    expect(salida).toMatch(/DB_PASSWORD/);   // sí se informa que está definida
+    expect(salida).not.toContain('otro-secreto');
+    expect(salida).toMatch(/DB_PASSWORD/);    // sí se informa que están definidas
+    expect(salida).toMatch(/ATT_PASSWORD/);
     delete process.env.DB_PASSWORD;
+    delete process.env.ATT_PASSWORD;
+  });
+
+  test('★ informa las variables que el conector LEE de verdad (ATT_*, no ATT2000_*)', async () => {
+    process.env.ATT_HOST = 'h';
+    process.env.ATT_DATABASE = 'att2000';
+    mockQuery.mockResolvedValue([[]]);
+    await dryRun({ ...ARGS, out: dir });
+
+    const salida = console.log.mock.calls.flat().join('\n');
+    expect(salida).toMatch(/ATT_HOST/);
+    expect(salida).toMatch(/ATT_DATABASE/);
+    delete process.env.ATT_HOST; delete process.env.ATT_DATABASE;
+  });
+
+  test('★ avisa si están las ATT2000_* que documenta CLAUDE.md pero no las ATT_* que se leen', async () => {
+    // Trampa real: quien sigue la documentación configura variables que el
+    // conector nunca mira, y antes el diagnóstico decía "(ninguna)".
+    process.env.ATT2000_HOST = 'h';
+    process.env.ATT2000_USER = 'u';
+    mockQuery.mockResolvedValue([[]]);
+    await dryRun({ ...ARGS, out: dir });
+
+    const salida = console.log.mock.calls.flat().join('\n');
+    expect(salida).toMatch(/el conector lee ATT_\*/);
+    delete process.env.ATT2000_HOST; delete process.env.ATT2000_USER;
   });
 });
 
@@ -472,6 +522,30 @@ describe('apply', () => {
     await apply({ ...ARGS, apply: true, manifest: manifestCon([FILA_OK]) });
 
     expect(mockQuery.mock.calls.filter(c => /UPDATE/i.test(String(c[0])))).toHaveLength(0);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test('★ un manifest SIN huella global se rechaza', async () => {
+    // Tratarla como opcional dejaba borrarla para saltear la verificación:
+    // con eso se podían pegar filas de otro manifest —con huella individual
+    // válida— sin que el cambio de estructura se detectara.
+    okQuery();
+    const f = manifestCon([FILA_OK], { digest: undefined });
+    await apply({ ...ARGS, apply: true, manifest: f });
+
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  test('★ una fila duplicada dentro del manifest rompe la huella global', async () => {
+    okQuery();
+    const base = manifestCon([FILA_OK]);
+    const m = JSON.parse(fs.readFileSync(base, 'utf8'));
+    m.filas.push({ ...m.filas[0] });          // duplicado exacto, huella válida
+    fs.writeFileSync(base, JSON.stringify(m));
+
+    await apply({ ...ARGS, apply: true, manifest: base });
+    expect(mockTransaction).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
