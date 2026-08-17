@@ -88,6 +88,30 @@ Las fechas se validan **estrictamente**: una que no exista —`2025-02-29`,
 `2024-04-31`, `2024-13-01`— aborta. Sin eso, `Date.UTC` las normalizaba en
 silencio y el rango "inclusive" abarcaba días de más.
 
+### Acotá siempre el rango
+
+Con `--from`/`--to` las consultas se limitan a la **ventana de candidatos**:
+
+```
+[from 00:00:00 , díaSiguiente(to) 04:00:00]
+```
+
+Esas 4 horas de margen son el mayor desplazamiento posible (+240 min). Un
+marcaje a las `23:59:59` del último día tiene su candidato a las `03:59:59` del
+siguiente, y la ventana lo cubre.
+
+La misma ventana acota las claves `UNIQUE` que se traen para detectar
+colisiones: una hora propuesta es la vieja + 180 o + 240, así que nunca cae
+fuera de ahí.
+
+**Sin `--from`/`--to` se consulta la historia completa.** Medido en producción,
+analizar los 10.849 registros de enero 2025 sin acotar cargaba 346.134 claves de
+MySQL y 331.270 `CHECKINOUT`, ~378 MiB de RSS y 44 s. El histórico total son
+400.031 registros de 542 empleados: sin ventana no escala.
+
+El `--apply` deriva su propia ventana de las horas viejas del manifest, así que
+no necesita que le repitas el rango.
+
 Conviene empezar acotado, con un empleado del que ya haya evidencia:
 
 ```bash

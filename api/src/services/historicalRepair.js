@@ -151,6 +151,64 @@ function nextDayISO(date) {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
 }
 
+/**
+ * Margen, en minutos, que hay que mirar MÁS ALLÁ del rango de attendance_logs.
+ *
+ * Los candidatos válidos de un registro están en +0, +180 y +240 minutos, así
+ * que para un lote de logs acotado a [desde, hasta) los candidatos posibles
+ * caen en [desde, hasta + 240min]. Ese 240 es el máximo de SHIFTS y no un
+ * número elegido a dedo: si algún día se agregara un desplazamiento mayor, el
+ * margen tiene que crecer con él.
+ */
+const WINDOW_MARGIN_MINUTES = Math.max(...SHIFTS);
+
+/**
+ * Ventana de horas de pared donde pueden caer los candidatos y las horas
+ * propuestas, para un rango de fechas civiles [from, to] ambas inclusive.
+ *
+ * Devuelve límites INCLUSIVOS { desde, hasta }, o null si no hay rango —en ese
+ * caso el llamador consulta sin acotar, que es el comportamiento histórico.
+ *
+ * Sirve para dos consultas distintas y por el mismo motivo:
+ *
+ * - los CHECKINOUT de ATT2000 que hay que traer;
+ * - las claves UNIQUE de attendance_logs con las que se detectan colisiones,
+ *   porque una hora propuesta = hora vieja + 180 o + 240.
+ *
+ * Es deliberadamente un SUPERCONJUNTO de lo estrictamente necesario: se
+ * prefiere traer alguna fila de más antes que perder una coincidencia o una
+ * colisión. Sin acotar, analizar un mes obligaba a cargar la historia completa
+ * de cada empleado involucrado.
+ */
+function candidateWindow({ from, to } = {}) {
+  if (!from && !to) return null;
+  const desde = from ? `${from} 00:00:00` : null;
+  let hasta = null;
+  if (to) {
+    const finExclusivo = nextDayISO(to);
+    if (!finExclusivo) return null;
+    hasta = addMinutesWall(`${finExclusivo} 00:00:00`, WINDOW_MARGIN_MINUTES);
+  }
+  if (from && !isCivilDate(from)) return null;
+  return { desde, hasta };
+}
+
+/**
+ * Ventana derivada de las filas de un manifest, para revalidar en el apply.
+ *
+ * Se calcula sobre las horas VIEJAS —que son las que se vuelven a clasificar—
+ * más el margen de los desplazamientos. Así el apply no necesita reconstruir
+ * los parámetros del dry-run ni volver a leer toda la historia.
+ */
+function candidateWindowForRows(filas) {
+  const viejas = (filas || []).map(f => f && f.old_timestamp).filter(Boolean).sort();
+  if (!viejas.length) return null;
+  return {
+    desde: viejas[0],
+    hasta: addMinutesWall(viejas[viejas.length - 1], WINDOW_MARGIN_MINUTES),
+  };
+}
+
 /** Parte de fecha de una hora de pared. */
 function wallDate(wall) {
   const m = WALL_RE.exec(String(wall || ''));
@@ -415,6 +473,9 @@ module.exports = {
   MANIFEST_VERSION,
   nextDayISO,
   isCivilDate,
+  WINDOW_MARGIN_MINUTES,
+  candidateWindow,
+  candidateWindowForRows,
   rowDigest,
   manifestDigest,
   rowDigestOk,
