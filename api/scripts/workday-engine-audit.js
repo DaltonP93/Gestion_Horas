@@ -61,7 +61,7 @@ const legacy = require('../src/services/legacyWorkday');
 function parseArgs(argv) {
   const args = {
     from: null, to: null, employee: null, dept: null,
-    out: null, limit: 200, chunk: 50, help: false,
+    out: null, limit: 200, chunk: 50, dailySummary: false, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -73,6 +73,7 @@ function parseArgs(argv) {
     else if (a === '--out') args.out = next();
     else if (a === '--limit') args.limit = Number(next());
     else if (a === '--chunk') args.chunk = Number(next());
+    else if (a === '--daily-summary') args.dailySummary = true;
     else if (a === '--env' || a === '--no-env') { if (a === '--env') next(); }
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a.startsWith('--')) throw new Error(`Argumento desconocido: ${a}`);
@@ -90,6 +91,9 @@ workday-engine-audit — contraste legacy vs motor de jornada (SÓLO LECTURA)
   --out DIR            escribir el detalle en DIR/workday-audit.json
   --limit N            máximo de diferencias a listar en el detalle (200)
   --chunk N            empleados por lote de lectura (50)
+  --daily-summary      además, contrastar contra las filas YA GUARDADAS de
+                       daily_summary. Sigue siendo sólo lectura: informa qué
+                       cambiaría un recálculo, sin recalcular nada.
   --env RUTA           archivo .env a usar (por defecto api/.env)
   --no-env             usar sólo las variables del shell
 
@@ -173,6 +177,24 @@ async function main() {
   };
   const detalle = [];
 
+  /**
+   * Contraste contra lo que YA está guardado en daily_summary.
+   *
+   * Es una simulación: dice qué cambiaría un recálculo, sin recalcular. La
+   * comparación es contra `presence_minutes` —primera entrada a última
+   * salida—, que es el concepto que `daily_summary.worked_minutes` viene
+   * guardando. Compararlo contra `segment_minutes` daría una diferencia
+   * enorme y falsa en todo día con almuerzo marcado, porque son dos números
+   * distintos, no dos versiones del mismo.
+   */
+  const ds = {
+    filas_guardadas: 0,
+    coinciden: 0,
+    difieren: 0,
+    sin_fila: 0,
+    delta_total_min: 0,
+  };
+
   for (let i = 0; i < empleados.length; i += args.chunk) {
     const lote = empleados.slice(i, i + args.chunk);
     const ids = lote.map((e) => e.employee_id);
@@ -193,6 +215,23 @@ async function main() {
       if (lista) lista.push(l); else porEmpleado.set(l.employee_id, [l]);
     }
 
+    // daily_summary ya guardado, si se pidió el contraste.
+    const guardado = new Map();
+    if (args.dailySummary) {
+      const [filas] = await sequelize.query(`
+        SELECT employee_id,
+               DATE_FORMAT(date, '%Y-%m-%d') AS date,
+               worked_minutes, late_minutes, status
+        FROM daily_summary
+        WHERE employee_id IN (${ids.map(() => '?').join(',')})
+          AND date >= ? AND date <= ?
+      `, { replacements: [...ids, args.from, args.to] });
+      for (const f of filas) {
+        guardado.set(`${f.employee_id}|${f.date}`, f);
+        ds.filas_guardadas++;
+      }
+    }
+
     for (const emp of lote) {
       const marcajes = porEmpleado.get(emp.employee_id) || [];
       if (!marcajes.length) continue;
@@ -209,6 +248,29 @@ async function main() {
 
       for (const j of jornadas) {
         vistas.add(j.work_date);
+
+        if (args.dailySummary) {
+          const fila = guardado.get(`${emp.employee_id}|${j.work_date}`);
+          if (!fila) {
+            ds.sin_fila++;
+          } else if (Number(fila.worked_minutes) === j.presence_minutes) {
+            ds.coinciden++;
+          } else {
+            ds.difieren++;
+            ds.delta_total_min += j.presence_minutes - Number(fila.worked_minutes);
+            if (detalle.length < args.limit) {
+              detalle.push({
+                code: emp.code, nombre: emp.nombre, work_date: j.work_date,
+                caso: 'daily_summary',
+                guardado_min: Number(fila.worked_minutes),
+                motor_permanencia_min: j.presence_minutes,
+                delta_min: j.presence_minutes - Number(fila.worked_minutes),
+                guardado_status: fila.status,
+              });
+            }
+          }
+        }
+
         const l = porFechaLegacy.get(j.work_date);
         resumen.minutos_motor += j.segment_minutes;
         resumen.minutos_legacy += l ? l.minutes : 0;
@@ -278,6 +340,21 @@ async function main() {
   console.log(`Minutos totales motor    : ${resumen.minutos_motor} (${engine.minutesToHM(resumen.minutos_motor)})`);
   console.log(`Minutos totales legacy   : ${resumen.minutos_legacy} (${engine.minutesToHM(resumen.minutos_legacy)})`);
   console.log(`Diferencia               : ${resumen.minutos_motor - resumen.minutos_legacy} min`);
+  if (args.dailySummary) {
+    console.log('');
+    console.log('Contraste contra daily_summary YA GUARDADO (simulación):');
+    console.log(`  filas guardadas en el período : ${ds.filas_guardadas}`);
+    console.log(`  coinciden con la permanencia  : ${ds.coinciden}`);
+    console.log(`  difieren                      : ${ds.difieren}`);
+    console.log(`  jornadas sin fila guardada    : ${ds.sin_fila}`);
+    console.log(`  delta acumulado               : ${ds.delta_total_min} min`);
+    console.log('');
+    console.log('  Se compara contra `presence_minutes` (primera entrada a última');
+    console.log('  salida), que es el concepto que daily_summary.worked_minutes');
+    console.log('  viene guardando. Compararlo contra la suma de tramos daría una');
+    console.log('  diferencia enorme y falsa en todo día con almuerzo marcado.');
+  }
+
   console.log('');
   console.log('Recordatorio: este script no escribió nada. Los números de');
   console.log('daily_summary en producción siguen siendo los de antes.');
@@ -289,6 +366,7 @@ async function main() {
       periodo: { from: args.from, to: args.to },
       generado: new Date().toISOString(),
       resumen,
+      daily_summary: args.dailySummary ? ds : null,
       detalle,
       detalle_truncado: detalle.length >= args.limit,
     }, null, 2));
