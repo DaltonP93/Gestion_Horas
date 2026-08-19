@@ -11,18 +11,27 @@ const { sequelize } = require('../config/database');
 const { sendMail, buildReportEmailHtml } = require('./emailService');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('./recalcLock');
+const engine = require('./workdayEngine');
+const { loadScheduleHistory } = require('./workdayConfig');
 
 const _jobs = new Map(); // scheduleId → tarea cron activa
 
 // ─── Helpers de timezone Paraguay ────────────────────────────────
+//
+// ALCANCE, que acá es todo: estos helpers convierten un INSTANTE REAL —el
+// `new Date()` de ahora— a la fecha civil paraguaya. Para eso la tzdata es la
+// herramienta correcta y hay que usarla: "qué día es hoy en Asunción" depende
+// de la zona.
+//
+// Lo que NO se puede hacer con ellos —y era lo que se hacía— es aplicarlos a
+// un DATETIME leído de la base. Esa columna no guarda un instante sino una
+// hora de pared; convertirla arrastra la tzdata histórica (Paraguay estuvo en
+// UTC-4 hasta el 2024-10-06) y corre una hora todo el histórico de invierno.
+// Ese camino ahora pasa por `workdayEngine`, que trabaja en hora de pared.
 const TZ_PY = 'America/Asuncion';
-const _dtfHour = new Intl.DateTimeFormat('es-PY', { timeZone: TZ_PY, hour: 'numeric', hour12: false });
 const _dtfDate = new Intl.DateTimeFormat('es-PY', { timeZone: TZ_PY, year: 'numeric', month: '2-digit', day: '2-digit' });
 
-/** Hora (0-23) de un Date en Paraguay */
-function pyHour(d) { return parseInt(_dtfHour.format(d), 10); }
-
-/** "YYYY-MM-DD" de un Date en Paraguay */
+/** "YYYY-MM-DD" de un Date en Paraguay. Sólo para instantes reales. */
 function pyDateStr(d) {
   const parts = _dtfDate.formatToParts(d);
   const get = t => parts.find(p => p.type === t)?.value ?? '';
@@ -41,24 +50,65 @@ function toDate(v) {
 }
 
 // ─── Generar reporte de marcadas (igual al PDF de SisHoras) ───────
+//
+// La jornada NO se arma acá: la arma `workdayEngine`, que es la única
+// definición de jornada del sistema. Esta función se ocupa de qué empleados
+// entran (RBAC, filtros), de leer los marcajes con una consulta acotada, y de
+// darle a la vista la forma que ya esperaba.
+//
+// Lo que se fue de acá, y por qué:
+//
+//   - El agrupamiento por "fecha laboral" con corte fijo a las 05:00. Partía
+//     en dos un turno 18:30 → 07:04 y le daba día propio a una salida de
+//     05:29.
+//   - El emparejamiento por posición (par = entrada, impar = salida), que
+//     ignora `attendance_logs.type` y corre todos los pares del día ante un
+//     marcaje espurio.
+//   - `toDate()` + `pyHour()` + `pyDateStr()` + `fmtTime()`, que fijaban
+//     -03:00 sobre el DATETIME guardado y después lo formateaban con la tzdata
+//     histórica de America/Asuncion. Toda marca de invierno anterior al
+//     2024-10-06 salía una hora antes, y las de la primera hora del día
+//     cambiaban de fecha.
+//
 // `scope` es opcional: cuando el caller lo pasa (rutas HTTP), acota por los
 // departamentos visibles al usuario (RBAC jerárquico). Los callers internos
 // —el cron mail scheduler y demás— lo omiten y ven todo (comportamiento previo).
-async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, scope } = {}) {
-  const today = pyDateStr(new Date());
-  const from  = dateFrom || today;
-  const to    = dateTo   || today;
 
-  // Los placeholders de `empFilter` aparecen en el SQL ANTES del rango de
-  // fechas, así que sus valores tienen que ir antes en `replacements`: el
-  // enlace es posicional. Se acumulan aparte y el rango se agrega al final.
-  //
-  // Antes se inicializaba `params` con [from, to] y se hacía push de los
-  // filtros encima, de modo que en cuanto había un filtro el orden se
-  // desalineaba: `e.department_id = ?` recibía `from` y el BETWEEN recibía
-  // `to` y el id del departamento. Devolvía cero filas. El caso sin filtros
-  // funcionaba por coincidencia —dos placeholders, dos valores, mismo orden—,
-  // que es justamente por qué no se notaba.
+/**
+ * Empleados procesados por lote.
+ *
+ * El reporte cargaba TODOS los marcajes del período en un array y recién
+ * después agrupaba. Con un rango largo sobre varios cientos de empleados eso
+ * es un pico de memoria proporcional al período completo, y es la causa
+ * directa de los reinicios por `max_memory_restart` (RSS observado de hasta
+ * 1,28 GB contra un tope de 512 MB) y de los 502 que los acompañan.
+ *
+ * Procesando por lotes, el pico pasa a depender del LOTE y no del período: los
+ * marcajes de cada lote se sueltan antes de leer el siguiente, y lo que queda
+ * vivo son las filas ya resumidas, que son órdenes de magnitud más chicas.
+ */
+const MARCADAS_EMPLOYEE_CHUNK = 50;
+
+/**
+ * Tope duro de marcajes por lote.
+ *
+ * Preferimos fallar con un mensaje que diga qué achicar antes que que el
+ * proceso muera por OOM y se lleve puestas todas las peticiones en vuelo. Un
+ * 502 sin explicación es peor que un error explícito.
+ */
+const MARCADAS_MAX_PUNCHES_PER_CHUNK = 400000;
+
+async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, scope } = {}) {
+  // "Hoy" sí es un instante real, y por eso acá la tzdata corresponde.
+  const hoy = pyDateStr(new Date());
+  const from = dateFrom || hoy;
+  const to   = dateTo   || hoy;
+
+  // Los placeholders de `empFilter` aparecen en el SQL ANTES del rango, así que
+  // sus valores tienen que ir antes en `replacements`: el enlace es posicional.
+  // Antes se inicializaba `params` con [from, to] y se hacía push encima, de
+  // modo que en cuanto había un filtro el orden se desalineaba y el reporte
+  // devolvía cero filas.
   let empFilter = 'WHERE e.status = "active"';
   const empParams = [];
   if (employeeId) { empFilter += ' AND e.id = ?'; empParams.push(employeeId); }
@@ -74,107 +124,110 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     empParams.push(...ids);
   }
 
-  const params = [...empParams, from, to];
-
-  // Obtener todos los logs del período
-  const [logs] = await sequelize.query(`
+  // 1) Padrón primero. Es una lista acotada por el filtro y cabe en memoria
+  //    sin problema; los marcajes, que no, se leen después y por lotes.
+  const [empleados] = await sequelize.query(`
     SELECT
       e.id AS employee_id,
       CONCAT(e.first_name,' ',e.last_name) AS employee_name,
       e.code,
-      d.name AS department,
-      al.timestamp, al.type
-    FROM attendance_logs al
-    JOIN employees e ON al.employee_id = e.id
+      d.name AS department
+    FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
     ${empFilter}
-      AND DATE(al.timestamp) BETWEEN ? AND ?
-    ORDER BY e.last_name, al.timestamp
-  `, { replacements: params });
+    ORDER BY e.last_name, e.first_name, e.id
+  `, { replacements: empParams });
 
-  // Agrupar por empleado y fecha (fecha "laboral": marcas 00:00-04:59 se asignan al día anterior)
-  const byEmp = {};
-  const SHIFT_CUTOFF_HOUR = 5; // marcas antes de las 05:00 pertenecen al turno del día anterior
-  for (const log of logs) {
-    if (!byEmp[log.employee_id]) {
-      byEmp[log.employee_id] = {
-        employee_id: log.employee_id,
-        employee_name: log.employee_name,
-        code: log.code,
-        department: log.department,
-        days: {},
-      };
-    }
-    const ts = toDate(log.timestamp);                // → JS Date UTC correcto
-    const workDate = new Date(ts);
-    if (pyHour(ts) < SHIFT_CUTOFF_HOUR) {           // hora en Paraguay
-      workDate.setUTCDate(workDate.getUTCDate() - 1);
-    }
-    const date = pyDateStr(workDate);               // fecha laboral en Paraguay
-    if (!byEmp[log.employee_id].days[date]) {
-      byEmp[log.employee_id].days[date] = [];
-    }
-    byEmp[log.employee_id].days[date].push(ts);
-  }
+  if (!empleados.length) return { data: [], period: { from, to } };
 
-  // Construir filas tipo "Marcadas" — pares entrada/salida
+  // 2) Ventana de marcajes. Se extiende más allá del período pedido para que
+  //    la jornada del primer y del último día estén COMPLETAS: un turno que
+  //    entra el último día a las 22:00 cierra al día siguiente, y cortarlo por
+  //    fecha de marca perdería esas horas.
+  const ventana = engine.punchWindow({ from, to });
+
   const result = [];
-  const DAY_NAMES = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-  const MONTH_NAMES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+  for (let i = 0; i < empleados.length; i += MARCADAS_EMPLOYEE_CHUNK) {
+    const lote = empleados.slice(i, i + MARCADAS_EMPLOYEE_CHUNK);
+    const ids = lote.map((e) => e.employee_id);
 
-  for (const empData of Object.values(byEmp)) {
-    const rows = [];
-    let totalMinutes = 0;
+    // `timestamp >= ? AND < ?` es sargable sobre idx_emp_ts; el
+    // `DATE(al.timestamp) BETWEEN ? AND ?` anterior no lo era y forzaba a
+    // evaluar la función sobre cada fila del rango.
+    const [logs] = await sequelize.query(`
+      SELECT
+        al.employee_id,
+        DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp,
+        al.type
+      FROM attendance_logs al
+      WHERE al.employee_id IN (${ids.map(() => '?').join(',')})
+        AND al.timestamp >= ? AND al.timestamp < ?
+      ORDER BY al.employee_id, al.timestamp, al.id
+    `, { replacements: [...ids, ventana.from, ventana.to] });
 
-    for (const [dateStr, marks] of Object.entries(empData.days).sort()) {
-      const d = new Date(dateStr + 'T12:00');
-      const dayName = DAY_NAMES[d.getDay()];
-      const formatted = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-
-      // Ordenar marcas y deduplicar las que caen dentro del mismo minuto
-      // (algunos relojes registran el mismo fichaje 2 veces por segundo)
-      marks.sort((a, b) => a - b);
-      const deduped = [];
-      for (const m of marks) {
-        const last = deduped[deduped.length - 1];
-        if (!last || Math.abs(m - last) > 60 * 1000) deduped.push(m);
-      }
-
-      // Emparejar (par = entrada, impar = salida) y sumar sólo pares completos.
-      // Así se excluye el tiempo de almuerzo entre pares (in/out/in/out).
-      // Si el día queda con un marcaje impar sin par, se ignora la última entrada.
-      const pairs = [];
-      let dayMinutes = 0;
-      for (let i = 0; i < deduped.length; i += 2) {
-        const entrada = deduped[i];
-        const salida  = deduped[i + 1];
-        pairs.push({
-          entrada: entrada ? fmtTime(entrada) : '',
-          salida:  salida  ? fmtTime(salida)  : '',
-        });
-        if (entrada && salida && salida > entrada) {
-          dayMinutes += Math.round((salida - entrada) / 60000);
-        }
-      }
-      totalMinutes += dayMinutes;
-
-      rows.push({
-        dayName,
-        date: formatted,
-        pairs,          // array de {entrada, salida}
-        total: dayMinutes > 0 ? minsToHM(dayMinutes) : '0:00',
-      });
+    if (logs.length > MARCADAS_MAX_PUNCHES_PER_CHUNK) {
+      throw new Error(
+        `El período ${from}..${to} devuelve demasiados marcajes para procesar de una vez `
+        + `(${logs.length} en un lote de ${ids.length} empleados). Acotar el rango de fechas `
+        + 'o filtrar por departamento.',
+      );
     }
 
-    result.push({
-      ...empData,
-      rows,
-      total_minutes: totalMinutes,
-      total_hm: minsToHM(totalMinutes),
-    });
+    const porEmpleado = new Map();
+    for (const log of logs) {
+      const lista = porEmpleado.get(log.employee_id);
+      if (lista) lista.push(log); else porEmpleado.set(log.employee_id, [log]);
+    }
+
+    const historial = await loadScheduleHistory(ids);
+
+    for (const emp of lote) {
+      const marcajes = porEmpleado.get(emp.employee_id) || [];
+      result.push(armarFilasEmpleado(emp, marcajes, historial.get(emp.employee_id), { from, to }));
+    }
   }
 
   return { data: result, period: { from, to } };
+}
+
+const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+
+/**
+ * Filas del reporte para un empleado, ya con la forma que espera la vista.
+ *
+ * El total del día es `segment_minutes` —la suma de los tramos entrada/salida—,
+ * que es lo que la columna "Total Permanencia" venía sumando: excluye la pausa
+ * entre pares. NO es `presence_minutes` (primera entrada → última salida), que
+ * es el concepto que guarda `daily_summary.worked_minutes`. Son dos números
+ * distintos y mezclarlos es por qué los dos reportes nunca cerraron entre sí.
+ */
+function armarFilasEmpleado(emp, marcajes, historial, periodo) {
+  const { workdays } = engine.buildWorkdays(marcajes, { history: historial });
+  const delPeriodo = engine.clipToPeriod(workdays, periodo);
+
+  let totalMinutes = 0;
+  const rows = delPeriodo.map((j) => {
+    totalMinutes += j.segment_minutes;
+    const [y, m, d] = j.work_date.split('-');
+    return {
+      dayName: DAY_NAMES[engine.dayOfWeekISO(j.work_date)],
+      date: `${d}/${m}/${y}`,
+      pairs: j.segments.map((s) => ({ entrada: s.in_hhmm, salida: s.out_hhmm })),
+      total: engine.minutesToHM(j.segment_minutes),
+      crosses_midnight: j.crosses_midnight,
+      open: j.open,
+    };
+  });
+
+  return {
+    employee_id: emp.employee_id,
+    employee_name: emp.employee_name,
+    code: emp.code,
+    department: emp.department,
+    rows,
+    total_minutes: totalMinutes,
+    total_hm: minsToHM(totalMinutes),
+  };
 }
 
 function fmtTime(dt) {

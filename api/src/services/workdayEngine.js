@@ -199,6 +199,20 @@ function absToDateTime(abs) {
   return `${absToDateISO(abs)} ${pad2(Math.floor(s / 3600))}:${pad2(Math.floor((s % 3600) / 60))}:${pad2(s % 60)}`;
 }
 
+/**
+ * Día de la semana de una fecha civil: 0 = Domingo … 6 = Sábado.
+ *
+ * Se calcula desde el contador de días, no con `new Date(iso).getDay()`, que
+ * lee la fecha en la zona del proceso y puede correrse un día. Ancla: el
+ * 1970-01-01 fue jueves (4).
+ */
+function dayOfWeekISO(dateISO) {
+  const w = toWall(`${dateISO} 00:00:00`);
+  if (!w) return null;
+  const days = Math.floor(w.abs / 86400);
+  return ((days % 7) + 4 + 7) % 7;
+}
+
 /** Minutos → 'H:mm'. Nunca negativo. */
 function minutesToHM(mins) {
   const m = Math.max(0, Math.round(mins || 0));
@@ -646,6 +660,7 @@ module.exports = {
   absToDateISO,
   absToHHmm,
   absToDateTime,
+  dayOfWeekISO,
   minutesToHM,
   DEFAULTS,
   MODE_HISTORICAL_FALLBACK,
