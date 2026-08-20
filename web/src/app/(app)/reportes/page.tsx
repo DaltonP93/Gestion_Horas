@@ -6,6 +6,10 @@ import { es } from 'date-fns/locale'
 import { BarChart2, RefreshCw, Plus, Trash2, Mail, Clock, Download, CheckCircle, XCircle, Calendar } from 'lucide-react'
 import { api, downloadUrl } from '@/lib/api'
 import { marcadasParams, marcadasEmailBody } from '@/lib/reportParams'
+import {
+  canApply, isStale, marcadasQueryKey, normalizeFilters,
+  type AppliedFilters, type ReportFilters,
+} from '@/lib/reportFilters'
 import { maxPairsOf } from '@/lib/marcadasTable'
 import EmployeeSearchCombobox from '@/components/EmployeeSearchCombobox'
 import { useI18n } from '@/i18n/I18nProvider'
@@ -41,13 +45,24 @@ function TabMarcadas() {
   const today        = format(new Date(), 'yyyy-MM-dd')
   const firstOfMonth = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), 'yyyy-MM-dd')
 
+  // BORRADOR: lo que se está editando. No dispara nada.
   const [from, setFrom]       = useState(firstOfMonth)
   const [to, setTo]           = useState(today)
   const [empId, setEmpId]     = useState('')
   const [deptId, setDeptId]   = useState('')
   const [emailTo, setEmailTo] = useState('')
   const [sending, setSending] = useState(false)
-  const [queried, setQueried] = useState(false)
+
+  // APLICADOS: lo que se consultó. Cambia sólo al presionar "Generar reporte",
+  // y es lo ÚNICO que alimenta la tabla, el PDF, el CSV y el email.
+  //
+  // Antes había un solo juego de filtros y la queryKey colgaba del formulario,
+  // así que tocar una fecha después de generar recargaba la tabla sola y, peor,
+  // el botón de PDF descargaba el período nuevo mientras la pantalla seguía
+  // mostrando el anterior. El archivo salía sin ninguna señal de la diferencia.
+  const draft: ReportFilters = { from, to, empId, deptId }
+  const [applied, setApplied] = useState<AppliedFilters>(null)
+  const stale = isStale(draft, applied)
 
   const { data: deptsData } = useQuery({
     queryKey: ['departments'],
@@ -55,22 +70,31 @@ function TabMarcadas() {
     staleTime: 300_000,
   })
 
-  const { data, isLoading, refetch } = useQuery({
-    queryKey: ['marcadas', from, to, empId, deptId],
-    queryFn: () => api.get('/api/reports/marcadas', {
-      params: marcadasParams({ from, to, empId, deptId })
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: marcadasQueryKey(applied),
+    queryFn: ({ signal }) => api.get('/api/reports/marcadas', {
+      params: marcadasParams(applied as ReportFilters),
+      // Cancelar la petición en vuelo cuando la clave cambia evita que la
+      // respuesta de un rango viejo pise a la del nuevo si llega después.
+      signal,
     }).then(r => r.data),
-    enabled: queried,
+    enabled: applied !== null,
   })
 
-  function handleGenerar() { setQueried(true); refetch() }
+  // `refetch()` ya no hace falta: cambiar `applied` cambia la clave y TanStack
+  // consulta solo. Llamarlo además forzaba una segunda petición idéntica.
+  function handleGenerar() {
+    if (!canApply(draft)) return
+    setApplied(normalizeFilters(draft))
+  }
 
   async function sendByEmail() {
     if (!emailTo.trim()) return alert('Ingresa un email destino')
+    if (!applied) return
     setSending(true)
     try {
       await api.post('/api/reports/marcadas/email', marcadasEmailBody(
-        { from, to, empId, deptId },
+        applied,
         emailTo.split(',').map((e: string) => e.trim()),
       ))
       alert('Reporte enviado por email ✅')
@@ -111,20 +135,22 @@ function TabMarcadas() {
             <label className="block text-xs text-slate-500 mb-1 font-medium dark:text-white/40">Empleado</label>
             <EmployeeSearchCombobox value={empId} onChange={setEmpId} deptId={deptId} />
           </div>
-          <button onClick={handleGenerar}
-            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-blue-700 transition-colors">
-            <RefreshCw size={14} /> Generar reporte
+          <button onClick={handleGenerar} disabled={!canApply(draft) || isFetching}
+            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-60 transition-colors">
+            <RefreshCw size={14} className={isFetching ? 'animate-spin' : undefined} /> Generar reporte
           </button>
-          {employees.length > 0 && (
+          {/* Las descargas usan `applied`, NO el formulario: el archivo tiene
+              que ser el mismo período que la persona está mirando. */}
+          {applied && employees.length > 0 && (
             <>
-              <button onClick={() => exportMarcadasCSV(employees, from, to)}
+              <button onClick={() => exportMarcadasCSV(employees, applied.from, applied.to)}
                 className="flex items-center gap-2 border border-slate-200 text-slate-600 px-4 py-2 rounded-xl text-sm font-medium hover:bg-slate-50 transition-colors dark:text-white/60 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                 <Download size={14} /> Exportar CSV
               </button>
               <button
                 onClick={() => {
                   window.open(downloadUrl('/api/reports/marcadas/pdf',
-                    marcadasParams({ from, to, empId, deptId })
+                    marcadasParams(applied)
                   ), '_blank')
                 }}
                 className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition-colors">
@@ -134,7 +160,17 @@ function TabMarcadas() {
           )}
         </div>
 
-        {employees.length > 0 && (
+        {/* Sin este aviso, la tabla de enero con el formulario en febrero se ve
+            igual que la tabla de febrero: no hay forma de notar la diferencia
+            hasta que el reporte ya está impreso o enviado. */}
+        {stale && (
+          <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+            Los filtros cambiaron. Estás viendo el reporte de {applied?.from} al {applied?.to};
+            presioná «Generar reporte» para actualizarlo.
+          </p>
+        )}
+
+        {applied && employees.length > 0 && (
           <div className="flex gap-2 mt-4 pt-4 border-t border-slate-100 items-center dark:border-white/[0.06]">
             <Mail size={16} className="text-slate-400 shrink-0 dark:text-white/30" />
             <input value={emailTo} onChange={e => setEmailTo(e.target.value)}
@@ -154,7 +190,14 @@ function TabMarcadas() {
           Generando reporte...
         </div>
       )}
-      {!isLoading && queried && employees.length === 0 && (
+      {/* "Todavía no generaste nada" y "no hay marcaciones" son dos cosas
+          distintas y antes se mostraba el mismo texto para las dos. */}
+      {applied === null && (
+        <div className="text-center py-12 text-slate-400 dark:text-white/30">
+          Elegí el período y presioná «Generar reporte».
+        </div>
+      )}
+      {!isLoading && applied !== null && employees.length === 0 && (
         <div className="text-center py-12 text-slate-400 dark:text-white/30">Sin marcaciones en este período</div>
       )}
 
