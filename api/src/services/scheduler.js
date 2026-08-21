@@ -12,7 +12,7 @@ const { sendMail, buildReportEmailHtml } = require('./emailService');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('./recalcLock');
 const engine = require('./workdayEngine');
-const { loadScheduleHistory } = require('./workdayConfig');
+const { loadWorkdayConfig } = require('./workdayConfig');
 
 const _jobs = new Map(); // scheduleId → tarea cron activa
 
@@ -156,6 +156,7 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     // evaluar la función sobre cada fila del rango.
     const [logs] = await sequelize.query(`
       SELECT
+        al.id,
         al.employee_id,
         DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp,
         al.type
@@ -179,11 +180,14 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
       if (lista) lista.push(log); else porEmpleado.set(log.employee_id, [log]);
     }
 
-    const historial = await loadScheduleHistory(ids);
+    // Configuración del lote en TRES consultas acotadas al rango, no una por
+    // empleado y día: 500 empleados por 30 días serían 15.000 viajes a la base
+    // para un solo reporte.
+    const config = await loadWorkdayConfig(ids, { from, to });
 
     for (const emp of lote) {
       const marcajes = porEmpleado.get(emp.employee_id) || [];
-      result.push(armarFilasEmpleado(emp, marcajes, historial.get(emp.employee_id), { from, to }));
+      result.push(armarFilasEmpleado(emp, marcajes, config, { from, to }));
     }
   }
 
@@ -201,8 +205,10 @@ const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Vierne
  * es el concepto que guarda `daily_summary.worked_minutes`. Son dos números
  * distintos y mezclarlos es por qué los dos reportes nunca cerraron entre sí.
  */
-function armarFilasEmpleado(emp, marcajes, historial, periodo) {
-  const { workdays } = engine.buildWorkdays(marcajes, { history: historial });
+function armarFilasEmpleado(emp, marcajes, config, periodo) {
+  const { workdays } = engine.buildWorkdays(marcajes, {
+    resolveConfig: (workDate) => config.forDate(emp.employee_id, workDate),
+  });
   const delPeriodo = engine.clipToPeriod(workdays, periodo);
 
   let totalMinutes = 0;
@@ -216,6 +222,11 @@ function armarFilasEmpleado(emp, marcajes, historial, periodo) {
       total: engine.minutesToHM(j.segment_minutes),
       crosses_midnight: j.crosses_midnight,
       open: j.open,
+      // Se exponen para que la vista pueda marcar la fila como revisable en
+      // vez de mostrar un cero indistinguible de un día sin trabajar.
+      anomalies: j.anomalies.map((a) => a.code),
+      calculation_mode: j.calculation_mode,
+      non_working_kind: j.non_working_kind,
     };
   });
 

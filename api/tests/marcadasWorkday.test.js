@@ -14,7 +14,12 @@ jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn() },
 }));
 jest.mock('../src/services/workdayConfig', () => ({
-  loadScheduleHistory: jest.fn(async () => new Map()),
+  // Sin configuración cargada: todas las jornadas caen en historical_fallback,
+  // que es el estado real mientras las migraciones 072/073 no estén aplicadas.
+  loadWorkdayConfig: jest.fn(async () => ({
+    forDate: () => null,
+    historyFor: () => [],
+  })),
 }));
 
 const { sequelize } = require('../src/config/database');

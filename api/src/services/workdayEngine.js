@@ -656,10 +656,21 @@ function buildWorkdays(punches, options = {}) {
       ? Math.floor((ultimaSalida.abs - primeraEntrada.abs) / 60)
       : 0;
 
-    const cfg = options.config
-      || resolveEffectiveConfig(g.work_date, options.history)
-      || null;
-    const mode = cfg ? MODE_CONFIGURED : MODE_HISTORICAL_FALLBACK;
+    // `resolveConfig` es el resolvedor con precedencia (turnera → historial →
+    // contrato). `config` fija una sola configuración y `history` resuelve
+    // sólo por vigencia; los tres caminos existen para que el motor se pueda
+    // probar sin base.
+    let cfg = options.config || null;
+    if (!cfg && typeof options.resolveConfig === 'function') {
+      cfg = options.resolveConfig(g.work_date) || null;
+    }
+    if (!cfg) cfg = resolveEffectiveConfig(g.work_date, options.history) || null;
+
+    // Un día de turnera marcado off/vacaciones/permiso no trae horario. Tratarlo
+    // como `configured` haría que quien está de vacaciones figure llegando
+    // tarde; se conserva el motivo y la jornada se describe sin horario.
+    const noLaborable = !!(cfg && cfg.non_working);
+    const mode = cfg && !noLaborable ? MODE_CONFIGURED : MODE_HISTORICAL_FALLBACK;
 
     const breakMode = cfg && cfg.break_mode ? cfg.break_mode : BREAK_PUNCHED;
     const breakMinutes = breakMinutesFor({
@@ -693,8 +704,12 @@ function buildWorkdays(punches, options = {}) {
       work_date: g.work_date,
       mode,
       calculation_mode: mode,
-      calculation_source: cfg ? (cfg.source || 'schedule_history') : 'attendance_logs',
+      calculation_source: cfg && !noLaborable
+        ? (cfg.source || 'schedule_history')
+        : 'attendance_logs',
       policy_version: POLICY_VERSION,
+      /** 'off' | 'vacation' | 'permiso' | 'presupuesto' según la turnera. */
+      non_working_kind: noLaborable ? (cfg.kind || 'off') : null,
 
       first_in: primeraEntrada.datetime,
       first_in_hhmm: primeraEntrada.hhmm,
