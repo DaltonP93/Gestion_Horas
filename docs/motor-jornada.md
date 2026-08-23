@@ -3,10 +3,10 @@
 Este documento explica qué hace el motor, qué números cambia respecto del
 armado anterior y cómo verificarlo contra datos reales **sin tocar nada**.
 
-> **Estado.** El motor está integrado en el reporte de Marcadas. La migración
-> `072_employee_schedule_history.sql` **no fue ejecutada en producción** y
-> `daily_summary` **no fue recalculado**. Habilitar cualquiera de las dos cosas
-> es una decisión aparte, posterior a la validación descrita más abajo.
+> **Estado.** El motor está integrado en el reporte de Marcadas. Las migraciones
+> `072` y `073` **no fueron ejecutadas en producción** y `daily_summary` **no fue
+> recalculado**. Habilitar cualquiera de las dos cosas es una decisión aparte,
+> posterior a la validación descrita más abajo.
 
 ---
 
@@ -59,6 +59,35 @@ heurística sobre el reloj, no sobre la jornada. Falla en los dos sentidos:
 Emparejar por índice (par = entrada, impar = salida) ignora
 `attendance_logs.type`: un marcaje espurio corre **todos** los pares del día.
 
+La deduplicación tenía el mismo problema: colapsaba cualquier par de marcajes
+dentro de 60 segundos **sin mirar el tipo**. Una entrada a las 08:00:00 y una
+salida a las 08:00:30 se convertían en una sola marca, el tramo quedaba abierto
+y la jornada perdía todos sus minutos. Ahora se colapsa sólo cuando los tipos
+son compatibles — iguales, o alguno todavía sin determinar.
+
+### 2.4 El bug `24:xx`
+
+Con `hour12: false`, algunas combinaciones de locale e ICU resuelven a
+`hourCycle: 'h24'` —que es lo que hace el runtime de producción— y entonces la
+medianoche se numera 24 en vez de 0:
+
+```
+00:05 → 24:05      00:58 → 24:58      01:02 → 01:02
+```
+
+Y el corte por hora se rompe: `pyHour(00:05)` da **24**, así que `24 < 5` es
+falso y la marca de la madrugada **no** se asigna al día anterior — mientras
+que `pyHour(01:02)` da 1 y sí se asigna.
+
+Es un defecto **dependiente del entorno**: en un contenedor con ICU completo,
+`es-PY` resuelve a `h23` y el bug **no se reproduce**. Eso significa que el
+reporte venía dando resultados distintos en el servidor y en CI. El test que lo
+cubre fuerza el `hourCycle` en lugar de confiar en el entorno.
+
+El motor es inmune por construcción: **no invoca `Intl`**, y hay un test que lo
+verifica sobre el fuente. Si nadie llama a `Intl`, ningún `hourCycle` puede
+afectar el resultado.
+
 ---
 
 ## 3. El modelo
@@ -78,11 +107,12 @@ Ninguno codifica una regla legal. Todos son configurables por llamada.
 
 | parámetro | por defecto | qué decide |
 |---|---|---|
-| `maxSegmentMinutes` | 16 h | por encima de esto, la salida nunca se marcó |
-| `maxGapMinutes` | 4 h | pausa que todavía es la misma jornada |
-| `maxSpanMinutes` | 20 h | tope de duración total de una jornada |
-| `dedupeSeconds` | 60 s | ráfaga del reloj = un solo fichaje |
+| `historicalMaxSessionSpanMinutes` | 16 h | por encima de esto, la salida nunca se marcó |
+| `historicalMaxIntersegmentGapMinutes` | 4 h | pausa que todavía es la misma jornada |
+| `historicalMaxWorkdaySpanMinutes` | 20 h | tope de duración total de una jornada |
+| `duplicateWindowSeconds` | 60 s | ráfaga del reloj = un solo fichaje |
 | `typeAware` | `true` | el `type` explícito manda; `unknown` cae en alternancia |
+| `nightStartMinute` / `nightEndMinute` | `null` | franja nocturna; sin definir, `night_minutes` = 0 |
 
 ### Casos dorados
 
@@ -103,6 +133,17 @@ Confundirlos es por qué los dos reportes nunca cerraron entre sí.
 | `presence_minutes` | primera entrada → última salida (el almuerzo adentro) | es lo que `daily_summary.worked_minutes` viene guardando |
 | `segment_minutes` | suma de los tramos entrada→salida | es lo que la columna "Total" de Marcadas suma |
 | `worked_minutes` | `segment_minutes` menos el descanso a descontar | depende del modo de descanso |
+| `contract_excess_minutes` | lo trabajado por encima del objetivo | **no es hora extra legal** |
+
+`contract_excess_minutes` mide un hecho: trabajar 9 h contra un objetivo de 6 da
+3 h de exceso. Si esas horas se liquidan como extraordinarias, al 50 %, o se
+compensan con descanso, es una decisión de convenio que el motor **no toma**.
+Llamarlo `overtime` sería decidirla por omisión.
+
+Lo mismo con `night_minutes` / `day_minutes`: el motor mide cuántos minutos
+cayeron en la franja nocturna **configurada** y deja la valorización a quien
+tenga la política. Sin franja definida, `night_minutes` es 0 — poner
+20:00→06:00 "porque es lo usual" sería meter una regla laboral por la ventana.
 
 En un día con almuerzo marcado de una hora: permanencia 540, tramos 480.
 Comparar uno contra otro da una diferencia de 60 minutos que **no es un error**,
@@ -128,8 +169,27 @@ llegando una hora tarde.
 
 ### `configured`
 
-Hay un tramo de `employee_schedule_history` que **cubre esa fecha**. Se agregan
-atraso, salida anticipada, jornada esperada y el objetivo semanal.
+Hay configuración que **cubre esa fecha**. Se agregan atraso, salida
+anticipada, jornada esperada y el objetivo semanal.
+
+**Precedencia**, resuelta por fecha:
+
+1. `shift_assignments` de una turnera **publicada** para esa fecha exacta. Un
+   borrador no se usa: calcular contra una propuesta que RRHH todavía está
+   armando produciría atrasos por un turno que nunca se comunicó.
+2. `employee_schedule_history` vigente para esa fecha.
+3. `employee_contracts` vigente — sólo aporta carga horaria. Por sí solo **no**
+   habilita el modo `configured`: sin hora de entrada no hay atraso que
+   calcular.
+4. Nada → `historical_fallback`.
+
+`employees.schedule_id` **no participa**, y hay un test que verifica que
+ninguna de las consultas emitidas la lee.
+
+Un día de turnera marcado `off`/`vacation`/`permiso` **no** devuelve horario:
+devolverlo haría que quien está de vacaciones figure llegando tarde todos los
+días. La jornada se describe sin horario y conserva el motivo en
+`non_working_kind`.
 
 `weekly_target_minutes` en `NULL` significa "no hay objetivo definido" y el
 motor **no inventa uno**. Las 48 h paraguayas se cargan como `2880`, igual que
@@ -213,10 +273,26 @@ Ahora la lectura es por lotes de empleados y el pico depende del **lote**, no
 del período. Medición sobre 300 empleados × 365 días × 4 marcajes (438.000
 marcajes, sólo el trabajo en proceso, sin contar el result-set del driver):
 
-| | pico de heap | tiempo | filas |
-|---|---|---|---|
-| todo en un array (anterior) | +165,7 MB | 7.220 ms | 109.500 |
-| por lotes de 50 (motor) | **+43,1 MB** | **1.618 ms** | 109.500 |
+| | pico | tiempo |
+|---|---|---|
+| todo en un array (anterior) | +46,2 MB RSS / +35,8 MB heap | 1.209 ms |
+| por lotes de 50 (motor) | **+0,3 MB RSS / +29,1 MB heap** | **250 ms** |
+
+(300 empleados × 62 días × 4 marcajes = 74.400 marcajes, 4 iteraciones.)
+
+El RSS casi no se mueve en el camino nuevo porque **nunca materializa el
+dataset completo**: lo que crecía con el largo del período era exactamente eso.
+
+Para medir contra la base real:
+
+```bash
+node --expose-gc scripts/benchmark-marcadas-memory.js --iterations 5 --out ./bench
+```
+
+Informa `rss`, `heapUsed`, `heapTotal` y `external` —dicen cosas distintas:
+`rss` es lo que mira PM2 para reiniciar, `external` cubre los `Buffer` donde
+vive un PDF— y sale con código 1 si algún escenario supera los 512 MB o si
+crece de forma sostenida entre corridas.
 
 Además, el rango pasó a ser sargable: `al.timestamp >= ? AND < ?` en lugar de
 `DATE(al.timestamp) BETWEEN ? AND ?`, que obligaba a evaluar la función sobre
@@ -257,11 +333,36 @@ Al ser aditiva y nacer vacía, revertirla no puede perder datos previos.
 
 ---
 
+## 9 bis. `daily_summary` como materialización del motor
+
+`dailySummaryEngine.js` convierte la salida del motor en la fila de
+`daily_summary`. A partir de ahí el resumen diario es una **caché consultable**
+del motor, no un segundo algoritmo.
+
+**La decisión que el código no toma solo:** `daily_summary.worked_minutes` viene
+guardando *permanencia* (primera entrada → última salida). El motor llama a eso
+`presence_minutes`. El modo por defecto es `presence`, que **conserva la
+semántica histórica**; pasar la columna a tiempo neto es opt-in explícito,
+porque hacerlo en silencio movería todos los números históricos de RRHH.
+
+Para medir el impacto antes de habilitar nada:
+
+```bash
+node scripts/daily-summary-dryrun.js --from 2025-01-01 --to 2025-01-31
+```
+
+Contrasta fila por fila contra lo guardado y clasifica cada diferencia **por
+campo**. Cuenta aparte las filas guardadas que el motor ya no produce —el turno
+nocturno que el algoritmo anterior partía en dos días—, porque eso no es una
+diferencia de minutos sino de estructura. **No escribe nada.**
+
+---
+
 ## 10. Qué queda pendiente
 
-- `daily_summary` **no** fue recalculado. El código del resumen diario sigue
-  siendo el de antes; el motor todavía no lo alimenta.
-- La migración 072 **no** fue ejecutada en producción.
+- `daily_summary` **no** fue recalculado y el camino de escritura sigue siendo
+  el anterior: `dailySummaryEngine` está listo pero nadie lo invoca todavía.
+- Las migraciones 072 y 073 **no** fueron ejecutadas en producción.
 - No hay UI para cargar tramos de vigencia todavía.
 - `legacyWorkday.js` es código muerto por diseño: existe sólo como referencia
   de auditoría. Cuando el motor esté validado y ya no haga falta comparar, se
