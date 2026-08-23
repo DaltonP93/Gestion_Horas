@@ -14,8 +14,15 @@
 const fs = require('fs');
 const path = require('path');
 
-const RUTA = path.resolve(__dirname, '..', 'scripts', 'workday-engine-audit.js');
-const fuente = fs.readFileSync(RUTA, 'utf8');
+/**
+ * Los tres scripts que corren contra la base de producción. Todos prometen lo
+ * mismo y todos tienen que cumplirlo.
+ */
+const SCRIPTS = [
+  'workday-engine-audit.js',
+  'daily-summary-dryrun.js',
+  'benchmark-marcadas-memory.js',
+];
 
 /** Quita comentarios: el encabezado NOMBRA las sentencias prohibidas. */
 function sinComentarios(src) {
@@ -24,9 +31,10 @@ function sinComentarios(src) {
     .replace(/^\s*\/\/.*$/gm, '');
 }
 
-const codigo = sinComentarios(fuente);
+describe.each(SCRIPTS)('%s es de sólo lectura', (script) => {
+  const fuente = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', script), 'utf8');
+  const codigo = sinComentarios(fuente);
 
-describe('workday-engine-audit es de sólo lectura', () => {
   test.each([
     ['INSERT', /\bINSERT\s+INTO\b/i],
     ['UPDATE', /\bUPDATE\s+\w/i],
@@ -50,9 +58,10 @@ describe('workday-engine-audit es de sólo lectura', () => {
   });
 
   test('sus consultas son SELECT', () => {
-    const consultas = codigo.match(/sequelize\.query\(`([\s\S]*?)`/g) || [];
-    expect(consultas.length).toBeGreaterThan(0);
-    for (const q of consultas) {
+    // El benchmark no consulta directamente: llama al reporte, que ya está
+    // cubierto por sus propios tests. Por eso no se exige que tenga consultas
+    // propias, sólo que las que tenga sean de lectura.
+    for (const q of codigo.match(/sequelize\.query\(`([\s\S]*?)`/g) || []) {
       expect(q).toMatch(/SELECT/i);
     }
   });
