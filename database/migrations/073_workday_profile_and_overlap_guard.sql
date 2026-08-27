@@ -55,7 +55,8 @@
 --       DROP COLUMN overtime_policy,
 --       DROP COLUMN rounding_policy,
 --       DROP COLUMN night_start,
---       DROP COLUMN night_end;
+--       DROP COLUMN night_end,
+--       DROP COLUMN work_days;
 --     DELETE FROM schema_migrations
 --      WHERE filename = '073_workday_profile_and_overlap_guard.sql';
 -- -------------------------------------------------------------
@@ -96,6 +97,19 @@ CALL mig_073_add_col('employee_schedule_history', 'rounding_policy', 'VARCHAR(40
 -- materia legal y de convenio.
 CALL mig_073_add_col('employee_schedule_history', 'night_start', 'TIME NULL AFTER rounding_policy');
 CALL mig_073_add_col('employee_schedule_history', 'night_end',   'TIME NULL AFTER night_start');
+
+-- Días laborables SNAPSHOT del tramo, en la convención DAYOFWEEK (1=Domingo …
+-- 7=Sábado, migración 046). Es el mismo patrón que check_in/check_out: el
+-- historial PUEDE fijar su propio valor, y el motor cae al `schedules` vivo
+-- sólo cuando acá está NULL.
+--
+-- POR QUÉ IMPORTA QUE SEA SNAPSHOT: `PUT /api/schedules/:id` edita work_days en
+-- su lugar. Si la expectativa histórica se leyera siempre del `schedules` vivo,
+-- cambiar un horario de lunes-viernes a otro patrón reescribiría TODOS los
+-- tramos de historial que lo referencian, y días vacíos viejos saltarían entre
+-- absent y non_working. Fijándolo acá, la configuración efectiva del pasado
+-- queda estable aunque el horario actual cambie.
+CALL mig_073_add_col('employee_schedule_history', 'work_days', 'VARCHAR(20) NULL AFTER night_end');
 
 DROP PROCEDURE IF EXISTS mig_073_add_col;
 

@@ -270,4 +270,13 @@ describe('loadScheduleHistory expone work_days', () => {
     const r = cfg.forDate(1, '2024-12-16'); // lunes
     expect(r.work_days).toEqual([2, 3, 4, 5, 6]);
   });
+
+  test('work_days se toma del SNAPSHOT del historial, no del schedules vivo', async () => {
+    // Si se leyera siempre del `schedules` vivo, editar un horario reescribiría
+    // la expectativa de los tramos históricos. El COALESCE prefiere h.work_days.
+    mockTablas({});
+    await loadWorkdayConfig([1], RANGO);
+    const sql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
+    expect(sql).toMatch(/COALESCE\(h\.work_days,\s*s\.work_days\)/);
+  });
 });

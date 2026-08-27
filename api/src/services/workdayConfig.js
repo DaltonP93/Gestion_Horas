@@ -112,7 +112,11 @@ async function loadScheduleHistory(employeeIds) {
       h.daily_target_minutes,
       h.night_start,
       h.night_end,
-      s.work_days
+      -- Snapshot del historial si lo tiene; si no, el schedules vivo como
+      -- respaldo. Preferir h.work_days evita que editar un horario reescriba
+      -- retroactivamente la expectativa de los tramos históricos, por el mismo
+      -- motivo por el que el schedule_id ACTUAL del empleado no entra acá.
+      COALESCE(h.work_days, s.work_days) AS work_days
     FROM employee_schedule_history h
     LEFT JOIN schedules s ON s.id = h.schedule_id
     WHERE h.employee_id IN (${marcas(ids.length)})

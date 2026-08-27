@@ -212,10 +212,15 @@ async function main() {
         const diaVacio = fila.calculation_mode === null;
 
         // Día vacío sin configuración: se cuenta en su bucket propio y NO como
-        // diferencia. Es el caso central de 2022-2025 —sin horario cargado no
-        // sabemos si hubo ausencia— y contarlo como diff fabricaría ausencias.
-        if (diaVacio && fila.status === ds.STATUS.UNCONFIGURED && !g) {
+        // diferencia, EXISTA O NO fila guardada. Es el caso central de
+        // 2022-2025 —sin horario cargado no sabemos si hubo ausencia—: si el
+        // daily_summary viejo ya tiene un 'absent'/'weekend' para esa fecha,
+        // compararlo contra 'unconfigured' reportaría un cambio de estado
+        // falso, que es justo lo que este bucket evita. Se marca vista para
+        // que el loop de "guardadas no vistas" tampoco la re-cuente.
+        if (diaVacio && fila.status === ds.STATUS.UNCONFIGURED) {
           resumen.unconfigured_no_punches++;
+          vistas.add(fila.date);
           continue;
         }
 
