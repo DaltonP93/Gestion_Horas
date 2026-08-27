@@ -12,6 +12,15 @@
  * propiedad estructural: correr el reporte N veces no puede dejar el heap
  * creciendo de forma monótona.
  *
+ * MEDIR RETENCIÓN NECESITA GC DETERMINISTA
+ *
+ * Sin recolección forzada, el heap puede subir corrida tras corrida sin que
+ * haya fuga: es sólo GC perezoso que todavía no corrió. En CI, que no lanza
+ * node con `--expose-gc`, `global.gc` es undefined y esa deriva hacía flaquear
+ * el test —cinco lecturas crecientes por casualidad—. Acá se habilita el GC
+ * PROGRAMÁTICAMENTE, así la medición es la misma corra como corra el runner:
+ * lo que quede después de un `gc()` explícito sí es retención.
+ *
  * LO QUE ESTE TEST NO ES
  *
  * No es una medición del consumo en producción, y no pretende serlo: acá no
@@ -20,6 +29,14 @@
  * ausencia de RETENCIÓN en el código del reporte, que es la parte que sí se
  * puede aislar. La magnitud se mide con el script, contra la base.
  */
+
+const v8 = require('v8');
+const vm = require('vm');
+
+// Habilita `gc()` sin depender de que node se haya lanzado con --expose-gc.
+// Es el mecanismo estándar para tests de memoria deterministas.
+v8.setFlagsFromString('--expose-gc');
+const forceGc = vm.runInNewContext('gc');
 
 jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn() },
@@ -93,29 +110,30 @@ describe('memoria del reporte de Marcadas', () => {
   }, 60000);
 
   test('cinco corridas seguidas no dejan el heap creciendo de forma monótona', async () => {
-    // Una corrida de calentamiento: la primera siempre infla el heap con
-    // código compilado y cachés de módulo que no son retención del reporte.
-    await generateMarcadasReport({ dateFrom: '2024-12-01', dateTo: '2025-01-29' });
-    if (global.gc) global.gc();
+    // Dos corridas de calentamiento: las primeras inflan el heap con código
+    // compilado y cachés de módulo que no son retención del reporte.
+    for (let i = 0; i < 2; i++) {
+      await generateMarcadasReport({ dateFrom: '2024-12-01', dateTo: '2025-01-29' });
+    }
+    forceGc();
     await respirar();
 
     const enReposo = [];
     for (let i = 0; i < 5; i++) {
       await generateMarcadasReport({ dateFrom: '2024-12-01', dateTo: '2025-01-29' });
-      if (global.gc) global.gc();
+      forceGc();
       await respirar();
       enReposo.push(heap());
     }
 
-    // Monótono creciente en LAS CINCO es la firma de la retención. Sin
-    // --expose-gc el ruido del GC hace que alguna baje, y eso ya descarta el
-    // crecimiento acumulativo, que es justamente lo que se quiere afirmar.
+    // Con GC forzado entre corridas, lo que queda es retención real. La firma
+    // es crecer SIEMPRE y por un margen que no se explica por ruido: 32 MB
+    // sobre 120 empleados x 60 días. Un reporte que retiene su dataset dejaría
+    // bastante más que eso por corrida.
     const siempreCrece = enReposo.every((v, i) => i === 0 || v > enReposo[i - 1]);
     const crecimientoTotal = enReposo[enReposo.length - 1] - enReposo[0];
 
-    // 64 MB sobre un dataset de 120 empleados x 60 días. Un reporte que retiene
-    // su dataset dejaría bastante más que eso por corrida.
-    expect(siempreCrece && crecimientoTotal > 64 * 1048576).toBe(false);
+    expect(siempreCrece && crecimientoTotal > 32 * 1048576).toBe(false);
   }, 120000);
 
   test('el resultado no conserva referencias a los marcajes crudos', async () => {
