@@ -15,9 +15,10 @@
  *   2. `employee_schedule_history` vigente para esa fecha. Es el horario
  *      habitual CON vigencia, que es lo que permite calcular el pasado.
  *
- *   3. `employee_contracts` vigente. Sólo aporta carga horaria; no define
- *      horas de entrada ni salida, así que por sí solo no habilita el cálculo
- *      de atraso.
+ *   3. `employee_contracts` vigente. Hoy sólo aporta la IDENTIDAD del contrato
+ *      (contract_id), no carga horaria ni horas de entrada/salida: la tabla
+ *      todavía no tiene esos campos. Por sí solo NO habilita el cálculo de
+ *      atraso; se adjunta para trazabilidad y para la FASE C posterior.
  *
  *   4. Nada → `historical_fallback`, y el motor describe lo que dicen los
  *      marcajes sin inventar un horario.
@@ -110,7 +111,8 @@ async function loadScheduleHistory(employeeIds) {
       h.weekly_target_minutes,
       h.daily_target_minutes,
       h.night_start,
-      h.night_end
+      h.night_end,
+      s.work_days
     FROM employee_schedule_history h
     LEFT JOIN schedules s ON s.id = h.schedule_id
     WHERE h.employee_id IN (${marcas(ids.length)})
@@ -172,8 +174,15 @@ async function loadShiftAssignments(employeeIds, { from, to }) {
 /**
  * Contratos que se solapan con el rango.
  *
- * Aportan la carga horaria, no el horario. Un contrato dice cuánto debe
- * trabajar la persona, no a qué hora entra.
+ * Lo que HOY aporta esta consulta es sólo la IDENTIDAD del contrato vigente
+ * (contract_id) y su vigencia. `employee_contracts` todavía NO tiene carga
+ * horaria (weekly_target/daily_target), así que el motor NO obtiene de acá el
+ * objetivo semanal —ese dato viene de `employee_schedule_history` cuando está
+ * cargado—. Adjuntar el contract_id sirve para trazabilidad y para que la
+ * FASE C posterior, cuando el contrato lleve carga horaria, tenga dónde
+ * colgarla sin cambiar la forma de esta resolución.
+ *
+ * En resumen: por ahora el contrato dice QUIÉN, no CUÁNTO.
  */
 async function loadContracts(employeeIds, { from, to }) {
   const ids = idsValidos(employeeIds);
@@ -335,7 +344,33 @@ function normalizeConfigRow(r) {
     daily_target_minutes: num(r.daily_target_minutes),
     night_start: hora(r.night_start),
     night_end: hora(r.night_end),
+    // Días laborables del horario, ya normalizados a un array de DAYOFWEEK
+    // (1=Domingo … 7=Sábado, la convención de la migración 046). Se resuelve
+    // acá una sola vez para que el CSV crudo no circule por todo el motor.
+    work_days: parseWorkDays(r.work_days),
   };
+}
+
+/**
+ * "1,2,3,4,5" → [1,2,3,4,5], en la convención DAYOFWEEK del proyecto.
+ *
+ * IMPORTANTE: la convención NO es la de JavaScript. Tras la migración 046,
+ * `schedules.work_days` usa DAYOFWEEK de MySQL: 1=Domingo, 2=Lunes … 7=Sábado.
+ * El default sembrado es '2,3,4,5,6' (lunes a viernes). Confundirla con
+ * 0=Domingo correría todos los días laborables uno, así que la conversión al
+ * comparar contra una fecha tiene que sumar 1 al día JS (0=Dom → 1=Dom).
+ *
+ * Devuelve `null` —no `[]`— cuando no hay dato: un horario sin work_days
+ * cargado no dice "no trabaja ningún día", dice "no sabemos qué días". Esa
+ * distinción es la que evita fabricar descansos inventados.
+ */
+function parseWorkDays(value) {
+  if (value == null || value === '') return null;
+  const dias = String(value)
+    .split(',')
+    .map((t) => Number(t.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
+  return dias.length ? [...new Set(dias)].sort((a, b) => a - b) : null;
 }
 
 module.exports = {
@@ -344,6 +379,7 @@ module.exports = {
   loadShiftAssignments,
   loadContracts,
   normalizeConfigRow,
+  parseWorkDays,
   vigenteEn,
   configDesdeTurnera,
 };

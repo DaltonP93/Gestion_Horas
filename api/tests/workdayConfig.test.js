@@ -228,3 +228,46 @@ describe('normalizeConfigRow', () => {
     expect(normalizeConfigRow({}).break_mode).toBe('punched');
   });
 });
+
+describe('parseWorkDays — convención DAYOFWEEK del proyecto', () => {
+  const { parseWorkDays } = require('../src/services/workdayConfig');
+
+  test('normaliza el CSV a un array ordenado y sin duplicados', () => {
+    expect(parseWorkDays('2,3,4,5,6')).toEqual([2, 3, 4, 5, 6]);
+    expect(parseWorkDays('7,1,1,2')).toEqual([1, 2, 7]);
+  });
+
+  test('null y vacío significan "no sabemos", no "ningún día"', () => {
+    // La distinción evita fabricar descansos: sin work_days no se puede afirmar
+    // que un día era libre.
+    expect(parseWorkDays(null)).toBeNull();
+    expect(parseWorkDays('')).toBeNull();
+    expect(parseWorkDays('   ')).toBeNull();
+  });
+
+  test('descarta tokens fuera de 1..7', () => {
+    expect(parseWorkDays('0,8,3')).toEqual([3]);
+    expect(parseWorkDays('a,b')).toBeNull();
+  });
+
+  test('la convención es 1=Domingo … 7=Sábado (migración 046)', () => {
+    // Lunes a viernes = 2,3,4,5,6. Domingo = 1, Sábado = 7.
+    const lv = parseWorkDays('2,3,4,5,6');
+    expect(lv).not.toContain(1); // no domingo
+    expect(lv).not.toContain(7); // no sábado
+  });
+});
+
+describe('loadScheduleHistory expone work_days', () => {
+  test('el horario carga work_days del schedule y lo normaliza', async () => {
+    mockTablas({
+      history: [{
+        employee_id: 1, schedule_id: 5, valid_from: '2024-01-01', valid_to: null,
+        check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6',
+      }],
+    });
+    const cfg = await loadWorkdayConfig([1], RANGO);
+    const r = cfg.forDate(1, '2024-12-16'); // lunes
+    expect(r.work_days).toEqual([2, 3, 4, 5, 6]);
+  });
+});
