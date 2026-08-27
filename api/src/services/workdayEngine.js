@@ -153,6 +153,8 @@ const ANOMALY = Object.freeze({
   JORNADA_EXCESIVA: 'jornada_excesiva',
   /** Valor de `timestamp` que no se pudo interpretar. */
   MARCAJE_ILEGIBLE: 'marcaje_ilegible',
+  /** Dos o más jornadas reales en la misma fecha civil, agregadas en una fila. */
+  MULTIPLE_WORKDAYS_SAME_DATE: 'multiple_workdays_same_date',
 });
 
 /**

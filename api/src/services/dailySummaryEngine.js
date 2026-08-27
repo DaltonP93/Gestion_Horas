@@ -54,23 +54,111 @@ const WORKED_PRESENCE = 'presence';
 const WORKED_NET = 'worked';
 
 /**
- * Estado del día.
+ * Estados que emite el motor.
  *
- * `holiday` y `weekend` sólo aplican cuando NO hubo marcajes: si la persona
- * trabajó un feriado, el día cuenta como trabajado y el feriado se refleja en
- * las horas extra, no en el estado. Es el criterio que ya tenía el sistema y
- * se conserva.
+ * Los primeros seis existen en el ENUM de `daily_summary`. Los dos últimos NO:
+ *
+ *   'non_working'   día de descanso por CONFIGURACIÓN, no por ser sábado o
+ *                   domingo. Puede caer un martes.
+ *   'unconfigured'  no hay configuración histórica ni marcajes: no sabemos si
+ *                   la persona debía trabajar. NO es ausencia.
+ *
+ * Persistir estos dos requiere una migración aditiva del ENUM (ver
+ * docs/motor-jornada.md, §día vacío). Este PR NO la ejecuta: el motor los
+ * emite para el dry-run y para la FASE C, pero `daily_summary` no se escribe.
  */
-function statusDe({ jornada, isHoliday, isWeekend }) {
-  if (!jornada) {
-    if (isHoliday) return 'holiday';
-    if (isWeekend) return 'weekend';
-    return 'absent';
+const STATUS = Object.freeze({
+  PRESENT: 'present',
+  LATE: 'late',
+  ABSENT: 'absent',
+  HOLIDAY: 'holiday',
+  PERMISSION: 'permission',
+  WEEKEND: 'weekend',
+  NON_WORKING: 'non_working',
+  UNCONFIGURED: 'unconfigured',
+});
+
+/**
+ * ¿La persona DEBÍA trabajar esa fecha? true | false | null.
+ *
+ * Sale de la CONFIGURACIÓN EFECTIVA, nunca de que sea sábado o domingo:
+ * SisHoras tiene gente que trabaja domingo, descansa un día de semana o rota
+ * por Turnera. Hardcodear el fin de semana fabricaría descansos y ausencias
+ * que la configuración contradice.
+ *
+ *   true   hay evidencia de que debía trabajar (turnera de trabajo, o el
+ *          horario vigente incluye ese día de la semana).
+ *   false  la configuración dice que era libre (off/vacaciones/permiso, o el
+ *          horario excluye ese día).
+ *   null   no hay configuración suficiente. NO se puede afirmar ausencia.
+ *
+ * `work_days` usa la convención DAYOFWEEK del proyecto (1=Domingo … 7=Sábado,
+ * migración 046); `dayOfWeekISO` devuelve 0=Domingo, así que se suma 1.
+ */
+function resolveExpectation(cfg, date) {
+  if (!cfg) return { expected: null, kind: null };
+
+  if (cfg.non_working) {
+    return { expected: false, kind: cfg.kind || 'off' };
   }
+  if (cfg.source === 'shift_assignment') {
+    // Asignación de turnera de trabajo para esa fecha exacta.
+    return { expected: true, kind: 'work' };
+  }
+  if (Array.isArray(cfg.work_days) && cfg.work_days.length) {
+    const dow = engine.dayOfWeekISO(date) + 1; // JS 0=Dom → DAYOFWEEK 1=Dom
+    return cfg.work_days.includes(dow)
+      ? { expected: true, kind: 'work' }
+      : { expected: false, kind: 'rest_day' };
+  }
+  // Hay algo de configuración pero sin work_days (p. ej. una fila de historial
+  // que declara "sin horario"): no sabemos qué días correspondían. Conservador:
+  // desconocido, para no inventar ni ausencia ni descanso.
+  return { expected: null, kind: null };
+}
+
+/**
+ * Estado de un día CON jornada (hubo marcajes).
+ *
+ * Trabajar un feriado cuenta como trabajado: el feriado se refleja en las
+ * horas extra, no en el estado. Se conserva el criterio previo.
+ */
+function statusWorked(jornada) {
   if (jornada.non_working_kind === 'vacation' || jornada.non_working_kind === 'permiso') {
-    return 'permission';
+    return STATUS.PERMISSION;
   }
-  return (jornada.late_minutes || 0) > 0 ? 'late' : 'present';
+  return (jornada.late_minutes || 0) > 0 ? STATUS.LATE : STATUS.PRESENT;
+}
+
+/**
+ * Estado de un día SIN jornada (no hubo marcajes).
+ *
+ * El feriado se evalúa ANTES que la ausencia a propósito: un feriado nacional
+ * cae en día laborable, y marcar `absent` a todo el padrón cada feriado sería
+ * fabricar exactamente las ausencias masivas que el modelo quiere evitar. El
+ * dato de si "debía trabajar" no se pierde: viaja aparte en `expected_workday`.
+ */
+function statusEmptyDay(expectation, isHoliday) {
+  if (expectation.kind === 'vacation' || expectation.kind === 'permiso') {
+    return STATUS.PERMISSION;
+  }
+  if (isHoliday) return STATUS.HOLIDAY;
+  if (expectation.expected === false) return STATUS.NON_WORKING;
+  if (expectation.expected === true) return STATUS.ABSENT;
+  return STATUS.UNCONFIGURED; // expected === null
+}
+
+/**
+ * Compat: firma vieja usada por algunos tests. `isWeekend` se ignora
+ * deliberadamente —el fin de semana ya no decide el estado— y se traduce a la
+ * semántica nueva de expectativa.
+ */
+function statusDe({ jornada, isHoliday = false, isWeekend = false }) {
+  if (jornada) return statusWorked(jornada);
+  // Sin expectativa explícita: un weekend legacy se trata como no laborable
+  // conocido; en cualquier otro caso, ausencia (comportamiento previo del test).
+  const expectation = isWeekend ? { expected: false, kind: 'rest_day' } : { expected: true, kind: 'work' };
+  return statusEmptyDay(expectation, isHoliday);
 }
 
 /**
@@ -104,28 +192,39 @@ function buildDailySummaryRows(punches, options = {}) {
   const { workdays } = engine.buildWorkdays(punches, options);
   const delPeriodo = engine.clipToPeriod(workdays, { from, to });
 
-  // Una jornada por fecha. Si dos jornadas cayeran en la misma work_date
-  // —turno partido separado por más de la pausa máxima— gana la primera, que
-  // es la que fija la primera entrada del día.
+  // Configuración efectiva por fecha, también para las fechas SIN jornada:
+  // sin esto, un día de vacaciones o un domingo libre sin marcajes nunca vería
+  // su configuración y terminaría materializado como ausencia.
+  const cfgFor = (date) => options.config
+    || (typeof options.resolveConfig === 'function' ? options.resolveConfig(date) : null)
+    || null;
+
+  // TODAS las jornadas de cada fecha, no sólo la primera. Dos jornadas reales
+  // del mismo día —06:00-10:00 y 16:00-20:00, separadas por más de la pausa
+  // máxima— comparten work_date, y descartar una perdería sus horas.
   const porFecha = new Map();
-  for (const j of delPeriodo) if (!porFecha.has(j.work_date)) porFecha.set(j.work_date, j);
+  for (const j of delPeriodo) {
+    const arr = porFecha.get(j.work_date) || [];
+    arr.push(j);
+    porFecha.set(j.work_date, arr);
+  }
 
   const filas = [];
   for (const date of fechasDelPeriodo(from, to)) {
     const isHoliday = holidays.has(date);
-    const dow = engine.dayOfWeekISO(date);
-    const isWeekend = dow === 0 || dow === 6;
-    const j = porFecha.get(date);
+    const cfg = cfgFor(date);
+    const expectation = resolveExpectation(cfg, date);
+    const lista = porFecha.get(date);
 
-    if (!j) {
-      // Sin jornada. Sólo se materializa si corresponde y si la fecha aporta
-      // un estado propio: un día laborable sin marcajes es `absent`, pero
-      // materializar todos los ausentes de un rango largo puede ser mucho, así
-      // que queda bajo el flag.
+    if (!lista || !lista.length) {
       if (!materializeEmptyDates) continue;
-      filas.push(filaVacia(date, statusDe({ jornada: null, isHoliday, isWeekend })));
+      filas.push(filaVacia(date, statusEmptyDay(expectation, isHoliday), expectation, cfg));
       continue;
     }
+
+    // Una sola jornada, o la agregación determinista de varias del mismo día.
+    const j = lista.length === 1 ? lista[0] : aggregateWorkdays(lista);
+    const anomalyCodes = j.anomalies.map((a) => (typeof a === 'string' ? a : a.code));
 
     filas.push({
       date,
@@ -145,19 +244,83 @@ function buildDailySummaryRows(punches, options = {}) {
       // en una liquidación; queda en 0 hasta que exista esa política.
       overtime_minutes: 0,
       contract_excess_minutes: j.contract_excess_minutes,
-      status: statusDe({ jornada: j, isHoliday, isWeekend }),
+      status: statusWorked(j),
+      // Debía trabajar o no, independiente del estado: un feriado trabajado es
+      // 'present' pero `expected_workday` puede ser true.
+      expected_workday: expectation.expected,
       schedule_id: j.schedule_id,
       calculation_mode: j.calculation_mode,
       policy_version: j.policy_version,
-      anomalies: j.anomalies.map((a) => a.code),
+      anomalies: anomalyCodes,
+      workday_count: lista.length,
       crosses_midnight: j.crosses_midnight,
     });
   }
   return filas;
 }
 
-/** Fila de un día sin jornada: ceros y el estado que corresponda. */
-function filaVacia(date, status) {
+/**
+ * Agrega varias jornadas de la MISMA fecha civil en una fila determinista.
+ *
+ * `daily_summary` es una fila por empleado y fecha, así que dos jornadas del
+ * mismo día tienen que combinarse sin perder ninguna. La regla:
+ *
+ *   first_in         primera entrada de todas.
+ *   last_out         última salida de todas.
+ *   presence_minutes SPAN total del día (primera entrada → última salida),
+ *                    coherente con lo que la columna guarda; incluye el hueco
+ *                    entre jornadas, que es lo que de verdad transcurrió.
+ *   segment/worked/  SUMA: no se pierde ningún tramo.
+ *   break/night/day
+ *   late_minutes     de la PRIMERA jornada: el atraso es sobre la llegada del
+ *                    día, no algo que se sume por jornada.
+ *
+ * Se marca con la anomalía MULTIPLE_WORKDAYS_SAME_DATE para que el caso quede
+ * visible y revisable en vez de agregarse en silencio.
+ */
+function aggregateWorkdays(lista) {
+  const ordenadas = [...lista].sort((a, b) => (a.first_in < b.first_in ? -1 : 1));
+  const primera = ordenadas[0];
+  const ultima = ordenadas[ordenadas.length - 1];
+
+  const inWall = engine.toWall(primera.first_in);
+  const outWall = ultima.last_out ? engine.toWall(ultima.last_out) : null;
+  const presence = (inWall && outWall)
+    ? Math.max(0, Math.floor((outWall.abs - inWall.abs) / 60))
+    : 0;
+
+  const sum = (campo) => ordenadas.reduce((acc, j) => acc + (j[campo] || 0), 0);
+  const codes = new Set();
+  for (const j of ordenadas) for (const a of j.anomalies) codes.add(typeof a === 'string' ? a : a.code);
+  codes.add(engine.ANOMALY.MULTIPLE_WORKDAYS_SAME_DATE);
+
+  return {
+    work_date: primera.work_date,
+    first_in: primera.first_in,
+    last_out: ultima.last_out,
+    presence_minutes: presence,
+    segment_minutes: sum('segment_minutes'),
+    worked_minutes: sum('worked_minutes'),
+    break_minutes: sum('break_minutes'),
+    late_minutes: primera.late_minutes || 0,
+    night_minutes: sum('night_minutes'),
+    day_minutes: sum('day_minutes'),
+    // El exceso contractual se deriva del objetivo diario contra el total; con
+    // dos jornadas la resta cambia y no se puede sumar sin arrastrar el
+    // objetivo dos veces. Se deja en null: la anomalía marca que hay que
+    // revisar cómo se valoriza, en vez de dar un número que parece cerrado.
+    contract_excess_minutes: null,
+    crosses_midnight: ordenadas.some((j) => j.crosses_midnight),
+    schedule_id: primera.schedule_id,
+    calculation_mode: primera.calculation_mode,
+    policy_version: primera.policy_version,
+    non_working_kind: primera.non_working_kind,
+    anomalies: [...codes],
+  };
+}
+
+/** Fila de un día sin jornada: ceros, el estado y la expectativa que corresponda. */
+function filaVacia(date, status, expectation, cfg) {
   return {
     date,
     first_in: null,
@@ -170,10 +333,12 @@ function filaVacia(date, status) {
     overtime_minutes: 0,
     contract_excess_minutes: null,
     status,
-    schedule_id: null,
+    expected_workday: expectation ? expectation.expected : null,
+    schedule_id: cfg && cfg.schedule_id != null ? cfg.schedule_id : null,
     calculation_mode: null,
     policy_version: null,
     anomalies: [],
+    workday_count: 0,
     crosses_midnight: false,
   };
 }
@@ -229,6 +394,11 @@ module.exports = {
   buildDailySummaryRows,
   compararFila,
   statusDe,
+  statusWorked,
+  statusEmptyDay,
+  resolveExpectation,
+  aggregateWorkdays,
+  STATUS,
   WORKED_PRESENCE,
   WORKED_NET,
 };

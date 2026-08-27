@@ -215,6 +215,69 @@ al medio y perdería seis horas.
 Para que eso funcione, la lectura de marcajes se extiende un día a cada lado
 del período (`punchWindow`). El límite superior es exclusivo.
 
+**Reporte de Marcadas — empleados vacíos.** Un empleado activo sin ninguna
+jornada dentro del período **no aparece** en el reporte. Antes se incluía con
+`rows: []` y total 0, lo que en el PDF generaba páginas en blanco. El filtro se
+aplica **después** del recorte por `work_date`: puede haber marcajes en la
+ventana ampliada que son sólo contexto del día anterior o siguiente y no una
+jornada del período.
+
+---
+
+## 6 bis. El día sin marcaje — `expected_workday`
+
+Un día sin fichajes **no es automáticamente una ausencia**. El sistema
+distingue tres cosas, y la diferencia es la que evita fabricar miles de
+ausencias falsas en el histórico 2022-2025:
+
+| `expected_workday` | significado | estado del día vacío |
+|---|---|---|
+| `true` | la configuración dice que **debía** trabajar | `absent` |
+| `false` | la configuración dice que era **libre** | `non_working` / `permission` |
+| `null` | **no hay configuración**: no sabemos | `unconfigured` |
+
+`expected_workday` sale de la **configuración efectiva**, nunca de que sea
+sábado o domingo. SisHoras tiene gente que trabaja domingo, descansa un día de
+semana o rota por Turnera; hardcodear el fin de semana contradiría esa
+configuración. La convención de `schedules.work_days` es **DAYOFWEEK**
+(`1=Domingo … 7=Sábado`, migración 046); el motor la compara sumando 1 al día
+JS.
+
+**Precedencia del estado en un día sin marcaje:**
+
+1. Turnera `vacation` / `permiso` → `permission`.
+2. Feriado → `holiday`. Se evalúa **antes** que la ausencia a propósito: un
+   feriado nacional cae en día laborable, y marcar `absent` a todo el padrón
+   cada feriado sería la ausencia masiva que se quiere evitar. `expected_workday`
+   no se pierde: viaja aparte.
+3. Turnera `off` o día excluido por `work_days` → `non_working`.
+4. Día incluido por `work_days` (o turnera de trabajo) → `absent`.
+5. Sin configuración → `unconfigured`.
+
+Los estados `non_working` y `unconfigured` **no existen** en el ENUM actual de
+`daily_summary.status`. Persistirlos requiere la migración **074** (propuesta,
+aditiva, **no ejecutada**). Mientras tanto el motor los emite igual para el
+dry-run y la auditoría; sólo falta poder guardarlos, y eso importa recién
+cuando se habilite la escritura.
+
+## 6 ter. Dos jornadas en la misma fecha
+
+`daily_summary` es una fila por empleado y fecha, pero una persona puede tener
+**dos jornadas reales el mismo día** (06:00-10:00 y 16:00-20:00, separadas por
+más que la pausa máxima). Descartar una perdería sus horas, así que se
+**agregan** de forma determinista:
+
+- `first_in` = primera entrada de todas; `last_out` = última salida de todas.
+- `presence_minutes` = span total (primera entrada → última salida).
+- tramos, trabajado, descanso, diurno/nocturno = **suma**.
+- `late_minutes` = de la primera jornada (el atraso es sobre la llegada del día).
+- se marca la anomalía `multiple_workdays_same_date` para que el caso quede
+  visible y revisable, no agregado en silencio.
+
+El exceso contractual (`contract_excess_minutes`) queda en `null` al agregar:
+depende del objetivo diario contra el total, y sumarlo por jornada arrastraría
+el objetivo dos veces. La anomalía señala que hay que revisar cómo se valoriza.
+
 ---
 
 ## 7. Verificar contra datos reales — sin escribir nada
@@ -270,29 +333,38 @@ Contra un `max_memory_restart` de 512 MB, con RSS observado de hasta 1,28 GB,
 eso es el reinicio del proceso y el 502 que lo acompaña.
 
 Ahora la lectura es por lotes de empleados y el pico depende del **lote**, no
-del período. Medición sobre 300 empleados × 365 días × 4 marcajes (438.000
-marcajes, sólo el trabajo en proceso, sin contar el result-set del driver):
+del período. El RSS casi no se mueve en el camino nuevo porque **nunca
+materializa el dataset completo**: lo que crecía con el largo del período era
+exactamente eso.
 
-| | pico | tiempo |
-|---|---|---|
-| todo en un array (anterior) | +46,2 MB RSS / +35,8 MB heap | 1.209 ms |
-| por lotes de 50 (motor) | **+0,3 MB RSS / +29,1 MB heap** | **250 ms** |
+### Mock vs. servidor — qué demuestra cada uno
 
-(300 empleados × 62 días × 4 marcajes = 74.400 marcajes, 4 iteraciones.)
-
-El RSS casi no se mueve en el camino nuevo porque **nunca materializa el
-dataset completo**: lo que crecía con el largo del período era exactamente eso.
-
-Para medir contra la base real:
+El test de memoria de CI (`marcadasMemory.test.js`) demuestra una **propiedad
+estructural** con la base mockeada: que el reporte no retiene memoria entre
+corridas. **No** mide el RSS real del API, porque no hay `mysql2`, ni
+`sequelize`, ni `PDFKit`, ni el runtime productivo. Esa brecha se cierra
+corriendo el benchmark **en el servidor**, en horario de baja carga:
 
 ```bash
 node --expose-gc scripts/benchmark-marcadas-memory.js --iterations 5 --out ./bench
 ```
 
-Informa `rss`, `heapUsed`, `heapTotal` y `external` —dicen cosas distintas:
-`rss` es lo que mira PM2 para reiniciar, `external` cubre los `Buffer` donde
-vive un PDF— y sale con código 1 si algún escenario supera los 512 MB o si
-crece de forma sostenida entre corridas.
+Escenarios: `json-mes`, `json-dos-meses`, `json-trimestre`, `pdf-mes` (y
+`json-empleado` con `--employee`). El PDF se mide con el **mismo**
+`renderMarcadasPdf` que sirve la ruta —extraído a `services/marcadasPdf.js`
+justamente para eso—, no con una copia. Informa `rss`, `heapUsed`, `heapTotal`
+y `external` —dicen cosas distintas: `rss` es lo que mira PM2 para reiniciar,
+`external` cubre los `Buffer` donde vive el PDF— y sale con código 1 si algún
+escenario supera los 512 MB o si crece de forma sostenida entre corridas.
+**Nunca lo ejecuta Claude contra producción.**
+
+Medición local (mock, sin driver; 300 empleados × 62 días × 4 marcajes =
+74.400 marcajes, 4 iteraciones):
+
+| | pico | tiempo |
+|---|---|---|
+| todo en un array (anterior) | +46,2 MB RSS / +35,8 MB heap | 1.209 ms |
+| por lotes de 50 (motor) | **+0,3 MB RSS / +29,1 MB heap** | **250 ms** |
 
 Además, el rango pasó a ser sargable: `al.timestamp >= ? AND < ?` en lugar de
 `DATE(al.timestamp) BETWEEN ? AND ?`, que obligaba a evaluar la función sobre
@@ -352,9 +424,17 @@ node scripts/daily-summary-dryrun.js --from 2025-01-01 --to 2025-01-31
 ```
 
 Contrasta fila por fila contra lo guardado y clasifica cada diferencia **por
-campo**. Cuenta aparte las filas guardadas que el motor ya no produce —el turno
-nocturno que el algoritmo anterior partía en dos días—, porque eso no es una
-diferencia de minutos sino de estructura. **No escribe nada.**
+campo**. Cuenta aparte:
+
+- **las filas guardadas que el motor ya no produce** —el turno nocturno que el
+  algoritmo anterior partía en dos días—, que no es una diferencia de minutos
+  sino de estructura;
+- **`unconfigured_no_punches`** —días sin configuración histórica y sin
+  marcajes—, que **no se cuentan como diferencia funcional**: sin horario
+  cargado no sabemos si hubo ausencia, y contarlos convertiría la falta de
+  configuración de 2022-2025 en miles de ausencias falsas.
+
+**No escribe nada.**
 
 ---
 
@@ -362,8 +442,12 @@ diferencia de minutos sino de estructura. **No escribe nada.**
 
 - `daily_summary` **no** fue recalculado y el camino de escritura sigue siendo
   el anterior: `dailySummaryEngine` está listo pero nadie lo invoca todavía.
-- Las migraciones 072 y 073 **no** fueron ejecutadas en producción.
-- No hay UI para cargar tramos de vigencia todavía.
+- Las migraciones 072, 073 y 074 **no** fueron ejecutadas en producción. La
+  074 (ENUM `non_working`/`unconfigured`) es requisito para PERSISTIR esos
+  estados; hasta entonces el motor los emite pero no se pueden guardar.
+- `employee_contracts` todavía **no** tiene carga horaria: hoy el contrato
+  aporta identidad y vigencia, no objetivo semanal. Esa carga es FASE C.
+- No hay UI para cargar tramos de vigencia todavía (FASE C).
 - `legacyWorkday.js` es código muerto por diseño: existe sólo como referencia
   de auditoría. Cuando el motor esté validado y ya no haga falta comparar, se
   borra entero.

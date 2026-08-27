@@ -153,6 +153,11 @@ async function main() {
     difieren: 0,
     sin_fila_guardada: 0,
     sin_jornada_calculada: 0,
+    // Días sin configuración histórica y sin marcajes: NO sabemos si la persona
+    // debía trabajar. Se cuentan aparte y NO como diferencia funcional, para no
+    // convertir la falta de configuración de 2022-2025 en miles de ausencias
+    // falsas contra daily_summary.
+    unconfigured_no_punches: 0,
     por_campo: {},
   };
   const detalle = [];
@@ -204,15 +209,22 @@ async function main() {
       const vistas = new Set();
       for (const fila of filas) {
         const g = guardadaDe.get(`${emp.employee_id}|${fila.date}`);
+        const diaVacio = fila.calculation_mode === null;
 
-        // Un día SIN jornada y SIN fila guardada no es un cambio que este
-        // dry-run deba reportar: qué recálculo materializa los ausentes puros
-        // es una decisión aparte, y contarlos acá ahogaría las diferencias
-        // reales (un rango largo tiene muchísimos días sin marcar). Los días
-        // sin jornada que SÍ tienen fila guardada sí se comparan: es
-        // precisamente el caso que valida que un absent/holiday/weekend
+        // Día vacío sin configuración: se cuenta en su bucket propio y NO como
+        // diferencia. Es el caso central de 2022-2025 —sin horario cargado no
+        // sabemos si hubo ausencia— y contarlo como diff fabricaría ausencias.
+        if (diaVacio && fila.status === ds.STATUS.UNCONFIGURED && !g) {
+          resumen.unconfigured_no_punches++;
+          continue;
+        }
+
+        // Otros días vacíos SIN fila guardada: qué recálculo materializa
+        // ausentes/descansos puros es una decisión aparte, y contarlos acá
+        // ahogaría las diferencias reales. Los días vacíos que SÍ tienen fila
+        // guardada sí se comparan: valida que un absent/holiday/weekend/permission
         // guardado coincide con lo que el motor produciría.
-        if (fila.calculation_mode === null && !g) continue;
+        if (diaVacio && !g) continue;
         vistas.add(fila.date);
 
         const cmp = ds.compararFila(g, fila);
@@ -272,6 +284,7 @@ async function main() {
   console.log(`Difieren                  : ${resumen.difieren}`);
   console.log(`  sin fila guardada       : ${resumen.sin_fila_guardada}`);
   console.log(`  sin jornada calculada   : ${resumen.sin_jornada_calculada}`);
+  console.log(`Sin config y sin marcas   : ${resumen.unconfigured_no_punches}  (no es diferencia)`);
   console.log('');
   console.log('Diferencias por campo:');
   const campos = Object.entries(resumen.por_campo).sort((a, b) => b[1] - a[1]);
