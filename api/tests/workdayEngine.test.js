@@ -864,3 +864,61 @@ describe('reparto diurno / nocturno', () => {
     expect(workdays[0].day_minutes).toBe(120);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// 16. Correcciones de la revisión de Codex (PR #147)
+// ═════════════════════════════════════════════════════════════════════
+
+describe('franja nocturna desde la configuración resuelta', () => {
+  // La config resuelta trae night_start/night_end como TIME; los callers de
+  // producción no fijan nightStartMinute/nightEndMinute de nivel superior, así
+  // que sin tomar el intervalo de la config un turno 20:00-06:00 daba night 0.
+  test('resolveConfig con night_start/night_end reparte los minutos', () => {
+    const { workdays } = buildWorkdays(
+      [
+        { timestamp: '2025-01-02 22:00:00', type: 'in' },
+        { timestamp: '2025-01-03 06:00:00', type: 'out' },
+      ],
+      {
+        resolveConfig: () => ({
+          check_in: '22:00', check_out: '06:00',
+          night_start: '20:00:00', night_end: '06:00:00',
+          source: 'schedule_history',
+        }),
+      },
+    );
+    expect(workdays[0].night_minutes).toBe(480);
+    expect(workdays[0].day_minutes).toBe(0);
+  });
+
+  test('un día no laborable no aplica la franja aunque la config la traiga', () => {
+    const { workdays } = buildWorkdays(
+      marcas('2025-01-02 22:00:00', '2025-01-03 02:00:00'),
+      {
+        resolveConfig: () => ({
+          non_working: true, kind: 'vacation',
+          night_start: '20:00:00', night_end: '06:00:00',
+        }),
+      },
+    );
+    expect(workdays[0].night_minutes).toBe(0);
+  });
+});
+
+describe('anomalía de duplicado en el cierre queda en su jornada', () => {
+  // Un OUT duplicado posterior al OUT retenido tiene su hora DESPUÉS del cierre
+  // de la jornada; un filtro por sólo rango temporal lo dejaba en la lista
+  // global, que el reporte descarta, volviéndolo invisible.
+  test('17:00:00 out + 17:00:30 out: el duplicado se ve en la jornada', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-01-02 08:00:00', type: 'in', id: 1 },
+      { timestamp: '2025-01-02 17:00:00', type: 'out', id: 2 },
+      { timestamp: '2025-01-02 17:00:30', type: 'out', id: 3 },
+    ]);
+    expect(workdays).toHaveLength(1);
+    expect(workdays[0].anomalies.map((a) => a.code)).toContain(ANOMALY.MARCAJE_DUPLICADO);
+    expect(workdays[0].segments[0].source_logs).toEqual([1, 2, 3]);
+    // No debe quedar huérfana en la lista global.
+    expect(anomalies).toEqual([]);
+  });
+});

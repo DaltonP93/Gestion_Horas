@@ -289,6 +289,21 @@ function dayOfWeekISO(dateISO) {
   return ((days % 7) + 4 + 7) % 7;
 }
 
+/**
+ * "HH:mm" o "HH:mm:ss" → minuto del día (0..1439). null si no se interpreta.
+ *
+ * Los segundos se ignoran a propósito: la franja nocturna se define al minuto,
+ * y arrastrarlos sólo agregaría ruido al reparto diurno/nocturno.
+ */
+function timeToMinute(value) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(value || '').trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
 /** Minutos → 'H:mm'. Nunca negativo. */
 function minutesToHM(mins) {
   const m = Math.max(0, Math.round(mins || 0));
@@ -394,7 +409,13 @@ function normalizePunches(punches, opts) {
       if (prev.type === 'unknown' && p.type !== 'unknown') prev.type = p.type;
       prev.duplicates = (prev.duplicates || 0) + 1;
       if (p.id != null) prev.logIds.push(p.id);
-      duplicados.push({ code: ANOMALY.MARCAJE_DUPLICADO, at: p.datetime, log_id: p.id });
+      // `log_ids` como array (no `log_id`) para que la asignación a la jornada
+      // por pertenencia de log funcione igual que con las demás anomalías.
+      duplicados.push({
+        code: ANOMALY.MARCAJE_DUPLICADO,
+        at: p.datetime,
+        log_ids: p.id != null ? [p.id] : [],
+      });
       continue;
     }
     out.push(p);
@@ -686,11 +707,28 @@ function buildWorkdays(punches, options = {}) {
     const descuento = breakMode === BREAK_FIXED_UNPAID ? breakMinutes : 0;
     const workedMinutes = Math.max(0, segmentMinutes - descuento);
 
+    // Reparto de anomalías a SU jornada. El criterio primario es el log_id:
+    // una anomalía cuyo marcaje pertenece a esta jornada es de esta jornada,
+    // aunque su hora caiga fuera del rango primera-entrada→última-salida. Ese
+    // caso ocurre de verdad: un OUT duplicado a las 17:00:30 posterior al OUT
+    // retenido de 17:00:00 tiene su `at` DESPUÉS del cierre, así que un filtro
+    // por sólo tiempo lo dejaba en la lista global y `armarFilasEmpleado` la
+    // descarta, volviendo invisible el duplicado más común.
+    const logsDeLaJornada = new Set();
+    for (const s of g.segments) {
+      for (const id of s.in.logIds) logsDeLaJornada.add(id);
+      if (s.out) for (const id of s.out.logIds) logsDeLaJornada.add(id);
+    }
     const desdeAbs = primeraEntrada.abs;
     const hastaAbs = ultimaSalida ? ultimaSalida.abs : primeraEntrada.abs;
     const propias = todas.filter((a) => {
-      const w = toWall(a.at);
-      if (!w || w.abs < desdeAbs || w.abs > hastaAbs) return false;
+      const porLog = Array.isArray(a.log_ids) && a.log_ids.some((id) => logsDeLaJornada.has(id));
+      if (!porLog) {
+        // Sin log en común, se cae al rango temporal — cubre anomalías sin id
+        // (una secuencia ambigua) sin robarle a otra jornada las que sí tienen.
+        const w = toWall(a.at);
+        if (!w || w.abs < desdeAbs || w.abs > hastaAbs) return false;
+      }
       asignadas.add(a);
       return true;
     });
@@ -698,7 +736,14 @@ function buildWorkdays(punches, options = {}) {
       propias.push({ code: ANOMALY.JORNADA_EXCESIVA, at: primeraEntrada.datetime, log_ids: [] });
     }
 
-    const nocturnos = cerrados.reduce((acc, s) => acc + nightSeconds(s.in.abs, s.out.abs, opts), 0);
+    // Franja nocturna: si la configuración vigente la define, gana sobre los
+    // umbrales globales. Sin esto, una config de 20:00–06:00 resuelta por
+    // `resolveConfig` producía night_minutes 0, porque el cálculo miraba sólo
+    // las opciones de nivel superior que los callers de producción nunca fijan.
+    const nightOpts = (cfg && !noLaborable && cfg.night_start && cfg.night_end)
+      ? { nightStartMinute: timeToMinute(cfg.night_start), nightEndMinute: timeToMinute(cfg.night_end) }
+      : opts;
+    const nocturnos = cerrados.reduce((acc, s) => acc + nightSeconds(s.in.abs, s.out.abs, nightOpts), 0);
 
     const jornada = {
       work_date: g.work_date,
@@ -920,6 +965,7 @@ module.exports = {
   absToHHmm,
   absToDateTime,
   dayOfWeekISO,
+  timeToMinute,
   minutesToHM,
   nightSeconds,
   DEFAULTS,

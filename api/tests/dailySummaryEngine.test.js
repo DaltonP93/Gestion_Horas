@@ -52,7 +52,9 @@ describe('el resumen usa el mismo motor que Marcadas', () => {
     // turno producía dos filas incompletas: una sin salida y otra sin entrada.
     const filas = buildDailySummaryRows(
       marcas('2024-12-01 18:30:00', '2024-12-02 07:04:00'),
-      { from: '2024-12-01', to: '2024-12-31' },
+      // materializeEmptyDates:false para aislar la jornada; la materialización
+      // de los días vacíos tiene su propio test.
+      { from: '2024-12-01', to: '2024-12-31', materializeEmptyDates: false },
     );
     expect(filas).toHaveLength(1);
     expect(filas[0].date).toBe('2024-12-01');
@@ -66,7 +68,7 @@ describe('el resumen usa el mismo motor que Marcadas', () => {
         '2025-01-02 21:32:00', '2025-01-03 00:05:00',
         '2025-01-03 01:02:00', '2025-01-03 05:29:00',
       ),
-      { from: '2025-01-01', to: '2025-01-31' },
+      { from: '2025-01-01', to: '2025-01-31', materializeEmptyDates: false },
     );
     expect(filas).toHaveLength(1);
     expect(filas[0].date).toBe('2025-01-02');
@@ -81,6 +83,45 @@ describe('el resumen usa el mismo motor que Marcadas', () => {
     expect(fila.calculation_mode).toBe('historical_fallback');
     expect(fila.policy_version).toBe(1);
     expect(fila.anomalies).toContain('entrada_sin_salida');
+  });
+});
+
+describe('materialización de fechas sin jornada', () => {
+  // Sin esto, un recálculo borraría las filas absent/holiday/weekend que
+  // daily_summary guarda, y el dry-run marcaría cada una como diferencia.
+  test('emite una fila por cada fecha civil del período', () => {
+    const filas = buildDailySummaryRows(
+      marcas('2025-06-10 08:00:00', '2025-06-10 17:00:00'),
+      { from: '2025-06-09', to: '2025-06-11' },
+    );
+    expect(filas.map((f) => f.date)).toEqual(['2025-06-09', '2025-06-10', '2025-06-11']);
+    // 2025-06-10 es martes con marcajes; los otros dos, ausentes.
+    expect(filas[1].worked_minutes).toBe(540);
+    expect(filas[0].status).toBe('absent');
+    expect(filas[0].worked_minutes).toBe(0);
+    expect(filas[2].status).toBe('absent');
+  });
+
+  test('el fin de semana sin marcajes no es ausencia', () => {
+    // 2025-06-14 sábado, 2025-06-15 domingo.
+    const filas = buildDailySummaryRows([], { from: '2025-06-14', to: '2025-06-15' });
+    expect(filas.map((f) => f.status)).toEqual(['weekend', 'weekend']);
+  });
+
+  test('el feriado sin marcajes se materializa como holiday', () => {
+    const filas = buildDailySummaryRows([], {
+      from: '2025-05-01', to: '2025-05-01', holidays: new Set(['2025-05-01']),
+    });
+    expect(filas[0].status).toBe('holiday');
+  });
+
+  test('materializeEmptyDates:false sólo devuelve las jornadas', () => {
+    const filas = buildDailySummaryRows(
+      marcas('2025-06-10 08:00:00', '2025-06-10 17:00:00'),
+      { from: '2025-06-01', to: '2025-06-30', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].date).toBe('2025-06-10');
   });
 });
 

@@ -84,26 +84,51 @@ function statusDe({ jornada, isHoliday, isWeekend }) {
  *        - `resolveConfig`        resolvedor de configuración por fecha.
  *        - `holidays`             Set de fechas 'YYYY-MM-DD'.
  *        - `workedMinutesMode`    ver arriba. Por defecto 'presence'.
+ *        - `materializeEmptyDates` emitir fila para las fechas SIN jornada
+ *                                  (absent/holiday/weekend). Por defecto true.
  *
- * @returns {Array} filas listas para comparar o escribir.
+ * @returns {Array} filas listas para comparar o escribir, una por fecha civil
+ *          del período. Las fechas sin marcajes NO se omiten: `daily_summary`
+ *          guarda deliberadamente filas `absent`/`holiday`/`weekend`, y un
+ *          recálculo que las omitiera las borraría, además de hacer que el
+ *          dry-run marque cada una de esas filas guardadas como diferencia.
  */
 function buildDailySummaryRows(punches, options = {}) {
   const {
     from, to,
     holidays = new Set(),
     workedMinutesMode = WORKED_PRESENCE,
+    materializeEmptyDates = true,
   } = options;
 
   const { workdays } = engine.buildWorkdays(punches, options);
   const delPeriodo = engine.clipToPeriod(workdays, { from, to });
 
-  return delPeriodo.map((j) => {
-    const isHoliday = holidays.has(j.work_date);
-    const dow = engine.dayOfWeekISO(j.work_date);
-    const isWeekend = dow === 0 || dow === 6;
+  // Una jornada por fecha. Si dos jornadas cayeran en la misma work_date
+  // —turno partido separado por más de la pausa máxima— gana la primera, que
+  // es la que fija la primera entrada del día.
+  const porFecha = new Map();
+  for (const j of delPeriodo) if (!porFecha.has(j.work_date)) porFecha.set(j.work_date, j);
 
-    return {
-      date: j.work_date,
+  const filas = [];
+  for (const date of fechasDelPeriodo(from, to)) {
+    const isHoliday = holidays.has(date);
+    const dow = engine.dayOfWeekISO(date);
+    const isWeekend = dow === 0 || dow === 6;
+    const j = porFecha.get(date);
+
+    if (!j) {
+      // Sin jornada. Sólo se materializa si corresponde y si la fecha aporta
+      // un estado propio: un día laborable sin marcajes es `absent`, pero
+      // materializar todos los ausentes de un rango largo puede ser mucho, así
+      // que queda bajo el flag.
+      if (!materializeEmptyDates) continue;
+      filas.push(filaVacia(date, statusDe({ jornada: null, isHoliday, isWeekend })));
+      continue;
+    }
+
+    filas.push({
+      date,
       first_in: j.first_in,
       last_out: j.last_out,
       worked_minutes: workedMinutesMode === WORKED_NET
@@ -126,8 +151,48 @@ function buildDailySummaryRows(punches, options = {}) {
       policy_version: j.policy_version,
       anomalies: j.anomalies.map((a) => a.code),
       crosses_midnight: j.crosses_midnight,
-    };
-  });
+    });
+  }
+  return filas;
+}
+
+/** Fila de un día sin jornada: ceros y el estado que corresponda. */
+function filaVacia(date, status) {
+  return {
+    date,
+    first_in: null,
+    last_out: null,
+    worked_minutes: 0,
+    presence_minutes: 0,
+    net_worked_minutes: 0,
+    break_minutes: 0,
+    late_minutes: 0,
+    overtime_minutes: 0,
+    contract_excess_minutes: null,
+    status,
+    schedule_id: null,
+    calculation_mode: null,
+    policy_version: null,
+    anomalies: [],
+    crosses_midnight: false,
+  };
+}
+
+/**
+ * Fechas civiles 'YYYY-MM-DD' de `from` a `to`, inclusive.
+ *
+ * Recorre en aritmética de pared (contador de días), sin zonas horarias, así
+ * que no se salta ni repite un día en un cambio de horario.
+ */
+function fechasDelPeriodo(from, to) {
+  const desde = engine.toWall(`${from} 00:00:00`);
+  const hasta = engine.toWall(`${to} 00:00:00`);
+  if (!desde || !hasta || desde.abs > hasta.abs) return [];
+  const fechas = [];
+  for (let dia = Math.floor(desde.abs / 86400); dia <= Math.floor(hasta.abs / 86400); dia++) {
+    fechas.push(engine.absToDateISO(dia * 86400));
+  }
+  return fechas;
 }
 
 /**

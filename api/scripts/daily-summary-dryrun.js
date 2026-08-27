@@ -203,8 +203,18 @@ async function main() {
 
       const vistas = new Set();
       for (const fila of filas) {
-        vistas.add(fila.date);
         const g = guardadaDe.get(`${emp.employee_id}|${fila.date}`);
+
+        // Un día SIN jornada y SIN fila guardada no es un cambio que este
+        // dry-run deba reportar: qué recálculo materializa los ausentes puros
+        // es una decisión aparte, y contarlos acá ahogaría las diferencias
+        // reales (un rango largo tiene muchísimos días sin marcar). Los días
+        // sin jornada que SÍ tienen fila guardada sí se comparan: es
+        // precisamente el caso que valida que un absent/holiday/weekend
+        // guardado coincide con lo que el motor produciría.
+        if (fila.calculation_mode === null && !g) continue;
+        vistas.add(fila.date);
+
         const cmp = ds.compararFila(g, fila);
 
         if (cmp.iguales) { resumen.iguales++; continue; }
