@@ -922,3 +922,53 @@ describe('anomalía de duplicado en el cierre queda en su jornada', () => {
     expect(anomalies).toEqual([]);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// 17. Anomalía de cierre posterior al último out (revisión Codex, b733b82)
+// ═════════════════════════════════════════════════════════════════════
+
+describe('anomalía de salida posterior al cierre queda en su jornada', () => {
+  // Un OUT de más, fuera de la ventana de dedupe y POSTERIOR al último out:
+  // 08:00 in, 17:00 out, 17:05 out. El 17:05 es salidas_consecutivas, no
+  // comparte log con ningún tramo y cae después de la última salida; un filtro
+  // que corta en last_out lo dejaba en la lista global —que el reporte
+  // descarta— y el marcaje repetido quedaba invisible.
+  test('17:00 out + 17:05 out: la anomalía se ve en la jornada, no global', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+      { timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+      { timestamp: '2025-06-10 17:05:00', type: 'out', id: 3 },
+    ]);
+    expect(workdays).toHaveLength(1);
+    expect(workdays[0].anomalies.map((a) => a.code)).toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    expect(anomalies).toEqual([]);
+  });
+
+  // La contracara: una salida sin entrada ANTES de la primera jornada queda
+  // global, que es lo correcto (su entrada fue antes de la ventana).
+  test('una salida huérfana previa a la primera jornada queda global', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-06-10 06:00:00', type: 'out', id: 1 },
+      { timestamp: '2025-06-10 08:00:00', type: 'in', id: 2 },
+      { timestamp: '2025-06-10 17:00:00', type: 'out', id: 3 },
+    ]);
+    expect(workdays).toHaveLength(1);
+    expect(anomalies.map((a) => a.code)).toContain(ANOMALY.SALIDA_SIN_ENTRADA);
+  });
+
+  // Un OUT huérfano entre dos jornadas se asigna a la que viene ANTES, no a la
+  // siguiente ni a la lista global.
+  test('un OUT suelto entre dos jornadas se asigna a la jornada previa', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+      { timestamp: '2025-06-10 12:00:00', type: 'out', id: 2 },
+      { timestamp: '2025-06-10 12:30:00', type: 'out', id: 3 },
+      { timestamp: '2025-06-10 18:00:00', type: 'in', id: 4 },
+      { timestamp: '2025-06-10 22:00:00', type: 'out', id: 5 },
+    ]);
+    expect(workdays).toHaveLength(2);
+    expect(workdays[0].anomalies.map((a) => a.code)).toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    expect(workdays[1].anomalies).toEqual([]);
+    expect(anomalies).toEqual([]);
+  });
+});

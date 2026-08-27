@@ -109,6 +109,13 @@ CALL mig_073_add_col('employee_schedule_history', 'night_end',   'TIME NULL AFTE
 -- tramos de historial que lo referencian, y días vacíos viejos saltarían entre
 -- absent y non_working. Fijándolo acá, la configuración efectiva del pasado
 -- queda estable aunque el horario actual cambie.
+--
+-- CONTRATO PARA LA FASE C: el escritor de employee_schedule_history —que se
+-- construye en la FASE C, todavía no existe— DEBE copiar work_days (y, en
+-- rigor, cada campo derivado del horario que quiera congelar) en el tramo al
+-- crearlo. Mientras la columna quede NULL, la consulta cae al `schedules` vivo
+-- y la mutabilidad vuelve. Hoy no hay ningún tramo cargado, así que el hueco es
+-- latente; se cierra recién cuando ese escritor exista y snapshotee.
 CALL mig_073_add_col('employee_schedule_history', 'work_days', 'VARCHAR(20) NULL AFTER night_end');
 
 DROP PROCEDURE IF EXISTS mig_073_add_col;

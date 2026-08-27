@@ -162,7 +162,7 @@ async function loadShiftAssignments(employeeIds, { from, to }) {
     LEFT JOIN shift_templates t ON t.id = a.template_id
     WHERE a.employee_id IN (${marcas(ids.length)})
       AND a.work_date >= ? AND a.work_date <= ?
-    ORDER BY a.employee_id, a.work_date, a.segment
+    ORDER BY a.employee_id, a.work_date, a.schedule_id, a.segment
   `, [...ids, from, to]);
 
   const porClave = new Map();
@@ -288,6 +288,15 @@ function contratoVigente(lista, workDate) {
  * una persona de vacaciones figure llegando tarde todos los días. Se devuelve
  * `null` con el `kind` a la vista para que el consumidor lo trate como lo que
  * es y no como una ausencia común.
+ *
+ * DOS TURNERAS EN LA MISMA FECHA. La UNIQUE de `shift_assignments` incluye
+ * `schedule_id`, así que el esquema PERMITE que un empleado aparezca el mismo
+ * día en dos turneras publicadas distintas. Si se mezclaran, `check_in` saldría
+ * de una y `check_out` de la otra, fabricando un turno que abarca dos horarios
+ * sin relación y arruinando el atraso y la jornada esperada. Por eso se usa una
+ * sola turnera —la de menor `shift_schedule_id`, criterio determinista— y el
+ * conflicto se deja a la vista en `conflict_shift_schedule_ids` para que el
+ * consumidor pueda marcarlo, en vez de inventar un turno combinado.
  */
 function configDesdeTurnera(tramos) {
   const trabajo = tramos.filter((t) => (t.kind || 'work') === 'work' && t.start_time && t.end_time);
@@ -300,26 +309,40 @@ function configDesdeTurnera(tramos) {
     };
   }
 
-  const primero = trabajo[0];
-  const ultimo = trabajo[trabajo.length - 1];
+  // Turneras distintas presentes ese día (ordenadas para elegir de forma
+  // determinista y para reportar el conflicto).
+  const schedulesPresentes = [...new Set(
+    trabajo.map((t) => (t.shift_schedule_id != null ? Number(t.shift_schedule_id) : null)),
+  )].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+
+  // Se conserva SÓLO la turnera elegida: nunca se combinan tramos de dos.
+  const elegido = schedulesPresentes[0];
+  const deLaElegida = trabajo.filter(
+    (t) => (t.shift_schedule_id != null ? Number(t.shift_schedule_id) : null) === elegido,
+  );
+
+  const primero = deLaElegida[0];
+  const ultimo = deLaElegida[deLaElegida.length - 1];
   return {
     schedule_id: null,
-    shift_schedule_id: primero.shift_schedule_id ?? null,
+    shift_schedule_id: elegido,
     check_in: String(primero.start_time),
     check_out: String(ultimo.end_time),
     tolerance_in: 0,
     tolerance_out: 0,
     // Un turno partido ya trae el corte marcado en la turnera; el descanso
     // real es el que se fiche entre los tramos.
-    break_mode: trabajo.length > 1 ? 'punched' : 'fixed_unpaid',
-    break_minutes: trabajo.length > 1 ? 0 : Number(primero.break_minutes || 0),
+    break_mode: deLaElegida.length > 1 ? 'punched' : 'fixed_unpaid',
+    break_minutes: deLaElegida.length > 1 ? 0 : Number(primero.break_minutes || 0),
     break_after_minutes: 0,
     weekly_target_minutes: primero.weekly_target_minutes != null
       ? Number(primero.weekly_target_minutes)
       : null,
     daily_target_minutes: null,
-    segments: trabajo.length,
+    segments: deLaElegida.length,
     source: 'shift_assignment',
+    // Presente sólo cuando hubo más de una turnera publicada ese día.
+    conflict_shift_schedule_ids: schedulesPresentes.length > 1 ? schedulesPresentes : null,
   };
 }
 

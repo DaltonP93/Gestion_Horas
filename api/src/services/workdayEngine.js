@@ -664,7 +664,10 @@ function buildWorkdays(punches, options = {}) {
   const todas = [...duplicados, ...anomalies].sort((a, b) => (a.at < b.at ? -1 : 1));
   const asignadas = new Set();
 
-  const workdays = grupos.map((g) => {
+  const workdays = grupos.map((g, idx) => {
+    // Arranque de la jornada SIGUIENTE (o infinito para la última): es el
+    // límite hasta el que una anomalía suelta pertenece a ESTA jornada.
+    const nextStart = idx + 1 < grupos.length ? grupos[idx + 1].startAbs : Infinity;
     const cerrados = g.segments.filter((s) => !s.open);
     const segmentSeconds = cerrados.reduce((acc, s) => acc + s.seconds, 0);
     const segmentMinutes = Math.floor(segmentSeconds / 60);
@@ -722,14 +725,21 @@ function buildWorkdays(punches, options = {}) {
       if (s.out) for (const id of s.out.logIds) logsDeLaJornada.add(id);
     }
     const desdeAbs = primeraEntrada.abs;
-    const hastaAbs = ultimaSalida ? ultimaSalida.abs : primeraEntrada.abs;
     const propias = todas.filter((a) => {
+      // Cada anomalía va a UNA sola jornada: si ya se asignó, no se re-evalúa.
+      if (asignadas.has(a)) return false;
       const porLog = Array.isArray(a.log_ids) && a.log_ids.some((id) => logsDeLaJornada.has(id));
       if (!porLog) {
-        // Sin log en común, se cae al rango temporal — cubre anomalías sin id
-        // (una secuencia ambigua) sin robarle a otra jornada las que sí tienen.
+        // Sin log en común, se cae al rango temporal: desde la primera entrada
+        // de esta jornada hasta JUSTO ANTES del arranque de la siguiente. El
+        // límite superior es el arranque de la próxima jornada, NO la última
+        // salida — así un OUT huérfano posterior al cierre (17:05 tras salir
+        // 17:00, un `salidas_consecutivas` sin log en común) queda en ESTA
+        // jornada en vez de volverse invisible en la lista global. Una anomalía
+        // anterior a la primera jornada (salida sin entrada al inicio) queda
+        // global, que es lo correcto.
         const w = toWall(a.at);
-        if (!w || w.abs < desdeAbs || w.abs > hastaAbs) return false;
+        if (!w || w.abs < desdeAbs || w.abs >= nextStart) return false;
       }
       asignadas.add(a);
       return true;

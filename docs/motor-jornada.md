@@ -447,7 +447,12 @@ campo**. Cuenta aparte:
   estados; hasta entonces el motor los emite pero no se pueden guardar.
 - `employee_contracts` todavía **no** tiene carga horaria: hoy el contrato
   aporta identidad y vigencia, no objetivo semanal. Esa carga es FASE C.
-- No hay UI para cargar tramos de vigencia todavía (FASE C).
+- No hay UI ni escritor para cargar tramos de vigencia todavía (FASE C). Cuando
+  se construya, **debe snapshotear `work_days`** (y los demás campos derivados
+  del horario) en cada tramo: la columna `employee_schedule_history.work_days`
+  existe para eso, pero mientras quede `NULL` la consulta cae al `schedules`
+  vivo y editar un horario volvería a reescribir la expectativa histórica. Hoy
+  el hueco es latente porque no hay ningún tramo cargado.
 - `legacyWorkday.js` es código muerto por diseño: existe sólo como referencia
   de auditoría. Cuando el motor esté validado y ya no haga falta comparar, se
   borra entero.

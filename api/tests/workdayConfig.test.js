@@ -280,3 +280,37 @@ describe('loadScheduleHistory expone work_days', () => {
     expect(sql).toMatch(/COALESCE\(h\.work_days,\s*s\.work_days\)/);
   });
 });
+
+describe('dos turneras publicadas la misma fecha no se combinan', () => {
+  const { configDesdeTurnera } = require('../src/services/workdayConfig');
+
+  test('usa una sola turnera (menor shift_schedule_id) y marca el conflicto', () => {
+    // schedule 9 (07-15) y schedule 3 (18-22) el mismo día: combinarlas
+    // fabricaría un turno 07:00→22:00 y arruinaría el atraso.
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '07:00:00', end_time: '15:00:00', shift_schedule_id: 9, break_minutes: 0 },
+      { kind: 'work', start_time: '18:00:00', end_time: '22:00:00', shift_schedule_id: 3, break_minutes: 0 },
+    ]);
+    expect(cfg.shift_schedule_id).toBe(3);
+    expect(cfg.check_in).toBe('18:00:00');
+    expect(cfg.check_out).toBe('22:00:00');
+    expect(cfg.conflict_shift_schedule_ids).toEqual([3, 9]);
+  });
+
+  test('un turno partido de UNA sola turnera no marca conflicto', () => {
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '07:00:00', end_time: '14:00:00', shift_schedule_id: 5, break_minutes: 0 },
+      { kind: 'work', start_time: '17:00:00', end_time: '19:00:00', shift_schedule_id: 5, break_minutes: 0 },
+    ]);
+    expect(cfg.check_in).toBe('07:00:00');
+    expect(cfg.check_out).toBe('19:00:00');
+    expect(cfg.conflict_shift_schedule_ids).toBeNull();
+  });
+
+  test('la consulta de turnera ordena por schedule_id para elegir de forma determinista', async () => {
+    mockTablas({});
+    await loadWorkdayConfig([1], RANGO);
+    const sql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
+    expect(sql).toMatch(/ORDER BY a\.employee_id, a\.work_date, a\.schedule_id, a\.segment/);
+  });
+});
