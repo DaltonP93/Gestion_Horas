@@ -314,3 +314,35 @@ describe('dos turneras publicadas la misma fecha no se combinan', () => {
     expect(sql).toMatch(/ORDER BY a\.employee_id, a\.work_date, a\.schedule_id, a\.segment/);
   });
 });
+
+describe('turnera — objetivo diario y conflicto con no laborables', () => {
+  const { configDesdeTurnera } = require('../src/services/workdayConfig');
+
+  test('el objetivo diario de un turno partido es la SUMA de los tramos, no el span', () => {
+    // 07:00-14:00 (7h) + 17:00-19:00 (2h) = 9h = 540, no 720 (07:00→19:00).
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '07:00:00', end_time: '14:00:00', shift_schedule_id: 5 },
+      { kind: 'work', start_time: '17:00:00', end_time: '19:00:00', shift_schedule_id: 5 },
+    ]);
+    expect(cfg.daily_target_minutes).toBe(540);
+  });
+
+  test('el objetivo diario resuelve el cruce de medianoche', () => {
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '22:00:00', end_time: '06:00:00', shift_schedule_id: 5 },
+    ]);
+    expect(cfg.daily_target_minutes).toBe(480);
+  });
+
+  test('un off de menor id gana sobre un work de mayor id, y marca conflicto', () => {
+    // El criterio "gana el menor id" se aplica sobre TODAS las asignaciones,
+    // no sólo las de trabajo: si no, el work de id mayor ganaría sin conflicto.
+    const cfg = configDesdeTurnera([
+      { kind: 'off', start_time: null, end_time: null, shift_schedule_id: 3 },
+      { kind: 'work', start_time: '08:00:00', end_time: '17:00:00', shift_schedule_id: 9 },
+    ]);
+    expect(cfg.non_working).toBe(true);
+    expect(cfg.shift_schedule_id).toBe(3);
+    expect(cfg.conflict_shift_schedule_ids).toEqual([3, 9]);
+  });
+});

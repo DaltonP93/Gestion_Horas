@@ -972,3 +972,38 @@ describe('anomalía de salida posterior al cierre queda en su jornada', () => {
     expect(anomalies).toEqual([]);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// 18. Conflicto de turneras visible en la jornada (revisión Codex)
+// ═════════════════════════════════════════════════════════════════════
+
+describe('conflicto de turneras se expone como anomalía', () => {
+  test('dos turneras el mismo día → anomalía turnera_conflict en la jornada', () => {
+    const { workdays } = buildWorkdays(
+      [
+        { timestamp: '2025-06-10 08:00:00', type: 'in' },
+        { timestamp: '2025-06-10 17:00:00', type: 'out' },
+      ],
+      {
+        resolveConfig: () => ({
+          source: 'shift_assignment', check_in: '08:00', check_out: '17:00',
+          conflict_shift_schedule_ids: [3, 9],
+        }),
+      },
+    );
+    const a = workdays[0].anomalies.find((x) => x.code === ANOMALY.TURNERA_CONFLICT);
+    expect(a).toBeDefined();
+    expect(a.shift_schedule_ids).toEqual([3, 9]);
+  });
+
+  test('sin conflicto no se agrega la anomalía', () => {
+    const { workdays } = buildWorkdays(
+      [
+        { timestamp: '2025-06-10 08:00:00', type: 'in' },
+        { timestamp: '2025-06-10 17:00:00', type: 'out' },
+      ],
+      { resolveConfig: () => ({ source: 'shift_assignment', check_in: '08:00', check_out: '17:00' }) },
+    );
+    expect(workdays[0].anomalies.map((x) => x.code)).not.toContain(ANOMALY.TURNERA_CONFLICT);
+  });
+});

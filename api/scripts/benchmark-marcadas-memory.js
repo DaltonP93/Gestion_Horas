@@ -246,6 +246,8 @@ async function correrEscenario(esc, iteraciones) {
     // sustancial y consistente, hay retención entre peticiones.
     crecimiento_rss: ultima.rss_despues - primera.rss_despues,
     supera_limite_pm2: picoRss > 536870912,
+    // Cualquier corrida que haya fallado invalida la medición del escenario.
+    error: corridas.find((c) => c.error) ? corridas.find((c) => c.error).error : null,
   };
 }
 
@@ -277,19 +279,26 @@ async function main() {
     console.log(
       `${r.escenario.padEnd(22)} pico RSS ${mb(r.rss_pico).padStart(8)} MB  `
       + `crecimiento ${mb(r.crecimiento_rss).padStart(7)} MB  `
-      + `${r.supera_limite_pm2 ? '⚠ SUPERA EL LÍMITE DE PM2' : 'dentro del límite'}`,
+      + `${r.error ? `✖ ERROR: ${r.error}` : (r.supera_limite_pm2 ? '⚠ SUPERA EL LÍMITE DE PM2' : 'dentro del límite')}`,
     );
   }
 
+  // Un escenario que FALLÓ invalida su medición: sin filas medidas, "no creció"
+  // no significa nada. Certificar la memoria durante una caída de base, un
+  // problema de esquema o un fallo de render sería un falso GO.
+  const algunoError = resultados.some((r) => r.error);
   const algunoSupera = resultados.some((r) => r.supera_limite_pm2);
   // 32 MB de margen: por debajo de eso el ruido del GC domina y llamarlo
   // "crecimiento" sería leer una señal que no está.
   const algunoCrece = resultados.some((r) => r.crecimiento_rss > 32 * MB);
 
   console.log('');
+  if (algunoError) console.log('✖ Al menos un escenario falló: la medición no es válida. NO-GO.');
   if (algunoSupera) console.log('✖ Al menos un escenario supera los 512 MB: NO-GO.');
   if (algunoCrece) console.log('✖ Crecimiento acumulativo entre corridas: hay retención. NO-GO.');
-  if (!algunoSupera && !algunoCrece) console.log('✓ Dentro del límite y sin crecimiento acumulativo apreciable.');
+  if (!algunoError && !algunoSupera && !algunoCrece) {
+    console.log('✓ Dentro del límite y sin crecimiento acumulativo apreciable.');
+  }
   console.log('');
   console.log('Recordatorio: subir max_memory_restart no es una solución. Si un');
   console.log('escenario supera el límite, la forma de leer sigue estando mal.');
@@ -307,7 +316,7 @@ async function main() {
     console.log(`\nDetalle escrito en ${destino}`);
   }
 
-  process.exitCode = (algunoSupera || algunoCrece) ? 1 : 0;
+  process.exitCode = (algunoError || algunoSupera || algunoCrece) ? 1 : 0;
 }
 
 main()

@@ -154,6 +154,13 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     // `timestamp >= ? AND < ?` es sargable sobre idx_emp_ts; el
     // `DATE(al.timestamp) BETWEEN ? AND ?` anterior no lo era y forzaba a
     // evaluar la función sobre cada fila del rango.
+    //
+    // El LIMIT acota la MATERIALIZACIÓN, no sólo el chequeo: sin él, mysql2
+    // traía TODAS las filas que matchean —millones en un rango largo— antes de
+    // que el `if` de abajo pudiera reaccionar, y el pico de esa asignación es
+    // justamente lo que hacía saltar a PM2 por memoria. Con `LIMIT max+1`, el
+    // driver nunca materializa más que eso: si vuelven `max+1` filas sabemos
+    // que se superó el tope, sin haber cargado el dataset entero.
     const [logs] = await sequelize.query(`
       SELECT
         al.id,
@@ -164,13 +171,14 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
       WHERE al.employee_id IN (${ids.map(() => '?').join(',')})
         AND al.timestamp >= ? AND al.timestamp < ?
       ORDER BY al.employee_id, al.timestamp, al.id
+      LIMIT ${MARCADAS_MAX_PUNCHES_PER_CHUNK + 1}
     `, { replacements: [...ids, ventana.from, ventana.to] });
 
     if (logs.length > MARCADAS_MAX_PUNCHES_PER_CHUNK) {
       throw new Error(
         `El período ${from}..${to} devuelve demasiados marcajes para procesar de una vez `
-        + `(${logs.length} en un lote de ${ids.length} empleados). Acotar el rango de fechas `
-        + 'o filtrar por departamento.',
+        + `(más de ${MARCADAS_MAX_PUNCHES_PER_CHUNK} en un lote de ${ids.length} empleados). `
+        + 'Acotar el rango de fechas o filtrar por departamento.',
       );
     }
 

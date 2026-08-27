@@ -155,6 +155,8 @@ const ANOMALY = Object.freeze({
   MARCAJE_ILEGIBLE: 'marcaje_ilegible',
   /** Dos o más jornadas reales en la misma fecha civil, agregadas en una fila. */
   MULTIPLE_WORKDAYS_SAME_DATE: 'multiple_workdays_same_date',
+  /** Dos o más turneras publicadas para el mismo empleado y fecha. */
+  TURNERA_CONFLICT: 'turnera_conflict',
 });
 
 /**
@@ -746,6 +748,18 @@ function buildWorkdays(punches, options = {}) {
     });
     if (g.excedida) {
       propias.push({ code: ANOMALY.JORNADA_EXCESIVA, at: primeraEntrada.datetime, log_ids: [] });
+    }
+    // Conflicto de turneras: la config lo detecta pero se perdía porque la
+    // jornada sólo copiaba el shift_schedule_id elegido. Se expone como anomalía
+    // para que el reporte y daily_summary lo marquen en vez de recibir en
+    // silencio la turnera elegida arbitrariamente.
+    if (cfg && Array.isArray(cfg.conflict_shift_schedule_ids) && cfg.conflict_shift_schedule_ids.length > 1) {
+      propias.push({
+        code: ANOMALY.TURNERA_CONFLICT,
+        at: primeraEntrada.datetime,
+        log_ids: [],
+        shift_schedule_ids: cfg.conflict_shift_schedule_ids,
+      });
     }
 
     // Franja nocturna: si la configuración vigente la define, gana sobre los

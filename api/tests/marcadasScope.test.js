@@ -164,6 +164,10 @@ describe('generateMarcadasReport — scope de departamento', () => {
     const { sql } = marcajes();
     expect(sql).toMatch(/al\.timestamp >= \? AND al\.timestamp < \?/);
     expect(sql).not.toMatch(/DATE\(al\.timestamp\) BETWEEN/);
+    // El tope se aplica en SQL con LIMIT: sin él, mysql2 materializaría todo el
+    // dataset antes de que el chequeo de longitud pudiera reaccionar, y ese
+    // pico es lo que dispara el reinicio por memoria.
+    expect(sql).toMatch(/LIMIT \d+/);
   });
 
   test('scope sin ids (rol scoped sin depto vinculado): devuelve vacío sin tocar DB', async () => {

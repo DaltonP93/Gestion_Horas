@@ -299,30 +299,42 @@ function contratoVigente(lista, workDate) {
  * consumidor pueda marcarlo, en vez de inventar un turno combinado.
  */
 function configDesdeTurnera(tramos) {
-  const trabajo = tramos.filter((t) => (t.kind || 'work') === 'work' && t.start_time && t.end_time);
+  // La turnera elegida se decide sobre TODAS las asignaciones, no sólo las de
+  // trabajo. Si no, un `off` de menor id conviviendo con un `work` de mayor id
+  // haría que el resolvedor eligiera el work y no reportara conflicto, en
+  // contra del criterio "gana el menor id".
+  const schedulesPresentes = [...new Set(
+    tramos.map((t) => (t.shift_schedule_id != null ? Number(t.shift_schedule_id) : null)),
+  )].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+  const elegido = schedulesPresentes[0];
+  const conflicto = schedulesPresentes.length > 1 ? schedulesPresentes : null;
+
+  // Sólo los tramos de la turnera elegida; nunca se combinan dos turneras.
+  const deLaElegida = tramos.filter(
+    (t) => (t.shift_schedule_id != null ? Number(t.shift_schedule_id) : null) === elegido,
+  );
+  const trabajo = deLaElegida.filter((t) => (t.kind || 'work') === 'work' && t.start_time && t.end_time);
+
   if (!trabajo.length) {
     return {
       non_working: true,
-      kind: tramos[0].kind || 'off',
-      shift_schedule_id: tramos[0].shift_schedule_id ?? null,
+      kind: deLaElegida[0].kind || 'off',
+      shift_schedule_id: elegido,
       source: 'shift_assignment',
+      conflict_shift_schedule_ids: conflicto,
     };
   }
 
-  // Turneras distintas presentes ese día (ordenadas para elegir de forma
-  // determinista y para reportar el conflicto).
-  const schedulesPresentes = [...new Set(
-    trabajo.map((t) => (t.shift_schedule_id != null ? Number(t.shift_schedule_id) : null)),
-  )].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
-
-  // Se conserva SÓLO la turnera elegida: nunca se combinan tramos de dos.
-  const elegido = schedulesPresentes[0];
-  const deLaElegida = trabajo.filter(
-    (t) => (t.shift_schedule_id != null ? Number(t.shift_schedule_id) : null) === elegido,
+  const primero = trabajo[0];
+  const ultimo = trabajo[trabajo.length - 1];
+  // Objetivo diario = SUMA de la duración planificada de cada tramo, no el span
+  // de la primera entrada a la última salida. En un turno partido 07:00-14:00 +
+  // 17:00-19:00 el objetivo son 9 h (7+2), no 12 (07:00→19:00); si se dejara en
+  // null, el motor lo derivaría del span y daría 720 min en vez de 540.
+  const dailyTarget = trabajo.reduce(
+    (acc, t) => acc + minutosDeTurno(t.start_time, t.end_time),
+    0,
   );
-
-  const primero = deLaElegida[0];
-  const ultimo = deLaElegida[deLaElegida.length - 1];
   return {
     schedule_id: null,
     shift_schedule_id: elegido,
@@ -332,18 +344,36 @@ function configDesdeTurnera(tramos) {
     tolerance_out: 0,
     // Un turno partido ya trae el corte marcado en la turnera; el descanso
     // real es el que se fiche entre los tramos.
-    break_mode: deLaElegida.length > 1 ? 'punched' : 'fixed_unpaid',
-    break_minutes: deLaElegida.length > 1 ? 0 : Number(primero.break_minutes || 0),
+    break_mode: trabajo.length > 1 ? 'punched' : 'fixed_unpaid',
+    break_minutes: trabajo.length > 1 ? 0 : Number(primero.break_minutes || 0),
     break_after_minutes: 0,
     weekly_target_minutes: primero.weekly_target_minutes != null
       ? Number(primero.weekly_target_minutes)
       : null,
-    daily_target_minutes: null,
-    segments: deLaElegida.length,
+    daily_target_minutes: dailyTarget > 0 ? dailyTarget : null,
+    segments: trabajo.length,
     source: 'shift_assignment',
     // Presente sólo cuando hubo más de una turnera publicada ese día.
-    conflict_shift_schedule_ids: schedulesPresentes.length > 1 ? schedulesPresentes : null,
+    conflict_shift_schedule_ids: conflicto,
   };
+}
+
+/**
+ * Minutos planificados de un tramo "HH:mm[:ss]" → "HH:mm[:ss]".
+ *
+ * Resuelve el cruce de medianoche: un turno 22:00 → 06:00 dura 8 h, no −16.
+ * Es aritmética de reloj, sin zona horaria.
+ */
+function minutosDeTurno(start, end) {
+  const m = (v) => {
+    const p = /^(\d{1,2}):(\d{2})/.exec(String(v || ''));
+    return p ? Number(p[1]) * 60 + Number(p[2]) : null;
+  };
+  const a = m(start);
+  const b = m(end);
+  if (a == null || b == null) return 0;
+  const d = b - a;
+  return d >= 0 ? d : d + 1440;
 }
 
 /**
