@@ -187,7 +187,13 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
 
     for (const emp of lote) {
       const marcajes = porEmpleado.get(emp.employee_id) || [];
-      result.push(armarFilasEmpleado(emp, marcajes, config, { from, to }));
+      const item = armarFilasEmpleado(emp, marcajes, config, { from, to });
+      // Un empleado activo SIN ninguna jornada dentro del período no aparece en
+      // el reporte. Antes se agregaba con rows:[] y total 0, y en el PDF eso
+      // producía bloques/páginas vacías. La condición se evalúa DESPUÉS del
+      // recorte al período: puede haber logs en la ventana ampliada que sólo
+      // son contexto del día anterior/siguiente y no una jornada del período.
+      if (item.rows.length > 0) result.push(item);
     }
   }
 

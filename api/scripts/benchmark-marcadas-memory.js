@@ -56,8 +56,10 @@ function cargarEnv(argv) {
 
 const ENV = cargarEnv(process.argv.slice(2));
 
+const { Writable } = require('stream');
 const { sequelize } = require('../src/config/database');
 const { generateMarcadasReport } = require('../src/services/scheduler');
+const { renderMarcadasPdf } = require('../src/services/marcadasPdf');
 
 const MB = 1048576;
 const mb = (b) => (b / MB).toFixed(1);
@@ -83,13 +85,21 @@ const AYUDA = `
 benchmark-marcadas-memory — consumo del reporte de Marcadas (SÓLO LECTURA)
 
   --iterations N     corridas por escenario (por defecto 3)
-  --scenario NOMBRE  limitar a un escenario (repetible)
+  --scenario NOMBRE  limitar a un escenario (repetible):
+                       json-mes | json-dos-meses | json-trimestre | pdf-mes
+                       json-empleado (requiere --employee)
   --employee ID      id de empleado para el escenario individual
   --out DIR          escribir DIR/marcadas-memory.json
   --env RUTA         archivo .env a usar
   --no-env           usar sólo variables del shell
 
 Recomendado: node --expose-gc scripts/benchmark-marcadas-memory.js
+
+Este comando mide el CAMINO REAL contra la base del servidor (mysql2,
+sequelize, pdfkit, Node productivo). El test de CI, en cambio, sólo demuestra
+la propiedad estructural con la base mockeada: NO mide el RSS real del API.
+Ejecutar este script en el servidor, en horario de baja carga, es lo que cierra
+esa brecha. Nunca lo ejecuta Claude contra producción.
 `;
 
 /**
@@ -100,19 +110,44 @@ Recomendado: node --expose-gc scripts/benchmark-marcadas-memory.js
  */
 function escenarios(args) {
   const lista = [
-    { nombre: 'mes-completo', dateFrom: '2024-12-01', dateTo: '2024-12-31' },
-    { nombre: 'dos-meses', dateFrom: '2024-12-01', dateTo: '2025-01-31' },
-    { nombre: 'trimestre', dateFrom: '2024-11-01', dateTo: '2025-01-31' },
+    { nombre: 'json-mes', dateFrom: '2024-12-01', dateTo: '2024-12-31' },
+    { nombre: 'json-dos-meses', dateFrom: '2024-12-01', dateTo: '2025-01-31' },
+    { nombre: 'json-trimestre', dateFrom: '2024-11-01', dateTo: '2025-01-31' },
+    // El PDF agrega el Buffer de pdfkit encima del dataset; se mide con el
+    // MISMO render que sirve la ruta, no con una copia.
+    { nombre: 'pdf-mes', dateFrom: '2024-12-01', dateTo: '2024-12-31', pdf: true },
   ];
   if (args.employee) {
     lista.push({
-      nombre: 'empleado-individual',
+      nombre: 'json-empleado',
       dateFrom: '2024-12-01', dateTo: '2025-01-31',
       employeeId: args.employee,
     });
   }
   if (!args.scenarios) return lista;
   return lista.filter((e) => args.scenarios.includes(e.nombre));
+}
+
+/**
+ * Renderiza el PDF a un sink que descarta, devolviendo los bytes producidos.
+ *
+ * Mide el camino real —el mismo `renderMarcadasPdf` de la ruta— sin escribir a
+ * disco ni a la red. Los Buffer de pdfkit viven en `external`, por eso ese
+ * campo importa para el PDF aunque el heap no se mueva.
+ */
+function renderPdfADescarte(report, esc) {
+  return new Promise((resolve, reject) => {
+    // eslint-disable-next-line global-require
+    const PDFDocument = require('pdfkit');
+    let bytes = 0;
+    const sink = new Writable({ write(chunk, _enc, cb) { bytes += chunk.length; cb(); } });
+    sink.on('error', reject);
+    const doc = new PDFDocument({ size: 'A4', margin: 36 });
+    doc.on('error', reject);
+    doc.pipe(sink);
+    sink.on('finish', () => resolve(bytes));
+    renderMarcadasPdf(doc, { data: report.data, from: esc.dateFrom, to: esc.dateTo });
+  });
 }
 
 /** Fuerza recolección si el proceso corre con --expose-gc. */
@@ -154,8 +189,13 @@ async function correrEscenario(esc, iteraciones) {
     try {
       const out = await generateMarcadasReport({ dateFrom: esc.dateFrom, dateTo: esc.dateTo, employeeId: esc.employeeId });
       filas = out.data.reduce((acc, e) => acc + e.rows.length, 0);
-      // Tamaño real de lo que viajaría por la red, que es parte del costo.
-      bytesRespuesta = Buffer.byteLength(JSON.stringify(out));
+      if (esc.pdf) {
+        // Camino PDF: además del dataset, el render y su Buffer.
+        bytesRespuesta = await renderPdfADescarte(out, esc);
+      } else {
+        // Tamaño real de lo que viajaría por la red, que es parte del costo.
+        bytesRespuesta = Buffer.byteLength(JSON.stringify(out));
+      }
     } catch (err) {
       error = err.message;
     }

@@ -99,8 +99,9 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
 
     conMarcajes(['2025-12-31 22:00:00', '2026-01-01 06:00:00']);
     const ene = await generateMarcadasReport({ dateFrom: '2026-01-01', dateTo: '2026-01-31' });
-    expect(ene.data[0].rows).toEqual([]);
-    expect(ene.data[0].total_hm).toBe('0:00');
+    // La jornada pertenece al 31/12, así que en enero el empleado no tiene
+    // ninguna fila y, sin filas, no aparece en el reporte.
+    expect(ene.data).toEqual([]);
   });
 
   test('el total del día excluye la pausa entre pares, como siempre lo hizo', async () => {
@@ -114,13 +115,38 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
     expect(data[0].rows[0].pairs).toHaveLength(2);
   });
 
-  test('un empleado sin marcajes aparece con cero, no desaparece del reporte', async () => {
+  test('un empleado activo SIN marcajes no aparece en el reporte', async () => {
+    // Antes se agregaba con rows:[] y total 0, y en el PDF generaba páginas
+    // vacías. Un empleado sin ninguna jornada del período no debe aparecer.
     conMarcajes([]);
     const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toEqual([]);
+  });
+
+  test('un empleado con marcajes SÓLO fuera del período (contexto) no aparece', async () => {
+    // El 09/06 cae en la ventana ampliada como contexto, pero su jornada no
+    // pertenece al período pedido (10/06).
+    conMarcajes(['2025-06-09 08:00:00', '2025-06-09 17:00:00']);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toEqual([]);
+  });
+
+  test('una jornada que abre el último día del período SÍ aparece', async () => {
+    // 31/01 IN + 01/02 OUT, reporte hasta 31/01: work_date = 31/01.
+    conMarcajes(['2025-01-31 20:00:00', '2025-02-01 06:30:00']);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-01-01', dateTo: '2025-01-31' });
     expect(data).toHaveLength(1);
-    expect(data[0].rows).toEqual([]);
-    expect(data[0].total_minutes).toBe(0);
-    expect(data[0].total_hm).toBe('0:00');
+    expect(data[0].rows).toHaveLength(1);
+    expect(data[0].rows[0].date).toBe('31/01/2025');
+    expect(data[0].rows[0].total).toBe('10:30');
+  });
+
+  test('employeeId específico sin marcajes devuelve data vacía', async () => {
+    conMarcajes([]);
+    const { data } = await generateMarcadasReport({
+      dateFrom: '2025-06-10', dateTo: '2025-06-10', employeeId: 1,
+    });
+    expect(data).toEqual([]);
   });
 
   test('la jornada abierta se muestra sin inventar la salida', async () => {
