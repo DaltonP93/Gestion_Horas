@@ -95,6 +95,20 @@ describe('dry-run vs apply', () => {
     expect(insertó).toBe(false);
   });
 
+  test('un día unconfigured RECONCILIA la fila existente (DELETE salvo permission)', async () => {
+    // Sin marcas y sin config → unconfigured. No basta con no escribir: una fila
+    // legacy (absent/holiday/weekend) quedaría fabricada para siempre. Se borra,
+    // salvo un permiso manual.
+    conMarcajes([]);
+    await svc.resolveSummary(1, '2025-06-10 12:00:00', { apply: true });
+    const del = sequelize.query.mock.calls.find((c) => /DELETE FROM daily_summary/i.test(c[0]));
+    expect(del).toBeDefined();
+    expect(del[0]).toMatch(/status <> 'permission'/);
+    // No inventa una fila para un día sin evidencia.
+    const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
+    expect(insertó).toBe(false);
+  });
+
   test('apply:true SÍ escribe (bajo el lock por fecha)', async () => {
     conMarcajes([
       { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },

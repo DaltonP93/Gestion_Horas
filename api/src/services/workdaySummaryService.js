@@ -165,7 +165,21 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
 async function escribirFilas(employeeId, rows) {
   for (const row of rows) {
     const status = statusParaDb(row.status);
-    if (status == null) continue; // unconfigured: no se escribe una fila inventada
+    if (status == null) {
+      // unconfigured: no hay evidencia de nada para esa fecha. No basta con NO
+      // escribir: si el camino legacy ya dejó una fila (absent/holiday/weekend) y
+      // después se corrige/elimina la config histórica, esa fila fabricada
+      // quedaría visible para siempre en KPI, alertas y reportes legales. Se
+      // RECONCILIA borrando la fila existente, salvo un permiso manual, que el
+      // motor no conoce y no debe pisar. Bajo el lock por fecha.
+      await withDayRecalcLock(row.date, async (t) => {
+        await sequelize.query(
+          `DELETE FROM daily_summary WHERE employee_id = ? AND date = ? AND status <> 'permission'`,
+          { replacements: [employeeId, row.date], transaction: t },
+        );
+      }, { label: `engineRecalcDel:${row.date}:${employeeId}` });
+      continue;
+    }
     // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
     // preserva el estado guardado, y SÓLO si es 'permission': un permiso lo
     // carga una justificación manual que el motor no conoce, así que el motor no
