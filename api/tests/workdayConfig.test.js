@@ -345,4 +345,46 @@ describe('turnera — objetivo diario y conflicto con no laborables', () => {
     expect(cfg.shift_schedule_id).toBe(3);
     expect(cfg.conflict_shift_schedule_ids).toEqual([3, 9]);
   });
+
+  test('el objetivo diario usa los minutos NETOS persistidos, no el span con break', () => {
+    // 08:00-17:00 son 9 h de span, pero la turnera guardó `minutes` = 480 (con
+    // 60' de pausa ya descontados). El objetivo tiene que ser 480, no 540: si
+    // usara el span, el break contaría como trabajado y el motor mediría un
+    // déficit de una hora todos los días.
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '08:00:00', end_time: '17:00:00', shift_schedule_id: 5, minutes: 480 },
+    ]);
+    expect(cfg.daily_target_minutes).toBe(480);
+  });
+
+  test('sin minutes cargado (asignación vieja) cae al span de reloj', () => {
+    // Compatibilidad: las asignaciones anteriores a la columna `minutes` no lo
+    // traen; el objetivo se deriva del span, que es el mejor dato disponible.
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '08:00:00', end_time: '17:00:00', shift_schedule_id: 5 },
+    ]);
+    expect(cfg.daily_target_minutes).toBe(540);
+  });
+
+  test('un minutes de 0 en un tramo de trabajo cae al span (asignación degenerada)', () => {
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '08:00:00', end_time: '17:00:00', shift_schedule_id: 5, minutes: 0 },
+    ]);
+    expect(cfg.daily_target_minutes).toBe(540);
+  });
+
+  test('turno partido: el objetivo es la SUMA de los minutos netos de cada tramo', () => {
+    const cfg = configDesdeTurnera([
+      { kind: 'work', start_time: '07:00:00', end_time: '14:00:00', shift_schedule_id: 5, minutes: 390 },
+      { kind: 'work', start_time: '17:00:00', end_time: '19:00:00', shift_schedule_id: 5, minutes: 120 },
+    ]);
+    expect(cfg.daily_target_minutes).toBe(510);
+  });
+
+  test('la consulta de asignaciones trae la columna minutes', async () => {
+    mockTablas({});
+    await loadWorkdayConfig([1], RANGO);
+    const sql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
+    expect(sql).toMatch(/a\.minutes/);
+  });
 });

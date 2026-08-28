@@ -151,6 +151,65 @@ describe('materialización de fechas sin jornada', () => {
     expect(filas).toHaveLength(1);
     expect(filas[0].date).toBe('2025-06-10');
   });
+
+  test('un conflicto de turnera se expone también en un día SIN marcajes', () => {
+    // Dos turneras publicadas para la fecha: el resolvedor eligió el `off` de
+    // menor id sobre un `work` de mayor id. Sin marcajes el día no pasa por el
+    // motor, así que la anomalía tiene que propagarse desde la config o se
+    // pierde justo cuando más importa —el descanso puede estar tapando un turno
+    // de trabajo que nadie fichó—.
+    const enConflicto = {
+      non_working: true, kind: 'off', source: 'shift_assignment',
+      conflict_shift_schedule_ids: [3, 9],
+    };
+    const filas = buildDailySummaryRows([], {
+      from: '2025-06-17', to: '2025-06-17', resolveConfig: () => enConflicto,
+    });
+    expect(filas[0].status).toBe('non_working');
+    expect(filas[0].expected_workday).toBe(false);
+    expect(filas[0].anomalies).toContain('turnera_conflict');
+  });
+
+  test('un día vacío sin conflicto no inventa la anomalía', () => {
+    const filas = buildDailySummaryRows([], {
+      from: '2025-06-17', to: '2025-06-17', resolveConfig: () => LV,
+    });
+    expect(filas[0].anomalies).toEqual([]);
+  });
+});
+
+describe('agregación de dos jornadas en la misma fecha civil', () => {
+  test('si la última jornada quedó ABIERTA, la permanencia no se borra', () => {
+    // Sesión de mañana cerrada (06:00→10:00) y una entrada de tarde sin salida
+    // (16:00, entrada_sin_salida). Son dos jornadas del mismo día. La última
+    // por hora de entrada está abierta: tomar su last_out (null) colapsaría la
+    // permanencia a 0. Debe conservarse la salida real de la sesión cerrada.
+    const filas = buildDailySummaryRows(
+      marcas('2025-06-10 06:00:00', '2025-06-10 10:00:00', '2025-06-10 16:00:00'),
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].date).toBe('2025-06-10');
+    expect(filas[0].first_in.slice(11, 16)).toBe('06:00');
+    expect(filas[0].last_out.slice(11, 16)).toBe('10:00');
+    expect(filas[0].presence_minutes).toBe(240);
+    expect(filas[0].workday_count).toBe(2);
+    expect(filas[0].anomalies).toContain('multiple_workdays_same_date');
+    expect(filas[0].anomalies).toContain('entrada_sin_salida');
+  });
+
+  test('dos jornadas cerradas: last_out es la salida más tardía', () => {
+    const filas = buildDailySummaryRows(
+      marcas(
+        '2025-06-10 06:00:00', '2025-06-10 10:00:00',
+        '2025-06-10 16:00:00', '2025-06-10 20:00:00',
+      ),
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas[0].first_in.slice(11, 16)).toBe('06:00');
+    expect(filas[0].last_out.slice(11, 16)).toBe('20:00');
+    expect(filas[0].presence_minutes).toBe(840); // 06:00 → 20:00
+  });
 });
 
 describe('estado del día', () => {

@@ -155,6 +155,10 @@ async function loadShiftAssignments(employeeIds, { from, to }) {
       COALESCE(a.start_time, t.start_time) AS start_time,
       COALESCE(a.end_time,   t.end_time)   AS end_time,
       t.break_minutes,
+      -- Minutos NETOS de la asignación: shifts.js los calcula con shiftMinutes
+      -- al publicar la turnera y ya vienen con el break descontado. Es el
+      -- objetivo diario real; el span de reloj lo sobreestimaría en el break.
+      a.minutes,
       a.schedule_id AS shift_schedule_id,
       ss.weekly_target_minutes
     FROM shift_assignments a
@@ -327,12 +331,16 @@ function configDesdeTurnera(tramos) {
 
   const primero = trabajo[0];
   const ultimo = trabajo[trabajo.length - 1];
-  // Objetivo diario = SUMA de la duración planificada de cada tramo, no el span
-  // de la primera entrada a la última salida. En un turno partido 07:00-14:00 +
-  // 17:00-19:00 el objetivo son 9 h (7+2), no 12 (07:00→19:00); si se dejara en
-  // null, el motor lo derivaría del span y daría 720 min en vez de 540.
+  // Objetivo diario = SUMA de los minutos NETOS planificados de cada tramo, no
+  // el span de la primera entrada a la última salida. Dos correcciones en una:
+  //   · el span sobreestimaría un turno partido 07:00-14:00 + 17:00-19:00 como
+  //     12 h (07:00→19:00) en vez de 9 (7+2);
+  //   · dentro de un tramo, el span cuenta el break como trabajado —08:00-17:00
+  //     con 60' de pausa serían 540 y no 480—, y `shift_assignments.minutes` ya
+  //     viene neto del break (lo calcula shifts.js al publicar). Se prefiere el
+  //     dato persistido; sólo si una asignación vieja no lo trae se cae al span.
   const dailyTarget = trabajo.reduce(
-    (acc, t) => acc + minutosDeTurno(t.start_time, t.end_time),
+    (acc, t) => acc + minutosNetosDeTramo(t),
     0,
   );
   return {
@@ -356,6 +364,21 @@ function configDesdeTurnera(tramos) {
     // Presente sólo cuando hubo más de una turnera publicada ese día.
     conflict_shift_schedule_ids: conflicto,
   };
+}
+
+/**
+ * Minutos NETOS planificados de un tramo de turnera.
+ *
+ * Prefiere `shift_assignments.minutes` —persistido y ya descontado el break por
+ * `shifts.js` al publicar la turnera— porque es el objetivo diario real. Sólo
+ * cuando ese dato no está cargado (asignaciones anteriores a la columna) se cae
+ * al span de reloj, que no conoce el break. Un `minutes` de 0 en un tramo de
+ * trabajo es una asignación degenerada (start == end) y también cae al span.
+ */
+function minutosNetosDeTramo(t) {
+  const m = t.minutes != null ? Number(t.minutes) : NaN;
+  if (Number.isFinite(m) && m > 0) return m;
+  return minutosDeTurno(t.start_time, t.end_time);
 }
 
 /**

@@ -281,10 +281,24 @@ function buildDailySummaryRows(punches, options = {}) {
 function aggregateWorkdays(lista) {
   const ordenadas = [...lista].sort((a, b) => (a.first_in < b.first_in ? -1 : 1));
   const primera = ordenadas[0];
-  const ultima = ordenadas[ordenadas.length - 1];
+
+  // La última salida NO es la de la jornada más tardía por hora de entrada: esa
+  // jornada puede estar ABIERTA (last_out null, entrada sin salida). Tomarla a
+  // ciegas pondría last_out en null y colapsaría la permanencia a 0, borrando
+  // una sesión anterior ya cerrada. Se elige la salida más tardía entre todas
+  // las jornadas que la tengan.
+  let lastOut = null;
+  let outWall = null;
+  for (const j of ordenadas) {
+    if (!j.last_out) continue;
+    const w = engine.toWall(j.last_out);
+    if (w && (!outWall || w.abs > outWall.abs)) {
+      outWall = w;
+      lastOut = j.last_out;
+    }
+  }
 
   const inWall = engine.toWall(primera.first_in);
-  const outWall = ultima.last_out ? engine.toWall(ultima.last_out) : null;
   const presence = (inWall && outWall)
     ? Math.max(0, Math.floor((outWall.abs - inWall.abs) / 60))
     : 0;
@@ -297,7 +311,7 @@ function aggregateWorkdays(lista) {
   return {
     work_date: primera.work_date,
     first_in: primera.first_in,
-    last_out: ultima.last_out,
+    last_out: lastOut,
     presence_minutes: presence,
     segment_minutes: sum('segment_minutes'),
     worked_minutes: sum('worked_minutes'),
@@ -321,6 +335,17 @@ function aggregateWorkdays(lista) {
 
 /** Fila de un día sin jornada: ceros, el estado y la expectativa que corresponda. */
 function filaVacia(date, status, expectation, cfg) {
+  // Un día sin marcajes igual puede arrastrar un conflicto de turnera: hubo dos
+  // turneras publicadas para esa fecha y el resolvedor eligió una (a veces un
+  // `off` de menor id sobre un `work` de mayor id). Sin jornada no pasa por el
+  // motor, así que la anomalía se propaga acá o se pierde justo en el caso en
+  // que más importa —el descanso elegido puede estar tapando un turno de
+  // trabajo que nadie fichó—.
+  const anomalies = [];
+  if (cfg && Array.isArray(cfg.conflict_shift_schedule_ids)
+      && cfg.conflict_shift_schedule_ids.length > 1) {
+    anomalies.push(engine.ANOMALY.TURNERA_CONFLICT);
+  }
   return {
     date,
     first_in: null,
@@ -337,7 +362,7 @@ function filaVacia(date, status, expectation, cfg) {
     schedule_id: cfg && cfg.schedule_id != null ? cfg.schedule_id : null,
     calculation_mode: null,
     policy_version: null,
-    anomalies: [],
+    anomalies,
     workday_count: 0,
     crosses_midnight: false,
   };
