@@ -95,18 +95,22 @@ describe('dry-run vs apply', () => {
     expect(insertó).toBe(false);
   });
 
-  test('un día unconfigured RECONCILIA la fila existente (DELETE salvo permission)', async () => {
-    // Sin marcas y sin config → unconfigured. No basta con no escribir: una fila
-    // legacy (absent/holiday/weekend) quedaría fabricada para siempre. Se borra,
-    // salvo un permiso manual.
+  test('un día unconfigured RECONCILIA: restaura la justificación manual y borra el resto', async () => {
+    // Sin marcas y sin config → unconfigured. Una fila con justificación MANUAL
+    // sobrevive con su estado derivado (injustificada→absent, otra→permission);
+    // las filas automáticas (sin justificación) se borran como config obsoleta.
     conMarcajes([]);
     await svc.resolveSummary(1, '2025-06-10 12:00:00', { apply: true });
+    const upd = sequelize.query.mock.calls.find((c) => /UPDATE daily_summary/i.test(c[0]));
     const del = sequelize.query.mock.calls.find((c) => /DELETE FROM daily_summary/i.test(c[0]));
+    expect(upd).toBeDefined();
+    // El UPDATE restaura injustificada→absent, resto→permission, sólo si hay
+    // justificación manual.
+    expect(upd[0]).toMatch(/COALESCE\(justification_type, ''\) = 'injustificada'\s*\n?\s*THEN 'absent' ELSE 'permission'/);
+    expect(upd[0]).toMatch(/justification IS NOT NULL OR justification_type IS NOT NULL/);
+    // El DELETE sólo borra filas SIN justificación manual.
     expect(del).toBeDefined();
-    // Sólo se conserva el permiso MANUAL (con justificación) que NO sea una
-    // ausencia injustificada; un permiso de turnera se borra como config obsoleta.
-    expect(del[0]).toMatch(/justification IS NOT NULL OR justification_type IS NOT NULL/);
-    expect(del[0]).toMatch(/<> 'injustificada'/);
+    expect(del[0]).toMatch(/justification IS NULL AND justification_type IS NULL/);
     // No inventa una fila para un día sin evidencia.
     const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
     expect(insertó).toBe(false);
@@ -122,16 +126,18 @@ describe('dry-run vs apply', () => {
     expect(insertó).toBe(true);
   });
 
-  test('el upsert PRESERVA los estados manuales (holiday/weekend/permission)', async () => {
+  test('el upsert deriva el estado de la justificación manual, no del status compartido', async () => {
     conMarcajes([
       { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
       { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
     ]);
     await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
     const insert = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]))[0];
-    // Sólo el permiso manual se preserva; holiday/weekend son automáticos y el
-    // motor los recalcula desde los datos vigentes.
-    expect(insert).toMatch(/daily_summary\.status = 'permission'/);
+    // Una justificación manual gana en un día vacío, con su estado DERIVADO
+    // (injustificada→absent, otra→permission). holiday/weekend son automáticos
+    // (sin justificación) y el motor los recalcula.
+    expect(insert).toMatch(/justification IS NOT NULL OR daily_summary\.justification_type IS NOT NULL/);
+    expect(insert).toMatch(/'injustificada'\s*\n?\s*THEN 'absent' ELSE 'permission'/);
     expect(insert).not.toMatch(/IN \('holiday','weekend','permission'\)/);
   });
 
@@ -159,7 +165,7 @@ describe('dry-run vs apply', () => {
     const call = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]));
     const sql = call[0];
     const repl = call[1].replacements;
-    expect(sql).toMatch(/daily_summary\.status = 'permission'\s*\n?\s*AND \(daily_summary\.justification IS NOT NULL/);
+    expect(sql).toMatch(/WHEN \? = 1 AND \(daily_summary\.justification IS NOT NULL/);
     // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
     expect(repl[8]).toBe('present');   // status calculado
     expect(repl[9]).toBe(0);           // esDiaVacio: hay jornada, el estado nuevo gana

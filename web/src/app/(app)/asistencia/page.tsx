@@ -20,7 +20,7 @@ interface AttendanceRow {
   worked_minutes: number
   late_minutes: number
   overtime_minutes: number
-  status: 'present' | 'absent' | 'late' | 'permission' | 'holiday' | 'weekend'
+  status: 'present' | 'absent' | 'late' | 'permission' | 'holiday' | 'weekend' | 'non_working' | 'unconfigured'
   scheduled_in: string
   scheduled_out: string
 }
@@ -53,7 +53,16 @@ const STATUS_CFG: Record<string, { label: string; cls: string }> = {
   permission: { label: 'Permiso',      cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
   holiday:    { label: 'Festivo',      cls: 'bg-blue-50   text-blue-700   border border-blue-200'   },
   weekend:    { label: 'Fin semana',   cls: 'bg-slate-50  text-slate-500  border border-slate-200'  },
+  // Estados de la migración 074: un día NO laborable por configuración (puede
+  // caer un martes) y un día del que no hay configuración suficiente. NO son
+  // ausencias y no deben pintarse de rojo.
+  non_working:  { label: 'No laborable',  cls: 'bg-slate-50  text-slate-500  border border-slate-200'  },
+  unconfigured: { label: 'Sin configurar', cls: 'bg-slate-50 text-slate-400  border border-slate-200'  },
 }
+
+// Fallback NEUTRO para un estado no reconocido: nunca 'Ausente', que pintaría de
+// rojo una fila que el estado nuevo afirma que NO es ausencia.
+const STATUS_FALLBACK = { label: '—', cls: 'bg-slate-50 text-slate-400 border border-slate-200' }
 
 const SOURCE_ICON: Record<string, string> = {
   device: '🖐️', mobile: '📱', manual: '✏️',
@@ -373,7 +382,7 @@ export default function AsistenciaPage() {
             </thead>
             <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {filtered.map((row, i) => {
-                const cfg = STATUS_CFG[row.status] || STATUS_CFG.absent
+                const cfg = STATUS_CFG[row.status] || STATUS_FALLBACK
                 return (
                   <tr key={i} className="hover:bg-slate-50 transition-colors dark:hover:bg-white/[0.04]">
                     <td className="px-4 py-3">

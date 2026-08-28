@@ -180,27 +180,34 @@ async function escribirFilas(employeeId, rows) {
   for (const row of rows) {
     const status = statusParaDb(row.status);
     if (status == null) {
-      // unconfigured: no hay evidencia de nada para esa fecha. No basta con NO
+      // unconfigured: no hay evidencia de jornada para esa fecha. No basta con NO
       // escribir: si el camino legacy ya dejó una fila (absent/holiday/weekend) y
       // después se corrige/elimina la config histórica, esa fila fabricada
-      // quedaría visible para siempre en KPI, alertas y reportes legales. Se
-      // RECONCILIA borrando la fila existente, salvo un permiso manual, que el
-      // motor no conoce y no debe pisar. Bajo el lock por fecha.
+      // quedaría visible para siempre. Se RECONCILIA bajo el lock por fecha:
+      //   · una fila con JUSTIFICACIÓN MANUAL sobrevive —es una decisión de
+      //     RR.HH. que el motor no conoce—, con su estado DERIVADO
+      //     (injustificada → 'absent'; otra → 'permission') y sus minutos en cero
+      //     (no hay jornada). Así no se pierde una ausencia ni un permiso manual;
+      //   · las demás filas (automáticas: absent/holiday/weekend o permiso de
+      //     turnera sin justificación) se borran como config obsoleta.
       await withDayRecalcLock(row.date, async (t) => {
         await sequelize.query(
-          // Se conserva SÓLO un permiso MANUAL: status 'permission' con una
-          // justificación persistente cargada por RR.HH. y cuyo tipo NO es
-          // 'injustificada' —esa es una AUSENCIA que justificationsBulk deja a
-          // propósito, no un permiso—. Un 'permission' de turnera (sin
-          // justificación) es automático y también se borra como config obsoleta.
-          `DELETE FROM daily_summary
+          `UPDATE daily_summary
+             SET status = CASE WHEN COALESCE(justification_type, '') = 'injustificada'
+                               THEN 'absent' ELSE 'permission' END,
+                 first_in = NULL, last_out = NULL,
+                 worked_minutes = 0, break_minutes = 0, overtime_minutes = 0, late_minutes = 0
              WHERE employee_id = ? AND date = ?
-               AND NOT (status = 'permission'
-                        AND (justification IS NOT NULL OR justification_type IS NOT NULL)
-                        AND COALESCE(justification_type, '') <> 'injustificada')`,
+               AND (justification IS NOT NULL OR justification_type IS NOT NULL)`,
           { replacements: [employeeId, row.date], transaction: t },
         );
-      }, { label: `engineRecalcDel:${row.date}:${employeeId}` });
+        await sequelize.query(
+          `DELETE FROM daily_summary
+             WHERE employee_id = ? AND date = ?
+               AND justification IS NULL AND justification_type IS NULL`,
+          { replacements: [employeeId, row.date], transaction: t },
+        );
+      }, { label: `engineRecalcRec:${row.date}:${employeeId}` });
       continue;
     }
     // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
@@ -235,16 +242,18 @@ async function escribirFilas(employeeId, rows) {
           break_minutes    = VALUES(break_minutes),
           overtime_minutes = VALUES(overtime_minutes),
           late_minutes     = VALUES(late_minutes),
-          -- Se preserva SÓLO el permiso MANUAL (con justificación persistente
-          -- cargada por RR.HH.), y sólo en un día SIN jornada (?=1). Un
-          -- 'permission' derivado de una turnera vacation/permiso es automático y
-          -- el motor ya lo recalcula; holiday/weekend tampoco se preservan por lo
-          -- mismo. Si el día tiene marcas reales, el estado trabajado gana.
+          -- En un día SIN jornada (?=1), una JUSTIFICACIÓN MANUAL cargada por
+          -- RR.HH. gana sobre el estado calculado, con su estado DERIVADO: una
+          -- 'injustificada' es una AUSENCIA (→ 'absent'), cualquier otra es un
+          -- permiso (→ 'permission'). Así no se pierde ni un permiso ni una
+          -- ausencia manual que nómina/reportes legales deben contabilizar. Los
+          -- estados AUTOMÁTICOS (holiday/weekend, permiso de turnera) no tienen
+          -- justificación, así que el motor los recalcula. Con jornada real
+          -- (?=0), el estado trabajado gana.
           status = CASE
-            WHEN ? = 1 AND daily_summary.status = 'permission'
-                 AND (daily_summary.justification IS NOT NULL OR daily_summary.justification_type IS NOT NULL)
-                 AND COALESCE(daily_summary.justification_type, '') <> 'injustificada'
-              THEN daily_summary.status
+            WHEN ? = 1 AND (daily_summary.justification IS NOT NULL OR daily_summary.justification_type IS NOT NULL)
+              THEN CASE WHEN COALESCE(daily_summary.justification_type, '') = 'injustificada'
+                        THEN 'absent' ELSE 'permission' END
             ELSE VALUES(status)
           END
       `, {
