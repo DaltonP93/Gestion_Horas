@@ -283,18 +283,20 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
 
   const firstIn  = logs.find(l => l.type === 'in');
   const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
+  const unknowns = logs.filter(l => l.type === 'unknown');
 
   // PRESENCIA con marcas sin tipo: una jornada puede quedar registrada sólo con
   // marcas 'unknown' (p. ej. un marcaje móvil sin contexto para inferir in/out,
   // ahora que resolveMarkType conserva 'unknown' en vez de fabricar una entrada).
   // El legacy sólo miraba in/out y dejaba el día 'absent' pese a que la persona
-  // fichó, dejando el flujo atrapado como ausencia hasta que otra fuente aportara
-  // un tipo. Si hay actividad pero falta la entrada/salida explícita, la
-  // permanencia se ancla en la primera/última marca del día: es PRESENCIA, no
-  // ausencia. NO se infiere atraso desde una marca sin tipo (no sabemos si es la
-  // entrada), así que el atraso sólo se calcula con un `in` explícito.
-  const anchorIn  = firstIn || logs[0];
-  const anchorOut = lastOut || logs[logs.length - 1];
+  // fichó, dejando el flujo atrapado como ausencia. Si hay actividad pero falta
+  // la entrada/salida explícita, la permanencia se ancla en la primera/última
+  // marca UTILIZABLE ('unknown'), no en la del tipo opuesto: con un `in` explícito
+  // y sin `out`, last_out queda NULL (checkout faltante), no una jornada cerrada
+  // con entrada = salida que ocultaría precisamente la salida que falta. NO se
+  // infiere atraso desde un 'unknown', así que el atraso sólo sale de un `in`.
+  const anchorIn  = firstIn || unknowns[0] || null;
+  const anchorOut = lastOut || unknowns[unknowns.length - 1] || null;
 
   // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
   // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
@@ -323,10 +325,12 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
     : 0;
 
   // Con `in` explícito, el estado sale del cálculo (present/late). Sin `in` pero
-  // con actividad, el día es PRESENTE (sin atraso inventado): la persona fichó.
+  // con actividad UTILIZABLE ('unknown'), el día es PRESENTE (sin atraso
+  // inventado): la persona fichó. Sin `in` y sin unknowns (p. ej. sólo una salida
+  // huérfana) se conserva el estado legacy —no se reclasifica ese borde acá—.
   const status = firstIn
     ? calc.dayStatus({ hasFirstIn: true, late: lateMinutes })
-    : 'present';
+    : (unknowns.length > 0 ? 'present' : calc.dayStatus({ hasFirstIn: false, late: 0 }));
 
   // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
   // y con reintento acotado ante deadlock/lock-wait.

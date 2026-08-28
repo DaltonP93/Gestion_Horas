@@ -100,4 +100,27 @@ describe('recalcDailySummary (sargable + lock por fecha)', () => {
     expect(repl[3]).toBe('2026-07-28 12:10:00'); // …y la última
     expect(repl[5]).toBe(0);                  // sin atraso inventado desde un unknown
   });
+
+  test('un IN explícito sin OUT deja last_out NULL (no fabrica una salida = entrada)', async () => {
+    // El fallback del extremo ausente sólo usa marcas 'unknown', nunca la del
+    // tipo opuesto: con un 'in' explícito y sin 'out', el checkout sigue faltando
+    // (last_out NULL), no se cierra la jornada con salida = entrada.
+    mockQuery.mockImplementation(async (sql) => {
+      if (/FROM attendance_logs/i.test(sql) && /SELECT\s+timestamp/i.test(sql)) {
+        return [[{ timestamp: '2026-07-28 08:00:00', type: 'in' }]];
+      }
+      if (/FROM holidays/i.test(sql)) return [[null]];
+      if (/FROM employees/i.test(sql) && /schedules/i.test(sql)) return [[{ check_in: '08:00:00', tolerance_in: 5 }]];
+      if (/GET_LOCK/i.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/i.test(sql)) return [[]];
+      if (/INSERT INTO daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
+      return [[]];
+    });
+    await recalcDailySummary(1, new Date('2026-07-28T12:00:00-03:00'));
+    const upsert = mockQuery.mock.calls.find(c => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements.length === 7);
+    const repl = upsert[1].replacements;
+    expect(repl[2]).toBe('2026-07-28 08:00:00'); // first_in explícito
+    expect(repl[3]).toBeNull();                  // last_out NULL: falta el checkout
+    expect(repl[6]).toBe('present');
+  });
 });
