@@ -210,6 +210,29 @@ describe('agregación de dos jornadas en la misma fecha civil', () => {
     expect(filas[0].last_out.slice(11, 16)).toBe('20:00');
     expect(filas[0].presence_minutes).toBe(840); // 06:00 → 20:00
   });
+
+  test('si la PRIMERA jornada quedó abierta, su entrada no infla el span', () => {
+    // Un IN huérfano a las 06:00 (entrada sin salida) seguido de un turno real
+    // 18:00-22:00. La entrada abierta no aporta tiempo, así que la permanencia
+    // son 4 h (18:00→22:00), no 16 (06:00→22:00). first_in ancla en la jornada
+    // cerrada para que first_in/last_out/presence queden coherentes.
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 06:00:00', type: 'in' },
+        { timestamp: '2025-06-10 18:00:00', type: 'in' },
+        { timestamp: '2025-06-10 22:00:00', type: 'out' },
+      ],
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].first_in.slice(11, 16)).toBe('18:00');
+    expect(filas[0].last_out.slice(11, 16)).toBe('22:00');
+    expect(filas[0].presence_minutes).toBe(240); // NO 960
+    // El 06:00 seguido del 18:00 (dos entradas) es entradas_consecutivas; la
+    // agregación de las dos jornadas del día se marca aparte.
+    expect(filas[0].anomalies).toContain('entradas_consecutivas');
+    expect(filas[0].anomalies).toContain('multiple_workdays_same_date');
+  });
 });
 
 describe('estado del día', () => {

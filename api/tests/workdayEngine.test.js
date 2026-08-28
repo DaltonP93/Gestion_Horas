@@ -1002,6 +1002,40 @@ describe('anomalía de salida posterior al cierre queda en su jornada', () => {
     expect(workdays[1].anomalies).toEqual([]);
     expect(anomalies).toEqual([]);
   });
+
+  // El límite superior de la ÚLTIMA jornada NO es infinito: un OUT huérfano del
+  // día siguiente —que la consulta trae por extender la ventana un día— no puede
+  // colgarse de la jornada final. Queda global, con su fecha correcta.
+  test('un OUT huérfano del día siguiente NO se atribuye a la jornada final', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-06-09 08:00:00', type: 'in', id: 1 },
+      { timestamp: '2025-06-09 17:00:00', type: 'out', id: 2 },
+      // ~16 h después del cierre del lunes, más allá del umbral de pausa: sería
+      // de otra jornada, así que su anomalía no es de la del lunes.
+      { timestamp: '2025-06-10 09:00:00', type: 'out', id: 3 },
+    ]);
+    // El OUT del martes, tras el OUT del lunes, es salidas_consecutivas; con el
+    // tope infinito se pegaba a la jornada final del lunes.
+    expect(workdays).toHaveLength(1);
+    expect(workdays[0].work_date).toBe('2025-06-09');
+    expect(workdays[0].anomalies.map((a) => a.code)).not.toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    // La huérfana del martes queda en la lista global, no pegada al lunes.
+    expect(anomalies.map((a) => a.code)).toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    expect(anomalies.find((a) => a.code === ANOMALY.SALIDAS_CONSECUTIVAS).at).toBe('2025-06-10 09:00:00');
+  });
+
+  // Pero un cierre repetido CERCANO al de la jornada final sigue entrando: el
+  // tope acotado no puede volver invisible el duplicado que la ventana busca.
+  test('un cierre repetido cercano sigue entrando en la jornada final', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+      { timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+      { timestamp: '2025-06-10 19:30:00', type: 'out', id: 3 }, // 2,5 h < 4 h de umbral
+    ]);
+    expect(workdays).toHaveLength(1);
+    expect(workdays[0].anomalies.map((a) => a.code)).toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    expect(anomalies).toEqual([]);
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════

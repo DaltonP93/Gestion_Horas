@@ -739,21 +739,42 @@ function buildWorkdays(punches, options = {}) {
       if (s.out) for (const id of s.out.logIds) logsDeLaJornada.add(id);
     }
     const desdeAbs = primeraEntrada.abs;
+    // Última actividad de la jornada (última salida o, si quedó abierta, la
+    // última entrada): es el ancla del límite superior cuando no hay jornada
+    // siguiente que lo fije.
+    let hastaAbs = desdeAbs;
+    for (const s of g.segments) {
+      if (s.in.abs > hastaAbs) hastaAbs = s.in.abs;
+      if (s.out && s.out.abs > hastaAbs) hastaAbs = s.out.abs;
+    }
+    // Límite superior del rango de esta jornada. Para las jornadas intermedias
+    // es el arranque de la siguiente. Para la ÚLTIMA no hay siguiente, y usar
+    // infinito le colgaba cualquier anomalía posterior: como la consulta de
+    // marcajes se extiende un día a cada lado del período, un OUT huérfano del
+    // día siguiente terminaba atribuido a la jornada final, errando fecha y
+    // jornada. Se acota a la última actividad más el mismo umbral de pausa que
+    // usa `groupWorkdays` para cortar una jornada nueva: más allá de esa
+    // distancia, un marcaje YA sería de otra jornada, así que su anomalía no es
+    // de ésta. Un cierre repetido cercano (17:05 tras 17:00) sigue entrando.
+    const gapCapSeconds = opts.historicalMaxIntersegmentGapMinutes * 60;
+    const limiteSuperior = Number.isFinite(nextStart)
+      ? nextStart
+      : hastaAbs + gapCapSeconds;
     const propias = todas.filter((a) => {
       // Cada anomalía va a UNA sola jornada: si ya se asignó, no se re-evalúa.
       if (asignadas.has(a)) return false;
       const porLog = Array.isArray(a.log_ids) && a.log_ids.some((id) => logsDeLaJornada.has(id));
       if (!porLog) {
         // Sin log en común, se cae al rango temporal: desde la primera entrada
-        // de esta jornada hasta JUSTO ANTES del arranque de la siguiente. El
-        // límite superior es el arranque de la próxima jornada, NO la última
-        // salida — así un OUT huérfano posterior al cierre (17:05 tras salir
-        // 17:00, un `salidas_consecutivas` sin log en común) queda en ESTA
-        // jornada en vez de volverse invisible en la lista global. Una anomalía
+        // de esta jornada hasta JUSTO ANTES del límite superior. El tope NO es
+        // la última salida —así un OUT huérfano posterior al cierre (17:05 tras
+        // salir 17:00, un `salidas_consecutivas` sin log en común) queda en ESTA
+        // jornada en vez de volverse invisible en la lista global— pero tampoco
+        // es infinito para la última jornada (ver `limiteSuperior`). Una anomalía
         // anterior a la primera jornada (salida sin entrada al inicio) queda
         // global, que es lo correcto.
         const w = toWall(a.at);
-        if (!w || w.abs < desdeAbs || w.abs >= nextStart) return false;
+        if (!w || w.abs < desdeAbs || w.abs >= limiteSuperior) return false;
       }
       asignadas.add(a);
       return true;

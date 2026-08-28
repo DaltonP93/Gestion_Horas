@@ -282,15 +282,24 @@ function aggregateWorkdays(lista) {
   const ordenadas = [...lista].sort((a, b) => (a.first_in < b.first_in ? -1 : 1));
   const primera = ordenadas[0];
 
-  // La última salida NO es la de la jornada más tardía por hora de entrada: esa
-  // jornada puede estar ABIERTA (last_out null, entrada sin salida). Tomarla a
-  // ciegas pondría last_out en null y colapsaría la permanencia a 0, borrando
-  // una sesión anterior ya cerrada. Se elige la salida más tardía entre todas
-  // las jornadas que la tengan.
+  // La permanencia se mide SÓLO sobre las jornadas cerradas (con salida). Una
+  // jornada abierta —entrada sin salida— no aporta tiempo, así que ni su
+  // entrada puede anclar el inicio del span ni su falta de salida cortarlo:
+  //   · si la más TEMPRANA está abierta (06:00 suelto + 18:00-22:00), tomar su
+  //     06:00 inflaría el span a 16 h cuando la permanencia real son 4;
+  //   · si la más TARDÍA está abierta (06:00-10:00 + 16:00 suelto), tomar su
+  //     salida null colapsaría la permanencia a 0.
+  const cerradas = ordenadas.filter((j) => j.last_out);
+
+  // Primera entrada del span: la de la jornada cerrada más temprana. Si NINGUNA
+  // cerró, no hay permanencia que medir; se conserva la entrada suelta sólo
+  // para que la fila muestre el marcaje huérfano (presence 0, sin salida).
+  const inRef = cerradas.length ? cerradas[0] : primera;
+
+  // Última salida: la más tardía entre las jornadas cerradas.
   let lastOut = null;
   let outWall = null;
-  for (const j of ordenadas) {
-    if (!j.last_out) continue;
+  for (const j of cerradas) {
     const w = engine.toWall(j.last_out);
     if (w && (!outWall || w.abs > outWall.abs)) {
       outWall = w;
@@ -298,7 +307,7 @@ function aggregateWorkdays(lista) {
     }
   }
 
-  const inWall = engine.toWall(primera.first_in);
+  const inWall = engine.toWall(inRef.first_in);
   const presence = (inWall && outWall)
     ? Math.max(0, Math.floor((outWall.abs - inWall.abs) / 60))
     : 0;
@@ -310,13 +319,16 @@ function aggregateWorkdays(lista) {
 
   return {
     work_date: primera.work_date,
-    first_in: primera.first_in,
+    // first_in y late se leen de la jornada que ancla el span (la cerrada más
+    // temprana), no de una entrada abierta que no aporta permanencia; así
+    // first_in, last_out y presence quedan coherentes entre sí.
+    first_in: inRef.first_in,
     last_out: lastOut,
     presence_minutes: presence,
     segment_minutes: sum('segment_minutes'),
     worked_minutes: sum('worked_minutes'),
     break_minutes: sum('break_minutes'),
-    late_minutes: primera.late_minutes || 0,
+    late_minutes: inRef.late_minutes || 0,
     night_minutes: sum('night_minutes'),
     day_minutes: sum('day_minutes'),
     // El exceso contractual se deriva del objetivo diario contra el total; con
