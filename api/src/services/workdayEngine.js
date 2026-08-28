@@ -747,19 +747,19 @@ function buildWorkdays(punches, options = {}) {
       if (s.in.abs > hastaAbs) hastaAbs = s.in.abs;
       if (s.out && s.out.abs > hastaAbs) hastaAbs = s.out.abs;
     }
-    // Límite superior del rango de esta jornada. Para las jornadas intermedias
-    // es el arranque de la siguiente. Para la ÚLTIMA no hay siguiente, y usar
-    // infinito le colgaba cualquier anomalía posterior: como la consulta de
-    // marcajes se extiende un día a cada lado del período, un OUT huérfano del
-    // día siguiente terminaba atribuido a la jornada final, errando fecha y
-    // jornada. Se acota a la última actividad más el mismo umbral de pausa que
-    // usa `groupWorkdays` para cortar una jornada nueva: más allá de esa
-    // distancia, un marcaje YA sería de otra jornada, así que su anomalía no es
-    // de ésta. Un cierre repetido cercano (17:05 tras 17:00) sigue entrando.
+    // Límite superior del rango de esta jornada: el MENOR entre el arranque de
+    // la siguiente y la última actividad más el umbral de pausa que usa
+    // `groupWorkdays` para cortar una jornada nueva. Más allá de esa distancia
+    // un marcaje YA sería de otra jornada, así que su anomalía no es de ésta.
+    //
+    // El tope por pausa hace falta tanto para la ÚLTIMA jornada —sin siguiente,
+    // `nextStart` es Infinity y le colgaba cualquier anomalía posterior— como
+    // para las INTERMEDIAS: con jornadas el lunes y el miércoles y un OUT
+    // huérfano el martes, `nextStart` (miércoles) dejaba la anomalía del martes
+    // atribuida al lunes, errando la fecha. Un cierre repetido cercano (17:05
+    // tras 17:00) sigue entrando porque cae dentro del umbral.
     const gapCapSeconds = opts.historicalMaxIntersegmentGapMinutes * 60;
-    const limiteSuperior = Number.isFinite(nextStart)
-      ? nextStart
-      : hastaAbs + gapCapSeconds;
+    const limiteSuperior = Math.min(nextStart, hastaAbs + gapCapSeconds);
     const propias = todas.filter((a) => {
       // Cada anomalía va a UNA sola jornada: si ya se asignó, no se re-evalúa.
       if (asignadas.has(a)) return false;

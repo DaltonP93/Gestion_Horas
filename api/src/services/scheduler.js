@@ -196,11 +196,14 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     for (const emp of lote) {
       const marcajes = porEmpleado.get(emp.employee_id) || [];
       const item = armarFilasEmpleado(emp, marcajes, config, { from, to });
-      // Un empleado activo SIN ninguna jornada dentro del período no aparece en
-      // el reporte. Antes se agregaba con rows:[] y total 0, y en el PDF eso
-      // producía bloques/páginas vacías. La condición se evalúa DESPUÉS del
-      // recorte al período: puede haber logs en la ventana ampliada que sólo
-      // son contexto del día anterior/siguiente y no una jornada del período.
+      // Un empleado SIN ninguna fila dentro del período no aparece en el
+      // reporte. Antes se agregaba con rows:[] y total 0, y en el PDF eso
+      // producía bloques/páginas vacías. `rows` ya incluye tanto las jornadas
+      // como las anomalías sueltas materializadas (una salida huérfana como
+      // único marcaje), así que un fichaje anómalo NO borra al empleado: sólo
+      // se filtra a quien no tiene marcaje alguno en el período. La condición se
+      // evalúa DESPUÉS del recorte: los logs de la ventana ampliada que son sólo
+      // contexto del borde no cuentan como fila del período.
       if (item.rows.length > 0) result.push(item);
     }
   }
@@ -220,16 +223,25 @@ const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Vierne
  * distintos y mezclarlos es por qué los dos reportes nunca cerraron entre sí.
  */
 function armarFilasEmpleado(emp, marcajes, config, periodo) {
-  const { workdays } = engine.buildWorkdays(marcajes, {
+  const { workdays, anomalies } = engine.buildWorkdays(marcajes, {
     resolveConfig: (workDate) => config.forDate(emp.employee_id, workDate),
   });
   const delPeriodo = engine.clipToPeriod(workdays, periodo);
 
+  // Índice de marcajes por log_id: recupera tipo y hora del fichaje suelto que
+  // originó una anomalía global (la que no cayó en ninguna jornada).
+  const porLog = new Map();
+  for (const p of marcajes) if (p.id != null) porLog.set(p.id, p);
+
+  // Filas por fecha, para poder fusionar una anomalía suelta con la jornada del
+  // mismo día si existiera, en vez de duplicar la fecha.
+  const filasPorFecha = new Map();
   let totalMinutes = 0;
-  const rows = delPeriodo.map((j) => {
+  for (const j of delPeriodo) {
     totalMinutes += j.segment_minutes;
     const [y, m, d] = j.work_date.split('-');
-    return {
+    filasPorFecha.set(j.work_date, {
+      work_date: j.work_date,
       dayName: DAY_NAMES[engine.dayOfWeekISO(j.work_date)],
       date: `${d}/${m}/${y}`,
       pairs: j.segments.map((s) => ({ entrada: s.in_hhmm, salida: s.out_hhmm })),
@@ -241,8 +253,47 @@ function armarFilasEmpleado(emp, marcajes, config, periodo) {
       anomalies: j.anomalies.map((a) => a.code),
       calculation_mode: j.calculation_mode,
       non_working_kind: j.non_working_kind,
-    };
-  });
+    });
+  }
+
+  // Anomalías que NO cayeron en ninguna jornada (una salida huérfana como único
+  // marcaje del período es el caso central). Sin materializarlas, un empleado
+  // cuyo único fichaje es un OUT sin entrada no genera filas, y el filtro de
+  // "empleados vacíos" lo borraba del reporte: un período que SÍ tiene un
+  // marcaje anómalo se presentaba como si no tuviera ninguno. Se emiten como
+  // fila visible y revisable, acotadas al período (una anomalía en la ventana
+  // ampliada es sólo contexto del borde y no se materializa).
+  for (const a of anomalies) {
+    const fecha = String(a.at || '').slice(0, 10);
+    if (!fecha || fecha < periodo.from || fecha > periodo.to) continue;
+    const yaHay = filasPorFecha.get(fecha);
+    if (yaHay) {
+      if (!yaHay.anomalies.includes(a.code)) yaHay.anomalies.push(a.code);
+      continue;
+    }
+    const src = (a.log_ids || []).map((id) => porLog.get(id)).find(Boolean);
+    const hhmm = src ? String(src.timestamp).slice(11, 16) : '';
+    const esEntrada = src ? src.type === 'in' : false;
+    const [y, m, d] = fecha.split('-');
+    filasPorFecha.set(fecha, {
+      work_date: fecha,
+      dayName: DAY_NAMES[engine.dayOfWeekISO(fecha)],
+      date: `${d}/${m}/${y}`,
+      pairs: [{ entrada: esEntrada ? hhmm : '', salida: esEntrada ? '' : hhmm }],
+      total: engine.minutesToHM(0),
+      crosses_midnight: false,
+      open: true,
+      anomalies: [a.code],
+      calculation_mode: null,
+      non_working_kind: null,
+    });
+  }
+
+  const rows = [...filasPorFecha.values()]
+    .sort((x, z) => (x.work_date < z.work_date ? -1 : 1))
+    // `work_date` era sólo para ordenar y fusionar; la fila que consume la vista
+    // conserva la forma anterior.
+    .map(({ work_date, ...fila }) => fila);
 
   return {
     employee_id: emp.employee_id,

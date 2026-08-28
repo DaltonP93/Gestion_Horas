@@ -163,4 +163,39 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
     expect(out.period.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(out.period.from).toBe(out.period.to);
   });
+
+  /** Programa el padrón y marcajes con tipo/id explícitos (para huérfanos). */
+  function conMarcajesTipados(marcajes) {
+    sequelize.query.mockReset();
+    sequelize.query
+      .mockResolvedValueOnce([[EMP]])
+      .mockResolvedValueOnce([marcajes]);
+  }
+
+  test('un OUT huérfano como único marcaje NO borra al empleado del reporte', async () => {
+    // Antes, buildWorkdays no generaba jornada (salida_sin_entrada queda global)
+    // y el filtro de empleados vacíos lo eliminaba: un período CON un marcaje
+    // anómalo se presentaba como si no tuviera ninguno. Ahora se materializa.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 09:00:00', type: 'out', id: 99 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(1);
+    expect(data[0].rows[0].date).toBe('10/06/2025');
+    expect(data[0].rows[0].pairs).toEqual([{ entrada: '', salida: '09:00' }]);
+    expect(data[0].rows[0].total).toBe('0:00');
+    expect(data[0].rows[0].anomalies).toContain('salida_sin_entrada');
+  });
+
+  test('un huérfano en el borde de la ventana (fuera del período) NO cuenta', async () => {
+    // La ventana de lectura se extiende un día; un OUT del día siguiente es sólo
+    // contexto del borde y no debe materializar una fila ni conservar al
+    // empleado si no tiene nada dentro del período.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-11 09:00:00', type: 'out', id: 99 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toEqual([]);
+  });
 });

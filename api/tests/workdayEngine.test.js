@@ -1024,6 +1024,26 @@ describe('anomalía de salida posterior al cierre queda en su jornada', () => {
     expect(anomalies.find((a) => a.code === ANOMALY.SALIDAS_CONSECUTIVAS).at).toBe('2025-06-10 09:00:00');
   });
 
+  // El mismo error de fecha existía para las jornadas INTERMEDIAS: con jornadas
+  // el lunes y el miércoles y un OUT huérfano el martes, `nextStart` (miércoles)
+  // dejaba la anomalía del martes atribuida al lunes. El tope por pausa también
+  // acota estas ventanas.
+  test('un OUT huérfano entre dos jornadas separadas por días queda global', () => {
+    const { workdays, anomalies } = buildWorkdays([
+      { timestamp: '2025-06-09 08:00:00', type: 'in', id: 1 },
+      { timestamp: '2025-06-09 17:00:00', type: 'out', id: 2 },
+      { timestamp: '2025-06-10 09:00:00', type: 'out', id: 3 }, // martes, huérfano
+      { timestamp: '2025-06-11 08:00:00', type: 'in', id: 4 },
+      { timestamp: '2025-06-11 17:00:00', type: 'out', id: 5 },
+    ]);
+    expect(workdays).toHaveLength(2);
+    expect(workdays[0].work_date).toBe('2025-06-09');
+    expect(workdays[1].work_date).toBe('2025-06-11');
+    expect(workdays[0].anomalies.map((a) => a.code)).not.toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    expect(anomalies.map((a) => a.code)).toContain(ANOMALY.SALIDAS_CONSECUTIVAS);
+    expect(anomalies.find((a) => a.code === ANOMALY.SALIDAS_CONSECUTIVAS).at).toBe('2025-06-10 09:00:00');
+  });
+
   // Pero un cierre repetido CERCANO al de la jornada final sigue entrando: el
   // tope acotado no puede volver invisible el duplicado que la ventana busca.
   test('un cierre repetido cercano sigue entrando en la jornada final', () => {
