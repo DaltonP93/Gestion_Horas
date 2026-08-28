@@ -60,4 +60,20 @@ describe('resolveMarkType — sin reset por día civil', () => {
     conPrevias([{ timestamp: '2025-06-09 06:00:00', type: 'in' }]);
     expect(await resolveMarkType(1, '2025-06-10 12:00:00')).toBe('in');
   });
+
+  test('ráfaga del reloj: una marca unknown dentro de la ventana de dedupe conserva el tipo', async () => {
+    // 08:00:00 in + 08:00:30 (unknown): la segunda es una repetición del reloj y
+    // conserva 'in'. Si se alternara a 'out', el dedupe nuevo (que no colapsa
+    // tipos opuestos) dejaría un tramo de 30 s y rompería la jornada.
+    conPrevias([{ timestamp: '2025-06-10 08:00:00', type: 'in' }]);
+    expect(await resolveMarkType(1, '2025-06-10 08:00:30')).toBe('in');
+  });
+
+  test('tras la ráfaga, la salida real de la tarde se infiere SALIDA', async () => {
+    conPrevias([
+      { timestamp: '2025-06-10 08:00:00', type: 'in' },
+      { timestamp: '2025-06-10 08:00:30', type: 'in' }, // duplicado ya guardado como in
+    ]);
+    expect(await resolveMarkType(1, '2025-06-10 17:00:00')).toBe('out');
+  });
 });

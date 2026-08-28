@@ -128,6 +128,24 @@ describe('dry-run vs apply', () => {
     expect(insert).toMatch(/break_minutes\s*=\s*VALUES\(break_minutes\)/);
     expect(insert).toMatch(/overtime_minutes\s*=\s*VALUES\(overtime_minutes\)/);
   });
+
+  test('la preservación de estado se limita a los días SIN jornada', async () => {
+    // La guarda de preservación va condicionada a ?=1: sólo se conserva el
+    // holiday/weekend/permission viejo cuando la fila recalculada NO tiene
+    // jornada. Un domingo ahora laborable con marcas reales no queda 'weekend'.
+    conMarcajes([
+      { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
+      { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
+    ]);
+    await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
+    const call = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]));
+    const sql = call[0];
+    const repl = call[1].replacements;
+    expect(sql).toMatch(/WHEN \? = 1 AND daily_summary\.status IN/);
+    // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
+    expect(repl[8]).toBe('present');   // status calculado
+    expect(repl[9]).toBe(0);           // esDiaVacio: hay jornada, el estado nuevo gana
+  });
 });
 
 describe('feature flag', () => {

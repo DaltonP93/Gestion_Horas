@@ -160,6 +160,13 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
     for (const row of rows) {
       const status = statusParaDb(row.status);
       if (status == null) continue; // unconfigured: no se escribe una fila inventada
+      // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
+      // preservan los estados manuales guardados. Si ahora hay marcas válidas
+      // —un domingo que la config declara laborable, un feriado trabajado— el
+      // estado calculado (present/late) DEBE ganar: conservar el holiday/weekend
+      // viejo dejaría minutos trabajados fuera de los KPI de presencia y
+      // representados como descanso en los reportes legales.
+      const esDiaVacio = (row.workday_count || 0) === 0;
       await withDayRecalcLock(row.date, async (t) => {
         await sequelize.query(`
           INSERT INTO daily_summary
@@ -178,13 +185,14 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
             break_minutes    = VALUES(break_minutes),
             overtime_minutes = VALUES(overtime_minutes),
             late_minutes     = VALUES(late_minutes),
-            -- Se PRESERVAN los estados cargados a mano / por justificación:
-            -- un feriado, un fin de semana o un permiso ya guardado no se pisa
-            -- con el estado calculado (mismo criterio que el recálculo legacy).
-            -- Recalcular ayer por una marca de hoy no puede borrar un permission
-            -- que sigue justificado, aunque el materializador vería 'absent'.
+            -- Se PRESERVAN los estados cargados a mano / por justificación
+            -- (feriado, fin de semana, permiso) SÓLO cuando la fila recalculada
+            -- NO contiene una jornada (?=1). Recalcular ayer por una marca de hoy
+            -- no puede borrar un permission que sigue justificado; pero si ese
+            -- día ahora tiene marcas reales, el estado trabajado gana.
             status = CASE
-              WHEN daily_summary.status IN ('holiday','weekend','permission') THEN daily_summary.status
+              WHEN ? = 1 AND daily_summary.status IN ('holiday','weekend','permission')
+                THEN daily_summary.status
               ELSE VALUES(status)
             END
         `, {
@@ -202,6 +210,7 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
             row.overtime_minutes || 0,
             row.late_minutes || 0,
             status,
+            esDiaVacio ? 1 : 0,
           ],
           transaction: t,
         });

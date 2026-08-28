@@ -154,6 +154,19 @@ async function resolveMarkType(employeeId, wallClockTs) {
 
   if (!rows.length) return 'in';
 
+  // RÁFAGA / DUPLICADO PRIMERO: si la marca más reciente cae dentro de la ventana
+  // de dedupe, esta marca es una repetición del reloj y CONSERVA su tipo, no
+  // alterna. Si no, un 08:00:00 in + 08:00:30 (unknown) se tiparía out, y como el
+  // dedupe nuevo no colapsa tipos opuestos, quedaría un tramo de 30 s y la salida
+  // real de las 17:00 se infiere in. Detectarlo antes de alternar lo evita.
+  const previa = rows[rows.length - 1];
+  if (previa && (previa.type === 'in' || previa.type === 'out')) {
+    const wPrev = engine.toWall(previa.timestamp);
+    if (wPrev && (at.abs - wPrev.abs) <= engine.DEFAULTS.duplicateWindowSeconds) {
+      return previa.type;
+    }
+  }
+
   // Última marca con tipo conocido (los duplicados y desconocidos no cambian el
   // estado de sesión).
   let ultima = null;
