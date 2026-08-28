@@ -49,6 +49,13 @@
 
 const engine = require('./workdayEngine');
 
+// Anomalías cuyo fichaje suelto es una SALIDA (un OUT): sólo éstas pueden correr
+// el cierre (last_out) al materializar los bounds de una jornada.
+const ANOMALIAS_OUT = new Set([
+  engine.ANOMALY.SALIDA_SIN_ENTRADA,
+  engine.ANOMALY.SALIDAS_CONSECUTIVAS,
+]);
+
 /** Cómo se llena `daily_summary.worked_minutes`. */
 const WORKED_PRESENCE = 'presence';
 const WORKED_NET = 'worked';
@@ -246,21 +253,34 @@ function buildDailySummaryRows(punches, options = {}) {
 
     // Una sola jornada, o la agregación determinista de varias del mismo día.
     const j = lista.length === 1 ? lista[0] : aggregateWorkdays(lista);
-    const anomalyCodes = j.anomalies.map((a) => (typeof a === 'string' ? a : a.code));
 
-    // Los bounds se extienden para cubrir la hora de los fichajes sueltos
-    // ATRIBUIDOS a la jornada (una salida de más poco después del cierre: 08:00
-    // in, 17:00 out, 18:00 out). El motor los deja como anomalía con su `at`,
-    // pero fuera de los tramos, así que sin esto la marca de las 18:00 no
-    // aparecería en ningún campo de daily_summary (el writer no persiste
-    // anomalies). La permanencia/trabajado siguen siendo los del motor.
+    // Los bounds se extienden para cubrir la hora de los fichajes sueltos, así no
+    // desaparecen de daily_summary (el writer no persiste anomalies). Es
+    // TYPE-AWARE a propósito:
+    //   · sólo una SALIDA de más corre last_out —un OUT atribuido poco después del
+    //     cierre (18:00) o una salida global posterior—; una entrada abierta
+    //     (entrada_sin_salida) NO corre el cierre, para no reinflar el span que
+    //     el manejo de jornadas abiertas justamente evita;
+    //   · una huérfana GLOBAL de la fecha ancla first_in si es la actividad más
+    //     temprana (un OUT antes del inicio: 06:00 out, 08:00 in, 17:00 out).
+    // La permanencia/trabajado siguen siendo los del motor, no el span extendido.
     let firstIn = j.first_in;
     let lastOut = j.last_out;
+    const codigos = new Set(j.anomalies.map((a) => (typeof a === 'string' ? a : a.code)));
+    // Anomalías ATRIBUIDAS: sólo un OUT de más extiende el cierre.
     for (const a of j.anomalies) {
       if (typeof a === 'string' || !a.at) continue;
-      if (!firstIn || a.at < firstIn) firstIn = a.at;
-      if (!lastOut || a.at > lastOut) lastOut = a.at;
+      if (ANOMALIAS_OUT.has(a.code) && (!lastOut || a.at > lastOut)) lastOut = a.at;
     }
+    // Huérfanas GLOBALES de la fecha (fuera de toda jornada).
+    for (const h of (huerfanasPorFecha.get(date) || [])) {
+      codigos.add(h.code);
+      const t = h.src ? String(h.src.timestamp || h.src.ts || '') : '';
+      if (!t) continue;
+      if (!firstIn || t < firstIn) firstIn = t;            // la más temprana ancla la entrada
+      if (h.src && h.src.type === 'out' && (!lastOut || t > lastOut)) lastOut = t;
+    }
+    const anomalyCodes = [...codigos];
 
     filas.push({
       date,
@@ -349,9 +369,13 @@ function aggregateWorkdays(lista) {
     : 0;
 
   const sum = (campo) => ordenadas.reduce((acc, j) => acc + (j[campo] || 0), 0);
-  const codes = new Set();
-  for (const j of ordenadas) for (const a of j.anomalies) codes.add(typeof a === 'string' ? a : a.code);
-  codes.add(engine.ANOMALY.MULTIPLE_WORKDAYS_SAME_DATE);
+  // Se CONSERVAN los objetos de anomalía (con su `at`), no sólo los códigos: la
+  // extensión de bounds necesita la hora de una huérfana atribuida a una de las
+  // jornadas (p. ej. un OUT de más a las 21:00 sobre la segunda). Aplanar a
+  // strings la haría desaparecer.
+  const anomalias = [];
+  for (const j of ordenadas) for (const a of j.anomalies) anomalias.push(a);
+  anomalias.push({ code: engine.ANOMALY.MULTIPLE_WORKDAYS_SAME_DATE, at: primera.first_in, log_ids: [] });
 
   return {
     work_date: primera.work_date,
@@ -377,7 +401,7 @@ function aggregateWorkdays(lista) {
     calculation_mode: primera.calculation_mode,
     policy_version: primera.policy_version,
     non_working_kind: primera.non_working_kind,
-    anomalies: [...codes],
+    anomalies: anomalias,
   };
 }
 

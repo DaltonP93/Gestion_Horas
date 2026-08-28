@@ -230,6 +230,44 @@ describe('materialización de fechas sin jornada', () => {
     expect(filas[0].presence_minutes).toBe(540);
   });
 
+  test('una huérfana GLOBAL antes de la jornada extiende first_in', () => {
+    // 06:00 out (huérfana global, antes del inicio), 08:00 in, 17:00 out. La
+    // huérfana no está en la jornada sino en la lista global; igual debe quedar
+    // registrada en la fila del día.
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 06:00:00', type: 'out', id: 1 },
+        { timestamp: '2025-06-10 08:00:00', type: 'in', id: 2 },
+        { timestamp: '2025-06-10 17:00:00', type: 'out', id: 3 },
+      ],
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].first_in.slice(11, 16)).toBe('06:00');
+    expect(filas[0].last_out.slice(11, 16)).toBe('17:00');
+    expect(filas[0].anomalies).toContain('salida_sin_entrada');
+    expect(filas[0].presence_minutes).toBe(540); // 08:00→17:00, no 06:00→17:00
+  });
+
+  test('al AGREGAR dos jornadas, una huérfana atribuida a la segunda extiende last_out', () => {
+    // 06:00-10:00 y 16:00-20:00 (dos jornadas del día) + 21:00 out atribuido a la
+    // segunda. aggregateWorkdays conserva el `at` para que la extensión funcione.
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 06:00:00', type: 'in', id: 1 },
+        { timestamp: '2025-06-10 10:00:00', type: 'out', id: 2 },
+        { timestamp: '2025-06-10 16:00:00', type: 'in', id: 3 },
+        { timestamp: '2025-06-10 20:00:00', type: 'out', id: 4 },
+        { timestamp: '2025-06-10 21:00:00', type: 'out', id: 5 },
+      ],
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].last_out.slice(11, 16)).toBe('21:00');
+    expect(filas[0].anomalies).toContain('salidas_consecutivas');
+    expect(filas[0].anomalies).toContain('multiple_workdays_same_date');
+  });
+
   test('un fichaje suelto en un día NO laborable por config conserva la marca', () => {
     // Domingo libre (L-V) con un OUT huérfano: sigue 'non_working' pero registra
     // la hora del fichaje.
