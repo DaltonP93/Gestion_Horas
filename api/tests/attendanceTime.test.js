@@ -8,7 +8,11 @@
 
 jest.mock('../src/config/database', () => ({ DB_TIMEZONE: '-03:00' }));
 
-const { normalizeAttendanceTimestampForDb, wallClockToInstitutionInstant } = require('../src/utils/attendanceTime');
+const {
+  normalizeAttendanceTimestampForDb,
+  wallClockToInstitutionInstant,
+  attendanceDisplayInstant,
+} = require('../src/utils/attendanceTime');
 
 describe('normalizeAttendanceTimestampForDb — naive se preserva', () => {
   test('naive con segundos se guarda tal cual', () => {
@@ -159,4 +163,40 @@ describe('wallClockToInstitutionInstant — wall-clock → instante correcto', (
     const wall = normalizeAttendanceTimestampForDb('2026-08-27 18:30:15');
     expect(wallClockToInstitutionInstant(wall).toISOString()).toBe('2026-08-27T21:30:15.000Z');
   });
+});
+
+describe('attendanceDisplayInstant — el instante inequívoco se conserva', () => {
+  test('un input naive se invierte como hora de Asunción', () => {
+    const wall = normalizeAttendanceTimestampForDb('2026-08-27 18:30:15');
+    expect(attendanceDisplayInstant('2026-08-27 18:30:15', wall).toISOString())
+      .toBe('2026-08-27T21:30:15.000Z');
+  });
+
+  test('un ISO con Z en la HORA REPETIDA conserva su instante original (no lo corre)', () => {
+    // 2024-03-24T03:30:00Z persiste como wall 2024-03-23 23:30:00 (hora repetida
+    // del cambio histórico). Reinvertir el wall elegiría la ocurrencia equivocada;
+    // el instante original es inequívoco y se conserva.
+    const src = '2024-03-24T03:30:00Z';
+    const wall = normalizeAttendanceTimestampForDb(src);
+    expect(wall).toBe('2024-03-23 23:30:00');
+    expect(attendanceDisplayInstant(src, wall).toISOString()).toBe('2024-03-24T03:30:00.000Z');
+  });
+
+  test('un Date se conserva como instante original', () => {
+    const d = new Date('2024-03-24T03:30:00Z');
+    const wall = normalizeAttendanceTimestampForDb(d);
+    expect(attendanceDisplayInstant(d, wall).toISOString()).toBe('2024-03-24T03:30:00.000Z');
+  });
+
+  const original = process.env.TZ;
+  afterEach(() => { process.env.TZ = original; });
+  for (const tz of ['UTC', 'America/Asuncion', 'Asia/Tokyo']) {
+    test(`TZ=${tz}: naive e ISO-Z dan el mismo instante en cualquier proceso`, () => {
+      process.env.TZ = tz;
+      expect(attendanceDisplayInstant('2026-08-27 18:30:15', '2026-08-27 18:30:15').toISOString())
+        .toBe('2026-08-27T21:30:15.000Z');
+      expect(attendanceDisplayInstant('2026-08-27T21:30:15Z', '2026-08-27 18:30:15').toISOString())
+        .toBe('2026-08-27T21:30:15.000Z');
+    });
+  }
 });

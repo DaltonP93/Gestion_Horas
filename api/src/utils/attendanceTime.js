@@ -180,4 +180,43 @@ function wallClockToInstitutionInstant(wallStr, opts = {}) {
   return new Date(instant);
 }
 
-module.exports = { normalizeAttendanceTimestampForDb, wallClockToInstitutionInstant };
+/**
+ * Instante (Date) para display/socket/audit/webhooks/logs a partir del MISMO
+ * `input` que se normalizó para la BD.
+ *
+ * La clave: un input ya INEQUÍVOCO —un `Date` o un string con zona (Z/offset)—
+ * lleva su instante exacto, y ese instante se conserva TAL CUAL. Sólo un naive
+ * (que ya es hora de pared) necesita invertirse con wallClockToInstitutionInstant.
+ *
+ * Por qué no reinvertir siempre desde el wall-clock: en la hora REPETIDA de un
+ * cambio de zona histórico, dos instantes distintos comparten la misma hora de
+ * pared. Normalizar un input zonificado a wall-clock y luego reinvertir perdería
+ * cuál de los dos era y elegiría uno arbitrariamente (p. ej. 2024-03-24T03:30:00Z
+ * → wall 2024-03-23 23:30:00 → reinvertido 02:30:00Z, una hora corrida). Con el
+ * instante original no hay ambigüedad.
+ *
+ * @param {string|Date} input     el valor original del marcaje.
+ * @param {string} wallStr        el wall-clock ya normalizado (para el caso naive).
+ * @param {object} [opts] - `tz`  zona de la institución (por defecto INSTITUTION_TZ).
+ * @returns {Date} instante real.
+ */
+function attendanceDisplayInstant(input, wallStr, opts = {}) {
+  if (input instanceof Date) {
+    if (Number.isNaN(input.getTime())) throw new Error('Instante de marcaje inválido (Date)');
+    return new Date(input.getTime());
+  }
+  const s = String(input == null ? '' : input).trim();
+  if (CON_ZONA_RE.test(s)) {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) throw new Error(`Instante de marcaje inválido: ${s}`);
+    return d;
+  }
+  // Naive: ya es hora de pared, sin ambigüedad de origen → se invierte.
+  return wallClockToInstitutionInstant(wallStr, opts);
+}
+
+module.exports = {
+  normalizeAttendanceTimestampForDb,
+  wallClockToInstitutionInstant,
+  attendanceDisplayInstant,
+};

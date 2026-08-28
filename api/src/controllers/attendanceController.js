@@ -6,7 +6,7 @@ const { dbSecondsOfDay, dbDateISO } = require('../utils/dbTime');
 const calc = require('../services/dailySummaryCalc');
 const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
-const { normalizeAttendanceTimestampForDb, wallClockToInstitutionInstant } = require('../utils/attendanceTime');
+const { normalizeAttendanceTimestampForDb, attendanceDisplayInstant } = require('../utils/attendanceTime');
 const engine = require('../services/workdayEngine');
 const workdaySummary = require('../services/workdaySummaryService');
 const lateAlert = require('../services/lateAlertService');
@@ -34,13 +34,15 @@ async function processAttendanceEvent(data) {
     // convierte a la hora de pared de la institución. `ts` (Date) se conserva
     // sólo para trazas/emisión (display), NO para la persistencia.
     //
-    // El instante para display/audit/socket/logs se deriva del wall-clock ya
-    // normalizado (tsDb), NO de `new Date(timestamp)`: para un naive del reloj,
-    // `new Date("2026-08-27 18:30:15")` parsea en la TZ del proceso Node y da un
-    // instante distinto según el servidor. wallClockToInstitutionInstant lo
-    // interpreta explícitamente como hora de Asunción (con tzdata histórica).
+    // El instante para display/audit/socket/logs sale de attendanceDisplayInstant,
+    // NO de `new Date(timestamp)`: un naive del reloj ("2026-08-27 18:30:15")
+    // parseado con `new Date` usa la TZ del proceso Node y da un instante distinto
+    // por servidor, así que se invierte el wall-clock interpretándolo como hora de
+    // Asunción (tzdata histórica). Un input YA inequívoco (Date o ISO con zona)
+    // conserva su instante original: reinvertirlo desde el wall-clock perdería la
+    // ocurrencia correcta en la hora repetida de un cambio de zona.
     const tsDb = normalizeAttendanceTimestampForDb(timestamp);
-    const ts = wallClockToInstitutionInstant(tsDb);
+    const ts = attendanceDisplayInstant(timestamp, tsDb);
     // El tipo explícito confiable se conserva; si viene `unknown` se resuelve
     // por CONTEXTO de jornada (secuencia real de marcas), nunca por paridad del
     // día civil, que se reinicia a medianoche y rompe los turnos nocturnos.
@@ -282,6 +284,18 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
   const firstIn  = logs.find(l => l.type === 'in');
   const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
 
+  // PRESENCIA con marcas sin tipo: una jornada puede quedar registrada sólo con
+  // marcas 'unknown' (p. ej. un marcaje móvil sin contexto para inferir in/out,
+  // ahora que resolveMarkType conserva 'unknown' en vez de fabricar una entrada).
+  // El legacy sólo miraba in/out y dejaba el día 'absent' pese a que la persona
+  // fichó, dejando el flujo atrapado como ausencia hasta que otra fuente aportara
+  // un tipo. Si hay actividad pero falta la entrada/salida explícita, la
+  // permanencia se ancla en la primera/última marca del día: es PRESENCIA, no
+  // ausencia. NO se infiere atraso desde una marca sin tipo (no sabemos si es la
+  // entrada), así que el atraso sólo se calcula con un `in` explícito.
+  const anchorIn  = firstIn || logs[0];
+  const anchorOut = lastOut || logs[logs.length - 1];
+
   // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
   // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
   // no necesita zona horaria. La versión anterior construía el horario
@@ -289,8 +303,8 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
   // históricamente —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en
   // fechas de invierno anteriores el atraso salía corrido una hora aunque
   // first_in fuese exacto.
-  const inSec  = firstIn ? dbSecondsOfDay(firstIn.timestamp)  : null;
-  const outSec = lastOut ? dbSecondsOfDay(lastOut.timestamp) : null;
+  const inSec  = anchorIn  ? dbSecondsOfDay(anchorIn.timestamp)  : null;
+  const outSec = anchorOut ? dbSecondsOfDay(anchorOut.timestamp) : null;
 
   const workedMinutes = calc.workedMinutes({ firstInSeconds: inSec, lastOutSeconds: outSec });
 
@@ -302,13 +316,17 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
 
   const lateMinutes = (firstIn && emp)
     ? calc.lateMinutes({
-        firstInSeconds: inSec,
+        firstInSeconds: dbSecondsOfDay(firstIn.timestamp),
         checkInSeconds: calc.scheduleSeconds(emp.check_in),
         toleranceMin: emp.tolerance_in || 0,
       })
     : 0;
 
-  const status = calc.dayStatus({ hasFirstIn: Boolean(firstIn), late: lateMinutes });
+  // Con `in` explícito, el estado sale del cálculo (present/late). Sin `in` pero
+  // con actividad, el día es PRESENTE (sin atraso inventado): la persona fichó.
+  const status = firstIn
+    ? calc.dayStatus({ hasFirstIn: true, late: lateMinutes })
+    : 'present';
 
   // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
   // y con reintento acotado ante deadlock/lock-wait.
@@ -324,8 +342,8 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
         status          = VALUES(status)
     `, { replacements: [
       employeeId, date,
-      firstIn  ? firstIn.timestamp  : null,
-      lastOut  ? lastOut.timestamp  : null,
+      anchorIn  ? anchorIn.timestamp  : null,
+      anchorOut ? anchorOut.timestamp : null,
       workedMinutes, lateMinutes, status
     ], transaction: t });
   }, { label: `recalcEmp:${date}:${employeeId}` });
