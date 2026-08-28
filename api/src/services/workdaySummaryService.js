@@ -174,7 +174,15 @@ async function escribirFilas(employeeId, rows) {
       // motor no conoce y no debe pisar. Bajo el lock por fecha.
       await withDayRecalcLock(row.date, async (t) => {
         await sequelize.query(
-          `DELETE FROM daily_summary WHERE employee_id = ? AND date = ? AND status <> 'permission'`,
+          // Se conserva SÓLO un permiso MANUAL: el que tiene una justificación
+          // persistente cargada por RR.HH. Un 'permission' derivado de una
+          // turnera vacation/permiso (sin justificación) es automático: si la
+          // turnera se elimina y la fecha queda unconfigured, esa fila es config
+          // obsoleta y debe borrarse como cualquier otra.
+          `DELETE FROM daily_summary
+             WHERE employee_id = ? AND date = ?
+               AND NOT (status = 'permission'
+                        AND (justification IS NOT NULL OR justification_type IS NOT NULL))`,
           { replacements: [employeeId, row.date], transaction: t },
         );
       }, { label: `engineRecalcDel:${row.date}:${employeeId}` });
@@ -212,13 +220,14 @@ async function escribirFilas(employeeId, rows) {
           break_minutes    = VALUES(break_minutes),
           overtime_minutes = VALUES(overtime_minutes),
           late_minutes     = VALUES(late_minutes),
-          -- Se preserva SÓLO el permiso manual, y sólo en un día SIN jornada
-          -- (?=1). Recalcular ayer por una marca de hoy no puede borrar un
-          -- permission que sigue justificado; pero si ese día ahora tiene marcas
-          -- reales, el estado trabajado gana. holiday/weekend NO se preservan:
-          -- son automáticos y el motor ya los recalcula desde los datos vigentes.
+          -- Se preserva SÓLO el permiso MANUAL (con justificación persistente
+          -- cargada por RR.HH.), y sólo en un día SIN jornada (?=1). Un
+          -- 'permission' derivado de una turnera vacation/permiso es automático y
+          -- el motor ya lo recalcula; holiday/weekend tampoco se preservan por lo
+          -- mismo. Si el día tiene marcas reales, el estado trabajado gana.
           status = CASE
             WHEN ? = 1 AND daily_summary.status = 'permission'
+                 AND (daily_summary.justification IS NOT NULL OR daily_summary.justification_type IS NOT NULL)
               THEN daily_summary.status
             ELSE VALUES(status)
           END

@@ -103,7 +103,9 @@ describe('dry-run vs apply', () => {
     await svc.resolveSummary(1, '2025-06-10 12:00:00', { apply: true });
     const del = sequelize.query.mock.calls.find((c) => /DELETE FROM daily_summary/i.test(c[0]));
     expect(del).toBeDefined();
-    expect(del[0]).toMatch(/status <> 'permission'/);
+    // Sólo se conserva el permiso MANUAL (con justificación); un permiso de
+    // turnera (sin justificación) se borra como config obsoleta.
+    expect(del[0]).toMatch(/justification IS NOT NULL OR justification_type IS NOT NULL/);
     // No inventa una fila para un día sin evidencia.
     const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
     expect(insertó).toBe(false);
@@ -156,7 +158,7 @@ describe('dry-run vs apply', () => {
     const call = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]));
     const sql = call[0];
     const repl = call[1].replacements;
-    expect(sql).toMatch(/WHEN \? = 1 AND daily_summary\.status = 'permission'/);
+    expect(sql).toMatch(/daily_summary\.status = 'permission'\s*\n?\s*AND \(daily_summary\.justification IS NOT NULL/);
     // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
     expect(repl[8]).toBe('present');   // status calculado
     expect(repl[9]).toBe(0);           // esDiaVacio: hay jornada, el estado nuevo gana
