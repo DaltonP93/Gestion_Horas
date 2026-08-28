@@ -24,11 +24,13 @@
  *
  * No se recalcula `DATE(timestamp)` como única fecha. Un OUT de madrugada
  * (02/12 07:04) cierra una jornada que empezó el día anterior (01/12). Por eso
- * las fechas afectadas por una marca en `anchorDate` son, a lo sumo,
- * {anchorDate-1, anchorDate}: una jornada se fecha por su PRIMERA entrada, así
- * que una marca nunca puede pertenecer a una jornada fechada en el futuro. Se
- * lee una ventana ampliada (punchWindow) para no truncar la jornada nocturna, y
- * se recalculan esas dos fechas.
+ * las fechas afectadas por una marca en `anchorDate` son {anchorDate-1,
+ * anchorDate, anchorDate+1}: una jornada se fecha por su PRIMERA entrada, así
+ * que la marca en sí pertenece a la del ancla o a la anterior, pero una marca
+ * cargada FUERA DE ORDEN puede absorber una huérfana que ya se materializó como
+ * fila del día siguiente, y esa fila obsoleta también debe reconciliarse (ver
+ * el detalle en resolveSummary). Se lee una ventana ampliada (punchWindow) para
+ * no truncar la jornada nocturna, y se recalculan esas tres fechas.
  *
  * ═══════════════════════════════════════════════════════════════════════
  * ESCRITURA CONTROLADA POR FLAG (default OFF)
@@ -147,11 +149,17 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
   const anchorISO = anchorDateISO(anchor);
   if (!anchorISO) throw new Error(`Ancla de recalc inválida: ${anchor}`);
 
-  // Fechas afectadas: la del ancla y la anterior (una jornada nocturna que
-  // empezó ayer se cierra hoy). Nunca la posterior: una marca no puede
-  // pertenecer a una jornada fechada en el futuro.
+  // Fechas afectadas: {anchorDate-1, anchorDate, anchorDate+1}.
+  //   · anchorDate-1: una jornada nocturna que empezó ayer se cierra hoy;
+  //   · anchorDate:   la jornada de la propia marca;
+  //   · anchorDate+1: aunque una jornada NUNCA se fecha en el futuro, una marca
+  //     cargada fuera de orden puede ABSORBER una huérfana que ya se materializó
+  //     como fila del día siguiente. Ej.: primero se guarda el OUT del 21 02:00
+  //     (fila del 21 con actividad); al cargar después el IN del 20 22:00, la
+  //     jornada correcta es del 20 y la fila del 21 queda obsoleta. Reconciliar
+  //     anchorDate+1 la limpia en vez de duplicar la actividad en KPI/reportes.
   const from = shiftDate(anchorISO, -1);
-  const to = anchorISO;
+  const to = shiftDate(anchorISO, 1);
 
   const ventana = engine.punchWindow({ from, to });
   const [punches, config, holidays] = await Promise.all([

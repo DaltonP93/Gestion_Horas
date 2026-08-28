@@ -82,6 +82,30 @@ describe('resolveSummary — fechas afectadas', () => {
     expect(fila).toBeDefined();
     expect(fila.net_worked_minutes).toBe(420); // 2:33 + 4:27 = 7:00 netos
   });
+
+  test('el ancla también reconcilia el día civil POSTERIOR (huérfana absorbida)', async () => {
+    // Carga fuera de orden: la marca ancla es el IN del 20 22:00, pero el OUT del
+    // 21 02:00 ya pudo materializarse como una fila huérfana del 21. La jornada
+    // correcta es del 20 (se fecha por su primera entrada), así que la ventana
+    // debe incluir el 21 para reconciliar esa fila obsoleta en vez de duplicar
+    // la actividad. affectedDates cubre {19, 20, 21}.
+    conMarcajes([
+      { id: 1, timestamp: '2025-08-20 22:00:00', type: 'in' },
+      { id: 2, timestamp: '2025-08-21 02:00:00', type: 'out' },
+    ]);
+    const { rows, affectedDates } = await svc.resolveSummary(1, '2025-08-20 22:00:00', { apply: false });
+    expect(affectedDates).toContain('2025-08-21');
+    // La jornada nocturna queda fechada el 20, no el 21.
+    const jornada = rows.find((r) => r.date === '2025-08-20');
+    expect(jornada).toBeDefined();
+    expect(jornada.first_in.slice(11, 16)).toBe('22:00');
+    expect(jornada.last_out.slice(11, 16)).toBe('02:00');
+    // El 21 se materializa como día vacío (sin jornada propia), listo para
+    // pisar/borrar cualquier huérfana previa; no reclama la actividad del 20.
+    const posterior = rows.find((r) => r.date === '2025-08-21');
+    expect(posterior).toBeDefined();
+    expect(posterior.workday_count || 0).toBe(0);
+  });
 });
 
 describe('dry-run vs apply', () => {
