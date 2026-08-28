@@ -167,11 +167,13 @@ async function escribirFilas(employeeId, rows) {
     const status = statusParaDb(row.status);
     if (status == null) continue; // unconfigured: no se escribe una fila inventada
     // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
-    // preservan los estados manuales guardados. Si ahora hay marcas válidas
-    // —un domingo que la config declara laborable, un feriado trabajado— el
-    // estado calculado (present/late) DEBE ganar: conservar el holiday/weekend
-    // viejo dejaría minutos trabajados fuera de los KPI de presencia y
-    // representados como descanso en los reportes legales.
+    // preserva el estado guardado, y SÓLO si es 'permission': un permiso lo
+    // carga una justificación manual que el motor no conoce, así que el motor no
+    // puede pisarlo. En cambio holiday/weekend son AUTOMÁTICOS —el motor los
+    // deriva de la tabla de feriados vigente y de la config—, así que su valor
+    // recalculado es el autoritativo: si se desactiva un feriado o el historial
+    // vuelve laborable un descanso, el estado nuevo (absent) debe ganar, no
+    // quedar congelado sobre una config obsoleta.
     const esDiaVacio = (row.workday_count || 0) === 0;
     await withDayRecalcLock(row.date, async (t) => {
       await sequelize.query(`
@@ -196,13 +198,13 @@ async function escribirFilas(employeeId, rows) {
           break_minutes    = VALUES(break_minutes),
           overtime_minutes = VALUES(overtime_minutes),
           late_minutes     = VALUES(late_minutes),
-          -- Se PRESERVAN los estados cargados a mano / por justificación
-          -- (feriado, fin de semana, permiso) SÓLO cuando la fila recalculada
-          -- NO contiene una jornada (?=1). Recalcular ayer por una marca de hoy
-          -- no puede borrar un permission que sigue justificado; pero si ese
-          -- día ahora tiene marcas reales, el estado trabajado gana.
+          -- Se preserva SÓLO el permiso manual, y sólo en un día SIN jornada
+          -- (?=1). Recalcular ayer por una marca de hoy no puede borrar un
+          -- permission que sigue justificado; pero si ese día ahora tiene marcas
+          -- reales, el estado trabajado gana. holiday/weekend NO se preservan:
+          -- son automáticos y el motor ya los recalcula desde los datos vigentes.
           status = CASE
-            WHEN ? = 1 AND daily_summary.status IN ('holiday','weekend','permission')
+            WHEN ? = 1 AND daily_summary.status = 'permission'
               THEN daily_summary.status
             ELSE VALUES(status)
           END

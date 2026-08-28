@@ -112,9 +112,10 @@ describe('dry-run vs apply', () => {
     ]);
     await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
     const insert = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]))[0];
-    // Un permiso ya cargado no se pisa: recalcular ayer por una marca de hoy no
-    // puede borrar un permission que sigue justificado.
-    expect(insert).toMatch(/daily_summary\.status IN \('holiday','weekend','permission'\)/);
+    // Sólo el permiso manual se preserva; holiday/weekend son automáticos y el
+    // motor los recalcula desde los datos vigentes.
+    expect(insert).toMatch(/daily_summary\.status = 'permission'/);
+    expect(insert).not.toMatch(/IN \('holiday','weekend','permission'\)/);
   });
 
   test('el upsert materializa TODOS los derivados (break y overtime), no sólo algunos', async () => {
@@ -141,7 +142,7 @@ describe('dry-run vs apply', () => {
     const call = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]));
     const sql = call[0];
     const repl = call[1].replacements;
-    expect(sql).toMatch(/WHEN \? = 1 AND daily_summary\.status IN/);
+    expect(sql).toMatch(/WHEN \? = 1 AND daily_summary\.status = 'permission'/);
     // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
     expect(repl[8]).toBe('present');   // status calculado
     expect(repl[9]).toBe(0);           // esDiaVacio: hay jornada, el estado nuevo gana

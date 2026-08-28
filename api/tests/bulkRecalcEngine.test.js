@@ -18,7 +18,7 @@ jest.mock('../src/services/workdaySummaryService', () => ({
 }));
 
 const { sequelize } = require('../src/config/database');
-const { bulkRecalcDailySummary } = require('../src/services/scheduler');
+const { bulkRecalcDailySummary, materializeAbsents } = require('../src/services/scheduler');
 
 test('el lote del motor toma la UNIÓN de activos + marcadores y procesa POR LOTE', async () => {
   sequelize.query.mockReset();
@@ -34,4 +34,14 @@ test('el lote del motor toma la UNIÓN de activos + marcadores y procesa POR LOT
   const loteSql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
   expect(loteSql).toMatch(/FROM employees WHERE status = 'active'/);
   expect(loteSql).toMatch(/UNION/);
+});
+
+test('con el flag ON, materializeAbsents es un no-op (no fabrica ausencias)', async () => {
+  // El motor deja un día unconfigured SIN fila a propósito; materializeAbsents
+  // usaría el horario actual y lo pisaría con 'absent'. En el camino nuevo no corre.
+  sequelize.query.mockReset();
+  const n = await materializeAbsents('2025-06-15');
+  expect(n).toBe(0);
+  const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
+  expect(insertó).toBe(false);
 });

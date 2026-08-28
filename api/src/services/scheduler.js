@@ -659,6 +659,12 @@ async function legacyBulkRecalcDailySummary(date) {
 // debían trabajar ese día, no es feriado, y no tienen ya una fila. No pisa
 // filas existentes. Empleados sin horario asignado se omiten.
 async function materializeAbsents(date) {
+  // Con el motor habilitado, la materialización de días vacíos ya la hace el
+  // recálculo por el motor, que DELIBERADAMENTE deja sin fila un día
+  // `unconfigured` (sin evidencia de ausencia). materializeAbsents usa el
+  // horario ACTUAL y fabricaría 'absent' sobre esos días, justo lo que el motor
+  // evitó, así que en el camino nuevo NO corre.
+  if (workdaySummary.isEngineSummaryWriteEnabled()) return 0;
   let n = 0;
   // Bajo el mismo lock por fecha: nunca choca con un recálculo del mismo día.
   await withDayRecalcLock(date, async (t) => {
