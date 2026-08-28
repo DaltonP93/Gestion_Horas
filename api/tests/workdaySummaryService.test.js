@@ -104,6 +104,30 @@ describe('dry-run vs apply', () => {
     const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
     expect(insertó).toBe(true);
   });
+
+  test('el upsert PRESERVA los estados manuales (holiday/weekend/permission)', async () => {
+    conMarcajes([
+      { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
+      { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
+    ]);
+    await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
+    const insert = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]))[0];
+    // Un permiso ya cargado no se pisa: recalcular ayer por una marca de hoy no
+    // puede borrar un permission que sigue justificado.
+    expect(insert).toMatch(/daily_summary\.status IN \('holiday','weekend','permission'\)/);
+  });
+
+  test('el upsert materializa TODOS los derivados (break y overtime), no sólo algunos', async () => {
+    conMarcajes([
+      { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
+      { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
+    ]);
+    await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
+    const insert = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]))[0];
+    // Sin escribir overtime, un valor legacy positivo seguiría acreditándose.
+    expect(insert).toMatch(/break_minutes\s*=\s*VALUES\(break_minutes\)/);
+    expect(insert).toMatch(/overtime_minutes\s*=\s*VALUES\(overtime_minutes\)/);
+  });
 });
 
 describe('feature flag', () => {

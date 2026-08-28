@@ -162,14 +162,31 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
       if (status == null) continue; // unconfigured: no se escribe una fila inventada
       await withDayRecalcLock(row.date, async (t) => {
         await sequelize.query(`
-          INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, late_minutes, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO daily_summary
+            (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             first_in       = COALESCE(VALUES(first_in), first_in),
             last_out       = VALUES(last_out),
             worked_minutes = VALUES(worked_minutes),
-            late_minutes   = VALUES(late_minutes),
-            status         = VALUES(status)
+            -- Se materializan TODOS los campos derivados del motor, no sólo
+            -- algunos: dejar break/overtime sin escribir conservaría valores
+            -- legacy obsoletos. En particular un overtime_minutes viejo y
+            -- positivo podría seguir acreditándose en el banco de horas después
+            -- de que el motor lo recalculó en cero (el motor no computa hora
+            -- extra legal: la deja en 0 hasta que exista una política).
+            break_minutes    = VALUES(break_minutes),
+            overtime_minutes = VALUES(overtime_minutes),
+            late_minutes     = VALUES(late_minutes),
+            -- Se PRESERVAN los estados cargados a mano / por justificación:
+            -- un feriado, un fin de semana o un permiso ya guardado no se pisa
+            -- con el estado calculado (mismo criterio que el recálculo legacy).
+            -- Recalcular ayer por una marca de hoy no puede borrar un permission
+            -- que sigue justificado, aunque el materializador vería 'absent'.
+            status = CASE
+              WHEN daily_summary.status IN ('holiday','weekend','permission') THEN daily_summary.status
+              ELSE VALUES(status)
+            END
         `, {
           replacements: [
             employeeId, row.date,
@@ -179,6 +196,10 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
             // histórica de la columna; el modo por defecto del materializador ya
             // usa presence. Cambiarla a neto es una decisión de negocio aparte.
             row.worked_minutes || 0,
+            row.break_minutes || 0,
+            // El motor no computa hora extra legal: siempre 0. Escribirlo limpia
+            // cualquier overtime legacy que quedara colgado.
+            row.overtime_minutes || 0,
             row.late_minutes || 0,
             status,
           ],
