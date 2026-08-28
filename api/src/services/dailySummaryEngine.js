@@ -248,10 +248,24 @@ function buildDailySummaryRows(punches, options = {}) {
     const j = lista.length === 1 ? lista[0] : aggregateWorkdays(lista);
     const anomalyCodes = j.anomalies.map((a) => (typeof a === 'string' ? a : a.code));
 
+    // Los bounds se extienden para cubrir la hora de los fichajes sueltos
+    // ATRIBUIDOS a la jornada (una salida de más poco después del cierre: 08:00
+    // in, 17:00 out, 18:00 out). El motor los deja como anomalía con su `at`,
+    // pero fuera de los tramos, así que sin esto la marca de las 18:00 no
+    // aparecería en ningún campo de daily_summary (el writer no persiste
+    // anomalies). La permanencia/trabajado siguen siendo los del motor.
+    let firstIn = j.first_in;
+    let lastOut = j.last_out;
+    for (const a of j.anomalies) {
+      if (typeof a === 'string' || !a.at) continue;
+      if (!firstIn || a.at < firstIn) firstIn = a.at;
+      if (!lastOut || a.at > lastOut) lastOut = a.at;
+    }
+
     filas.push({
       date,
-      first_in: j.first_in,
-      last_out: j.last_out,
+      first_in: firstIn,
+      last_out: lastOut,
       worked_minutes: workedMinutesMode === WORKED_NET
         ? j.worked_minutes
         : j.presence_minutes,

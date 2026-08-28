@@ -210,6 +210,26 @@ describe('materialización de fechas sin jornada', () => {
     expect(filas[0].calculation_mode).toBe('historical_fallback');
   });
 
+  test('una salida huérfana atribuida a la jornada extiende last_out (no desaparece)', () => {
+    // 08:00 in, 17:00 out, 18:00 out: el 18:00 es salidas_consecutivas atribuida
+    // a la jornada (dentro del umbral de pausa). El writer no persiste anomalies,
+    // así que la única forma de que la marca de las 18:00 no desaparezca de
+    // daily_summary es que last_out la cubra.
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+        { timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+        { timestamp: '2025-06-10 18:00:00', type: 'out', id: 3 },
+      ],
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].last_out.slice(11, 16)).toBe('18:00');
+    expect(filas[0].anomalies).toContain('salidas_consecutivas');
+    // La permanencia sigue siendo la del motor (08:00→17:00), no 08:00→18:00.
+    expect(filas[0].presence_minutes).toBe(540);
+  });
+
   test('un fichaje suelto en un día NO laborable por config conserva la marca', () => {
     // Domingo libre (L-V) con un OUT huérfano: sigue 'non_working' pero registra
     // la hora del fichaje.
