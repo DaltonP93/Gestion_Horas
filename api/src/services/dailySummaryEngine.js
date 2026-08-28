@@ -376,12 +376,17 @@ function aggregateWorkdays(lista) {
  * Materializar 'absent' ahí ocultaría el fichaje y una escritura futura
  * produciría una ausencia engañosa.
  *
- * Cuando hay huérfanas se incorpora su anomalía a la fila. Y si el estado base
- * era `absent` (día laborable sin jornada), se reinterpreta como un día CON
- * actividad incompleta —igual que el motor trata una jornada abierta (entrada
- * sin salida) como 'present' con cero minutos—: se conservan las horas del
- * fichaje como evidencia y se marca `calculation_mode` para que el dry-run lo
+ * Cuando hay huérfanas se conserva SIEMPRE la hora del fichaje suelto como
+ * evidencia, CUALQUIERA sea la clasificación del día vacío: si no, un OUT
+ * huérfano en un feriado, un descanso configurado o un día sin config
+ * desaparecería del resumen (los bounds quedarían en null y el writer no
+ * persiste las anomalías). Se marca `calculation_mode` para que el dry-run lo
  * compare en vez de descartarlo como día vacío.
+ *
+ * Además, un día que iba a clasificarse como AUSENCIA o DESCONOCIDO pero que TUVO
+ * actividad no es eso: la persona marcó algo. Se reinterpreta como 'present' con
+ * cero minutos —igual que una jornada abierta—. Un feriado o descanso conserva
+ * su clase (la marca queda registrada y señalada por la anomalía).
  */
 function filaDiaSinJornada(date, expectation, cfg, isHoliday, huerfanas) {
   const status0 = statusEmptyDay(expectation, isHoliday);
@@ -391,15 +396,19 @@ function filaDiaSinJornada(date, expectation, cfg, isHoliday, huerfanas) {
   const codigos = huerfanas.map((h) => h.code);
   fila.anomalies = [...new Set([...(fila.anomalies || []), ...codigos])];
 
-  if (status0 === STATUS.ABSENT) {
-    const ts = (h) => (h.src ? String(h.src.timestamp || h.src.ts || '') : '');
-    const ins = huerfanas.filter((h) => h.src && h.src.type === 'in').map(ts).filter(Boolean).sort();
-    const outs = huerfanas.filter((h) => h.src && h.src.type === 'out').map(ts).filter(Boolean).sort();
-    fila.first_in = ins.length ? ins[0] : null;
-    fila.last_out = outs.length ? outs[outs.length - 1] : null;
+  // Horas del fichaje suelto — SIEMPRE, sin importar el estado del día.
+  const ts = (h) => (h.src ? String(h.src.timestamp || h.src.ts || '') : '');
+  const ins = huerfanas.filter((h) => h.src && h.src.type === 'in').map(ts).filter(Boolean).sort();
+  const outs = huerfanas.filter((h) => h.src && h.src.type === 'out').map(ts).filter(Boolean).sort();
+  fila.first_in = ins.length ? ins[0] : null;
+  fila.last_out = outs.length ? outs[outs.length - 1] : null;
+  fila.calculation_mode = engine.MODE_HISTORICAL_FALLBACK;
+  fila.policy_version = engine.POLICY_VERSION;
+
+  // Ausencia o desconocido CON actividad → presente (0 minutos). El feriado o el
+  // descanso configurado conservan su clasificación.
+  if (status0 === STATUS.ABSENT || status0 === STATUS.UNCONFIGURED) {
     fila.status = STATUS.PRESENT;
-    fila.calculation_mode = engine.MODE_HISTORICAL_FALLBACK;
-    fila.policy_version = engine.POLICY_VERSION;
   }
   return fila;
 }

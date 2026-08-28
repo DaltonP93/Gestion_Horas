@@ -195,6 +195,32 @@ describe('materialización de fechas sin jornada', () => {
     // día vacío.
     expect(filas[0].calculation_mode).toBe('historical_fallback');
   });
+
+  test('un fichaje suelto en un FERIADO conserva la marca (no desaparece)', () => {
+    // Un OUT huérfano en un feriado: el día sigue siendo 'holiday', pero la hora
+    // del fichaje se registra y la anomalía queda a la vista, en vez de perderse.
+    const filas = buildDailySummaryRows(
+      [{ timestamp: '2025-05-01 17:00:00', type: 'out', id: 7 }],
+      { from: '2025-05-01', to: '2025-05-01', holidays: new Set(['2025-05-01']), resolveConfig: () => LV },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].status).toBe('holiday');            // conserva su clase
+    expect(filas[0].last_out.slice(11, 16)).toBe('17:00'); // pero retiene la marca
+    expect(filas[0].anomalies).toContain('salida_sin_entrada');
+    expect(filas[0].calculation_mode).toBe('historical_fallback');
+  });
+
+  test('un fichaje suelto en un día NO laborable por config conserva la marca', () => {
+    // Domingo libre (L-V) con un OUT huérfano: sigue 'non_working' pero registra
+    // la hora del fichaje.
+    const filas = buildDailySummaryRows(
+      [{ timestamp: '2025-06-15 09:00:00', type: 'out', id: 8 }], // domingo
+      { from: '2025-06-15', to: '2025-06-15', resolveConfig: () => LV },
+    );
+    expect(filas[0].status).toBe('non_working');
+    expect(filas[0].last_out.slice(11, 16)).toBe('09:00');
+    expect(filas[0].anomalies).toContain('salida_sin_entrada');
+  });
 });
 
 describe('agregación de dos jornadas en la misma fecha civil', () => {
