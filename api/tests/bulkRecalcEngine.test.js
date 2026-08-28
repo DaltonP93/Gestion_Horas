@@ -11,24 +11,26 @@
 jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() }, DB_TIMEZONE: '-03:00' }));
 jest.mock('../src/config/logger', () => ({ info() {}, warn() {}, error() {} }));
 
-const mockResolveSummary = jest.fn(async () => ({ rows: [], affectedDates: [] }));
+const mockBatch = jest.fn(async () => ({ rowsByEmployee: new Map() }));
 jest.mock('../src/services/workdaySummaryService', () => ({
   isEngineSummaryWriteEnabled: () => true, // flag ON para este test
-  resolveSummary: (...a) => mockResolveSummary(...a),
+  resolveSummaryBatchForDate: (...a) => mockBatch(...a),
 }));
 
 const { sequelize } = require('../src/config/database');
 const { bulkRecalcDailySummary } = require('../src/services/scheduler');
 
-test('el lote del motor toma la UNIÓN de activos + marcadores, no sólo attendance_logs', async () => {
+test('el lote del motor toma la UNIÓN de activos + marcadores y procesa POR LOTE', async () => {
   sequelize.query.mockReset();
   sequelize.query.mockImplementation(async () => [[{ employee_id: 1 }, { employee_id: 2 }, { employee_id: 3 }]]);
-  mockResolveSummary.mockClear();
+  mockBatch.mockClear();
 
   await bulkRecalcDailySummary('2025-06-15');
 
-  // Un empleado sin marcas (2, 3) también pasa por el motor.
-  expect(mockResolveSummary).toHaveBeenCalledTimes(3);
+  // Una sola llamada batch con TODOS los ids (incluye empleados sin marcas), no
+  // una por empleado.
+  expect(mockBatch).toHaveBeenCalledTimes(1);
+  expect(mockBatch).toHaveBeenCalledWith([1, 2, 3], '2025-06-15', { apply: true });
   const loteSql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
   expect(loteSql).toMatch(/FROM employees WHERE status = 'active'/);
   expect(loteSql).toMatch(/UNION/);

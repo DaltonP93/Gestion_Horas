@@ -34,11 +34,11 @@
 
 'use strict';
 
-const { DB_TIMEZONE } = require('../config/database');
-const { parseOffsetMinutes } = require('./dbTime');
-
-const TZ_POR_DEFECTO = DB_TIMEZONE || '-03:00';
 const pad2 = (n) => String(n).padStart(2, '0');
+
+// Zona IANA de la institución. Se usa SÓLO para convertir instantes reales a
+// hora de pared; para un naive nunca hay conversión.
+const INSTITUTION_TZ = process.env.ATTENDANCE_TZ || 'America/Asuncion';
 
 // Naive = fecha y hora SIN marca de zona (ni Z ni ±HH:MM al final). Acepta
 // separador " " o "T" y segundos/fracción opcionales.
@@ -48,13 +48,27 @@ const CON_ZONA_RE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 
 const fmt = (y, mo, d, h, mi, s) => `${pad2(y)}-${pad2(mo)}-${pad2(d)} ${pad2(h)}:${pad2(mi)}:${pad2(s)}`;
 
-/** Instante (Date) → hora de pared de la institución "YYYY-MM-DD HH:mm:ss". */
+/**
+ * Instante (Date) → hora de pared de la institución "YYYY-MM-DD HH:mm:ss".
+ *
+ * Resuelve la zona IANA para la FECHA CONCRETA del instante: aplica la tzdata
+ * histórica de Paraguay (UTC-4 hasta 2024-10-06, UTC-3 después). Un offset fijo
+ * -03:00 movería una hora los instantes anteriores al cambio (una carga manual
+ * `2024-07-01T12:00:00Z` es 08:00 en Asunción, no 09:00). Acá SÍ corresponde la
+ * tzdata: un instante real cambia de hora civil según el offset vigente; lo que
+ * NO se convierte es un string naive, que ya es hora de pared.
+ */
 function instanteAWallClock(date, tz) {
-  const shifted = new Date(date.getTime() + parseOffsetMinutes(tz) * 60000);
-  return fmt(
-    shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, shifted.getUTCDate(),
-    shifted.getUTCHours(), shifted.getUTCMinutes(), shifted.getUTCSeconds(),
-  );
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date);
+  const g = {};
+  for (const p of partes) if (p.type !== 'literal') g[p.type] = p.value;
+  // Algunos ICU emiten '24' para la medianoche aun con hourCycle h23; se normaliza.
+  const hora = g.hour === '24' ? '00' : g.hour;
+  return `${g.year}-${g.month}-${g.day} ${hora}:${g.minute}:${g.second}`;
 }
 
 /**
@@ -68,7 +82,7 @@ function instanteAWallClock(date, tz) {
  *         guarda una hora inventada).
  */
 function normalizeAttendanceTimestampForDb(input, opts = {}) {
-  const tz = opts.tz || TZ_POR_DEFECTO;
+  const tz = opts.tz || INSTITUTION_TZ;
 
   // Caso B: un Date es un instante real → convertir a hora de pared.
   if (input instanceof Date) {

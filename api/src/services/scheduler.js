@@ -547,11 +547,11 @@ async function bulkRecalcViaEngine(date) {
       SELECT DISTINCT employee_id FROM attendance_logs WHERE timestamp >= ? AND timestamp < ?
     ) u
   `, { replacements: [ventana.from, ventana.to] });
-  for (const { employee_id } of emps) {
-    // Ancla a mediodía de `date`: las fechas afectadas son {date-1, date}.
-    await workdaySummary.resolveSummary(employee_id, `${date} 12:00:00`, { apply: true });
-  }
-  logger.info(`♻️  daily_summary (motor) recalculado para ${date} — ${emps.length} empleado(s)`);
+  const ids = emps.map((e) => e.employee_id);
+  // Lote: una lectura de marcajes/feriados/config para todo el padrón, no por
+  // empleado. Sin esto, un reproceso mensual haría cientos de miles de viajes.
+  await workdaySummary.resolveSummaryBatchForDate(ids, date, { apply: true });
+  logger.info(`♻️  daily_summary (motor) recalculado para ${date} — ${ids.length} empleado(s)`);
 }
 
 // LEGACY (rollback). Recálculo en bloque con SQL propio: MIN(in)/MAX(out) del

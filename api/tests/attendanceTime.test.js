@@ -65,6 +65,16 @@ describe('instante real se convierte a hora de pared', () => {
     // 18:30:15+00:00 → 15:30:15 en UTC-3.
     expect(normalizeAttendanceTimestampForDb('2026-08-27T18:30:15+00:00')).toBe('2026-08-27 15:30:15');
   });
+
+  test('un instante HISTÓRICO usa la tzdata de la fecha (Paraguay UTC-4 antes de 2024-10-06)', () => {
+    // 2024-07-01T12:00:00Z: Asunción estaba en UTC-4 → 08:00, no 09:00.
+    expect(normalizeAttendanceTimestampForDb('2024-07-01T12:00:00Z')).toBe('2024-07-01 08:00:00');
+  });
+
+  test('un instante posterior al cambio usa UTC-3', () => {
+    // 2025-01-15T12:00:00Z: ya en UTC-3 → 09:00.
+    expect(normalizeAttendanceTimestampForDb('2025-01-15T12:00:00Z')).toBe('2025-01-15 09:00:00');
+  });
 });
 
 describe('entradas inválidas se rechazan (no se inventa hora)', () => {

@@ -156,74 +156,152 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
 
   const affectedDates = rows.map((r) => r.date);
 
-  if (apply) {
-    for (const row of rows) {
-      const status = statusParaDb(row.status);
-      if (status == null) continue; // unconfigured: no se escribe una fila inventada
-      // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
-      // preservan los estados manuales guardados. Si ahora hay marcas válidas
-      // —un domingo que la config declara laborable, un feriado trabajado— el
-      // estado calculado (present/late) DEBE ganar: conservar el holiday/weekend
-      // viejo dejaría minutos trabajados fuera de los KPI de presencia y
-      // representados como descanso en los reportes legales.
-      const esDiaVacio = (row.workday_count || 0) === 0;
-      await withDayRecalcLock(row.date, async (t) => {
-        await sequelize.query(`
-          INSERT INTO daily_summary
-            (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE
-            first_in       = COALESCE(VALUES(first_in), first_in),
-            last_out       = VALUES(last_out),
-            worked_minutes = VALUES(worked_minutes),
-            -- Se materializan TODOS los campos derivados del motor, no sólo
-            -- algunos: dejar break/overtime sin escribir conservaría valores
-            -- legacy obsoletos. En particular un overtime_minutes viejo y
-            -- positivo podría seguir acreditándose en el banco de horas después
-            -- de que el motor lo recalculó en cero (el motor no computa hora
-            -- extra legal: la deja en 0 hasta que exista una política).
-            break_minutes    = VALUES(break_minutes),
-            overtime_minutes = VALUES(overtime_minutes),
-            late_minutes     = VALUES(late_minutes),
-            -- Se PRESERVAN los estados cargados a mano / por justificación
-            -- (feriado, fin de semana, permiso) SÓLO cuando la fila recalculada
-            -- NO contiene una jornada (?=1). Recalcular ayer por una marca de hoy
-            -- no puede borrar un permission que sigue justificado; pero si ese
-            -- día ahora tiene marcas reales, el estado trabajado gana.
-            status = CASE
-              WHEN ? = 1 AND daily_summary.status IN ('holiday','weekend','permission')
-                THEN daily_summary.status
-              ELSE VALUES(status)
-            END
-        `, {
-          replacements: [
-            employeeId, row.date,
-            row.first_in || null,
-            row.last_out || null,
-            // worked_minutes = PERMANENCIA (presence), que es la semántica
-            // histórica de la columna; el modo por defecto del materializador ya
-            // usa presence. Cambiarla a neto es una decisión de negocio aparte.
-            row.worked_minutes || 0,
-            row.break_minutes || 0,
-            // El motor no computa hora extra legal: siempre 0. Escribirlo limpia
-            // cualquier overtime legacy que quedara colgado.
-            row.overtime_minutes || 0,
-            row.late_minutes || 0,
-            status,
-            esDiaVacio ? 1 : 0,
-          ],
-          transaction: t,
-        });
-      }, { label: `engineRecalc:${row.date}:${employeeId}` });
-    }
-  }
+  if (apply) await escribirFilas(employeeId, rows);
 
   return { rows, affectedDates };
+}
+
+/** Escribe las filas de UN empleado en daily_summary, cada una bajo su lock. */
+async function escribirFilas(employeeId, rows) {
+  for (const row of rows) {
+    const status = statusParaDb(row.status);
+    if (status == null) continue; // unconfigured: no se escribe una fila inventada
+    // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
+    // preservan los estados manuales guardados. Si ahora hay marcas válidas
+    // —un domingo que la config declara laborable, un feriado trabajado— el
+    // estado calculado (present/late) DEBE ganar: conservar el holiday/weekend
+    // viejo dejaría minutos trabajados fuera de los KPI de presencia y
+    // representados como descanso en los reportes legales.
+    const esDiaVacio = (row.workday_count || 0) === 0;
+    await withDayRecalcLock(row.date, async (t) => {
+      await sequelize.query(`
+        INSERT INTO daily_summary
+          (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          -- first_in se REEMPLAZA, no se conserva: el motor relee toda la
+          -- ventana, así que su valor es autoritativo. Si una marca migró a la
+          -- jornada anterior y esta fecha queda sin entrada, VALUES(first_in)
+          -- es NULL y debe borrar el first_in legacy; conservarlo dejaría una
+          -- hora de entrada obsoleta con last_out NULL y minutos en cero.
+          first_in       = VALUES(first_in),
+          last_out       = VALUES(last_out),
+          worked_minutes = VALUES(worked_minutes),
+          -- Se materializan TODOS los campos derivados del motor, no sólo
+          -- algunos: dejar break/overtime sin escribir conservaría valores
+          -- legacy obsoletos. En particular un overtime_minutes viejo y
+          -- positivo podría seguir acreditándose en el banco de horas después
+          -- de que el motor lo recalculó en cero (el motor no computa hora
+          -- extra legal: la deja en 0 hasta que exista una política).
+          break_minutes    = VALUES(break_minutes),
+          overtime_minutes = VALUES(overtime_minutes),
+          late_minutes     = VALUES(late_minutes),
+          -- Se PRESERVAN los estados cargados a mano / por justificación
+          -- (feriado, fin de semana, permiso) SÓLO cuando la fila recalculada
+          -- NO contiene una jornada (?=1). Recalcular ayer por una marca de hoy
+          -- no puede borrar un permission que sigue justificado; pero si ese
+          -- día ahora tiene marcas reales, el estado trabajado gana.
+          status = CASE
+            WHEN ? = 1 AND daily_summary.status IN ('holiday','weekend','permission')
+              THEN daily_summary.status
+            ELSE VALUES(status)
+          END
+      `, {
+        replacements: [
+          employeeId, row.date,
+          row.first_in || null,
+          row.last_out || null,
+          // worked_minutes = PERMANENCIA (presence), que es la semántica
+          // histórica de la columna; el modo por defecto del materializador ya
+          // usa presence. Cambiarla a neto es una decisión de negocio aparte.
+          row.worked_minutes || 0,
+          row.break_minutes || 0,
+          // El motor no computa hora extra legal: siempre 0. Escribirlo limpia
+          // cualquier overtime legacy que quedara colgado.
+          row.overtime_minutes || 0,
+          row.late_minutes || 0,
+          status,
+          esDiaVacio ? 1 : 0,
+        ],
+        transaction: t,
+      });
+    }, { label: `engineRecalc:${row.date}:${employeeId}` });
+  }
+}
+
+/**
+ * Recálculo en bloque para una fecha, POR LOTE de empleados.
+ *
+ * Lee marcajes, feriados y configuración UNA sola vez para todo el lote (no por
+ * empleado): loadWorkdayConfig ya acepta un array de ids y resuelve en memoria.
+ * Así un reproceso de cientos de empleados por decenas de días no dispara miles
+ * de viajes a la base. Incluye a los empleados SIN marcas para materializar sus
+ * días vacíos desde la config histórica.
+ *
+ * @param {number[]} employeeIds
+ * @param {string} date  fecha objetivo 'YYYY-MM-DD'.
+ * @param {object} [opts] - `apply` escribir (por defecto false).
+ * @returns {Promise<{ rowsByEmployee: Map<number, Array> }>}
+ */
+async function resolveSummaryBatchForDate(employeeIds, date, opts = {}) {
+  const apply = opts.apply === true;
+  const ids = [...new Set((employeeIds || []).map(Number).filter(Number.isInteger))];
+  if (!ids.length) return { rowsByEmployee: new Map() };
+
+  const from = shiftDate(date, -1);
+  const to = date;
+  const ventana = engine.punchWindow({ from, to });
+
+  // Una lectura de marcajes para TODO el lote; una carga de config; un set de
+  // feriados. El resto se resuelve en memoria.
+  const [todosPunches, config, holidays] = await Promise.all([
+    leerMarcajesLote(ids, ventana),
+    loadWorkdayConfig(ids, { from, to }),
+    leerFeriados(from, to),
+  ]);
+
+  const porEmpleado = new Map();
+  for (const p of todosPunches) {
+    const arr = porEmpleado.get(p.employee_id) || [];
+    arr.push(p);
+    porEmpleado.set(p.employee_id, arr);
+  }
+
+  const rowsByEmployee = new Map();
+  for (const employeeId of ids) {
+    const rows = dsEngine.buildDailySummaryRows(porEmpleado.get(employeeId) || [], {
+      from,
+      to,
+      holidays,
+      resolveConfig: (workDate) => config.forDate(employeeId, workDate),
+      materializeEmptyDates: true,
+    });
+    rowsByEmployee.set(employeeId, rows);
+    if (apply) await escribirFilas(employeeId, rows);
+  }
+
+  return { rowsByEmployee };
+}
+
+/** Marcajes wall-clock de VARIOS empleados en la ventana. */
+async function leerMarcajesLote(employeeIds, ventana) {
+  const marcas = employeeIds.map(() => '?').join(',');
+  const [rows] = await sequelize.query(`
+    SELECT al.employee_id, al.id,
+           DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp,
+           al.type
+    FROM attendance_logs al
+    WHERE al.employee_id IN (${marcas})
+      AND al.timestamp >= ? AND al.timestamp < ?
+    ORDER BY al.employee_id, al.timestamp, al.id
+  `, { replacements: [...employeeIds, ventana.from, ventana.to] });
+  return rows;
 }
 
 module.exports = {
   isEngineSummaryWriteEnabled,
   resolveSummary,
+  resolveSummaryBatchForDate,
   statusParaDb,
   anchorDateISO,
   shiftDate,
