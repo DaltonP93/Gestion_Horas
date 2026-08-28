@@ -72,17 +72,17 @@ describe('recalcDailySummary (sargable + lock por fecha)', () => {
     expect(reads.length).toBe(1);
   });
 
-  test('un día con SÓLO marcas unknown es PRESENTE, no ausente (no queda atrapado)', async () => {
-    // El flujo móvil sin contexto guarda 'unknown'. El legacy sólo miraba in/out y
-    // dejaba el día 'absent' pese a que la persona fichó. Ahora la actividad ancla
-    // la presencia en la primera/última marca, sin inventar atraso.
+});
+
+// Marcas sin tipo ('unknown', p. ej. móvil sin contexto): la actividad prueba
+// PRESENCIA pero no que sea in/out. El legacy no debe dejar el día 'absent' ni
+// inventar bordes/permanencia desde un unknown. Corrige SÓLO el camino flag-OFF.
+describe('recalcDailySummary (legacy) — marcas sin tipo no fabrican jornada', () => {
+  // Devuelve [first_in, last_out, worked, late, status] del upsert.
+  async function recalcConLogs(rows) {
+    mockQuery.mockReset();
     mockQuery.mockImplementation(async (sql) => {
-      if (/FROM attendance_logs/i.test(sql) && /SELECT\s+timestamp/i.test(sql)) {
-        return [[
-          { timestamp: '2026-07-28 08:05:00', type: 'unknown' },
-          { timestamp: '2026-07-28 12:10:00', type: 'unknown' },
-        ]];
-      }
+      if (/FROM attendance_logs/i.test(sql) && /SELECT\s+timestamp/i.test(sql)) return [rows];
       if (/FROM holidays/i.test(sql)) return [[null]];
       if (/FROM employees/i.test(sql) && /schedules/i.test(sql)) return [[{ check_in: '08:00:00', tolerance_in: 5 }]];
       if (/GET_LOCK/i.test(sql)) return [[{ ok: 1 }]];
@@ -92,35 +92,62 @@ describe('recalcDailySummary (sargable + lock por fecha)', () => {
     });
     await recalcDailySummary(1, new Date('2026-07-28T12:00:00-03:00'));
     const upsert = mockQuery.mock.calls.find(c => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements.length === 7);
-    expect(upsert).toBeTruthy();
-    const repl = upsert[1].replacements;
-    // [emp, date, first_in, last_out, worked, late, status]
-    expect(repl[6]).toBe('present');          // NO 'absent'
-    expect(repl[2]).toBe('2026-07-28 08:05:00'); // presencia anclada en la 1ª marca
-    expect(repl[3]).toBe('2026-07-28 12:10:00'); // …y la última
-    expect(repl[5]).toBe(0);                  // sin atraso inventado desde un unknown
+    const r = upsert[1].replacements; // [emp, date, first_in, last_out, worked, late, status]
+    return { first_in: r[2], last_out: r[3], worked: r[4], late: r[5], status: r[6] };
+  }
+
+  test('Caso A: 1 unknown → present, sin bordes ni permanencia inventados', async () => {
+    const r = await recalcConLogs([{ timestamp: '2026-07-28 08:00:00', type: 'unknown' }]);
+    expect(r).toEqual({ first_in: null, last_out: null, worked: 0, late: 0, status: 'present' });
   });
 
-  test('un IN explícito sin OUT deja last_out NULL (no fabrica una salida = entrada)', async () => {
-    // El fallback del extremo ausente sólo usa marcas 'unknown', nunca la del
-    // tipo opuesto: con un 'in' explícito y sin 'out', el checkout sigue faltando
-    // (last_out NULL), no se cierra la jornada con salida = entrada.
-    mockQuery.mockImplementation(async (sql) => {
-      if (/FROM attendance_logs/i.test(sql) && /SELECT\s+timestamp/i.test(sql)) {
-        return [[{ timestamp: '2026-07-28 08:00:00', type: 'in' }]];
-      }
-      if (/FROM holidays/i.test(sql)) return [[null]];
-      if (/FROM employees/i.test(sql) && /schedules/i.test(sql)) return [[{ check_in: '08:00:00', tolerance_in: 5 }]];
-      if (/GET_LOCK/i.test(sql)) return [[{ ok: 1 }]];
-      if (/RELEASE_LOCK/i.test(sql)) return [[]];
-      if (/INSERT INTO daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
-      return [[]];
-    });
-    await recalcDailySummary(1, new Date('2026-07-28T12:00:00-03:00'));
-    const upsert = mockQuery.mock.calls.find(c => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements.length === 7);
-    const repl = upsert[1].replacements;
-    expect(repl[2]).toBe('2026-07-28 08:00:00'); // first_in explícito
-    expect(repl[3]).toBeNull();                  // last_out NULL: falta el checkout
-    expect(repl[6]).toBe('present');
+  test('Caso B: 2 unknown NO se interpretan como 9 h de jornada', async () => {
+    const r = await recalcConLogs([
+      { timestamp: '2026-07-28 08:00:00', type: 'unknown' },
+      { timestamp: '2026-07-28 17:00:00', type: 'unknown' },
+    ]);
+    expect(r).toEqual({ first_in: null, last_out: null, worked: 0, late: 0, status: 'present' });
+  });
+
+  test('Caso C: IN + unknown → first_in real, last_out NULL, worked 0 (late permitido)', async () => {
+    const r = await recalcConLogs([
+      { timestamp: '2026-07-28 08:00:00', type: 'in' },
+      { timestamp: '2026-07-28 17:00:00', type: 'unknown' },
+    ]);
+    expect(r.first_in).toBe('2026-07-28 08:00:00');
+    expect(r.last_out).toBeNull();      // falta el OUT explícito
+    expect(r.worked).toBe(0);           // sin permanencia sin OUT
+    expect(r.status).toBe('present');
+  });
+
+  test('Caso D: unknown + OUT → first_in NULL, last_out real, worked 0', async () => {
+    const r = await recalcConLogs([
+      { timestamp: '2026-07-28 08:00:00', type: 'unknown' },
+      { timestamp: '2026-07-28 17:00:00', type: 'out' },
+    ]);
+    expect(r).toEqual({ first_in: null, last_out: '2026-07-28 17:00:00', worked: 0, late: 0, status: 'present' });
+  });
+
+  test('Caso E: IN + OUT → comportamiento legacy intacto (permanencia real)', async () => {
+    const r = await recalcConLogs([
+      { timestamp: '2026-07-28 08:00:00', type: 'in' },
+      { timestamp: '2026-07-28 17:00:00', type: 'out' },
+    ]);
+    expect(r.first_in).toBe('2026-07-28 08:00:00');
+    expect(r.last_out).toBe('2026-07-28 17:00:00');
+    expect(r.worked).toBe(540);         // 9 h reales (in→out explícitos)
+    expect(r.status).toBe('present');
+  });
+
+  test('Caso F: IN + unknown + OUT → sólo los bordes explícitos, el unknown no altera nada', async () => {
+    const r = await recalcConLogs([
+      { timestamp: '2026-07-28 08:00:00', type: 'in' },
+      { timestamp: '2026-07-28 12:00:00', type: 'unknown' },
+      { timestamp: '2026-07-28 17:00:00', type: 'out' },
+    ]);
+    expect(r.first_in).toBe('2026-07-28 08:00:00');
+    expect(r.last_out).toBe('2026-07-28 17:00:00');
+    expect(r.worked).toBe(540);         // idéntico al par IN/OUT sin el unknown
+    expect(r.status).toBe('present');
   });
 });

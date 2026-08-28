@@ -283,20 +283,18 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
 
   const firstIn  = logs.find(l => l.type === 'in');
   const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
-  const unknowns = logs.filter(l => l.type === 'unknown');
 
-  // PRESENCIA con marcas sin tipo: una jornada puede quedar registrada sólo con
-  // marcas 'unknown' (p. ej. un marcaje móvil sin contexto para inferir in/out,
-  // ahora que resolveMarkType conserva 'unknown' en vez de fabricar una entrada).
-  // El legacy sólo miraba in/out y dejaba el día 'absent' pese a que la persona
-  // fichó, dejando el flujo atrapado como ausencia. Si hay actividad pero falta
-  // la entrada/salida explícita, la permanencia se ancla en la primera/última
-  // marca UTILIZABLE ('unknown'), no en la del tipo opuesto: con un `in` explícito
-  // y sin `out`, last_out queda NULL (checkout faltante), no una jornada cerrada
-  // con entrada = salida que ocultaría precisamente la salida que falta. NO se
-  // infiere atraso desde un 'unknown', así que el atraso sólo sale de un `in`.
-  const anchorIn  = firstIn || unknowns[0] || null;
-  const anchorOut = lastOut || unknowns[unknowns.length - 1] || null;
+  // Los BORDES y la PERMANENCIA salen EXCLUSIVAMENTE de marcas explícitas. Un
+  // 'unknown' prueba PRESENCIA (la persona fichó), pero no que sea entrada ni
+  // salida: no se puede anclar first_in/last_out ni computar worked_minutes desde
+  // él sin inventar in/out. Por eso:
+  //   · first_in / last_out = SÓLO el 'in' / 'out' explícito, o NULL;
+  //   · worked_minutes = permanencia entre in y out explícitos (0 si falta alguno);
+  //   · late = sólo con 'in' explícito.
+  // El arreglo del falso 'absent' (una jornada de sólo-unknown quedaba como
+  // ausencia pese a la actividad) es SÓLO en el ESTADO, no en los bordes: un día
+  // con actividad no es ausencia, pero tampoco fabrica una jornada de 9 h desde
+  // dos marcas sin tipo. Corrige únicamente el camino LEGACY (flag OFF).
 
   // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
   // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
@@ -305,8 +303,8 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
   // históricamente —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en
   // fechas de invierno anteriores el atraso salía corrido una hora aunque
   // first_in fuese exacto.
-  const inSec  = anchorIn  ? dbSecondsOfDay(anchorIn.timestamp)  : null;
-  const outSec = anchorOut ? dbSecondsOfDay(anchorOut.timestamp) : null;
+  const inSec  = firstIn ? dbSecondsOfDay(firstIn.timestamp)  : null;
+  const outSec = lastOut ? dbSecondsOfDay(lastOut.timestamp) : null;
 
   const workedMinutes = calc.workedMinutes({ firstInSeconds: inSec, lastOutSeconds: outSec });
 
@@ -318,19 +316,20 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
 
   const lateMinutes = (firstIn && emp)
     ? calc.lateMinutes({
-        firstInSeconds: dbSecondsOfDay(firstIn.timestamp),
+        firstInSeconds: inSec,
         checkInSeconds: calc.scheduleSeconds(emp.check_in),
         toleranceMin: emp.tolerance_in || 0,
       })
     : 0;
 
   // Con `in` explícito, el estado sale del cálculo (present/late). Sin `in` pero
-  // con actividad UTILIZABLE ('unknown'), el día es PRESENTE (sin atraso
-  // inventado): la persona fichó. Sin `in` y sin unknowns (p. ej. sólo una salida
-  // huérfana) se conserva el estado legacy —no se reclasifica ese borde acá—.
+  // con actividad (cualquier marca, incluidas 'unknown' o una salida suelta), el
+  // día es PRESENTE: la persona fichó, no está ausente. No se inventan ni bordes
+  // ni permanencia por eso. (Sin marcas ya se resolvió antes: feriado/finde o
+  // return.)
   const status = firstIn
     ? calc.dayStatus({ hasFirstIn: true, late: lateMinutes })
-    : (unknowns.length > 0 ? 'present' : calc.dayStatus({ hasFirstIn: false, late: 0 }));
+    : 'present';
 
   // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
   // y con reintento acotado ante deadlock/lock-wait.
@@ -346,8 +345,8 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
         status          = VALUES(status)
     `, { replacements: [
       employeeId, date,
-      anchorIn  ? anchorIn.timestamp  : null,
-      anchorOut ? anchorOut.timestamp : null,
+      firstIn  ? firstIn.timestamp  : null,
+      lastOut  ? lastOut.timestamp : null,
       workedMinutes, lateMinutes, status
     ], transaction: t });
   }, { label: `recalcEmp:${date}:${employeeId}` });
