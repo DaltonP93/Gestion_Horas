@@ -228,17 +228,24 @@ router.post('/attendance/justify', async (req, res) => {
   if (!employeeId || !date || !justification) {
     return res.status(400).json({ error: 'employeeId, date y justification son requeridos' });
   }
+  // Estado DERIVADO de la justificación (misma regla que el writer del motor):
+  // una 'injustificada' es una AUSENCIA (→ 'absent'); cualquier otra es un
+  // permiso (→ 'permission'). Se aplica sobre un día NO trabajado —incluidos los
+  // estados nuevos unconfigured/non_working, no sólo 'absent'—; un día
+  // present/late (trabajado) no se pisa.
+  const jt = justificationType || 'other';
+  const newStatus = jt === 'injustificada' ? 'absent' : 'permission';
   await sequelize.query(`
     INSERT INTO daily_summary (employee_id, date, justification, justification_type, status)
-    VALUES (?, ?, ?, ?, 'permission')
+    VALUES (?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       justification      = VALUES(justification),
       justification_type = VALUES(justification_type),
       status = CASE
-        WHEN status = 'absent' THEN 'permission'
-        ELSE status
+        WHEN status IN ('present','late') THEN status
+        ELSE VALUES(status)
       END
-  `, { replacements: [employeeId, date, justification, justificationType || 'other'] });
+  `, { replacements: [employeeId, date, justification, jt, newStatus] });
 
   res.json({ message: 'Justificación registrada' });
 });

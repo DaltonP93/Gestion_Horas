@@ -540,13 +540,20 @@ async function bulkRecalcViaEngine(date) {
   // con el recálculo por marca). Así el materializador cubre también los vacíos,
   // sin depender del schedules vivo que usaría materializeAbsents.
   const ventana = engine.punchWindow({ from: date, to: date });
+  // Las fechas afectadas por `date` son {date-1, date}; una fila de resumen en
+  // cualquiera de ellas debe reconciliarse aunque hoy el empleado esté inactivo
+  // y no tenga marcas (corregir un feriado/config histórica no puede dejar sus
+  // ausencias/descansos/permisos automáticos viejos con valores obsoletos).
+  const prev = workdaySummary.shiftDate(date, -1);
   const [emps] = await sequelize.query(`
     SELECT employee_id FROM (
       SELECT id AS employee_id FROM employees WHERE status = 'active'
       UNION
       SELECT DISTINCT employee_id FROM attendance_logs WHERE timestamp >= ? AND timestamp < ?
+      UNION
+      SELECT DISTINCT employee_id FROM daily_summary WHERE date IN (?, ?)
     ) u
-  `, { replacements: [ventana.from, ventana.to] });
+  `, { replacements: [ventana.from, ventana.to, prev, date] });
   const ids = emps.map((e) => e.employee_id);
   // Lote: una lectura de marcajes/feriados/config para todo el padrón, no por
   // empleado. Sin esto, un reproceso mensual haría cientos de miles de viajes.

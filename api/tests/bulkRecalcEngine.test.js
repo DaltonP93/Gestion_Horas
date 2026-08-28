@@ -15,6 +15,7 @@ const mockBatch = jest.fn(async () => ({ rowsByEmployee: new Map() }));
 jest.mock('../src/services/workdaySummaryService', () => ({
   isEngineSummaryWriteEnabled: () => true, // flag ON para este test
   resolveSummaryBatchForDate: (...a) => mockBatch(...a),
+  shiftDate: (d, n) => `${d}#${n}`, // no importa el valor exacto para este test
 }));
 
 const { sequelize } = require('../src/config/database');
@@ -34,6 +35,9 @@ test('el lote del motor toma la UNIÓN de activos + marcadores y procesa POR LOT
   const loteSql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
   expect(loteSql).toMatch(/FROM employees WHERE status = 'active'/);
   expect(loteSql).toMatch(/UNION/);
+  // También los empleados con fila de resumen en las fechas afectadas (incluye a
+  // inactivos sin marcas, cuyas filas viejas hay que reconciliar).
+  expect(loteSql).toMatch(/FROM daily_summary WHERE date IN/);
 });
 
 test('con el flag ON, materializeAbsents es un no-op (no fabrica ausencias)', async () => {
