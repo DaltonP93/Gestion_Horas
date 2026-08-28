@@ -35,6 +35,17 @@ legacy como rollback; con ON, todos recalculan por el motor.
   histórico) es trabajo de FASE C y está anotada como contrato.
 - Los escritores de **justificación** no tocan la matemática de jornada; se
   listan para que el inventario sea completo.
+- **Estados `non_working` / `unconfigured` (migración 074):** el ENUM clásico no
+  los admite. `statusParaDb` los colapsa a `weekend` / (null → reconciliación por
+  DELETE) por defecto. Cuando la migración 074 esté aplicada, el flag
+  `WORKDAY_ENGINE_STATUS_074_ENABLED=true` hace que se persistan con su valor
+  real (un martes libre por config queda `non_working`, no `weekend`). Es un flag
+  de ESQUEMA independiente del de escritura: 074 puede aplicarse antes o después.
+- **Preservación de estados al recalcular:** sólo se conserva un permiso MANUAL
+  (`status='permission'` con `justification`/`justification_type` cargados y de
+  tipo distinto de `injustificada`). Los estados automáticos (holiday/weekend,
+  permisos de turnera) los recalcula el motor desde los datos vigentes; una
+  ausencia `injustificada` es una ausencia, no un permiso.
 
 ## Semántica de `worked_minutes` durante la migración (item 11)
 

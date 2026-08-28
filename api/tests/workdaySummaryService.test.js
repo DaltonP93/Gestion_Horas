@@ -103,9 +103,10 @@ describe('dry-run vs apply', () => {
     await svc.resolveSummary(1, '2025-06-10 12:00:00', { apply: true });
     const del = sequelize.query.mock.calls.find((c) => /DELETE FROM daily_summary/i.test(c[0]));
     expect(del).toBeDefined();
-    // Sólo se conserva el permiso MANUAL (con justificación); un permiso de
-    // turnera (sin justificación) se borra como config obsoleta.
+    // Sólo se conserva el permiso MANUAL (con justificación) que NO sea una
+    // ausencia injustificada; un permiso de turnera se borra como config obsoleta.
     expect(del[0]).toMatch(/justification IS NOT NULL OR justification_type IS NOT NULL/);
+    expect(del[0]).toMatch(/<> 'injustificada'/);
     // No inventa una fila para un día sin evidencia.
     const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
     expect(insertó).toBe(false);
@@ -162,6 +163,26 @@ describe('dry-run vs apply', () => {
     // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
     expect(repl[8]).toBe('present');   // status calculado
     expect(repl[9]).toBe(0);           // esDiaVacio: hay jornada, el estado nuevo gana
+  });
+});
+
+describe('mapeo de estado y la migración 074', () => {
+  const orig = process.env.WORKDAY_ENGINE_STATUS_074_ENABLED;
+  afterEach(() => {
+    if (orig === undefined) delete process.env.WORKDAY_ENGINE_STATUS_074_ENABLED;
+    else process.env.WORKDAY_ENGINE_STATUS_074_ENABLED = orig;
+  });
+
+  test('sin 074: non_working colapsa a weekend y unconfigured a null', () => {
+    delete process.env.WORKDAY_ENGINE_STATUS_074_ENABLED;
+    expect(svc.statusParaDb('non_working')).toBe('weekend');
+    expect(svc.statusParaDb('unconfigured')).toBeNull();
+  });
+
+  test('con 074: se persisten los valores nuevos', () => {
+    process.env.WORKDAY_ENGINE_STATUS_074_ENABLED = 'true';
+    expect(svc.statusParaDb('non_working')).toBe('non_working');
+    expect(svc.statusParaDb('unconfigured')).toBe('unconfigured');
   });
 });
 

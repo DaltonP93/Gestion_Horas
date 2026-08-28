@@ -69,15 +69,29 @@ function shiftDate(dateISO, dias) {
 }
 
 /**
- * Estados que emite el motor → ENUM real de daily_summary.
+ * ¿Está aplicada la migración 074 (ENUM con 'non_working' y 'unconfigured')?
  *
- * `non_working` y `unconfigured` NO existen todavía en el ENUM (migración 074
- * propuesta, no ejecutada). Mientras tanto:
- *   - non_working  → 'weekend' (día no laborable, el valor más cercano).
- *   - unconfigured → null: no se escribe una fila inventada para un día del que
- *     no sabemos nada. El caller omite esas fechas.
+ * Es una condición de ESQUEMA, no la del flag de escritura: 074 puede aplicarse
+ * antes o después de habilitar el writer. Mientras 074 NO esté aplicada, escribir
+ * esos valores rompería el INSERT (el ENUM no los admite), así que se colapsan a
+ * los valores clásicos. Con 074 aplicada, se persisten como corresponde.
+ */
+function isStatus074Enabled() {
+  return process.env.WORKDAY_ENGINE_STATUS_074_ENABLED === 'true';
+}
+
+/**
+ * Estados que emite el motor → ENUM de daily_summary.
+ *
+ * `non_working` y `unconfigured` sólo existen en el ENUM con la migración 074
+ * aplicada (ver isStatus074Enabled):
+ *   - non_working  → 'non_working' con 074; si no, 'weekend' (el valor clásico
+ *     más cercano para un día no laborable).
+ *   - unconfigured → 'unconfigured' con 074; si no, null → el caller reconcilia
+ *     la fila (no se inventa una para un día del que no sabemos nada).
  */
 function statusParaDb(status) {
+  const con074 = isStatus074Enabled();
   switch (status) {
     case dsEngine.STATUS.PRESENT: return 'present';
     case dsEngine.STATUS.LATE: return 'late';
@@ -85,8 +99,8 @@ function statusParaDb(status) {
     case dsEngine.STATUS.PERMISSION: return 'permission';
     case dsEngine.STATUS.HOLIDAY: return 'holiday';
     case dsEngine.STATUS.WEEKEND: return 'weekend';
-    case dsEngine.STATUS.NON_WORKING: return 'weekend';
-    case dsEngine.STATUS.UNCONFIGURED: return null;
+    case dsEngine.STATUS.NON_WORKING: return con074 ? 'non_working' : 'weekend';
+    case dsEngine.STATUS.UNCONFIGURED: return con074 ? 'unconfigured' : null;
     default: return null;
   }
 }
@@ -174,15 +188,16 @@ async function escribirFilas(employeeId, rows) {
       // motor no conoce y no debe pisar. Bajo el lock por fecha.
       await withDayRecalcLock(row.date, async (t) => {
         await sequelize.query(
-          // Se conserva SÓLO un permiso MANUAL: el que tiene una justificación
-          // persistente cargada por RR.HH. Un 'permission' derivado de una
-          // turnera vacation/permiso (sin justificación) es automático: si la
-          // turnera se elimina y la fecha queda unconfigured, esa fila es config
-          // obsoleta y debe borrarse como cualquier otra.
+          // Se conserva SÓLO un permiso MANUAL: status 'permission' con una
+          // justificación persistente cargada por RR.HH. y cuyo tipo NO es
+          // 'injustificada' —esa es una AUSENCIA que justificationsBulk deja a
+          // propósito, no un permiso—. Un 'permission' de turnera (sin
+          // justificación) es automático y también se borra como config obsoleta.
           `DELETE FROM daily_summary
              WHERE employee_id = ? AND date = ?
                AND NOT (status = 'permission'
-                        AND (justification IS NOT NULL OR justification_type IS NOT NULL))`,
+                        AND (justification IS NOT NULL OR justification_type IS NOT NULL)
+                        AND COALESCE(justification_type, '') <> 'injustificada')`,
           { replacements: [employeeId, row.date], transaction: t },
         );
       }, { label: `engineRecalcDel:${row.date}:${employeeId}` });
@@ -228,6 +243,7 @@ async function escribirFilas(employeeId, rows) {
           status = CASE
             WHEN ? = 1 AND daily_summary.status = 'permission'
                  AND (daily_summary.justification IS NOT NULL OR daily_summary.justification_type IS NOT NULL)
+                 AND COALESCE(daily_summary.justification_type, '') <> 'injustificada'
               THEN daily_summary.status
             ELSE VALUES(status)
           END
