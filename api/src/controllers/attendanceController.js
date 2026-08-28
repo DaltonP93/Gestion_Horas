@@ -6,7 +6,7 @@ const { dbSecondsOfDay, dbDateISO } = require('../utils/dbTime');
 const calc = require('../services/dailySummaryCalc');
 const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
-const { normalizeAttendanceTimestampForDb } = require('../utils/attendanceTime');
+const { normalizeAttendanceTimestampForDb, wallClockToInstitutionInstant } = require('../utils/attendanceTime');
 const engine = require('../services/workdayEngine');
 const workdaySummary = require('../services/workdaySummaryService');
 const lateAlert = require('../services/lateAlertService');
@@ -33,8 +33,14 @@ async function processAttendanceEvent(data) {
     // sus componentes exactos (sin reinterpretar como UTC); un instante real se
     // convierte a la hora de pared de la institución. `ts` (Date) se conserva
     // sólo para trazas/emisión (display), NO para la persistencia.
+    //
+    // El instante para display/audit/socket/logs se deriva del wall-clock ya
+    // normalizado (tsDb), NO de `new Date(timestamp)`: para un naive del reloj,
+    // `new Date("2026-08-27 18:30:15")` parsea en la TZ del proceso Node y da un
+    // instante distinto según el servidor. wallClockToInstitutionInstant lo
+    // interpreta explícitamente como hora de Asunción (con tzdata histórica).
     const tsDb = normalizeAttendanceTimestampForDb(timestamp);
-    const ts = new Date(timestamp);
+    const ts = wallClockToInstitutionInstant(tsDb);
     // El tipo explícito confiable se conserva; si viene `unknown` se resuelve
     // por CONTEXTO de jornada (secuencia real de marcas), nunca por paridad del
     // día civil, que se reinicia a medianoche y rompe los turnos nocturnos.
@@ -95,8 +101,12 @@ async function processAttendanceEvent(data) {
 
     emitAttendance(event);
 
-    // Disparar webhooks a sistemas externos (Oracle APEX, ERP, etc.)
-    if (fireWebhooks) {
+    // Disparar webhooks a sistemas externos (Oracle APEX, ERP, etc.). Sólo con
+    // un tipo resuelto: una marca 'unknown' no es ni checkin ni checkout, así que
+    // mapearla a 'attendance.checkout' publicaría una salida que nunca ocurrió.
+    // El evento de socket ya la refleja como 'unknown'; el webhook la omite hasta
+    // que su tipo se determine.
+    if (fireWebhooks && (detectedType === 'in' || detectedType === 'out')) {
       const webhookEvent = detectedType === 'in' ? 'attendance.checkin' : 'attendance.checkout';
       fireWebhooks(webhookEvent, event).catch(() => {});
     }
@@ -125,21 +135,29 @@ async function processAttendanceEvent(data) {
  * se infería como IN. También fallaba ante duplicados y turnos partidos.
  *
  * Acá se mira la SECUENCIA real de marcas anteriores, en una ventana de jornada
- * (no un día civil), y se decide por el estado de sesión:
+ * (no un día civil), y se decide por el estado de sesión.
  *
- *   - si la última marca relevante fue una ENTRADA y sigue "abierta" (la pausa
- *     desde entonces no supera el umbral de una jornada) → esta marca es SALIDA;
- *   - en cualquier otro caso (última fue salida, o no hay marca reciente, o el
- *     hueco es tan grande que ya sería otra jornada) → esta marca es ENTRADA.
+ * NO inventa in/out sin evidencia: esta función SÓLO corre cuando la fuente no
+ * trae tipo, y devuelve 'unknown' cuando el contexto no alcanza para decidir sin
+ * ambigüedad. WorkdayEngine sabe tratar 'unknown' aguas abajo, así que preservar
+ * la incertidumbre es preferible a fabricar una entrada que nadie fichó. Las
+ * reglas:
  *
- * No inventa una entrada para un OUT explícito: esta función SÓLO corre cuando
- * la fuente no trae tipo. Una marca `unknown` sin ningún contexto se resuelve
- * como entrada (inicio de sesión), que es el default razonable, y el motor de
- * jornada sabe además tratar `unknown` de forma controlada aguas abajo.
+ *   A) tipo explícito y confiable        → lo resuelve el CALLER, no llega acá;
+ *   B) unknown + contexto suficiente y no ambiguo → se infiere in/out;
+ *   C) unknown SIN contexto suficiente   → 'unknown';
+ *   D) secuencia ambigua                 → 'unknown'.
+ *
+ * Casos que SÍ se infieren (B):
+ *   · última explícita ENTRADA con sesión aún abierta (el hueco no supera una
+ *     jornada) → esta marca es SALIDA;
+ *   · última explícita SALIDA → esta marca abre sesión → ENTRADA.
+ * Todo lo demás —sin marcas previas, sólo unknown previos, o una entrada vieja
+ * cuya sesión ya cerró por el hueco— es ambiguo y se conserva 'unknown'.
  */
 async function resolveMarkType(employeeId, wallClockTs) {
   const at = engine.toWall(wallClockTs);
-  if (!at) return 'in';
+  if (!at) return 'unknown';   // sin hora legible: no hay evidencia
 
   // Ventana hacia atrás suficiente para cubrir una jornada; el límite superior
   // es EXCLUSIVO en esta marca (miramos sólo lo previo).
@@ -152,7 +170,7 @@ async function resolveMarkType(employeeId, wallClockTs) {
     ORDER BY al.timestamp, al.id
   `, { replacements: [employeeId, desde, hasta] });
 
-  if (!rows.length) return 'in';
+  if (!rows.length) return 'unknown';   // sin marcas previas: no se afirma in/out
 
   // RÁFAGA / DUPLICADO PRIMERO: si la marca más reciente cae dentro de la ventana
   // de dedupe, esta marca es una repetición del reloj y CONSERVA su tipo, no
@@ -173,15 +191,17 @@ async function resolveMarkType(employeeId, wallClockTs) {
   for (const r of rows) {
     if (r.type === 'in' || r.type === 'out') ultima = r;
   }
-  if (!ultima) return 'in';
+  if (!ultima) return 'unknown';   // sólo hay unknown previos: sin estado de sesión
 
   if (ultima.type === 'in') {
     // ¿Sigue abierta la sesión? Si el hueco supera el máximo de una jornada, esa
-    // entrada ya pertenece a otra jornada y ésta abre una nueva.
+    // entrada ya pertenece a otra jornada: no se puede afirmar si esta marca es
+    // la SALIDA tardía que faltó o una ENTRADA nueva → ambiguo → 'unknown'.
     const w = engine.toWall(ultima.timestamp);
     const gapMin = (at.abs - w.abs) / 60;
-    return gapMin <= engine.DEFAULTS.historicalMaxWorkdaySpanMinutes ? 'out' : 'in';
+    return gapMin <= engine.DEFAULTS.historicalMaxWorkdaySpanMinutes ? 'out' : 'unknown';
   }
+  // Última fue SALIDA → esta marca abre una sesión nueva → ENTRADA.
   return 'in';
 }
 
@@ -581,8 +601,13 @@ async function registerMobile(req, res) {
       timestamp: tsDb, type, source: 'mobile', latitude, longitude
     });
 
+    // El mensaje refleja el tipo sin inventarlo: una marca 'unknown' (sin
+    // contexto suficiente) no se anuncia como entrada ni salida.
+    const msg = type === 'in' ? 'Marcaje de entrada registrado'
+      : type === 'out' ? 'Marcaje de salida registrado'
+      : 'Marcaje registrado';
     res.status(201).json({
-      message: `Marcaje de ${type === 'in' ? 'entrada' : 'salida'} registrado`,
+      message: msg,
       type, timestamp: tsDb,
       geofence: { status: gf.status, distance_m: gf.distance },
     });

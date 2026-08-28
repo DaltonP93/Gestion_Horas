@@ -49,6 +49,25 @@ const CON_ZONA_RE = /(?:Z|[+-]\d{2}:?\d{2})$/;
 const fmt = (y, mo, d, h, mi, s) => `${pad2(y)}-${pad2(mo)}-${pad2(d)} ${pad2(h)}:${pad2(mi)}:${pad2(s)}`;
 
 /**
+ * ¿Los componentes forman una fecha-hora de calendario REAL? La forma la valida
+ * el regex; esto valida los RANGOS y el día dentro del mes (bisiestos incluidos).
+ * No se delega en que MySQL rechace la marca: una fecha imposible debe frenarse
+ * ANTES del INSERT, no persistir una hora inventada ni depender del modo SQL.
+ *
+ * Se verifica por round-trip de calendario en UTC (mismo principio que
+ * WorkdayEngine.toWall): si algún componente se desborda —día 30 de febrero, mes
+ * 13, hora 24, minuto/segundo 60— el Date normaliza y el round-trip no coincide.
+ */
+function naiveEsValido(y, mo, d, h, mi, s) {
+  if (mo < 1 || mo > 12) return false;
+  if (d < 1 || d > 31) return false;
+  if (h > 23 || mi > 59 || s > 59) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d
+      && dt.getUTCHours() === h && dt.getUTCMinutes() === mi && dt.getUTCSeconds() === s;
+}
+
+/**
  * Instante (Date) → hora de pared de la institución "YYYY-MM-DD HH:mm:ss".
  *
  * Resuelve la zona IANA para la FECHA CONCRETA del instante: aplica la tzdata
@@ -97,8 +116,12 @@ function normalizeAttendanceTimestampForDb(input, opts = {}) {
   // no vinieron). NUNCA se convierte por zona.
   const naive = NAIVE_RE.exec(s);
   if (naive && !CON_ZONA_RE.test(s)) {
-    const [, y, mo, d, h, mi, se] = naive;
-    return fmt(Number(y), Number(mo), Number(d), Number(h), Number(mi), Number(se || 0));
+    const y = Number(naive[1]); const mo = Number(naive[2]); const d = Number(naive[3]);
+    const h = Number(naive[4]); const mi = Number(naive[5]); const se = Number(naive[6] || 0);
+    if (!naiveEsValido(y, mo, d, h, mi, se)) {
+      throw new Error(`Timestamp de marcaje inválido (fecha/hora fuera de rango): ${s}`);
+    }
+    return fmt(y, mo, d, h, mi, se);
   }
 
   // Caso B: string con zona explícita (Z u offset) → instante → hora de pared.
@@ -111,4 +134,50 @@ function normalizeAttendanceTimestampForDb(input, opts = {}) {
   throw new Error(`Formato de timestamp de marcaje no reconocido: ${s}`);
 }
 
-module.exports = { normalizeAttendanceTimestampForDb };
+/**
+ * Offset de la zona `tz` (en ms que la zona va ADELANTADA respecto de UTC) en un
+ * instante dado. Sale de renderizar el instante en la zona y diferenciar; usa la
+ * tzdata IANA, así que respeta el offset histórico vigente en esa fecha.
+ */
+function tzOffsetMs(instantMs, tz) {
+  const wall = instanteAWallClock(new Date(instantMs), tz); // "YYYY-MM-DD HH:mm:ss"
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(wall);
+  const asUTC = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  return asUTC - instantMs;
+}
+
+/**
+ * Hora de pared institucional "YYYY-MM-DD HH:mm:ss" → INSTANTE real (Date).
+ *
+ * Es la INVERSA de instanteAWallClock: interpreta el wall-clock como hora local
+ * de la institución (con la tzdata histórica de la fecha) y devuelve el Date del
+ * instante correspondiente. Sirve para trazas/socket/audit/webhooks/logs, donde
+ * hace falta un instante (ISO) sin depender de la zona del proceso Node —el
+ * defecto de `new Date("2026-08-27 18:30:15")`, que parsea en la TZ local del
+ * runtime y produce un instante distinto en UTC, en Asunción y en Tokio—.
+ *
+ * NO altera la persistencia: la columna sigue guardando el string wall-clock.
+ *
+ * @param {string} wallStr  "YYYY-MM-DD HH:mm:ss" (o con 'T'); hora de pared.
+ * @param {object} [opts] - `tz` zona de la institución (por defecto INSTITUTION_TZ).
+ * @returns {Date} instante real.
+ * @throws si el string no tiene forma de wall-clock.
+ */
+function wallClockToInstitutionInstant(wallStr, opts = {}) {
+  const tz = opts.tz || INSTITUTION_TZ;
+  const m = NAIVE_RE.exec(String(wallStr == null ? '' : wallStr).trim());
+  if (!m) throw new Error(`Wall-clock no reconocido para instante: ${wallStr}`);
+  const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3]);
+  const h = Number(m[4]); const mi = Number(m[5]); const se = Number(m[6] || 0);
+  // Se parte tratando los componentes COMO SI fueran UTC y se corrige por el
+  // offset de la zona. Se refina una vez con el offset del instante candidato,
+  // que basta salvo dentro de la hora exacta de un salto DST.
+  const utcGuess = Date.UTC(y, mo - 1, d, h, mi, se);
+  const off1 = tzOffsetMs(utcGuess, tz);
+  let instant = utcGuess - off1;
+  const off2 = tzOffsetMs(instant, tz);
+  if (off2 !== off1) instant = utcGuess - off2;
+  return new Date(instant);
+}
+
+module.exports = { normalizeAttendanceTimestampForDb, wallClockToInstitutionInstant };

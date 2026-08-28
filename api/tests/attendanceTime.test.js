@@ -8,7 +8,7 @@
 
 jest.mock('../src/config/database', () => ({ DB_TIMEZONE: '-03:00' }));
 
-const { normalizeAttendanceTimestampForDb } = require('../src/utils/attendanceTime');
+const { normalizeAttendanceTimestampForDb, wallClockToInstitutionInstant } = require('../src/utils/attendanceTime');
 
 describe('normalizeAttendanceTimestampForDb — naive se preserva', () => {
   test('naive con segundos se guarda tal cual', () => {
@@ -85,5 +85,78 @@ describe('entradas inválidas se rechazan (no se inventa hora)', () => {
 
   test('un Date inválido lanza', () => {
     expect(() => normalizeAttendanceTimestampForDb(new Date('nope'))).toThrow();
+  });
+});
+
+describe('validación estricta de naive por componentes (no se delega en MySQL)', () => {
+  test('29 de febrero en año bisiesto es válido y se preserva', () => {
+    expect(normalizeAttendanceTimestampForDb('2024-02-29 00:05:07')).toBe('2024-02-29 00:05:07');
+  });
+
+  test('29 de febrero en año NO bisiesto se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2023-02-29 08:00:00')).toThrow();
+  });
+
+  test('día 31 en un mes de 30 se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2026-04-31 10:00:00')).toThrow();
+  });
+
+  test('día 30 de febrero se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2026-02-30 08:00:00')).toThrow();
+  });
+
+  test('mes 13 se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2026-13-01 08:00:00')).toThrow();
+  });
+
+  test('hora 24 se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2026-01-01 24:15:00')).toThrow();
+  });
+
+  test('minuto 60 se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2026-01-01 08:60:00')).toThrow();
+  });
+
+  test('segundo 60 se rechaza', () => {
+    expect(() => normalizeAttendanceTimestampForDb('2026-01-01 08:00:60')).toThrow();
+  });
+
+  const original = process.env.TZ;
+  afterEach(() => { process.env.TZ = original; });
+  for (const tz of ['UTC', 'America/Asuncion', 'Asia/Tokyo']) {
+    test(`TZ=${tz}: un naive válido produce exactamente el mismo string`, () => {
+      process.env.TZ = tz;
+      expect(normalizeAttendanceTimestampForDb('2024-02-29 00:05:07')).toBe('2024-02-29 00:05:07');
+      expect(normalizeAttendanceTimestampForDb('2026-08-27 18:30:15')).toBe('2026-08-27 18:30:15');
+    });
+  }
+});
+
+describe('wallClockToInstitutionInstant — wall-clock → instante correcto', () => {
+  test('18:30 wall-clock de Asunción → ISO del instante (21:30Z, UTC-3)', () => {
+    expect(wallClockToInstitutionInstant('2026-08-27 18:30:15').toISOString())
+      .toBe('2026-08-27T21:30:15.000Z');
+  });
+
+  test('fecha histórica pre-cambio usa la tzdata real (UTC-4 antes de 2024-10-06)', () => {
+    // 12:00 wall-clock de Asunción en UTC-4 → 16:00Z.
+    expect(wallClockToInstitutionInstant('2024-07-01 12:00:00').toISOString())
+      .toBe('2024-07-01T16:00:00.000Z');
+  });
+
+  const original = process.env.TZ;
+  afterEach(() => { process.env.TZ = original; });
+  for (const tz of ['UTC', 'America/Asuncion', 'Asia/Tokyo']) {
+    test(`TZ=${tz}: el instante emitido es el mismo (no depende del proceso)`, () => {
+      process.env.TZ = tz;
+      expect(wallClockToInstitutionInstant('2026-08-27 18:30:15').toISOString())
+        .toBe('2026-08-27T21:30:15.000Z');
+    });
+  }
+
+  test('un naive DB no cambia según la TZ del proceso (round-trip con normalize)', () => {
+    // normalize preserva el wall-clock; el instante que representa es estable.
+    const wall = normalizeAttendanceTimestampForDb('2026-08-27 18:30:15');
+    expect(wallClockToInstitutionInstant(wall).toISOString()).toBe('2026-08-27T21:30:15.000Z');
   });
 });
