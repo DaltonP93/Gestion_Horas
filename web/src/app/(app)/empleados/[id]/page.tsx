@@ -67,7 +67,15 @@ const STATUS_ROW: Record<string, { label: string; cls: string; icon: React.React
   late:       { label: 'Retardo',   cls: 'bg-amber-50  text-amber-700',  icon: <AlertCircle size={14} /> },
   absent:     { label: 'Ausente',   cls: 'bg-red-50    text-red-700',    icon: <XCircle size={14} />     },
   permission: { label: 'Permiso',   cls: 'bg-purple-50 text-purple-700', icon: <Calendar size={14} />    },
+  holiday:    { label: 'Festivo',   cls: 'bg-blue-50   text-blue-700',   icon: <Calendar size={14} />    },
+  weekend:    { label: 'Fin semana', cls: 'bg-slate-50 text-slate-500',  icon: <Calendar size={14} />    },
+  // Estados de la migración 074: NO son ausencias y no deben pintarse de rojo.
+  non_working:  { label: 'No laborable',   cls: 'bg-slate-50 text-slate-500', icon: <Calendar size={14} /> },
+  unconfigured: { label: 'Sin configurar', cls: 'bg-slate-50 text-slate-400', icon: <Calendar size={14} /> },
 }
+
+// Fallback NEUTRO para un estado no reconocido: nunca 'Ausente'.
+const STATUS_ROW_FALLBACK = { label: '—', cls: 'bg-slate-50 text-slate-400', icon: <Calendar size={14} /> }
 
 // Bloque de datos del header. Reutilizable: label + value + icon opcional.
 function InfoTile({
@@ -401,7 +409,7 @@ export default function EmpleadoDetallePage() {
                 <p className="text-center py-8 text-slate-400 text-sm dark:text-white/30">Sin registros en este período</p>
               )}
               {histRows.map((row: any, i: number) => {
-                const cfg = STATUS_ROW[row.status] || STATUS_ROW.absent
+                const cfg = STATUS_ROW[row.status] || STATUS_ROW_FALLBACK
                 return (
                   <div key={i} className="flex items-center gap-3 py-2.5 text-sm">
                     <span className="text-slate-400 font-mono text-xs w-24 shrink-0 dark:text-white/30">

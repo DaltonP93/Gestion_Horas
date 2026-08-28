@@ -21,6 +21,11 @@ const STATUS_META: Record<string, { color: string; label: string }> = {
   late:       { color: 'bg-amber-100 text-amber-800',     label: 'Con atraso' },
   absent:     { color: 'bg-red-100 text-red-800',         label: 'Ausente' },
   permission: { color: 'bg-blue-100 text-blue-800',       label: 'Permiso' },
+  holiday:    { color: 'bg-blue-100 text-blue-800',       label: 'Festivo' },
+  weekend:    { color: 'bg-slate-100 text-slate-600',     label: 'Fin de semana' },
+  // Migración 074: no son ausencias.
+  non_working:  { color: 'bg-slate-100 text-slate-600',   label: 'No laborable' },
+  unconfigured: { color: 'bg-slate-100 text-slate-500',   label: 'Sin configurar' },
 }
 
 export default function SupervisorPage() {
