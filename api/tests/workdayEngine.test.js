@@ -478,11 +478,42 @@ describe('descansos', () => {
     expect(workdays[0].break_minutes).toBe(60);
   });
 
+  // 39b
+  test('fixed_unpaid con la pausa FICHADA no descuenta el fijo dos veces', () => {
+    // Turno único 08:00-17:00 con break fijo de 60, pero el empleado marcó su
+    // pausa (dos pares). El hueco de 60 YA salió de la suma de tramos (480), así
+    // que restar el fijo entero daría 420 contra un objetivo de 480. El hueco
+    // marcado se acredita contra el fijo: descuento adicional 0, worked 480.
+    const { workdays } = buildWorkdays(marcas(
+      '2026-03-02 08:00:00', '2026-03-02 12:00:00',
+      '2026-03-02 13:00:00', '2026-03-02 17:00:00',
+    ), { config: { break_mode: BREAK_FIXED_UNPAID, break_minutes: 60 } });
+    expect(workdays[0].segment_minutes).toBe(480);
+    expect(workdays[0].worked_minutes).toBe(480); // NO 420
+    expect(workdays[0].break_minutes).toBe(0);     // nada que restar de más
+  });
+
+  // 39c
+  test('fixed_unpaid con pausa fichada MÁS CORTA que el fijo descuenta la diferencia', () => {
+    // Fijo 60, pero sólo se marcó una pausa de 30 (12:00→12:30). Tramos = 510;
+    // el hueco cubre 30 del fijo y quedan 30 por descontar → worked 480.
+    const { workdays } = buildWorkdays(marcas(
+      '2026-03-02 08:00:00', '2026-03-02 12:00:00',
+      '2026-03-02 12:30:00', '2026-03-02 17:00:00',
+    ), { config: { break_mode: BREAK_FIXED_UNPAID, break_minutes: 60 } });
+    expect(workdays[0].segment_minutes).toBe(510);
+    expect(workdays[0].break_minutes).toBe(30);
+    expect(workdays[0].worked_minutes).toBe(480);
+  });
+
   // 40
   test('breakMinutesFor es puro y cubre los tres modos', () => {
     const base = { fixedBreakMinutes: 45, breakAfterMinutes: 0, gapMinutes: 30, segmentMinutes: 480 };
     expect(breakMinutesFor({ ...base, mode: BREAK_NONE })).toBe(0);
-    expect(breakMinutesFor({ ...base, mode: BREAK_FIXED_UNPAID })).toBe(45);
+    // fixed_unpaid acredita el hueco marcado contra el fijo: 45 − 30 = 15.
+    expect(breakMinutesFor({ ...base, mode: BREAK_FIXED_UNPAID })).toBe(15);
+    // sin hueco marcado se descuenta el fijo completo.
+    expect(breakMinutesFor({ ...base, mode: BREAK_FIXED_UNPAID, gapMinutes: 0 })).toBe(45);
     expect(breakMinutesFor({ ...base, mode: BREAK_PUNCHED })).toBe(30);
   });
 });

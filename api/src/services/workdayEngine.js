@@ -580,6 +580,15 @@ function groupWorkdays(segments, opts) {
  *                   descontar 60 min de una jornada de 40 daría negativo.
  *                   Sólo se aplica si la jornada supera `breakAfterMinutes`
  *                   (0 = siempre), para no castigar medias jornadas.
+ *
+ *                   EL DESCANSO YA FICHADO CUENTA CONTRA EL FIJO. Si el
+ *                   empleado marcó su pausa (turno partido en dos pares:
+ *                   08:00-12:00 y 13:00-17:00), ese hueco YA salió de la suma
+ *                   de tramos, así que volver a restar el fijo entero lo
+ *                   cobraría dos veces —480 de tramos menos 60 daría 420 contra
+ *                   un objetivo de 480—. Se descuenta sólo lo que falta para
+ *                   llegar al fijo: `max(0, fijo − hueco marcado)`. Sin pausa
+ *                   marcada (hueco 0) se descuenta el fijo completo, como antes.
  *   'punched'       el descanso es el que se marcó: la suma de las pausas
  *                   entre tramos. No se descuenta de nuevo, ya está fuera de
  *                   la suma de tramos; se informa para que el reporte pueda
@@ -589,7 +598,10 @@ function breakMinutesFor({ mode, fixedBreakMinutes, breakAfterMinutes, gapMinute
   if (mode === BREAK_FIXED_UNPAID) {
     const umbral = breakAfterMinutes || 0;
     if (segmentMinutes <= umbral) return 0;
-    return Math.min(fixedBreakMinutes || 0, segmentMinutes);
+    // El hueco ya marcado se acredita contra el fijo para no descontarlo dos
+    // veces (una en la suma de tramos, otra acá). Nunca más de lo trabajado.
+    const pendiente = Math.max(0, (fixedBreakMinutes || 0) - (gapMinutes || 0));
+    return Math.min(pendiente, segmentMinutes);
   }
   if (mode === BREAK_PUNCHED) return gapMinutes;
   return 0;
