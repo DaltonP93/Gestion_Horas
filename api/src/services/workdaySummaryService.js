@@ -178,14 +178,31 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
 
   const affectedDates = rows.map((r) => r.date);
 
-  if (apply) await escribirFilas(employeeId, rows);
+  // anchorDate+1 es RECONCILE-ONLY: la marca del ancla nunca pertenece a una
+  // jornada fechada en el futuro, así que esa fecha jamás debe INSERTAR una
+  // fila nueva (materializar un día vacío ahí fabricaría una ausencia futura en
+  // KPI/reportes). Sólo se usa para ACTUALIZAR o BORRAR una fila obsoleta que un
+  // recalc anterior pudo materializar (la huérfana absorbida). Se pasa como set
+  // de fechas donde el writer sólo reconcilia lo ya existente.
+  const reconcileOnly = new Set([shiftDate(anchorISO, 1)]);
+
+  if (apply) await escribirFilas(employeeId, rows, { reconcileOnly });
 
   return { rows, affectedDates };
 }
 
-/** Escribe las filas de UN empleado en daily_summary, cada una bajo su lock. */
-async function escribirFilas(employeeId, rows) {
+/**
+ * Escribe las filas de UN empleado en daily_summary, cada una bajo su lock.
+ *
+ * `opts.reconcileOnly` es un Set de fechas donde NO se puede INSERTAR una fila
+ * nueva: sólo se actualiza/borra la que ya exista. Sirve para fechas que la
+ * ventana amplió por reconciliación (anchorDate+1) pero a las que la marca del
+ * ancla no puede pertenecer; insertar ahí fabricaría un día que nunca existió.
+ */
+async function escribirFilas(employeeId, rows, opts = {}) {
+  const reconcileOnly = opts.reconcileOnly || new Set();
   for (const row of rows) {
+    const soloReconciliar = reconcileOnly.has(row.date);
     const status = statusParaDb(row.status);
     if (status == null) {
       // unconfigured: no hay evidencia de jornada para esa fecha. No basta con NO
@@ -227,6 +244,45 @@ async function escribirFilas(employeeId, rows) {
     // vuelve laborable un descanso, el estado nuevo (absent) debe ganar, no
     // quedar congelado sobre una config obsoleta.
     const esDiaVacio = (row.workday_count || 0) === 0;
+
+    if (soloReconciliar) {
+      // Fecha RECONCILE-ONLY (anchorDate+1): jamás se inserta una fila nueva
+      // —eso fabricaría un día que la marca del ancla no puede haber generado—.
+      // Sólo se ACTUALIZA la fila que ya exista (UPDATE no-op si no hay fila),
+      // con la misma matemática del motor y la misma preservación de la
+      // justificación manual en un día vacío. Si un recalc anterior dejó una
+      // huérfana con actividad y la jornada migró a otra fecha, este UPDATE la
+      // corrige a su estado real (p. ej. absent con minutos en cero) sin duplicar.
+      await withDayRecalcLock(row.date, async (t) => {
+        await sequelize.query(`
+          UPDATE daily_summary SET
+            first_in = ?, last_out = ?,
+            worked_minutes = ?, break_minutes = ?, overtime_minutes = ?, late_minutes = ?,
+            status = CASE
+              WHEN ? = 1 AND (justification IS NOT NULL OR justification_type IS NOT NULL)
+                THEN CASE WHEN COALESCE(justification_type, '') = 'injustificada'
+                          THEN 'absent' ELSE 'permission' END
+              ELSE ?
+            END
+          WHERE employee_id = ? AND date = ?
+        `, {
+          replacements: [
+            row.first_in || null,
+            row.last_out || null,
+            row.worked_minutes || 0,
+            row.break_minutes || 0,
+            row.overtime_minutes || 0,
+            row.late_minutes || 0,
+            esDiaVacio ? 1 : 0,
+            status,
+            employeeId, row.date,
+          ],
+          transaction: t,
+        });
+      }, { label: `engineRecalcRec:${row.date}:${employeeId}` });
+      continue;
+    }
+
     await withDayRecalcLock(row.date, async (t) => {
       await sequelize.query(`
         INSERT INTO daily_summary

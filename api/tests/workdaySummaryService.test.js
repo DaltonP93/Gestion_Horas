@@ -10,10 +10,9 @@ jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn() },
   DB_TIMEZONE: '-03:00',
 }));
+const mockLoadWorkdayConfig = jest.fn();
 jest.mock('../src/services/workdayConfig', () => ({
-  // Sin config cargada: historical_fallback (estado real hoy). El motor describe
-  // lo que dicen los marcajes sin inventar horario.
-  loadWorkdayConfig: jest.fn(async () => ({ forDate: () => null, historyFor: () => [] })),
+  loadWorkdayConfig: (...a) => mockLoadWorkdayConfig(...a),
 }));
 jest.mock('../src/services/recalcLock', () => ({
   withDayRecalcLock: jest.fn(async (_date, fn) => fn('TX')),
@@ -22,6 +21,19 @@ jest.mock('../src/services/recalcLock', () => ({
 
 const { sequelize } = require('../src/config/database');
 const svc = require('../src/services/workdaySummaryService');
+
+beforeEach(() => {
+  // Por defecto: sin config cargada → historical_fallback (estado real hoy). El
+  // motor describe lo que dicen los marcajes sin inventar horario. Los tests que
+  // necesitan un día laborable configurado usan conConfig().
+  mockLoadWorkdayConfig.mockReset();
+  mockLoadWorkdayConfig.mockResolvedValue({ forDate: () => null, historyFor: () => [] });
+});
+
+/** Fija la configuración efectiva que devolverá forDate para cualquier fecha. */
+function conConfig(cfg) {
+  mockLoadWorkdayConfig.mockResolvedValue({ forDate: () => cfg, historyFor: () => [] });
+}
 
 /** Programa los marcajes que devolverá la lectura de la ventana. */
 function conMarcajes(rows) {
@@ -105,6 +117,33 @@ describe('resolveSummary — fechas afectadas', () => {
     const posterior = rows.find((r) => r.date === '2025-08-21');
     expect(posterior).toBeDefined();
     expect(posterior.workday_count || 0).toBe(0);
+  });
+
+  test('el día posterior es RECONCILE-ONLY: NUNCA inserta una fila nueva (P1)', async () => {
+    // Día laborable configurado, marca ordinaria (IN+OUT del martes 10). La
+    // ventana incluye el miércoles 11 SÓLO para reconciliar una huérfana previa.
+    // Materializarlo como día vacío daría 'absent'; si el writer INSERTARA esa
+    // fila, fabricaría una ausencia FUTURA en KPI/reportes. El 11 debe escribirse
+    // por UPDATE (no-op si no hay fila), nunca por INSERT.
+    conConfig({ source: 'schedule_history', check_in: '08:00', check_out: '17:00', tolerance_in: 5, work_days: [2, 3, 4, 5, 6] });
+    conMarcajes([
+      { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
+      { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
+    ]);
+    await svc.resolveSummary(1, '2025-06-10 08:00:00', { apply: true });
+
+    // Ningún INSERT apunta al día posterior (2025-06-11). El parámetro de fecha
+    // del INSERT es el segundo replacement.
+    const inserts = sequelize.query.mock.calls.filter((c) => /INSERT INTO daily_summary/i.test(c[0]));
+    expect(inserts.length).toBeGreaterThan(0); // sí inserta el 09 y el 10
+    for (const [, opts] of inserts) {
+      expect(opts.replacements[1]).not.toBe('2025-06-11');
+    }
+    // El 11 se reconcilia por un UPDATE acotado a esa fecha (no-op si no existe).
+    const updatePosterior = sequelize.query.mock.calls.find(
+      (c) => /UPDATE daily_summary SET/i.test(c[0]) && c[1].replacements.includes('2025-06-11'),
+    );
+    expect(updatePosterior).toBeDefined();
   });
 });
 
