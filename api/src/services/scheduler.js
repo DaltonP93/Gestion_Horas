@@ -532,13 +532,21 @@ async function bulkRecalcDailySummary(date) {
  * definición matemática, la misma que Marcadas.
  */
 async function bulkRecalcViaEngine(date) {
-  // Empleados con marcas en la ventana ampliada alrededor de `date` (una jornada
-  // nocturna del día anterior se cierra hoy, y una de hoy cierra mañana).
+  // El lote NO se limita a quienes marcaron: un empleado SIN fichajes también
+  // necesita que su día vacío se materialice desde la config histórica
+  // (holiday/weekend/permission/absent), y que una fila 'absent' vieja se
+  // corrija. Se toma la unión de los empleados ACTIVOS con los que tengan marcas
+  // en la ventana ampliada (incluye inactivos que igual fichearon, para paridad
+  // con el recálculo por marca). Así el materializador cubre también los vacíos,
+  // sin depender del schedules vivo que usaría materializeAbsents.
   const ventana = engine.punchWindow({ from: date, to: date });
-  const [emps] = await sequelize.query(
-    `SELECT DISTINCT employee_id FROM attendance_logs WHERE timestamp >= ? AND timestamp < ?`,
-    { replacements: [ventana.from, ventana.to] },
-  );
+  const [emps] = await sequelize.query(`
+    SELECT employee_id FROM (
+      SELECT id AS employee_id FROM employees WHERE status = 'active'
+      UNION
+      SELECT DISTINCT employee_id FROM attendance_logs WHERE timestamp >= ? AND timestamp < ?
+    ) u
+  `, { replacements: [ventana.from, ventana.to] });
   for (const { employee_id } of emps) {
     // Ancla a mediodía de `date`: las fechas afectadas son {date-1, date}.
     await workdaySummary.resolveSummary(employee_id, `${date} 12:00:00`, { apply: true });
