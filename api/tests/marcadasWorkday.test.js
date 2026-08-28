@@ -198,4 +198,48 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
     const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
     expect(data).toEqual([]);
   });
+
+  test('dos jornadas del MISMO día son dos filas y el total cierra', async () => {
+    // 06:00-10:00 y 18:00-22:00, separadas por más que el umbral de pausa: son
+    // dos jornadas del mismo día. Colapsarlas en la fecha perdía una y el total
+    // (8:00) dejaba de cerrar con lo que muestra la tabla.
+    conMarcajes([
+      '2025-06-10 06:00:00', '2025-06-10 10:00:00',
+      '2025-06-10 18:00:00', '2025-06-10 22:00:00',
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows.every((r) => r.date === '10/06/2025')).toBe(true);
+    expect(data[0].rows.map((r) => r.total)).toEqual(['4:00', '4:00']);
+    expect(data[0].total_hm).toBe('8:00');
+  });
+
+  test('un huérfano el mismo día de una jornada válida queda visible como fila aparte', async () => {
+    // OUT huérfano 06:00 + jornada 08:00-17:00. La hora del huérfano no puede
+    // perderse al compartir fecha: es su propia fila, ordenada antes.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 06:00:00', type: 'out', id: 1 },
+      { employee_id: 1, timestamp: '2025-06-10 08:00:00', type: 'in', id: 2 },
+      { employee_id: 1, timestamp: '2025-06-10 17:00:00', type: 'out', id: 3 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows[0].pairs).toEqual([{ entrada: '', salida: '06:00' }]);
+    expect(data[0].rows[0].anomalies).toContain('salida_sin_entrada');
+    expect(data[0].rows[1].pairs).toEqual([{ entrada: '08:00', salida: '17:00' }]);
+    expect(data[0].rows[1].total).toBe('9:00');
+  });
+
+  test('dos huérfanos del mismo día muestran los dos fichajes, no sólo el primero', async () => {
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 06:00:00', type: 'out', id: 1 },
+      { employee_id: 1, timestamp: '2025-06-10 07:00:00', type: 'out', id: 2 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows.map((r) => r.pairs[0].salida)).toEqual(['06:00', '07:00']);
+  });
 });

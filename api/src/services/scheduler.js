@@ -233,15 +233,18 @@ function armarFilasEmpleado(emp, marcajes, config, periodo) {
   const porLog = new Map();
   for (const p of marcajes) if (p.id != null) porLog.set(p.id, p);
 
-  // Filas por fecha, para poder fusionar una anomalía suelta con la jornada del
-  // mismo día si existiera, en vez de duplicar la fecha.
-  const filasPorFecha = new Map();
+  // UNA fila por jornada, NO por fecha. Dos jornadas del mismo día —06:00-10:00
+  // y 18:00-22:00, separadas por más que el umbral de pausa— son dos filas
+  // distintas: colapsarlas en la fecha perdería una, y el total del período
+  // dejaría de cerrar con lo que muestra la tabla. `_sort` (la fecha-hora de la
+  // primera entrada) ordena las filas del día entre sí.
+  const filas = [];
   let totalMinutes = 0;
   for (const j of delPeriodo) {
     totalMinutes += j.segment_minutes;
     const [y, m, d] = j.work_date.split('-');
-    filasPorFecha.set(j.work_date, {
-      work_date: j.work_date,
+    filas.push({
+      _sort: j.first_in || `${j.work_date} 00:00:00`,
       dayName: DAY_NAMES[engine.dayOfWeekISO(j.work_date)],
       date: `${d}/${m}/${y}`,
       pairs: j.segments.map((s) => ({ entrada: s.in_hhmm, salida: s.out_hhmm })),
@@ -260,23 +263,22 @@ function armarFilasEmpleado(emp, marcajes, config, periodo) {
   // marcaje del período es el caso central). Sin materializarlas, un empleado
   // cuyo único fichaje es un OUT sin entrada no genera filas, y el filtro de
   // "empleados vacíos" lo borraba del reporte: un período que SÍ tiene un
-  // marcaje anómalo se presentaba como si no tuviera ninguno. Se emiten como
-  // fila visible y revisable, acotadas al período (una anomalía en la ventana
-  // ampliada es sólo contexto del borde y no se materializa).
+  // marcaje anómalo se presentaba como si no tuviera ninguno.
+  //
+  // Cada huérfana es su PROPIA fila —nunca se fusiona con otra ni se descarta su
+  // hora—: un OUT huérfano el mismo día de una jornada válida queda visible como
+  // fila aparte, y dos huérfanas del mismo día muestran los dos fichajes en vez
+  // de que la segunda pise a la primera. Se acotan al período; una anomalía de
+  // la ventana ampliada es sólo contexto del borde y no se materializa.
   for (const a of anomalies) {
     const fecha = String(a.at || '').slice(0, 10);
     if (!fecha || fecha < periodo.from || fecha > periodo.to) continue;
-    const yaHay = filasPorFecha.get(fecha);
-    if (yaHay) {
-      if (!yaHay.anomalies.includes(a.code)) yaHay.anomalies.push(a.code);
-      continue;
-    }
     const src = (a.log_ids || []).map((id) => porLog.get(id)).find(Boolean);
     const hhmm = src ? String(src.timestamp).slice(11, 16) : '';
     const esEntrada = src ? src.type === 'in' : false;
     const [y, m, d] = fecha.split('-');
-    filasPorFecha.set(fecha, {
-      work_date: fecha,
+    filas.push({
+      _sort: a.at || `${fecha} 00:00:00`,
       dayName: DAY_NAMES[engine.dayOfWeekISO(fecha)],
       date: `${d}/${m}/${y}`,
       pairs: [{ entrada: esEntrada ? hhmm : '', salida: esEntrada ? '' : hhmm }],
@@ -289,11 +291,11 @@ function armarFilasEmpleado(emp, marcajes, config, periodo) {
     });
   }
 
-  const rows = [...filasPorFecha.values()]
-    .sort((x, z) => (x.work_date < z.work_date ? -1 : 1))
-    // `work_date` era sólo para ordenar y fusionar; la fila que consume la vista
-    // conserva la forma anterior.
-    .map(({ work_date, ...fila }) => fila);
+  const rows = filas
+    .sort((x, z) => (x._sort < z._sort ? -1 : (x._sort > z._sort ? 1 : 0)))
+    // `_sort` era sólo para ordenar; la fila que consume la vista conserva la
+    // forma anterior.
+    .map(({ _sort, ...fila }) => fila);
 
   return {
     employee_id: emp.employee_id,
