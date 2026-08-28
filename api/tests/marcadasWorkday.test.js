@@ -242,4 +242,36 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
     expect(data[0].rows).toHaveLength(2);
     expect(data[0].rows.map((r) => r.pairs[0].salida)).toEqual(['06:00', '07:00']);
   });
+
+  test('un OUT huérfano poco después del cierre (atribuido a la jornada) queda visible', async () => {
+    // 08:00-17:00 y un OUT de más a las 18:00: por caer dentro del umbral de
+    // pausa, el motor lo asigna a la jornada (sale de la lista global). Su código
+    // viaja en la jornada, pero su hora no está en ningún par y los
+    // renderizadores muestran pares: sin materializarlo, el 18:00 era invisible.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+      { employee_id: 1, timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+      { employee_id: 1, timestamp: '2025-06-10 18:00:00', type: 'out', id: 3 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows[0].pairs).toEqual([{ entrada: '08:00', salida: '17:00' }]);
+    expect(data[0].rows[1].pairs).toEqual([{ entrada: '', salida: '18:00' }]);
+    expect(data[0].rows[1].anomalies).toContain('salidas_consecutivas');
+    expect(data[0].total_hm).toBe('9:00'); // el huérfano no suma tiempo
+  });
+
+  test('un lote que supera el tope de marcajes lanza un error tipado 413', async () => {
+    // Determinista: el mismo pedido va a volver a superar el tope, así que la
+    // ruta lo mapea a 413 (no reintentable) en vez de un 500 que la UI ofrece
+    // reintentar. Sólo importa la longitud: el chequeo lanza antes de iterar.
+    sequelize.query.mockReset();
+    sequelize.query
+      .mockResolvedValueOnce([[EMP]])
+      .mockResolvedValueOnce([new Array(400001).fill(0)]);
+    await expect(
+      generateMarcadasReport({ dateFrom: '2025-06-01', dateTo: '2025-08-31' }),
+    ).rejects.toMatchObject({ status: 413, code: 'MARCADAS_TOO_MANY_PUNCHES' });
+  });
 });

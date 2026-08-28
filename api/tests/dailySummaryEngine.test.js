@@ -176,6 +176,25 @@ describe('materialización de fechas sin jornada', () => {
     });
     expect(filas[0].anomalies).toEqual([]);
   });
+
+  test('un día laborable con SÓLO una salida huérfana no es una ausencia limpia', () => {
+    // Configurado laborable (L-V), pero el único registro es un OUT sin entrada:
+    // el motor no genera jornada. Materializar 'absent' ocultaría el fichaje y
+    // una escritura futura produciría una ausencia engañosa. Se incorpora la
+    // anomalía, se conserva la hora como evidencia y NO se clasifica absent.
+    const filas = buildDailySummaryRows(
+      [{ timestamp: '2025-06-10 17:00:00', type: 'out', id: 5 }], // martes laborable
+      { from: '2025-06-10', to: '2025-06-10', resolveConfig: () => LV },
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0].status).not.toBe('absent');
+    expect(filas[0].status).toBe('present');
+    expect(filas[0].last_out.slice(11, 16)).toBe('17:00');
+    expect(filas[0].anomalies).toContain('salida_sin_entrada');
+    // calculation_mode no-null: el dry-run lo compara en vez de ignorarlo como
+    // día vacío.
+    expect(filas[0].calculation_mode).toBe('historical_fallback');
+  });
 });
 
 describe('agregación de dos jornadas en la misma fecha civil', () => {

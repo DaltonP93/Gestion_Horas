@@ -105,7 +105,9 @@ router.get('/marcadas', async (req, res) => {
     const result = await generateMarcadasReport({ dateFrom: from, dateTo: to, employeeId, deptId, scope });
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // `err.status` viaja cuando el error es tipado (p. ej. 413 por exceso de
+    // marcajes): así la UI puede distinguir lo no reintentable del 500 genérico.
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -179,7 +181,7 @@ router.get('/marcadas/pdf', async (req, res) => {
     // mida exactamente este render, y no una copia.
     renderMarcadasPdf(doc, { data: report.data, from, to });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -215,7 +217,7 @@ router.post('/marcadas/email', async (req, res) => {
 
     res.json({ ...result, employees: report.data.length });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

@@ -189,8 +189,30 @@ function buildDailySummaryRows(punches, options = {}) {
     materializeEmptyDates = true,
   } = options;
 
-  const { workdays } = engine.buildWorkdays(punches, options);
+  const { workdays, anomalies } = engine.buildWorkdays(punches, options);
   const delPeriodo = engine.clipToPeriod(workdays, { from, to });
+
+  // Fichajes sueltos por fecha: los que NO formaron jornada (una salida sin
+  // entrada como único registro del día). Sin esto, buildWorkdays no genera
+  // jornada, la fecha cae en la rama de "día vacío" y se materializa como
+  // 'absent' —una ausencia engañosa que oculta que sí hubo un fichaje—. Se
+  // agrupan por la fecha civil del marcaje, acotadas al período.
+  const punchById = new Map();
+  for (const p of (punches || [])) {
+    const id = p.id != null ? p.id : (p.attendance_log_id != null ? p.attendance_log_id : null);
+    if (id != null) punchById.set(id, p);
+  }
+  const huerfanasPorFecha = new Map();
+  for (const a of anomalies) {
+    if (typeof a === 'string' || !Array.isArray(a.log_ids)) continue;
+    const src = a.log_ids.map((id) => punchById.get(id)).find(Boolean);
+    const at = src ? (src.timestamp || src.ts) : a.at;
+    const fecha = at ? String(at).slice(0, 10) : null;
+    if (!fecha || fecha < from || fecha > to) continue;
+    const arr = huerfanasPorFecha.get(fecha) || [];
+    arr.push({ code: a.code, src });
+    huerfanasPorFecha.set(fecha, arr);
+  }
 
   // Configuración efectiva por fecha, también para las fechas SIN jornada:
   // sin esto, un día de vacaciones o un domingo libre sin marcajes nunca vería
@@ -218,7 +240,7 @@ function buildDailySummaryRows(punches, options = {}) {
 
     if (!lista || !lista.length) {
       if (!materializeEmptyDates) continue;
-      filas.push(filaVacia(date, statusEmptyDay(expectation, isHoliday), expectation, cfg));
+      filas.push(filaDiaSinJornada(date, expectation, cfg, isHoliday, huerfanasPorFecha.get(date) || []));
       continue;
     }
 
@@ -343,6 +365,43 @@ function aggregateWorkdays(lista) {
     non_working_kind: primera.non_working_kind,
     anomalies: [...codes],
   };
+}
+
+/**
+ * Fila de una fecha sin jornada computable.
+ *
+ * El caso base es el día vacío (sin marcas): sale de `filaVacia`. Pero una fecha
+ * puede no tener jornada y aun así tener un FICHAJE SUELTO —una salida sin
+ * entrada como único registro—. Ese día NO es una ausencia limpia: hubo marca.
+ * Materializar 'absent' ahí ocultaría el fichaje y una escritura futura
+ * produciría una ausencia engañosa.
+ *
+ * Cuando hay huérfanas se incorpora su anomalía a la fila. Y si el estado base
+ * era `absent` (día laborable sin jornada), se reinterpreta como un día CON
+ * actividad incompleta —igual que el motor trata una jornada abierta (entrada
+ * sin salida) como 'present' con cero minutos—: se conservan las horas del
+ * fichaje como evidencia y se marca `calculation_mode` para que el dry-run lo
+ * compare en vez de descartarlo como día vacío.
+ */
+function filaDiaSinJornada(date, expectation, cfg, isHoliday, huerfanas) {
+  const status0 = statusEmptyDay(expectation, isHoliday);
+  const fila = filaVacia(date, status0, expectation, cfg);
+  if (!huerfanas.length) return fila;
+
+  const codigos = huerfanas.map((h) => h.code);
+  fila.anomalies = [...new Set([...(fila.anomalies || []), ...codigos])];
+
+  if (status0 === STATUS.ABSENT) {
+    const ts = (h) => (h.src ? String(h.src.timestamp || h.src.ts || '') : '');
+    const ins = huerfanas.filter((h) => h.src && h.src.type === 'in').map(ts).filter(Boolean).sort();
+    const outs = huerfanas.filter((h) => h.src && h.src.type === 'out').map(ts).filter(Boolean).sort();
+    fila.first_in = ins.length ? ins[0] : null;
+    fila.last_out = outs.length ? outs[outs.length - 1] : null;
+    fila.status = STATUS.PRESENT;
+    fila.calculation_mode = engine.MODE_HISTORICAL_FALLBACK;
+    fila.policy_version = engine.POLICY_VERSION;
+  }
+  return fila;
 }
 
 /** Fila de un día sin jornada: ceros, el estado y la expectativa que corresponda. */

@@ -175,11 +175,18 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     `, { replacements: [...ids, ventana.from, ventana.to] });
 
     if (logs.length > MARCADAS_MAX_PUNCHES_PER_CHUNK) {
-      throw new Error(
+      // Error TIPADO, no un 500 genérico. Es determinista —el mismo pedido va a
+      // volver a superar el tope— así que la ruta lo mapea a 413 y la UI lo
+      // clasifica como NO reintentable, aconsejando acortar el rango. Como 500,
+      // la pantalla ofrecía reintentar exactamente el pedido que no puede pasar.
+      const err = new Error(
         `El período ${from}..${to} devuelve demasiados marcajes para procesar de una vez `
         + `(más de ${MARCADAS_MAX_PUNCHES_PER_CHUNK} en un lote de ${ids.length} empleados). `
         + 'Acotar el rango de fechas o filtrar por departamento.',
       );
+      err.status = 413;
+      err.code = 'MARCADAS_TOO_MANY_PUNCHES';
+      throw err;
     }
 
     const porEmpleado = new Map();
@@ -259,26 +266,51 @@ function armarFilasEmpleado(emp, marcajes, config, periodo) {
     });
   }
 
-  // Anomalías que NO cayeron en ninguna jornada (una salida huérfana como único
-  // marcaje del período es el caso central). Sin materializarlas, un empleado
-  // cuyo único fichaje es un OUT sin entrada no genera filas, y el filtro de
-  // "empleados vacíos" lo borraba del reporte: un período que SÍ tiene un
-  // marcaje anómalo se presentaba como si no tuviera ninguno.
+  // Fichajes sueltos (los que no forman parte de un tramo entrada/salida). Sin
+  // materializarlos, un empleado cuyo único fichaje es un OUT sin entrada no
+  // genera filas y el filtro de "empleados vacíos" lo borraba del reporte: un
+  // período que SÍ tiene un marcaje anómalo se presentaba como si no tuviera
+  // ninguno.
   //
-  // Cada huérfana es su PROPIA fila —nunca se fusiona con otra ni se descarta su
-  // hora—: un OUT huérfano el mismo día de una jornada válida queda visible como
-  // fila aparte, y dos huérfanas del mismo día muestran los dos fichajes en vez
-  // de que la segunda pise a la primera. Se acotan al período; una anomalía de
-  // la ventana ampliada es sólo contexto del borde y no se materializa.
-  for (const a of anomalies) {
-    const fecha = String(a.at || '').slice(0, 10);
-    if (!fecha || fecha < periodo.from || fecha > periodo.to) continue;
-    const src = (a.log_ids || []).map((id) => porLog.get(id)).find(Boolean);
-    const hhmm = src ? String(src.timestamp).slice(11, 16) : '';
-    const esEntrada = src ? src.type === 'in' : false;
+  // Se recogen de DOS orígenes, porque una huérfana puede quedar en cualquiera
+  // de los dos según su distancia a la jornada:
+  //   · la lista GLOBAL —anomalías que no cayeron en ninguna jornada—;
+  //   · las anomalías ATRIBUIDAS a una jornada —un OUT huérfano poco después del
+  //     cierre (17:00 out, 18:00 out) que el motor asigna a esa jornada por caer
+  //     dentro del umbral de pausa—. Su código viaja en la jornada, pero su hora
+  //     no está en ningún par, y los renderizadores muestran pares, no códigos:
+  //     sin esto el 18:00 quedaba invisible.
+  //
+  // Se descartan los ids YA visibles en un tramo (incluidos los duplicados
+  // colapsados, cuyo id vive en `source_logs`): sólo se materializa el fichaje
+  // que no se ve en ninguna parte. Cada uno es su PROPIA fila —nunca se fusiona
+  // ni se descarta su hora—, así dos huérfanas del mismo día muestran los dos
+  // fichajes. Se acotan al período: un fichaje de la ventana ampliada es sólo
+  // contexto del borde y no se materializa.
+  const mostrados = new Set();
+  for (const j of delPeriodo) {
+    for (const s of j.segments) for (const id of (s.source_logs || [])) mostrados.add(id);
+  }
+  const emitidos = new Set();
+  const sueltas = [...anomalies];
+  for (const j of delPeriodo) sueltas.push(...j.anomalies);
+  for (const a of sueltas) {
+    const ids = a.log_ids || [];
+    if (!ids.length) continue; // anomalía sintética sin fichaje (jornada_excesiva, turnera_conflict)
+    // Una fila por anomalía, no por id: un fichaje repetido colapsado comparte
+    // una anomalía con dos log_ids que son el MISMO marcaje físico. Si alguno de
+    // sus ids ya se ve en un tramo o ya se emitió, el fichaje ya está a la vista.
+    if (ids.some((id) => mostrados.has(id) || emitidos.has(id))) continue;
+    const src = ids.map((id) => porLog.get(id)).find(Boolean);
+    if (!src) continue;
+    const fecha = String(src.timestamp).slice(0, 10);
+    if (fecha < periodo.from || fecha > periodo.to) continue; // contexto del borde
+    for (const id of ids) emitidos.add(id);
+    const hhmm = String(src.timestamp).slice(11, 16);
+    const esEntrada = src.type === 'in';
     const [y, m, d] = fecha.split('-');
     filas.push({
-      _sort: a.at || `${fecha} 00:00:00`,
+      _sort: src.timestamp,
       dayName: DAY_NAMES[engine.dayOfWeekISO(fecha)],
       date: `${d}/${m}/${y}`,
       pairs: [{ entrada: esEntrada ? hhmm : '', salida: esEntrada ? '' : hhmm }],
