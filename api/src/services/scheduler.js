@@ -12,7 +12,8 @@ const { sendMail, buildReportEmailHtml } = require('./emailService');
 const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('./recalcLock');
 const engine = require('./workdayEngine');
-const { loadScheduleHistory } = require('./workdayConfig');
+const { loadWorkdayConfig } = require('./workdayConfig');
+const workdaySummary = require('./workdaySummaryService');
 
 const _jobs = new Map(); // scheduleId → tarea cron activa
 
@@ -154,8 +155,16 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
     // `timestamp >= ? AND < ?` es sargable sobre idx_emp_ts; el
     // `DATE(al.timestamp) BETWEEN ? AND ?` anterior no lo era y forzaba a
     // evaluar la función sobre cada fila del rango.
+    //
+    // El LIMIT acota la MATERIALIZACIÓN, no sólo el chequeo: sin él, mysql2
+    // traía TODAS las filas que matchean —millones en un rango largo— antes de
+    // que el `if` de abajo pudiera reaccionar, y el pico de esa asignación es
+    // justamente lo que hacía saltar a PM2 por memoria. Con `LIMIT max+1`, el
+    // driver nunca materializa más que eso: si vuelven `max+1` filas sabemos
+    // que se superó el tope, sin haber cargado el dataset entero.
     const [logs] = await sequelize.query(`
       SELECT
+        al.id,
         al.employee_id,
         DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp,
         al.type
@@ -163,14 +172,22 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
       WHERE al.employee_id IN (${ids.map(() => '?').join(',')})
         AND al.timestamp >= ? AND al.timestamp < ?
       ORDER BY al.employee_id, al.timestamp, al.id
+      LIMIT ${MARCADAS_MAX_PUNCHES_PER_CHUNK + 1}
     `, { replacements: [...ids, ventana.from, ventana.to] });
 
     if (logs.length > MARCADAS_MAX_PUNCHES_PER_CHUNK) {
-      throw new Error(
+      // Error TIPADO, no un 500 genérico. Es determinista —el mismo pedido va a
+      // volver a superar el tope— así que la ruta lo mapea a 413 y la UI lo
+      // clasifica como NO reintentable, aconsejando acortar el rango. Como 500,
+      // la pantalla ofrecía reintentar exactamente el pedido que no puede pasar.
+      const err = new Error(
         `El período ${from}..${to} devuelve demasiados marcajes para procesar de una vez `
-        + `(${logs.length} en un lote de ${ids.length} empleados). Acotar el rango de fechas `
-        + 'o filtrar por departamento.',
+        + `(más de ${MARCADAS_MAX_PUNCHES_PER_CHUNK} en un lote de ${ids.length} empleados). `
+        + 'Acotar el rango de fechas o filtrar por departamento.',
       );
+      err.status = 413;
+      err.code = 'MARCADAS_TOO_MANY_PUNCHES';
+      throw err;
     }
 
     const porEmpleado = new Map();
@@ -179,11 +196,23 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
       if (lista) lista.push(log); else porEmpleado.set(log.employee_id, [log]);
     }
 
-    const historial = await loadScheduleHistory(ids);
+    // Configuración del lote en TRES consultas acotadas al rango, no una por
+    // empleado y día: 500 empleados por 30 días serían 15.000 viajes a la base
+    // para un solo reporte.
+    const config = await loadWorkdayConfig(ids, { from, to });
 
     for (const emp of lote) {
       const marcajes = porEmpleado.get(emp.employee_id) || [];
-      result.push(armarFilasEmpleado(emp, marcajes, historial.get(emp.employee_id), { from, to }));
+      const item = armarFilasEmpleado(emp, marcajes, config, { from, to });
+      // Un empleado SIN ninguna fila dentro del período no aparece en el
+      // reporte. Antes se agregaba con rows:[] y total 0, y en el PDF eso
+      // producía bloques/páginas vacías. `rows` ya incluye tanto las jornadas
+      // como las anomalías sueltas materializadas (una salida huérfana como
+      // único marcaje), así que un fichaje anómalo NO borra al empleado: sólo
+      // se filtra a quien no tiene marcaje alguno en el período. La condición se
+      // evalúa DESPUÉS del recorte: los logs de la ventana ampliada que son sólo
+      // contexto del borde no cuentan como fila del período.
+      if (item.rows.length > 0) result.push(item);
     }
   }
 
@@ -201,23 +230,105 @@ const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Vierne
  * es el concepto que guarda `daily_summary.worked_minutes`. Son dos números
  * distintos y mezclarlos es por qué los dos reportes nunca cerraron entre sí.
  */
-function armarFilasEmpleado(emp, marcajes, historial, periodo) {
-  const { workdays } = engine.buildWorkdays(marcajes, { history: historial });
+function armarFilasEmpleado(emp, marcajes, config, periodo) {
+  const { workdays, anomalies } = engine.buildWorkdays(marcajes, {
+    resolveConfig: (workDate) => config.forDate(emp.employee_id, workDate),
+  });
   const delPeriodo = engine.clipToPeriod(workdays, periodo);
 
+  // Índice de marcajes por log_id: recupera tipo y hora del fichaje suelto que
+  // originó una anomalía global (la que no cayó en ninguna jornada).
+  const porLog = new Map();
+  for (const p of marcajes) if (p.id != null) porLog.set(p.id, p);
+
+  // UNA fila por jornada, NO por fecha. Dos jornadas del mismo día —06:00-10:00
+  // y 18:00-22:00, separadas por más que el umbral de pausa— son dos filas
+  // distintas: colapsarlas en la fecha perdería una, y el total del período
+  // dejaría de cerrar con lo que muestra la tabla. `_sort` (la fecha-hora de la
+  // primera entrada) ordena las filas del día entre sí.
+  const filas = [];
   let totalMinutes = 0;
-  const rows = delPeriodo.map((j) => {
+  for (const j of delPeriodo) {
     totalMinutes += j.segment_minutes;
     const [y, m, d] = j.work_date.split('-');
-    return {
+    filas.push({
+      _sort: j.first_in || `${j.work_date} 00:00:00`,
       dayName: DAY_NAMES[engine.dayOfWeekISO(j.work_date)],
       date: `${d}/${m}/${y}`,
       pairs: j.segments.map((s) => ({ entrada: s.in_hhmm, salida: s.out_hhmm })),
       total: engine.minutesToHM(j.segment_minutes),
       crosses_midnight: j.crosses_midnight,
       open: j.open,
-    };
-  });
+      // Se exponen para que la vista pueda marcar la fila como revisable en
+      // vez de mostrar un cero indistinguible de un día sin trabajar.
+      anomalies: j.anomalies.map((a) => a.code),
+      calculation_mode: j.calculation_mode,
+      non_working_kind: j.non_working_kind,
+    });
+  }
+
+  // Fichajes sueltos (los que no forman parte de un tramo entrada/salida). Sin
+  // materializarlos, un empleado cuyo único fichaje es un OUT sin entrada no
+  // genera filas y el filtro de "empleados vacíos" lo borraba del reporte: un
+  // período que SÍ tiene un marcaje anómalo se presentaba como si no tuviera
+  // ninguno.
+  //
+  // Se recogen de DOS orígenes, porque una huérfana puede quedar en cualquiera
+  // de los dos según su distancia a la jornada:
+  //   · la lista GLOBAL —anomalías que no cayeron en ninguna jornada—;
+  //   · las anomalías ATRIBUIDAS a una jornada —un OUT huérfano poco después del
+  //     cierre (17:00 out, 18:00 out) que el motor asigna a esa jornada por caer
+  //     dentro del umbral de pausa—. Su código viaja en la jornada, pero su hora
+  //     no está en ningún par, y los renderizadores muestran pares, no códigos:
+  //     sin esto el 18:00 quedaba invisible.
+  //
+  // Se descartan los ids YA visibles en un tramo (incluidos los duplicados
+  // colapsados, cuyo id vive en `source_logs`): sólo se materializa el fichaje
+  // que no se ve en ninguna parte. Cada uno es su PROPIA fila —nunca se fusiona
+  // ni se descarta su hora—, así dos huérfanas del mismo día muestran los dos
+  // fichajes. Se acotan al período: un fichaje de la ventana ampliada es sólo
+  // contexto del borde y no se materializa.
+  const mostrados = new Set();
+  for (const j of delPeriodo) {
+    for (const s of j.segments) for (const id of (s.source_logs || [])) mostrados.add(id);
+  }
+  const emitidos = new Set();
+  const sueltas = [...anomalies];
+  for (const j of delPeriodo) sueltas.push(...j.anomalies);
+  for (const a of sueltas) {
+    const ids = a.log_ids || [];
+    if (!ids.length) continue; // anomalía sintética sin fichaje (jornada_excesiva, turnera_conflict)
+    // Una fila por anomalía, no por id: un fichaje repetido colapsado comparte
+    // una anomalía con dos log_ids que son el MISMO marcaje físico. Si alguno de
+    // sus ids ya se ve en un tramo o ya se emitió, el fichaje ya está a la vista.
+    if (ids.some((id) => mostrados.has(id) || emitidos.has(id))) continue;
+    const src = ids.map((id) => porLog.get(id)).find(Boolean);
+    if (!src) continue;
+    const fecha = String(src.timestamp).slice(0, 10);
+    if (fecha < periodo.from || fecha > periodo.to) continue; // contexto del borde
+    for (const id of ids) emitidos.add(id);
+    const hhmm = String(src.timestamp).slice(11, 16);
+    const esEntrada = src.type === 'in';
+    const [y, m, d] = fecha.split('-');
+    filas.push({
+      _sort: src.timestamp,
+      dayName: DAY_NAMES[engine.dayOfWeekISO(fecha)],
+      date: `${d}/${m}/${y}`,
+      pairs: [{ entrada: esEntrada ? hhmm : '', salida: esEntrada ? '' : hhmm }],
+      total: engine.minutesToHM(0),
+      crosses_midnight: false,
+      open: true,
+      anomalies: [a.code],
+      calculation_mode: null,
+      non_working_kind: null,
+    });
+  }
+
+  const rows = filas
+    .sort((x, z) => (x._sort < z._sort ? -1 : (x._sort > z._sort ? 1 : 0)))
+    // `_sort` era sólo para ordenar; la fila que consume la vista conserva la
+    // forma anterior.
+    .map(({ _sort, ...fila }) => fila);
 
   return {
     employee_id: emp.employee_id,
@@ -404,6 +515,55 @@ function stopJob(scheduleId) {
 
 // ─── Recalcular daily_summary en bloque para una fecha (Paraguay) ─
 async function bulkRecalcDailySummary(date) {
+  // Cuando el motor está habilitado, el recálculo en bloque también pasa por él:
+  // no puede quedar un job/cron recalculando con la matemática vieja mientras el
+  // camino operativo usa el motor. Con el flag OFF (default) se conserva el SQL
+  // legacy como rollback.
+  if (workdaySummary.isEngineSummaryWriteEnabled()) {
+    return bulkRecalcViaEngine(date);
+  }
+  return legacyBulkRecalcDailySummary(date);
+}
+
+/**
+ * Recálculo en bloque por el MOTOR: por cada empleado con marcas que puedan
+ * pertenecer a una jornada de `date`, se corre el writer del motor (que además
+ * recalcula la work_date anterior si la jornada es nocturna). Una sola
+ * definición matemática, la misma que Marcadas.
+ */
+async function bulkRecalcViaEngine(date) {
+  // El lote NO se limita a quienes marcaron: un empleado SIN fichajes también
+  // necesita que su día vacío se materialice desde la config histórica
+  // (holiday/weekend/permission/absent), y que una fila 'absent' vieja se
+  // corrija. Se toma la unión de los empleados ACTIVOS con los que tengan marcas
+  // en la ventana ampliada (incluye inactivos que igual fichearon, para paridad
+  // con el recálculo por marca). Así el materializador cubre también los vacíos,
+  // sin depender del schedules vivo que usaría materializeAbsents.
+  const ventana = engine.punchWindow({ from: date, to: date });
+  // Las fechas afectadas por `date` son {date-1, date}; una fila de resumen en
+  // cualquiera de ellas debe reconciliarse aunque hoy el empleado esté inactivo
+  // y no tenga marcas (corregir un feriado/config histórica no puede dejar sus
+  // ausencias/descansos/permisos automáticos viejos con valores obsoletos).
+  const prev = workdaySummary.shiftDate(date, -1);
+  const [emps] = await sequelize.query(`
+    SELECT employee_id FROM (
+      SELECT id AS employee_id FROM employees WHERE status = 'active'
+      UNION
+      SELECT DISTINCT employee_id FROM attendance_logs WHERE timestamp >= ? AND timestamp < ?
+      UNION
+      SELECT DISTINCT employee_id FROM daily_summary WHERE date IN (?, ?)
+    ) u
+  `, { replacements: [ventana.from, ventana.to, prev, date] });
+  const ids = emps.map((e) => e.employee_id);
+  // Lote: una lectura de marcajes/feriados/config para todo el padrón, no por
+  // empleado. Sin esto, un reproceso mensual haría cientos de miles de viajes.
+  await workdaySummary.resolveSummaryBatchForDate(ids, date, { apply: true });
+  logger.info(`♻️  daily_summary (motor) recalculado para ${date} — ${ids.length} empleado(s)`);
+}
+
+// LEGACY (rollback). Recálculo en bloque con SQL propio: MIN(in)/MAX(out) del
+// día civil y employees.schedule_id ACTUAL. NO agregar matemática nueva acá.
+async function legacyBulkRecalcDailySummary(date) {
   // Insertar/actualizar daily_summary para todos los empleados
   // con registros en attendance_logs para la fecha dada.
   // late_minutes se calcula comparando primer IN con el horario del empleado.
@@ -506,6 +666,12 @@ async function bulkRecalcDailySummary(date) {
 // debían trabajar ese día, no es feriado, y no tienen ya una fila. No pisa
 // filas existentes. Empleados sin horario asignado se omiten.
 async function materializeAbsents(date) {
+  // Con el motor habilitado, la materialización de días vacíos ya la hace el
+  // recálculo por el motor, que DELIBERADAMENTE deja sin fila un día
+  // `unconfigured` (sin evidencia de ausencia). materializeAbsents usa el
+  // horario ACTUAL y fabricaría 'absent' sobre esos días, justo lo que el motor
+  // evitó, así que en el camino nuevo NO corre.
+  if (workdaySummary.isEngineSummaryWriteEnabled()) return 0;
   let n = 0;
   // Bajo el mismo lock por fecha: nunca choca con un recálculo del mismo día.
   await withDayRecalcLock(date, async (t) => {

@@ -10,6 +10,7 @@ import {
   canApply, isStale, marcadasQueryKey, normalizeFilters,
   type AppliedFilters, type ReportFilters,
 } from '@/lib/reportFilters'
+import { describeReportError } from '@/lib/reportError'
 import { maxPairsOf } from '@/lib/marcadasTable'
 import EmployeeSearchCombobox from '@/components/EmployeeSearchCombobox'
 import { useI18n } from '@/i18n/I18nProvider'
@@ -70,7 +71,7 @@ function TabMarcadas() {
     staleTime: 300_000,
   })
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isFetching, error, refetch } = useQuery({
     queryKey: marcadasQueryKey(applied),
     queryFn: ({ signal }) => api.get('/api/reports/marcadas', {
       params: marcadasParams(applied as ReportFilters),
@@ -79,7 +80,13 @@ function TabMarcadas() {
       signal,
     }).then(r => r.data),
     enabled: applied !== null,
+    // Sin reintento automático: el API se reinicia por memoria y reintentar
+    // solo alarga el spinner. Preferimos cortar y ofrecer el botón, que le
+    // devuelve el control a la persona en vez de dejarla esperando.
+    retry: false,
   })
+
+  const fallo = describeReportError(error)
 
   // `refetch()` ya no hace falta: cambiar `applied` cambia la clave y TanStack
   // consulta solo. Llamarlo además forzaba una segunda petición idéntica.
@@ -184,20 +191,43 @@ function TabMarcadas() {
         )}
       </div>
 
-      {isLoading && (
+      {isFetching && (
         <div className="text-center py-12 text-slate-400 dark:text-white/30">
           <RefreshCw size={24} className="mx-auto mb-3 animate-spin opacity-40" />
           Generando reporte...
         </div>
       )}
+
+      {/* El 502 del reinicio por memoria dejaba el spinner girando para siempre:
+          la consulta fallaba pero no había estado de error que mostrar, y la
+          única salida era recargar la página. */}
+      {!isFetching && fallo && (
+        <div
+          role="alert"
+          className="rounded-2xl border border-red-200 bg-red-50 p-5 text-sm dark:border-red-500/20 dark:bg-red-500/[0.06]"
+        >
+          <p className="font-medium text-red-700 dark:text-red-300">{fallo.mensaje}</p>
+          {fallo.detalle && (
+            <p className="mt-1 text-red-600/80 dark:text-red-300/70">{fallo.detalle}</p>
+          )}
+          {fallo.reintentable && (
+            <button
+              onClick={() => refetch()}
+              className="mt-3 flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
+            >
+              <RefreshCw size={14} /> Reintentar
+            </button>
+          )}
+        </div>
+      )}
       {/* "Todavía no generaste nada" y "no hay marcaciones" son dos cosas
           distintas y antes se mostraba el mismo texto para las dos. */}
-      {applied === null && (
+      {applied === null && !fallo && (
         <div className="text-center py-12 text-slate-400 dark:text-white/30">
           Elegí el período y presioná «Generar reporte».
         </div>
       )}
-      {!isLoading && applied !== null && employees.length === 0 && (
+      {!isFetching && !fallo && applied !== null && employees.length === 0 && (
         <div className="text-center py-12 text-slate-400 dark:text-white/30">Sin marcaciones en este período</div>
       )}
 

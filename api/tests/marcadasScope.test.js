@@ -25,7 +25,12 @@ jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn() },
 }));
 jest.mock('../src/services/workdayConfig', () => ({
-  loadScheduleHistory: jest.fn(async () => new Map()),
+  // Sin configuración cargada: todas las jornadas caen en historical_fallback,
+  // que es el estado real mientras las migraciones 072/073 no estén aplicadas.
+  loadWorkdayConfig: jest.fn(async () => ({
+    forDate: () => null,
+    historyFor: () => [],
+  })),
 }));
 
 const { sequelize } = require('../src/config/database');
@@ -159,6 +164,10 @@ describe('generateMarcadasReport — scope de departamento', () => {
     const { sql } = marcajes();
     expect(sql).toMatch(/al\.timestamp >= \? AND al\.timestamp < \?/);
     expect(sql).not.toMatch(/DATE\(al\.timestamp\) BETWEEN/);
+    // El tope se aplica en SQL con LIMIT: sin él, mysql2 materializaría todo el
+    // dataset antes de que el chequeo de longitud pudiera reaccionar, y ese
+    // pico es lo que dispara el reinicio por memoria.
+    expect(sql).toMatch(/LIMIT \d+/);
   });
 
   test('scope sin ids (rol scoped sin depto vinculado): devuelve vacío sin tocar DB', async () => {

@@ -71,4 +71,33 @@ describe('recalcDailySummary (sargable + lock por fecha)', () => {
     const reads = mockQuery.mock.calls.filter(c => /SELECT\s+timestamp,\s*type\s+FROM attendance_logs/i.test(c[0]));
     expect(reads.length).toBe(1);
   });
+
+  test('un día con SÓLO marcas unknown es PRESENTE, no ausente (no queda atrapado)', async () => {
+    // El flujo móvil sin contexto guarda 'unknown'. El legacy sólo miraba in/out y
+    // dejaba el día 'absent' pese a que la persona fichó. Ahora la actividad ancla
+    // la presencia en la primera/última marca, sin inventar atraso.
+    mockQuery.mockImplementation(async (sql) => {
+      if (/FROM attendance_logs/i.test(sql) && /SELECT\s+timestamp/i.test(sql)) {
+        return [[
+          { timestamp: '2026-07-28 08:05:00', type: 'unknown' },
+          { timestamp: '2026-07-28 12:10:00', type: 'unknown' },
+        ]];
+      }
+      if (/FROM holidays/i.test(sql)) return [[null]];
+      if (/FROM employees/i.test(sql) && /schedules/i.test(sql)) return [[{ check_in: '08:00:00', tolerance_in: 5 }]];
+      if (/GET_LOCK/i.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/i.test(sql)) return [[]];
+      if (/INSERT INTO daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
+      return [[]];
+    });
+    await recalcDailySummary(1, new Date('2026-07-28T12:00:00-03:00'));
+    const upsert = mockQuery.mock.calls.find(c => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements.length === 7);
+    expect(upsert).toBeTruthy();
+    const repl = upsert[1].replacements;
+    // [emp, date, first_in, last_out, worked, late, status]
+    expect(repl[6]).toBe('present');          // NO 'absent'
+    expect(repl[2]).toBe('2026-07-28 08:05:00'); // presencia anclada en la 1ª marca
+    expect(repl[3]).toBe('2026-07-28 12:10:00'); // …y la última
+    expect(repl[5]).toBe(0);                  // sin atraso inventado desde un unknown
+  });
 });

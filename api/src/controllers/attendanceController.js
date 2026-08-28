@@ -6,10 +6,12 @@ const { dbSecondsOfDay, dbDateISO } = require('../utils/dbTime');
 const calc = require('../services/dailySummaryCalc');
 const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
+const { normalizeAttendanceTimestampForDb, attendanceDisplayInstant } = require('../utils/attendanceTime');
+const engine = require('../services/workdayEngine');
+const workdaySummary = require('../services/workdaySummaryService');
+const lateAlert = require('../services/lateAlertService');
 let fireWebhooks;
 try { ({ fireWebhooks } = require('../routes/webhooks')); } catch {}
-let writeCheckinOut;
-try { ({ writeCheckinOut } = require('../config/att2000')); } catch {}
 
 // ─── Procesar evento de marcaje (desde Redis Pub/Sub del Bridge) ────────────
 async function processAttendanceEvent(data) {
@@ -27,8 +29,24 @@ async function processAttendanceEvent(data) {
       return;
     }
 
-    const ts = new Date(timestamp);
-    const detectedType = type !== 'unknown' ? type : await detectMarkType(emp.id, ts);
+    // Hora de pared a persistir. Una marca naive del dispositivo se guarda con
+    // sus componentes exactos (sin reinterpretar como UTC); un instante real se
+    // convierte a la hora de pared de la institución. `ts` (Date) se conserva
+    // sólo para trazas/emisión (display), NO para la persistencia.
+    //
+    // El instante para display/audit/socket/logs sale de attendanceDisplayInstant,
+    // NO de `new Date(timestamp)`: un naive del reloj ("2026-08-27 18:30:15")
+    // parseado con `new Date` usa la TZ del proceso Node y da un instante distinto
+    // por servidor, así que se invierte el wall-clock interpretándolo como hora de
+    // Asunción (tzdata histórica). Un input YA inequívoco (Date o ISO con zona)
+    // conserva su instante original: reinvertirlo desde el wall-clock perdería la
+    // ocurrencia correcta en la hora repetida de un cambio de zona.
+    const tsDb = normalizeAttendanceTimestampForDb(timestamp);
+    const ts = attendanceDisplayInstant(timestamp, tsDb);
+    // El tipo explícito confiable se conserva; si viene `unknown` se resuelve
+    // por CONTEXTO de jornada (secuencia real de marcas), nunca por paridad del
+    // día civil, que se reinicia a medianoche y rompe los turnos nocturnos.
+    const detectedType = type !== 'unknown' ? type : await resolveMarkType(emp.id, tsDb);
 
     // Resolver device_id si no vino pero tenemos IP
     let resolvedDeviceId = deviceId;
@@ -45,7 +63,7 @@ async function processAttendanceEvent(data) {
     await sequelize.query(`
       INSERT IGNORE INTO attendance_logs (employee_id, device_id, timestamp, type, source, raw_data)
       VALUES (?, ?, ?, ?, 'device', ?)
-    `, { replacements: [emp.id, resolvedDeviceId, ts, detectedType, JSON.stringify(raw || {})] });
+    `, { replacements: [emp.id, resolvedDeviceId, tsDb, detectedType, JSON.stringify(raw || {})] });
 
     // Empleado inactivo/suspendido que sigue marcando → alerta, sin procesar
     // como asistencia operativa (no recalc, no att2000, no retardo). La marca
@@ -66,19 +84,11 @@ async function processAttendanceEvent(data) {
       return;
     }
 
-    // Replicar el marcaje en att2000.CHECKINOUT si está habilitado
-    if (process.env.ATT2000_WRITE_ENABLED === 'true' && writeCheckinOut) {
-      writeCheckinOut([{
-        userId: employeeCode,
-        attTime: ts,
-        inOutStatus: detectedType === 'in' ? 0 : detectedType === 'out' ? 1 : null,
-        sensorId: resolvedDeviceId || 0,
-        verifyMode: 0
-      }]).catch(err => logger.error(`att2000 write falló: ${err.message}`));
-    }
+    // att2000 es READ-ONLY: no se replica el marcaje hacia CHECKINOUT. La
+    // capacidad de escritura fue eliminada del conector a propósito.
 
-    // Recalcular resumen diario
-    await recalcDailySummary(emp.id, ts);
+    // Recalcular resumen diario a partir de la hora de pared persistida.
+    await recalcDailySummary(emp.id, tsDb);
 
     // Emitir en tiempo real a todos los clientes web
     const io = getIO();
@@ -93,15 +103,21 @@ async function processAttendanceEvent(data) {
 
     emitAttendance(event);
 
-    // Disparar webhooks a sistemas externos (Oracle APEX, ERP, etc.)
-    if (fireWebhooks) {
+    // Disparar webhooks a sistemas externos (Oracle APEX, ERP, etc.). Sólo con
+    // un tipo resuelto: una marca 'unknown' no es ni checkin ni checkout, así que
+    // mapearla a 'attendance.checkout' publicaría una salida que nunca ocurrió.
+    // El evento de socket ya la refleja como 'unknown'; el webhook la omite hasta
+    // que su tipo se determine.
+    if (fireWebhooks && (detectedType === 'in' || detectedType === 'out')) {
       const webhookEvent = detectedType === 'in' ? 'attendance.checkin' : 'attendance.checkout';
       fireWebhooks(webhookEvent, event).catch(() => {});
     }
 
-    // Verificar retardos y emitir alerta
+    // Verificar retardos y emitir alerta. El atraso lo determina el MOTOR con la
+    // configuración efectiva (no employees.schedule_id actual + setHours): sin
+    // config confiable o con conflicto de turnera, NO se inventa una tardanza.
     if (detectedType === 'in') {
-      await checkAndAlertLate(emp, ts, io);
+      await lateAlert.checkAndAlertLate(emp, emp.id, tsDb, io);
     }
 
     logger.info(`Marcaje: ${emp.first_name} ${emp.last_name} - ${detectedType} - ${ts.toISOString()}`);
@@ -111,26 +127,113 @@ async function processAttendanceEvent(data) {
   }
 }
 
-// Determinar si es entrada o salida según historial del día
-async function detectMarkType(employeeId, timestamp) {
-  // MISMA semántica de fecha que recalcDailySummary. Si acá se usara la
-  // conversión a America/Asuncion, un marcaje de madrugada en una fecha de
-  // invierno anterior al 2024-10-06 contaría las marcas del día ANTERIOR y
-  // se inferiría un in/out equivocado, que después consume el resumen.
-  const date = dbDateISO(timestamp)
-    || new Intl.DateTimeFormat('sv', { timeZone: 'UTC' }).format(
-         timestamp instanceof Date ? timestamp : new Date(timestamp)
-       );
-  const [[row]] = await sequelize.query(
-    'SELECT COUNT(*) AS cnt FROM attendance_logs WHERE employee_id = ? AND DATE(timestamp) = ?',
-    { replacements: [employeeId, date] }
-  );
-  // Par: salida, Impar: entrada
-  return row.cnt % 2 === 0 ? 'in' : 'out';
+/**
+ * Resuelve el tipo (in/out) de una marca SIN tipo confiable, por CONTEXTO de
+ * jornada.
+ *
+ * El método viejo contaba `COUNT(*) WHERE DATE(timestamp)=fecha` y alternaba por
+ * paridad. Eso se reinicia a medianoche: en un turno nocturno (21:32 IN … 00:05
+ * OUT) el contador vuelve a cero al cambiar de día civil y el OUT de madrugada
+ * se infería como IN. También fallaba ante duplicados y turnos partidos.
+ *
+ * Acá se mira la SECUENCIA real de marcas anteriores, en una ventana de jornada
+ * (no un día civil), y se decide por el estado de sesión.
+ *
+ * NO inventa in/out sin evidencia: esta función SÓLO corre cuando la fuente no
+ * trae tipo, y devuelve 'unknown' cuando el contexto no alcanza para decidir sin
+ * ambigüedad. WorkdayEngine sabe tratar 'unknown' aguas abajo, así que preservar
+ * la incertidumbre es preferible a fabricar una entrada que nadie fichó. Las
+ * reglas:
+ *
+ *   A) tipo explícito y confiable        → lo resuelve el CALLER, no llega acá;
+ *   B) unknown + contexto suficiente y no ambiguo → se infiere in/out;
+ *   C) unknown SIN contexto suficiente   → 'unknown';
+ *   D) secuencia ambigua                 → 'unknown'.
+ *
+ * Casos que SÍ se infieren (B):
+ *   · última explícita ENTRADA con sesión aún abierta (el hueco no supera una
+ *     jornada) → esta marca es SALIDA;
+ *   · última explícita SALIDA → esta marca abre sesión → ENTRADA.
+ * Todo lo demás —sin marcas previas, sólo unknown previos, o una entrada vieja
+ * cuya sesión ya cerró por el hueco— es ambiguo y se conserva 'unknown'.
+ */
+async function resolveMarkType(employeeId, wallClockTs) {
+  const at = engine.toWall(wallClockTs);
+  if (!at) return 'unknown';   // sin hora legible: no hay evidencia
+
+  // Ventana hacia atrás suficiente para cubrir una jornada; el límite superior
+  // es EXCLUSIVO en esta marca (miramos sólo lo previo).
+  const desde = engine.absToDateTime(at.abs - engine.DEFAULTS.historicalMaxWorkdaySpanMinutes * 60);
+  const hasta = engine.absToDateTime(at.abs);
+  const [rows] = await sequelize.query(`
+    SELECT DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp, al.type
+    FROM attendance_logs al
+    WHERE al.employee_id = ? AND al.timestamp >= ? AND al.timestamp < ?
+    ORDER BY al.timestamp, al.id
+  `, { replacements: [employeeId, desde, hasta] });
+
+  if (!rows.length) return 'unknown';   // sin marcas previas: no se afirma in/out
+
+  // RÁFAGA / DUPLICADO PRIMERO: si la marca más reciente cae dentro de la ventana
+  // de dedupe, esta marca es una repetición del reloj y CONSERVA su tipo, no
+  // alterna. Si no, un 08:00:00 in + 08:00:30 (unknown) se tiparía out, y como el
+  // dedupe nuevo no colapsa tipos opuestos, quedaría un tramo de 30 s y la salida
+  // real de las 17:00 se infiere in. Detectarlo antes de alternar lo evita.
+  const previa = rows[rows.length - 1];
+  if (previa && (previa.type === 'in' || previa.type === 'out')) {
+    const wPrev = engine.toWall(previa.timestamp);
+    if (wPrev && (at.abs - wPrev.abs) <= engine.DEFAULTS.duplicateWindowSeconds) {
+      return previa.type;
+    }
+  }
+
+  // Última marca con tipo conocido (los duplicados y desconocidos no cambian el
+  // estado de sesión).
+  let ultima = null;
+  for (const r of rows) {
+    if (r.type === 'in' || r.type === 'out') ultima = r;
+  }
+  if (!ultima) return 'unknown';   // sólo hay unknown previos: sin estado de sesión
+
+  if (ultima.type === 'in') {
+    // ¿Sigue abierta la sesión? Si el hueco supera el máximo de una jornada, esa
+    // entrada ya pertenece a otra jornada: no se puede afirmar si esta marca es
+    // la SALIDA tardía que faltó o una ENTRADA nueva → ambiguo → 'unknown'.
+    const w = engine.toWall(ultima.timestamp);
+    const gapMin = (at.abs - w.abs) / 60;
+    return gapMin <= engine.DEFAULTS.historicalMaxWorkdaySpanMinutes ? 'out' : 'unknown';
+  }
+  // Última fue SALIDA → esta marca abre una sesión nueva → ENTRADA.
+  return 'in';
 }
 
-// Recalcular resumen diario del empleado
+/**
+ * Recalcular resumen diario del empleado tras una marca.
+ *
+ * Punto de conmutación entre dos caminos:
+ *   - MOTOR (nuevo): un solo cálculo, el mismo que Marcadas. Recalcula las
+ *     work_dates realmente afectadas (incluida la anterior, para el turno
+ *     nocturno). Se activa con WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED=true.
+ *   - LEGACY (rollback): el cálculo propio anterior, AISLADO como legacy. Es el
+ *     default por ahora, para no cambiar producción antes del rollout.
+ *
+ * El legacy queda disponible sólo como rollback; la matemática NUEVA vive
+ * exclusivamente en el motor/materializador, no duplicada acá.
+ */
 async function recalcDailySummary(employeeId, timestamp) {
+  if (workdaySummary.isEngineSummaryWriteEnabled()) {
+    await workdaySummary.resolveSummary(employeeId, timestamp, { apply: true });
+    return;
+  }
+  await legacyRecalcDailySummary(employeeId, timestamp);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// LEGACY (rollback). NO agregar matemática nueva acá: el cálculo del motor
+// vive en workdaySummaryService + dailySummaryEngine. Esta función se conserva
+// sólo para poder volver atrás mientras el flag está en OFF.
+// ─────────────────────────────────────────────────────────────────────
+async function legacyRecalcDailySummary(employeeId, timestamp) {
   // Fecha del resumen = fecha de la hora de pared guardada, sin conversión.
   //
   // Antes se formateaba el instante en `America/Asuncion`, lo que aplica la
@@ -181,6 +284,18 @@ async function recalcDailySummary(employeeId, timestamp) {
   const firstIn  = logs.find(l => l.type === 'in');
   const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
 
+  // PRESENCIA con marcas sin tipo: una jornada puede quedar registrada sólo con
+  // marcas 'unknown' (p. ej. un marcaje móvil sin contexto para inferir in/out,
+  // ahora que resolveMarkType conserva 'unknown' en vez de fabricar una entrada).
+  // El legacy sólo miraba in/out y dejaba el día 'absent' pese a que la persona
+  // fichó, dejando el flujo atrapado como ausencia hasta que otra fuente aportara
+  // un tipo. Si hay actividad pero falta la entrada/salida explícita, la
+  // permanencia se ancla en la primera/última marca del día: es PRESENCIA, no
+  // ausencia. NO se infiere atraso desde una marca sin tipo (no sabemos si es la
+  // entrada), así que el atraso sólo se calcula con un `in` explícito.
+  const anchorIn  = firstIn || logs[0];
+  const anchorOut = lastOut || logs[logs.length - 1];
+
   // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
   // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
   // no necesita zona horaria. La versión anterior construía el horario
@@ -188,8 +303,8 @@ async function recalcDailySummary(employeeId, timestamp) {
   // históricamente —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en
   // fechas de invierno anteriores el atraso salía corrido una hora aunque
   // first_in fuese exacto.
-  const inSec  = firstIn ? dbSecondsOfDay(firstIn.timestamp)  : null;
-  const outSec = lastOut ? dbSecondsOfDay(lastOut.timestamp) : null;
+  const inSec  = anchorIn  ? dbSecondsOfDay(anchorIn.timestamp)  : null;
+  const outSec = anchorOut ? dbSecondsOfDay(anchorOut.timestamp) : null;
 
   const workedMinutes = calc.workedMinutes({ firstInSeconds: inSec, lastOutSeconds: outSec });
 
@@ -201,13 +316,17 @@ async function recalcDailySummary(employeeId, timestamp) {
 
   const lateMinutes = (firstIn && emp)
     ? calc.lateMinutes({
-        firstInSeconds: inSec,
+        firstInSeconds: dbSecondsOfDay(firstIn.timestamp),
         checkInSeconds: calc.scheduleSeconds(emp.check_in),
         toleranceMin: emp.tolerance_in || 0,
       })
     : 0;
 
-  const status = calc.dayStatus({ hasFirstIn: Boolean(firstIn), late: lateMinutes });
+  // Con `in` explícito, el estado sale del cálculo (present/late). Sin `in` pero
+  // con actividad, el día es PRESENTE (sin atraso inventado): la persona fichó.
+  const status = firstIn
+    ? calc.dayStatus({ hasFirstIn: true, late: lateMinutes })
+    : 'present';
 
   // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
   // y con reintento acotado ante deadlock/lock-wait.
@@ -223,35 +342,16 @@ async function recalcDailySummary(employeeId, timestamp) {
         status          = VALUES(status)
     `, { replacements: [
       employeeId, date,
-      firstIn  ? firstIn.timestamp  : null,
-      lastOut  ? lastOut.timestamp  : null,
+      anchorIn  ? anchorIn.timestamp  : null,
+      anchorOut ? anchorOut.timestamp : null,
       workedMinutes, lateMinutes, status
     ], transaction: t });
   }, { label: `recalcEmp:${date}:${employeeId}` });
 }
 
-async function checkAndAlertLate(emp, inTime, io) {
-  const [[schedule]] = await sequelize.query(
-    'SELECT s.check_in, s.tolerance_in FROM employees e JOIN schedules s ON e.schedule_id = s.id WHERE e.id = ?',
-    { replacements: [emp.id] }
-  ).catch(() => [[]]);
-
-  if (!schedule) return;
-
-  const [h, m] = schedule.check_in.split(':').map(Number);
-  const deadline = new Date(inTime);
-  deadline.setHours(h, m + (schedule.tolerance_in || 0), 0, 0);
-
-  if (inTime > deadline) {
-    const lateMin = Math.floor((inTime - deadline) / 60000);
-    io.to('role:admin').to('role:hr').emit('alert:late', {
-      employeeId: emp.id,
-      employeeName: `${emp.first_name} ${emp.last_name}`,
-      lateMinutes: lateMin,
-      timestamp: inTime.toISOString()
-    });
-  }
-}
+// La alerta de atraso vive ahora en services/lateAlertService.js: la tardanza
+// la determina el MOTOR con la configuración efectiva, no un cálculo propio con
+// employees.schedule_id actual + setHours.
 
 // POST /api/attendance/bridge/webhook
 async function bridgeWebhook(req, res) {
@@ -451,12 +551,14 @@ async function registerManual(req, res) {
   }
 
   try {
-    const ts = new Date(timestamp);
+    // Hora de pared a persistir: si el cliente manda naive se guarda tal cual;
+    // si manda un ISO con zona se convierte a hora de pared de la institución.
+    const tsDb = normalizeAttendanceTimestampForDb(timestamp);
     await sequelize.query(
       'INSERT INTO attendance_logs (employee_id, timestamp, type, source) VALUES (?, ?, ?, "manual")',
-      { replacements: [employeeId, ts, type] }
+      { replacements: [employeeId, tsDb, type] }
     );
-    await recalcDailySummary(employeeId, ts);
+    await recalcDailySummary(employeeId, tsDb);
 
     const [[emp]] = await sequelize.query(
       'SELECT first_name, last_name FROM employees WHERE id = ?',
@@ -465,7 +567,7 @@ async function registerManual(req, res) {
 
     emitAttendance({
       employeeId, employeeName: `${emp.first_name} ${emp.last_name}`,
-      timestamp: ts.toISOString(), type, source: 'manual'
+      timestamp: tsDb, type, source: 'manual'
     });
 
     res.status(201).json({ message: 'Marcaje manual registrado' });
@@ -485,8 +587,10 @@ async function registerMobile(req, res) {
   }
 
   try {
-    const ts = new Date();
-    const type = await detectMarkType(employeeId, ts);
+    // Marcaje móvil = INSTANTE real del sistema (new Date()): se convierte a la
+    // hora de pared de la institución para persistir el DATETIME.
+    const tsDb = normalizeAttendanceTimestampForDb(new Date());
+    const type = await resolveMarkType(employeeId, tsDb);
 
     // Geocerca: valida el perímetro de la sede según el modo configurado.
     const geofence = require('../services/geofence');
@@ -501,9 +605,9 @@ async function registerMobile(req, res) {
     await sequelize.query(`
       INSERT INTO attendance_logs (employee_id, timestamp, type, source, latitude, longitude, accuracy, geofence_status, distance_m)
       VALUES (?, ?, ?, 'mobile', ?, ?, ?, ?, ?)
-    `, { replacements: [employeeId, ts, type, latitude, longitude, accuracy, gf.status, gf.distance] });
+    `, { replacements: [employeeId, tsDb, type, latitude, longitude, accuracy, gf.status, gf.distance] });
 
-    await recalcDailySummary(employeeId, ts);
+    await recalcDailySummary(employeeId, tsDb);
 
     const [[emp]] = await sequelize.query(
       'SELECT first_name, last_name FROM employees WHERE id = ?',
@@ -512,12 +616,17 @@ async function registerMobile(req, res) {
 
     emitAttendance({
       employeeId, employeeName: `${emp.first_name} ${emp.last_name}`,
-      timestamp: ts.toISOString(), type, source: 'mobile', latitude, longitude
+      timestamp: tsDb, type, source: 'mobile', latitude, longitude
     });
 
+    // El mensaje refleja el tipo sin inventarlo: una marca 'unknown' (sin
+    // contexto suficiente) no se anuncia como entrada ni salida.
+    const msg = type === 'in' ? 'Marcaje de entrada registrado'
+      : type === 'out' ? 'Marcaje de salida registrado'
+      : 'Marcaje registrado';
     res.status(201).json({
-      message: `Marcaje de ${type === 'in' ? 'entrada' : 'salida'} registrado`,
-      type, timestamp: ts,
+      message: msg,
+      type, timestamp: tsDb,
       geofence: { status: gf.status, distance_m: gf.distance },
     });
   } catch (err) {
@@ -529,5 +638,5 @@ async function registerMobile(req, res) {
 module.exports = {
   processAttendanceEvent, bridgeWebhook, getDashboardStats,
   getByDate, registerManual, registerMobile,
-  recalcDailySummary,
+  recalcDailySummary, legacyRecalcDailySummary, resolveMarkType,
 };

@@ -60,20 +60,24 @@ const legacy = require('../src/services/legacyWorkday');
 // ─── Argumentos ───────────────────────────────────────────────────
 function parseArgs(argv) {
   const args = {
-    from: null, to: null, employee: null, dept: null,
-    out: null, limit: 200, chunk: 50, dailySummary: false, help: false,
+    from: null, to: null, employee: null, employeeId: null, dept: null,
+    out: null, limit: 200, chunk: 50, dailySummary: false,
+    json: false, csv: false, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
     if (a === '--from') args.from = next();
     else if (a === '--to') args.to = next();
-    else if (a === '--employee') args.employee = next();
+    else if (a === '--employee' || a === '--employee-code') args.employee = next();
+    else if (a === '--employee-id') args.employeeId = Number(next());
     else if (a === '--dept') args.dept = Number(next());
     else if (a === '--out') args.out = next();
     else if (a === '--limit') args.limit = Number(next());
     else if (a === '--chunk') args.chunk = Number(next());
     else if (a === '--daily-summary') args.dailySummary = true;
+    else if (a === '--json') args.json = true;
+    else if (a === '--csv') args.csv = true;
     else if (a === '--env' || a === '--no-env') { if (a === '--env') next(); }
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a.startsWith('--')) throw new Error(`Argumento desconocido: ${a}`);
@@ -86,8 +90,12 @@ workday-engine-audit — contraste legacy vs motor de jornada (SÓLO LECTURA)
 
   --from YYYY-MM-DD    inicio del período (obligatorio)
   --to   YYYY-MM-DD    fin del período, inclusive (obligatorio)
-  --employee CODIGO    limitar a un empleado por su código de reloj
+  --employee-code C    limitar a un empleado por su código de reloj
+  --employee CODIGO    alias de --employee-code
+  --employee-id ID     limitar a un empleado por su id interno
   --dept ID            limitar a un departamento
+  --json               volcar el detalle en JSON por consola
+  --csv                volcar el detalle en CSV por consola
   --out DIR            escribir el detalle en DIR/workday-audit.json
   --limit N            máximo de diferencias a listar en el detalle (200)
   --chunk N            empleados por lote de lectura (50)
@@ -147,7 +155,8 @@ async function main() {
 
   let where = 'WHERE e.status = "active"';
   const params = [];
-  if (args.employee) { where += ' AND e.code = ?'; params.push(String(args.employee)); }
+  if (args.employee)   { where += ' AND e.code = ?'; params.push(String(args.employee)); }
+  if (args.employeeId) { where += ' AND e.id = ?';   params.push(args.employeeId); }
   if (args.dept)     { where += ' AND e.department_id = ?'; params.push(args.dept); }
 
   const [empleados] = await sequelize.query(`
@@ -302,6 +311,14 @@ async function main() {
             delta_min: j.segment_minutes - l.minutes,
             motor_pares: j.segments.map((s) => `${s.in_hhmm}-${s.out_hhmm}`),
             legacy_pares: l.pairs.map((p) => `${p.entrada}-${p.salida}`),
+            // Trazabilidad: con qué reglas y qué datos se produjo este número.
+            calculation_mode: j.calculation_mode,
+            calculation_source: j.calculation_source,
+            policy_version: j.policy_version,
+            anomalies: j.anomalies.map((a) => a.code),
+            source_logs: j.segments.flatMap((s) => s.source_logs),
+            schedule_id: j.schedule_id,
+            shift_schedule_id: j.shift_schedule_id,
           });
         }
       }
@@ -358,6 +375,25 @@ async function main() {
   console.log('');
   console.log('Recordatorio: este script no escribió nada. Los números de');
   console.log('daily_summary en producción siguen siendo los de antes.');
+
+  if (args.json) console.log(`\n${JSON.stringify({ resumen, detalle }, null, 2)}`);
+
+  if (args.csv) {
+    // Columnas fijas y en orden: un CSV cuyas columnas cambian según los datos
+    // no se puede abrir dos veces con la misma plantilla.
+    const cols = [
+      'code', 'nombre', 'work_date', 'caso', 'causa',
+      'motor_min', 'legacy_min', 'delta_min',
+      'calculation_mode', 'anomalies', 'motor_pares', 'legacy_pares',
+    ];
+    const escapar = (v) => {
+      const t = Array.isArray(v) ? v.join(' ') : (v == null ? '' : String(v));
+      return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+    };
+    console.log('');
+    console.log(cols.join(','));
+    for (const d of detalle) console.log(cols.map((c) => escapar(d[c])).join(','));
+  }
 
   if (args.out) {
     fs.mkdirSync(args.out, { recursive: true });

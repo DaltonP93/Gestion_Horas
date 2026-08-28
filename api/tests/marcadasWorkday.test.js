@@ -14,7 +14,12 @@ jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn() },
 }));
 jest.mock('../src/services/workdayConfig', () => ({
-  loadScheduleHistory: jest.fn(async () => new Map()),
+  // Sin configuración cargada: todas las jornadas caen en historical_fallback,
+  // que es el estado real mientras las migraciones 072/073 no estén aplicadas.
+  loadWorkdayConfig: jest.fn(async () => ({
+    forDate: () => null,
+    historyFor: () => [],
+  })),
 }));
 
 const { sequelize } = require('../src/config/database');
@@ -94,8 +99,9 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
 
     conMarcajes(['2025-12-31 22:00:00', '2026-01-01 06:00:00']);
     const ene = await generateMarcadasReport({ dateFrom: '2026-01-01', dateTo: '2026-01-31' });
-    expect(ene.data[0].rows).toEqual([]);
-    expect(ene.data[0].total_hm).toBe('0:00');
+    // La jornada pertenece al 31/12, así que en enero el empleado no tiene
+    // ninguna fila y, sin filas, no aparece en el reporte.
+    expect(ene.data).toEqual([]);
   });
 
   test('el total del día excluye la pausa entre pares, como siempre lo hizo', async () => {
@@ -109,13 +115,38 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
     expect(data[0].rows[0].pairs).toHaveLength(2);
   });
 
-  test('un empleado sin marcajes aparece con cero, no desaparece del reporte', async () => {
+  test('un empleado activo SIN marcajes no aparece en el reporte', async () => {
+    // Antes se agregaba con rows:[] y total 0, y en el PDF generaba páginas
+    // vacías. Un empleado sin ninguna jornada del período no debe aparecer.
     conMarcajes([]);
     const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toEqual([]);
+  });
+
+  test('un empleado con marcajes SÓLO fuera del período (contexto) no aparece', async () => {
+    // El 09/06 cae en la ventana ampliada como contexto, pero su jornada no
+    // pertenece al período pedido (10/06).
+    conMarcajes(['2025-06-09 08:00:00', '2025-06-09 17:00:00']);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toEqual([]);
+  });
+
+  test('una jornada que abre el último día del período SÍ aparece', async () => {
+    // 31/01 IN + 01/02 OUT, reporte hasta 31/01: work_date = 31/01.
+    conMarcajes(['2025-01-31 20:00:00', '2025-02-01 06:30:00']);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-01-01', dateTo: '2025-01-31' });
     expect(data).toHaveLength(1);
-    expect(data[0].rows).toEqual([]);
-    expect(data[0].total_minutes).toBe(0);
-    expect(data[0].total_hm).toBe('0:00');
+    expect(data[0].rows).toHaveLength(1);
+    expect(data[0].rows[0].date).toBe('31/01/2025');
+    expect(data[0].rows[0].total).toBe('10:30');
+  });
+
+  test('employeeId específico sin marcajes devuelve data vacía', async () => {
+    conMarcajes([]);
+    const { data } = await generateMarcadasReport({
+      dateFrom: '2025-06-10', dateTo: '2025-06-10', employeeId: 1,
+    });
+    expect(data).toEqual([]);
   });
 
   test('la jornada abierta se muestra sin inventar la salida', async () => {
@@ -131,5 +162,116 @@ describe('reporte de Marcadas sobre el motor de jornada', () => {
     const out = await generateMarcadasReport({});
     expect(out.period.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(out.period.from).toBe(out.period.to);
+  });
+
+  /** Programa el padrón y marcajes con tipo/id explícitos (para huérfanos). */
+  function conMarcajesTipados(marcajes) {
+    sequelize.query.mockReset();
+    sequelize.query
+      .mockResolvedValueOnce([[EMP]])
+      .mockResolvedValueOnce([marcajes]);
+  }
+
+  test('un OUT huérfano como único marcaje NO borra al empleado del reporte', async () => {
+    // Antes, buildWorkdays no generaba jornada (salida_sin_entrada queda global)
+    // y el filtro de empleados vacíos lo eliminaba: un período CON un marcaje
+    // anómalo se presentaba como si no tuviera ninguno. Ahora se materializa.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 09:00:00', type: 'out', id: 99 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(1);
+    expect(data[0].rows[0].date).toBe('10/06/2025');
+    expect(data[0].rows[0].pairs).toEqual([{ entrada: '', salida: '09:00' }]);
+    expect(data[0].rows[0].total).toBe('0:00');
+    expect(data[0].rows[0].anomalies).toContain('salida_sin_entrada');
+  });
+
+  test('un huérfano en el borde de la ventana (fuera del período) NO cuenta', async () => {
+    // La ventana de lectura se extiende un día; un OUT del día siguiente es sólo
+    // contexto del borde y no debe materializar una fila ni conservar al
+    // empleado si no tiene nada dentro del período.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-11 09:00:00', type: 'out', id: 99 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toEqual([]);
+  });
+
+  test('dos jornadas del MISMO día son dos filas y el total cierra', async () => {
+    // 06:00-10:00 y 18:00-22:00, separadas por más que el umbral de pausa: son
+    // dos jornadas del mismo día. Colapsarlas en la fecha perdía una y el total
+    // (8:00) dejaba de cerrar con lo que muestra la tabla.
+    conMarcajes([
+      '2025-06-10 06:00:00', '2025-06-10 10:00:00',
+      '2025-06-10 18:00:00', '2025-06-10 22:00:00',
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows.every((r) => r.date === '10/06/2025')).toBe(true);
+    expect(data[0].rows.map((r) => r.total)).toEqual(['4:00', '4:00']);
+    expect(data[0].total_hm).toBe('8:00');
+  });
+
+  test('un huérfano el mismo día de una jornada válida queda visible como fila aparte', async () => {
+    // OUT huérfano 06:00 + jornada 08:00-17:00. La hora del huérfano no puede
+    // perderse al compartir fecha: es su propia fila, ordenada antes.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 06:00:00', type: 'out', id: 1 },
+      { employee_id: 1, timestamp: '2025-06-10 08:00:00', type: 'in', id: 2 },
+      { employee_id: 1, timestamp: '2025-06-10 17:00:00', type: 'out', id: 3 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows[0].pairs).toEqual([{ entrada: '', salida: '06:00' }]);
+    expect(data[0].rows[0].anomalies).toContain('salida_sin_entrada');
+    expect(data[0].rows[1].pairs).toEqual([{ entrada: '08:00', salida: '17:00' }]);
+    expect(data[0].rows[1].total).toBe('9:00');
+  });
+
+  test('dos huérfanos del mismo día muestran los dos fichajes, no sólo el primero', async () => {
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 06:00:00', type: 'out', id: 1 },
+      { employee_id: 1, timestamp: '2025-06-10 07:00:00', type: 'out', id: 2 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows.map((r) => r.pairs[0].salida)).toEqual(['06:00', '07:00']);
+  });
+
+  test('un OUT huérfano poco después del cierre (atribuido a la jornada) queda visible', async () => {
+    // 08:00-17:00 y un OUT de más a las 18:00: por caer dentro del umbral de
+    // pausa, el motor lo asigna a la jornada (sale de la lista global). Su código
+    // viaja en la jornada, pero su hora no está en ningún par y los
+    // renderizadores muestran pares: sin materializarlo, el 18:00 era invisible.
+    conMarcajesTipados([
+      { employee_id: 1, timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+      { employee_id: 1, timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+      { employee_id: 1, timestamp: '2025-06-10 18:00:00', type: 'out', id: 3 },
+    ]);
+    const { data } = await generateMarcadasReport({ dateFrom: '2025-06-10', dateTo: '2025-06-10' });
+    expect(data).toHaveLength(1);
+    expect(data[0].rows).toHaveLength(2);
+    expect(data[0].rows[0].pairs).toEqual([{ entrada: '08:00', salida: '17:00' }]);
+    expect(data[0].rows[1].pairs).toEqual([{ entrada: '', salida: '18:00' }]);
+    expect(data[0].rows[1].anomalies).toContain('salidas_consecutivas');
+    expect(data[0].total_hm).toBe('9:00'); // el huérfano no suma tiempo
+  });
+
+  test('un lote que supera el tope de marcajes lanza un error tipado 413', async () => {
+    // Determinista: el mismo pedido va a volver a superar el tope, así que la
+    // ruta lo mapea a 413 (no reintentable) en vez de un 500 que la UI ofrece
+    // reintentar. Sólo importa la longitud: el chequeo lanza antes de iterar.
+    sequelize.query.mockReset();
+    sequelize.query
+      .mockResolvedValueOnce([[EMP]])
+      .mockResolvedValueOnce([new Array(400001).fill(0)]);
+    await expect(
+      generateMarcadasReport({ dateFrom: '2025-06-01', dateTo: '2025-08-31' }),
+    ).rejects.toMatchObject({ status: 413, code: 'MARCADAS_TOO_MANY_PUNCHES' });
   });
 });

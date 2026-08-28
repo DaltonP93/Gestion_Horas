@@ -99,7 +99,17 @@ Registra una URL en \`/api/webhooks\` para recibir marcajes en tiempo real.
             worked_minutes:   { type: 'integer', example: 480 },
             late_minutes:     { type: 'integer', example: 15 },
             overtime_minutes: { type: 'integer', example: 30 },
-            status:           { type: 'string', enum: ['present','absent','late','permission','holiday'] }
+            // Todos los valores que puede devolver daily_summary.status vía los
+            // endpoints de integración (que publican ds.status directo). Incluye
+            // 'weekend' (ya en el ENUM base) y 'non_working'/'unconfigured', que
+            // el motor persiste con la migración 074 aplicada. El contrato debe
+            // listarlos para que un cliente de nómina generado desde OpenAPI no
+            // rechace una respuesta válida.
+            status: {
+              type: 'string',
+              enum: ['present','absent','late','permission','holiday','weekend','non_working','unconfigured'],
+              description: "Estado del día. 'non_working' (descanso por configuración, p. ej. un martes libre) y 'unconfigured' (sin configuración ni marcajes; NO es ausencia) requieren la migración 074."
+            }
           }
         },
         DashboardStats: {
