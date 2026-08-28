@@ -56,6 +56,36 @@ const ANOMALIAS_OUT = new Set([
   engine.ANOMALY.SALIDAS_CONSECUTIVAS,
 ]);
 
+// Anomalías cuyo fichaje suelto es una ENTRADA (un IN). NO corren last_out —una
+// entrada abierta no es un cierre— pero su evidencia igual debe conservarse.
+const ANOMALIAS_IN = new Set([
+  engine.ANOMALY.ENTRADA_SIN_SALIDA,
+  engine.ANOMALY.ENTRADAS_CONSECUTIVAS,
+]);
+
+/**
+ * Nota de auditoría para los fichajes sueltos cuya hora NO cae dentro del
+ * envelope [first_in, last_out] de la fila. El writer no persiste `anomalies`,
+ * así que sin esto un fichaje que ningún bound cubre —p. ej. una entrada abierta
+ * a las 18:00 tras cerrar a las 17:00— desaparecería por completo de
+ * daily_summary. Se conserva su evidencia en `notes` en vez de correr last_out
+ * (eso convertiría la entrada abierta en un cierre artificial).
+ *
+ * @param {Array<{type:string, at:string}>} marks  fichajes sueltos (type in|out).
+ * @param {string|null} firstIn
+ * @param {string|null} lastOut
+ * @returns {string|null}
+ */
+function notaFichajesSueltos(marks, firstIn, lastOut) {
+  const fuera = marks
+    .filter((m) => m && m.at)
+    .filter((m) => !(firstIn != null && lastOut != null && m.at >= firstIn && m.at <= lastOut))
+    .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
+    .map((m) => `${m.type === 'out' ? 'salida' : 'entrada'} ${String(m.at).slice(11, 16)}`);
+  if (!fuera.length) return null;
+  return `fichajes sin par: ${[...new Set(fuera)].join(', ')}`;
+}
+
 /** Cómo se llena `daily_summary.worked_minutes`. */
 const WORKED_PRESENCE = 'presence';
 const WORKED_NET = 'worked';
@@ -264,23 +294,37 @@ function buildDailySummaryRows(punches, options = {}) {
     //   · una huérfana GLOBAL de la fecha ancla first_in si es la actividad más
     //     temprana (un OUT antes del inicio: 06:00 out, 08:00 in, 17:00 out).
     // La permanencia/trabajado siguen siendo los del motor, no el span extendido.
+    // Un fichaje suelto que aun así NINGÚN bound cubre —una entrada abierta a las
+    // 18:00 tras cerrar a las 17:00— no puede correr last_out sin fingir un
+    // cierre, así que su evidencia se guarda en `notes` (ver notaFichajesSueltos).
     let firstIn = j.first_in;
     let lastOut = j.last_out;
     const codigos = new Set(j.anomalies.map((a) => (typeof a === 'string' ? a : a.code)));
+    // Fichajes sueltos con su hora, para conservar su evidencia aunque ningún
+    // bound los cubra (ver notaFichajesSueltos). Una ENTRADA suelta no corre el
+    // cierre; una SALIDA sí.
+    const sueltos = [];
     // Anomalías ATRIBUIDAS: sólo un OUT de más extiende el cierre.
     for (const a of j.anomalies) {
       if (typeof a === 'string' || !a.at) continue;
-      if (ANOMALIAS_OUT.has(a.code) && (!lastOut || a.at > lastOut)) lastOut = a.at;
+      if (ANOMALIAS_OUT.has(a.code)) {
+        sueltos.push({ type: 'out', at: a.at });
+        if (!lastOut || a.at > lastOut) lastOut = a.at;
+      } else if (ANOMALIAS_IN.has(a.code)) {
+        sueltos.push({ type: 'in', at: a.at });
+      }
     }
     // Huérfanas GLOBALES de la fecha (fuera de toda jornada).
     for (const h of (huerfanasPorFecha.get(date) || [])) {
       codigos.add(h.code);
       const t = h.src ? String(h.src.timestamp || h.src.ts || '') : '';
       if (!t) continue;
+      sueltos.push({ type: h.src && h.src.type === 'out' ? 'out' : 'in', at: t });
       if (!firstIn || t < firstIn) firstIn = t;            // la más temprana ancla la entrada
       if (h.src && h.src.type === 'out' && (!lastOut || t > lastOut)) lastOut = t;
     }
     const anomalyCodes = [...codigos];
+    const notes = notaFichajesSueltos(sueltos, firstIn, lastOut);
 
     filas.push({
       date,
@@ -308,6 +352,9 @@ function buildDailySummaryRows(punches, options = {}) {
       calculation_mode: j.calculation_mode,
       policy_version: j.policy_version,
       anomalies: anomalyCodes,
+      // Evidencia de los fichajes sueltos que ningún bound cubre (el writer no
+      // persiste `anomalies`); null cuando no hay ninguno fuera del envelope.
+      notes,
       workday_count: lista.length,
       crosses_midnight: j.crosses_midnight,
     });
@@ -481,6 +528,7 @@ function filaVacia(date, status, expectation, cfg) {
     calculation_mode: null,
     policy_version: null,
     anomalies,
+    notes: null,
     workday_count: 0,
     crosses_midnight: false,
   };

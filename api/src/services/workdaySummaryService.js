@@ -221,7 +221,8 @@ async function escribirFilas(employeeId, rows, opts = {}) {
              SET status = CASE WHEN COALESCE(justification_type, '') = 'injustificada'
                                THEN 'absent' ELSE 'permission' END,
                  first_in = NULL, last_out = NULL,
-                 worked_minutes = 0, break_minutes = 0, overtime_minutes = 0, late_minutes = 0
+                 worked_minutes = 0, break_minutes = 0, overtime_minutes = 0, late_minutes = 0,
+                 notes = NULL
              WHERE employee_id = ? AND date = ?
                AND (justification IS NOT NULL OR justification_type IS NOT NULL)`,
           { replacements: [employeeId, row.date], transaction: t },
@@ -258,6 +259,7 @@ async function escribirFilas(employeeId, rows, opts = {}) {
           UPDATE daily_summary SET
             first_in = ?, last_out = ?,
             worked_minutes = ?, break_minutes = ?, overtime_minutes = ?, late_minutes = ?,
+            notes = ?,
             status = CASE
               WHEN ? = 1 AND (justification IS NOT NULL OR justification_type IS NOT NULL)
                 THEN CASE WHEN COALESCE(justification_type, '') = 'injustificada'
@@ -273,6 +275,7 @@ async function escribirFilas(employeeId, rows, opts = {}) {
             row.break_minutes || 0,
             row.overtime_minutes || 0,
             row.late_minutes || 0,
+            row.notes || null,
             esDiaVacio ? 1 : 0,
             status,
             employeeId, row.date,
@@ -286,8 +289,8 @@ async function escribirFilas(employeeId, rows, opts = {}) {
     await withDayRecalcLock(row.date, async (t) => {
       await sequelize.query(`
         INSERT INTO daily_summary
-          (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, notes, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           -- first_in se REEMPLAZA, no se conserva: el motor relee toda la
           -- ventana, así que su valor es autoritativo. Si una marca migró a la
@@ -297,6 +300,12 @@ async function escribirFilas(employeeId, rows, opts = {}) {
           first_in       = VALUES(first_in),
           last_out       = VALUES(last_out),
           worked_minutes = VALUES(worked_minutes),
+          -- notes conserva la evidencia de fichajes sueltos que ningún bound
+          -- cubre (p. ej. una entrada abierta a las 18:00 tras cerrar a las
+          -- 17:00). El motor es su única fuente en este camino —ningún flujo
+          -- humano escribe daily_summary.notes— así que se REEMPLAZA (NULL
+          -- cuando ya no hay fichaje suelto) para no dejar una nota obsoleta.
+          notes          = VALUES(notes),
           -- Se materializan TODOS los campos derivados del motor, no sólo
           -- algunos: dejar break/overtime sin escribir conservaría valores
           -- legacy obsoletos. En particular un overtime_minutes viejo y
@@ -334,6 +343,9 @@ async function escribirFilas(employeeId, rows, opts = {}) {
           // cualquier overtime legacy que quedara colgado.
           row.overtime_minutes || 0,
           row.late_minutes || 0,
+          // Evidencia de fichajes sueltos (o NULL): va antes de status para
+          // seguir el orden de columnas del INSERT.
+          row.notes || null,
           status,
           esDiaVacio ? 1 : 0,
         ],

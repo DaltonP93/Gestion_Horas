@@ -68,3 +68,15 @@ reporte:
 | Reporte **Marcadas** ("Total Permanencia") | `segment_minutes` (suma de tramos, excluye la pausa entre pares) |
 | `daily_summary.worked_minutes` | `presence_minutes` (permanencia; semántica histórica) |
 | Mensual / semanal / banco de horas | hoy derivan de `daily_summary.worked_minutes` (permanencia). Su paso a neto es una decisión de negocio futura. |
+
+## `notes`: evidencia de fichajes sueltos
+
+`daily_summary` no tiene columna de anomalías, así que un fichaje suelto que
+ningún bound cubre —una entrada abierta a las 18:00 tras cerrar a las 17:00—
+desaparecería del resumen. Correr `last_out` a esa entrada fingiría un cierre y
+falsearía la hora de salida. En cambio, el motor conserva su evidencia en
+`daily_summary.notes` (p. ej. `fichajes sin par: entrada 18:00`). Ningún flujo
+humano escribe esa columna en este camino, así que el writer la **reemplaza** en
+cada recalc (NULL cuando ya no hay fichaje suelto) para no dejar una nota
+obsoleta. `worked_minutes`/`presence_minutes` siguen saliendo del motor, no del
+span; `notes` es sólo trazabilidad.

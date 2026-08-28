@@ -204,6 +204,30 @@ describe('dry-run vs apply', () => {
     expect(insert).not.toMatch(/IN \('holiday','weekend','permission'\)/);
   });
 
+  test('un fichaje suelto que ningún bound cubre se conserva en notes (no como cierre)', async () => {
+    // 08:00 IN, 17:00 OUT (jornada real) y 18:00 IN (entrada abierta posterior).
+    // last_out NO se corre a 18:00 —eso sería un cierre artificial— pero la
+    // evidencia del fichaje de las 18:00 se guarda en notes, que el writer sí
+    // persiste (daily_summary no tiene columna de anomalías).
+    conMarcajes([
+      { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
+      { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
+      { id: 3, timestamp: '2025-06-10 18:00:00', type: 'in' },
+    ]);
+    await svc.resolveSummary(1, '2025-06-10 18:00:00', { apply: true });
+    const call = sequelize.query.mock.calls.find(
+      (c) => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements[1] === '2025-06-10',
+    );
+    expect(call).toBeDefined();
+    // La columna notes se persiste, con VALUES(notes) en el upsert.
+    expect(call[0]).toMatch(/notes\s*=\s*VALUES\(notes\)/);
+    const repl = call[1].replacements;
+    // Orden: …, late(7), notes(8), status(9), esDiaVacio(10).
+    expect(repl[3]).toBe('2025-06-10 17:00:00'); // last_out NO se corre a 18:00
+    expect(repl[8]).toMatch(/entrada 18:00/);    // evidencia del fichaje suelto
+    expect(repl[9]).toBe('present');
+  });
+
   test('el upsert materializa TODOS los derivados (break y overtime), no sólo algunos', async () => {
     conMarcajes([
       { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
@@ -230,8 +254,9 @@ describe('dry-run vs apply', () => {
     const repl = call[1].replacements;
     expect(sql).toMatch(/WHEN \? = 1 AND \(daily_summary\.justification IS NOT NULL/);
     // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
-    expect(repl[8]).toBe('present');   // status calculado
-    expect(repl[9]).toBe(0);           // esDiaVacio: hay jornada, el estado nuevo gana
+    // Orden de replacements: …, notes(8), status(9), esDiaVacio(10).
+    expect(repl[9]).toBe('present');   // status calculado
+    expect(repl[10]).toBe(0);          // esDiaVacio: hay jornada, el estado nuevo gana
   });
 });
 

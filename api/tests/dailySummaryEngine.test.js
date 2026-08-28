@@ -230,6 +230,40 @@ describe('materialización de fechas sin jornada', () => {
     expect(filas[0].presence_minutes).toBe(540);
   });
 
+  test('una ENTRADA huérfana posterior NO corre last_out pero conserva su evidencia en notes', () => {
+    // 08:00 in, 17:00 out (jornada real) y 18:00 in (entrada abierta posterior,
+    // entrada_sin_salida atribuida). Correr last_out a 18:00 sería un cierre
+    // artificial; en cambio la evidencia del fichaje se conserva en notes, que
+    // el writer sí persiste. Así el fichaje de las 18:00 no desaparece.
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+        { timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+        { timestamp: '2025-06-10 18:00:00', type: 'in', id: 3 },
+      ],
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas).toHaveLength(1);
+    // last_out se queda en la salida real, NO se convierte la entrada en cierre.
+    expect(filas[0].last_out.slice(11, 16)).toBe('17:00');
+    expect(filas[0].anomalies).toContain('entrada_sin_salida');
+    // La evidencia del fichaje de las 18:00 sobrevive en notes.
+    expect(filas[0].notes).toMatch(/entrada 18:00/);
+    // La permanencia sigue siendo la del motor (08:00→17:00).
+    expect(filas[0].presence_minutes).toBe(540);
+  });
+
+  test('sin fichajes sueltos fuera del envelope, notes es null', () => {
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+        { timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+      ],
+      { from: '2025-06-10', to: '2025-06-10', materializeEmptyDates: false },
+    );
+    expect(filas[0].notes).toBeNull();
+  });
+
   test('una huérfana GLOBAL antes de la jornada extiende first_in', () => {
     // 06:00 out (huérfana global, antes del inicio), 08:00 in, 17:00 out. La
     // huérfana no está en la jornada sino en la lista global; igual debe quedar
