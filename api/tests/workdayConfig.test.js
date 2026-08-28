@@ -388,3 +388,43 @@ describe('turnera — objetivo diario y conflicto con no laborables', () => {
     expect(sql).toMatch(/a\.minutes/);
   });
 });
+
+describe('snapshot histórico fail-safe (item 9)', () => {
+  test('los campos imprescindibles se leen SÓLO del snapshot, no del schedules vivo', async () => {
+    mockTablas({});
+    await loadWorkdayConfig([1], RANGO);
+    const sql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
+    // check_in/out y tolerancias salen de h.*, no de un COALESCE con s.*.
+    expect(sql).toMatch(/h\.check_in\s+AS check_in/);
+    expect(sql).not.toMatch(/COALESCE\(h\.check_in,\s*s\.check_in\)/);
+    expect(sql).not.toMatch(/COALESCE\(h\.tolerance_in/);
+  });
+
+  test('un tramo con snapshot congelado usa su propio check_in', async () => {
+    mockTablas({
+      history: [{
+        employee_id: 1, schedule_id: 5, valid_from: '2024-01-01', valid_to: null,
+        check_in: '08:00:00', check_out: '16:00:00', break_mode: 'fixed_unpaid',
+      }],
+    });
+    const cfg = await loadWorkdayConfig([1], RANGO);
+    const r = cfg.forDate(1, '2024-12-15');
+    expect(r).not.toBeNull();
+    expect(r.check_in).toBe('08:00:00');
+    expect(r.config_incomplete).toBe(false);
+  });
+
+  test('un tramo histórico SIN check_in es config_incomplete → cae al fallback', async () => {
+    // La fila existe (schedule_id, vigencia) pero el snapshot no trae la hora de
+    // entrada. No se completa con el horario vivo: forDate devuelve null y la
+    // jornada cae en historical_fallback en vez de inventar atraso.
+    mockTablas({
+      history: [{
+        employee_id: 1, schedule_id: 5, valid_from: '2024-01-01', valid_to: null,
+        check_in: null, check_out: null,
+      }],
+    });
+    const cfg = await loadWorkdayConfig([1], RANGO);
+    expect(cfg.forDate(1, '2024-12-15')).toBeNull();
+  });
+});

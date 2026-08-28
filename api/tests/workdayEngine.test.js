@@ -1091,4 +1091,26 @@ describe('conflicto de turneras se expone como anomalía', () => {
     );
     expect(workdays[0].anomalies.map((x) => x.code)).not.toContain(ANOMALY.TURNERA_CONFLICT);
   });
+
+  test('un conflicto de turnera NO calcula atraso ni jornada esperada', () => {
+    // Dos turneras publicadas incompatibles: el horario esperado es ambiguo, así
+    // que late/early/scheduled quedan en null (la turnera elegida es sólo
+    // trazabilidad). La presencia observada sí se mide.
+    const { workdays } = buildWorkdays(
+      marcas('2025-06-10 09:30:00', '2025-06-10 17:00:00'),
+      {
+        resolveConfig: () => ({
+          source: 'shift_assignment', check_in: '08:00', check_out: '17:00',
+          tolerance_in: 0, conflict_shift_schedule_ids: [3, 9],
+        }),
+      },
+    );
+    const j = workdays[0];
+    expect(j.late_minutes).toBeNull();
+    expect(j.early_leave_minutes).toBeNull();
+    expect(j.scheduled_minutes).toBeNull();
+    // La presencia observada se sigue midiendo.
+    expect(j.presence_minutes).toBe(450); // 09:30 → 17:00
+    expect(j.anomalies.map((a) => a.code)).toContain(ANOMALY.TURNERA_CONFLICT);
+  });
 });

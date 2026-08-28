@@ -13,6 +13,7 @@ const logger = require('../config/logger');
 const { withDayRecalcLock, dayBounds } = require('./recalcLock');
 const engine = require('./workdayEngine');
 const { loadWorkdayConfig } = require('./workdayConfig');
+const workdaySummary = require('./workdaySummaryService');
 
 const _jobs = new Map(); // scheduleId → tarea cron activa
 
@@ -514,6 +515,40 @@ function stopJob(scheduleId) {
 
 // ─── Recalcular daily_summary en bloque para una fecha (Paraguay) ─
 async function bulkRecalcDailySummary(date) {
+  // Cuando el motor está habilitado, el recálculo en bloque también pasa por él:
+  // no puede quedar un job/cron recalculando con la matemática vieja mientras el
+  // camino operativo usa el motor. Con el flag OFF (default) se conserva el SQL
+  // legacy como rollback.
+  if (workdaySummary.isEngineSummaryWriteEnabled()) {
+    return bulkRecalcViaEngine(date);
+  }
+  return legacyBulkRecalcDailySummary(date);
+}
+
+/**
+ * Recálculo en bloque por el MOTOR: por cada empleado con marcas que puedan
+ * pertenecer a una jornada de `date`, se corre el writer del motor (que además
+ * recalcula la work_date anterior si la jornada es nocturna). Una sola
+ * definición matemática, la misma que Marcadas.
+ */
+async function bulkRecalcViaEngine(date) {
+  // Empleados con marcas en la ventana ampliada alrededor de `date` (una jornada
+  // nocturna del día anterior se cierra hoy, y una de hoy cierra mañana).
+  const ventana = engine.punchWindow({ from: date, to: date });
+  const [emps] = await sequelize.query(
+    `SELECT DISTINCT employee_id FROM attendance_logs WHERE timestamp >= ? AND timestamp < ?`,
+    { replacements: [ventana.from, ventana.to] },
+  );
+  for (const { employee_id } of emps) {
+    // Ancla a mediodía de `date`: las fechas afectadas son {date-1, date}.
+    await workdaySummary.resolveSummary(employee_id, `${date} 12:00:00`, { apply: true });
+  }
+  logger.info(`♻️  daily_summary (motor) recalculado para ${date} — ${emps.length} empleado(s)`);
+}
+
+// LEGACY (rollback). Recálculo en bloque con SQL propio: MIN(in)/MAX(out) del
+// día civil y employees.schedule_id ACTUAL. NO agregar matemática nueva acá.
+async function legacyBulkRecalcDailySummary(date) {
   // Insertar/actualizar daily_summary para todos los empleados
   // con registros en attendance_logs para la fecha dada.
   // late_minutes se calcula comparando primer IN con el horario del empleado.

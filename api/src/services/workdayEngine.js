@@ -920,6 +920,15 @@ function nightSeconds(desdeAbs, hastaAbs, opts) {
  * tener dos definiciones de "llegó tarde" en el mismo sistema.
  */
 function aplicarConfiguracion(jornada, cfg, primeraEntrada, ultimaSalida) {
+  // CONFLICTO DE TURNERA: dos turneras publicadas incompatibles para la misma
+  // fecha. El horario esperado es AMBIGUO, así que NO se calcula lo que depende
+  // de él —atraso, salida anticipada, jornada esperada—: se deja en null. La
+  // turnera elegida (menor id) es sólo trazabilidad, no una verdad laboral. La
+  // presencia observada sí se mide; eso pasa afuera de esta función.
+  if (Array.isArray(cfg.conflict_shift_schedule_ids) && cfg.conflict_shift_schedule_ids.length > 1) {
+    return;
+  }
+
   const entradaPrevista = calc.scheduleSeconds(cfg.check_in);
   const salidaPrevista = calc.scheduleSeconds(cfg.check_out);
 

@@ -101,10 +101,18 @@ async function loadScheduleHistory(employeeIds) {
       h.schedule_id,
       DATE_FORMAT(h.valid_from, '%Y-%m-%d') AS valid_from,
       DATE_FORMAT(h.valid_to,   '%Y-%m-%d') AS valid_to,
-      COALESCE(h.check_in,      s.check_in)      AS check_in,
-      COALESCE(h.check_out,     s.check_out)     AS check_out,
-      COALESCE(h.tolerance_in,  s.tolerance_in)  AS tolerance_in,
-      COALESCE(h.tolerance_out, s.tolerance_out) AS tolerance_out,
+      -- FAIL-SAFE HISTÓRICO: los campos imprescindibles se leen SÓLO del snapshot
+      -- del historial, NUNCA del schedules vivo. Antes un COALESCE(h.x, s.x)
+      -- hacía que un tramo con el snapshot a medio poblar cayera al horario
+      -- ACTUAL —mutable—, y editar un horario reescribía retroactivamente el
+      -- pasado. Una fila histórica DEBE representar configuración CONGELADA; si
+      -- le falta check_in queda config_incomplete (ver normalizeConfigRow) en
+      -- vez de inventar late contra un horario vivo. FASE C es la que snapshotea
+      -- estos campos al crear el tramo.
+      h.check_in      AS check_in,
+      h.check_out     AS check_out,
+      h.tolerance_in  AS tolerance_in,
+      h.tolerance_out AS tolerance_out,
       h.break_mode,
       h.break_minutes,
       h.break_after_minutes,
@@ -112,10 +120,9 @@ async function loadScheduleHistory(employeeIds) {
       h.daily_target_minutes,
       h.night_start,
       h.night_end,
-      -- Snapshot del historial si lo tiene; si no, el schedules vivo como
-      -- respaldo. Preferir h.work_days evita que editar un horario reescriba
-      -- retroactivamente la expectativa de los tramos históricos, por el mismo
-      -- motivo por el que el schedule_id ACTUAL del empleado no entra acá.
+      -- work_days conserva el respaldo al schedules vivo por compatibilidad con
+      -- el estado actual (todavía no hay escritor que lo snapshotee); el
+      -- contrato de FASE C es snapshotearlo también.
       COALESCE(h.work_days, s.work_days) AS work_days
     FROM employee_schedule_history h
     LEFT JOIN schedules s ON s.id = h.schedule_id
@@ -245,13 +252,17 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
 
       // 2. Horario habitual con vigencia.
       const tramo = vigenteEn(history.get(id), workDate);
-      if (tramo) {
+      if (tramo && !tramo.config_incomplete) {
         return {
           ...tramo,
           contract_id: contratoVigente(contracts.get(id), workDate),
           source: 'schedule_history',
         };
       }
+      // Un tramo histórico incompleto (sin check_in snapshoteado) NO habilita el
+      // modo configured: se prefiere caer al fallback antes que calcular atraso
+      // contra un horario a medias o —peor— contra el schedules vivo.
+      if (tramo && tramo.config_incomplete) return null;
 
       // 3. Contrato: aporta carga, no horario. NO habilita el modo
       //    `configured` por sí solo — sin hora de entrada no hay atraso que
@@ -409,11 +420,16 @@ function minutosDeTurno(start, end) {
 function normalizeConfigRow(r) {
   const hora = (v) => (v != null ? String(v) : null);
   const num = (v) => (v != null ? Number(v) : null);
+  const checkIn = hora(r.check_in);
   return {
     schedule_id: num(r.schedule_id),
     valid_from: r.valid_from,
     valid_to: r.valid_to,
-    check_in: hora(r.check_in),
+    check_in: checkIn,
+    // Un tramo histórico SIN hora de entrada snapshoteada es config_incomplete:
+    // no se puede calcular atraso ni jornada esperada de forma confiable y NO se
+    // completa con el horario vivo. El consumidor lo trata como fallback.
+    config_incomplete: checkIn == null,
     check_out: hora(r.check_out),
     tolerance_in: r.tolerance_in != null ? Number(r.tolerance_in) : 0,
     tolerance_out: r.tolerance_out != null ? Number(r.tolerance_out) : 0,
