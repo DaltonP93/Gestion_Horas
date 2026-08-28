@@ -253,6 +253,27 @@ describe('materialización de fechas sin jornada', () => {
     expect(filas[0].presence_minutes).toBe(540);
   });
 
+  test('una entrada clasificada como sesion_excesiva también se conserva en notes', () => {
+    // 08:00 in, 17:00 out (jornada real), 18:00 in y un OUT >16 h después: la
+    // entrada abierta de las 18:00 queda cerrada como sesion_excesiva (su tramo
+    // supera el tope). El código se ancla en esa ENTRADA, así que su evidencia
+    // debe conservarse en notes sin correr last_out.
+    const filas = buildDailySummaryRows(
+      [
+        { timestamp: '2025-06-10 08:00:00', type: 'in', id: 1 },
+        { timestamp: '2025-06-10 17:00:00', type: 'out', id: 2 },
+        { timestamp: '2025-06-10 18:00:00', type: 'in', id: 3 },
+        { timestamp: '2025-06-11 12:00:00', type: 'out', id: 4 },
+      ],
+      { from: '2025-06-10', to: '2025-06-11', materializeEmptyDates: false },
+    );
+    const fila = filas.find((f) => f.date === '2025-06-10');
+    expect(fila).toBeDefined();
+    expect(fila.last_out.slice(11, 16)).toBe('17:00'); // no se corre a la entrada
+    expect(fila.anomalies).toContain('sesion_excesiva');
+    expect(fila.notes).toMatch(/entrada 18:00/);
+  });
+
   test('sin fichajes sueltos fuera del envelope, notes es null', () => {
     const filas = buildDailySummaryRows(
       [

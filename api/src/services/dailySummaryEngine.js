@@ -58,9 +58,15 @@ const ANOMALIAS_OUT = new Set([
 
 // Anomalías cuyo fichaje suelto es una ENTRADA (un IN). NO corren last_out —una
 // entrada abierta no es un cierre— pero su evidencia igual debe conservarse.
+// `sesion_excesiva` también se ancla en la ENTRADA abierta: buildSegments cierra
+// el tramo con `cerrarAbierto`, que anota el código sobre `open` (el IN), así que
+// su `at` es la hora de esa entrada —una entrada que sin esto reaparecería
+// perdida (p. ej. 18:00 IN con un OUT >16 h después: la jornada queda 08:00→17:00
+// y el fichaje de las 18:00 sólo vive en esta anomalía)—.
 const ANOMALIAS_IN = new Set([
   engine.ANOMALY.ENTRADA_SIN_SALIDA,
   engine.ANOMALY.ENTRADAS_CONSECUTIVAS,
+  engine.ANOMALY.SESION_EXCESIVA,
 ]);
 
 /**
