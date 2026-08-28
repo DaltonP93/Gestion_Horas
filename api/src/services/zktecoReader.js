@@ -887,13 +887,10 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   }
 
   if (pushAtt2000) {
-    try {
-      const { writeCheckinOut } = require('../config/att2000');
-      report.att2000 = await writeCheckinOut(norm.filter(n => n.ts && n.userId).map(n => ({
-        userId: n.userId, attTime: n.ts, inOutStatus: n.inout ?? 0,
-        sensorId: device.id, verifyMode: 0,
-      })));
-    } catch (e) { report.att2000 = { error: e.message }; }
+    // att2000 es READ-ONLY: la escritura de vuelta hacia CHECKINOUT fue
+    // eliminada. Se conserva el parámetro por compatibilidad de la API, pero no
+    // ejecuta ninguna escritura; se informa el motivo en el reporte.
+    report.att2000 = { skipped: true, reason: 'att2000 es READ-ONLY: escritura deshabilitada' };
   }
 
   report.duration_ms = Date.now() - t0;

@@ -15,7 +15,7 @@
 
 const router = require('express').Router();
 const { authenticate, requireSuperAdmin } = require('../middleware/auth');
-const { testAtt2000Connection, writeCheckinOut, queryAtt2000 } = require('../config/att2000');
+const { testAtt2000Connection, queryAtt2000 } = require('../config/att2000');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
 const { recordRun, recordCheck, getConnectionStatus } = require('../services/att2000Legacy');
@@ -196,56 +196,18 @@ router.get('/machines-list', async (req, res) => {
 });
 
 // ─── POST /api/sync/push-to-att2000 ──────────────────────────────
-// Envía marcaciones del MySQL local → att2000.CHECKINOUT
-// Body: { dateFrom?, dateTo?, limit? }
-// Útil para sincronizar marcaciones manuales ingresadas en SisHoras
-// o para re-enviar registros que att2000 no capturó.
+// DESHABILITADO: att2000 es READ-ONLY.
+//
+// Antes esta ruta enviaba marcaciones del MySQL local → att2000.CHECKINOUT.
+// La escritura hacia att2000 fue eliminada del conector a propósito. La ruta se
+// conserva para no romper clientes existentes, pero responde fail-closed (403)
+// y NUNCA ejecuta una escritura.
 router.post('/push-to-att2000', async (req, res) => {
-  const { dateFrom, dateTo, limit = 5000 } = req.body;
-
-  let where = '1=1';
-  const replacements = [];
-  if (dateFrom) { where += ' AND al.timestamp >= ?'; replacements.push(dateFrom); }
-  if (dateTo)   { where += ' AND al.timestamp <= ?'; replacements.push(dateTo + ' 23:59:59'); }
-
-  try {
-    // Leer del MySQL local — solo registros con código de empleado válido
-    const [rows] = await sequelize.query(`
-      SELECT
-        al.id,
-        al.timestamp,
-        al.type,
-        al.source,
-        e.code AS employee_code,
-        d.id   AS device_sensor_id
-      FROM attendance_logs al
-      JOIN employees e ON e.id = al.employee_id
-      LEFT JOIN devices d ON d.id = al.device_id
-      WHERE ${where}
-      ORDER BY al.timestamp DESC
-      LIMIT ?
-    `, { replacements: [...replacements, limit] });
-
-    if (!rows.length) {
-      return res.json({ ok: true, message: 'No hay registros para enviar', total: 0, inserted: 0, skipped: 0 });
-    }
-
-    // Enviar a att2000
-    const result = await writeCheckinOut(rows);
-
-    auditLegacy(req, 'push_to_att2000', { dateFrom: dateFrom || null, dateTo: dateTo || null, total: rows.length, inserted: result.inserted, skipped: result.skipped, errors: result.errors });
-
-    res.json({
-      ok: true,
-      total: rows.length,
-      inserted: result.inserted,
-      skipped:  result.skipped,
-      errors:   result.errors,
-      errList:  result.errList?.slice(0, 20),
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
+  auditLegacy(req, 'push_to_att2000_denied', { reason: 'att2000 es READ-ONLY' });
+  res.status(403).json({
+    ok: false,
+    error: 'att2000 es READ-ONLY: la escritura de marcaciones hacia CHECKINOUT está deshabilitada.',
+  });
 });
 
 // ─── GET /api/sync/push-to-att2000/preview ───────────────────────

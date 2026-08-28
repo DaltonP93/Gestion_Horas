@@ -35,6 +35,20 @@ Conecta a relojes biométricos ZKTeco y genera reportes de asistencia por emplea
 >- `ATT2000_PASSWORD`
 >- `JWT_SECRET`
 >- `REDIS_URL`
+>
+> **att2000 (fuente SQL Server) — variables reales y READ-ONLY:**
+>- `ATT_HOST`
+>- `ATT_PORT`
+>- `ATT_USER`
+>- `ATT_PASSWORD`
+>- `ATT_DATABASE`
+>
+> **att2000 es ESTRICTAMENTE READ-ONLY.** Gestion_Horas nunca escribe en att2000:
+> el conector `config/att2000.js` sólo expone lectura/introspección, no existe
+> `writeCheckinOut` ni ningún `INSERT/UPDATE/DELETE` sobre `CHECKINOUT`, y el
+> viejo flag `ATT2000_WRITE_ENABLED` fue eliminado. `att2000Readonly.test.js`
+> lo verifica sobre el fuente. Las variables `ATT2000_*` que figuraban antes no
+> son las reales; usar `ATT_*`.
 
 ## Relojes ZKTeco
 La configuración de relojes biométricos debe mantenerse fuera del repositorio, usando base de datos, archivo `.env` o secretos del entorno.

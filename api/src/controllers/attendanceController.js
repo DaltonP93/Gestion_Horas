@@ -8,8 +8,6 @@ const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
 let fireWebhooks;
 try { ({ fireWebhooks } = require('../routes/webhooks')); } catch {}
-let writeCheckinOut;
-try { ({ writeCheckinOut } = require('../config/att2000')); } catch {}
 
 // ─── Procesar evento de marcaje (desde Redis Pub/Sub del Bridge) ────────────
 async function processAttendanceEvent(data) {
@@ -66,16 +64,8 @@ async function processAttendanceEvent(data) {
       return;
     }
 
-    // Replicar el marcaje en att2000.CHECKINOUT si está habilitado
-    if (process.env.ATT2000_WRITE_ENABLED === 'true' && writeCheckinOut) {
-      writeCheckinOut([{
-        userId: employeeCode,
-        attTime: ts,
-        inOutStatus: detectedType === 'in' ? 0 : detectedType === 'out' ? 1 : null,
-        sensorId: resolvedDeviceId || 0,
-        verifyMode: 0
-      }]).catch(err => logger.error(`att2000 write falló: ${err.message}`));
-    }
+    // att2000 es READ-ONLY: no se replica el marcaje hacia CHECKINOUT. La
+    // capacidad de escritura fue eliminada del conector a propósito.
 
     // Recalcular resumen diario
     await recalcDailySummary(emp.id, ts);

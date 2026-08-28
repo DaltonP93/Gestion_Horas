@@ -3,9 +3,14 @@
  * Conexión a la base de datos SQL Server del
  * ZKTeco Fingerprint Attendance System (att2000).
  *
- * Operaciones:
- *   - Lectura: importar datos al nuevo MySQL propio.
- *   - Escritura: insertar marcaciones desde relojes o SisHoras → att2000.
+ * ATT2000 ES ESTRICTAMENTE READ-ONLY.
+ *
+ * Este conector expone ÚNICAMENTE operaciones de lectura (importar datos al
+ * MySQL propio). La capacidad de escritura fue eliminada a propósito: att2000
+ * vive en el entorno ADVENTISTA y es la base fuente, no un destino. No debe
+ * existir ningún camino de INSERT/UPDATE/DELETE sobre CHECKINOUT ni ninguna
+ * otra tabla de att2000 desde Gestion_Horas. `attendanceReadonly.test.js`
+ * verifica que este módulo no contiene DML ejecutable ni exporta un writer.
  *
  * Variables necesarias en .env:
  *   ATT_HOST=ADVENTISTA       (nombre o IP del servidor SQL Server)
@@ -127,66 +132,9 @@ async function testAtt2000Connection() {
   }
 }
 
-/**
- * Escribir marcaciones en att2000.CHECKINOUT
- * Records esperados: array de objetos con:
- *   { userId, attTime, inOutStatus, sensorId, verifyMode }
- *   (formato de salida de node-zklib getAttendances())
- * O bien del formato interno SisHoras:
- *   { employee_code, timestamp, type, device_sensor_id }
- */
-async function writeCheckinOut(records) {
-  const db = await getAtt2000();
-  let inserted = 0, skipped = 0, errors = 0;
-  const errList = [];
+// La escritura hacia att2000 fue ELIMINADA a propósito (att2000 es READ-ONLY).
+// Antes existía `writeCheckinOut`, que hacía INSERT sobre CHECKINOUT. No se
+// reemplaza por un stub tolerante: el conector simplemente no expone ninguna
+// operación de escritura, para que no haya forma de invocarla por descuido.
 
-  for (const r of records) {
-    try {
-      // Normalizar campos — acepta formato ZKLib y formato SisHoras
-      const userId    = r.userId    ?? r.employee_code ?? null;
-      const checkTime = r.attTime   ?? r.timestamp     ?? null;
-      const sensorId  = r.sensorId  ?? r.device_sensor_id ?? 0;
-      const verify    = r.verifyMode ?? r.verifycode   ?? 0;
-
-      // CHECKTYPE: ZKLib usa inOutStatus (0=in,1=out); SisHoras usa type ('in'/'out')
-      let checkType = null;
-      if (r.inOutStatus === 0 || r.type === 'in')  checkType = 'I';
-      if (r.inOutStatus === 1 || r.type === 'out') checkType = 'O';
-
-      if (!userId || !checkTime) { skipped++; continue; }
-
-      const checkDt = new Date(checkTime);
-      if (isNaN(checkDt.getTime())) { skipped++; continue; }
-
-      // Verificar duplicado
-      const chk = db.request();
-      chk.input('uid', sql.Int,      parseInt(userId));
-      chk.input('ct',  sql.DateTime, checkDt);
-      const dup = await chk.query(
-        'SELECT COUNT(*) AS cnt FROM CHECKINOUT WHERE USERID=@uid AND CHECKTIME=@ct'
-      );
-      if (dup.recordset[0].cnt > 0) { skipped++; continue; }
-
-      // Insertar
-      const ins = db.request();
-      ins.input('uid',      sql.Int,      parseInt(userId));
-      ins.input('ct',       sql.DateTime, checkDt);
-      ins.input('sensor',   sql.Int,      sensorId || 0);
-      ins.input('verify',   sql.Int,      verify   || 0);
-      ins.input('ctype',    sql.VarChar,  checkType || null);
-      await ins.query(`
-        INSERT INTO CHECKINOUT (USERID, CHECKTIME, SENSORID, VERIFYCODE, CHECKTYPE)
-        VALUES (@uid, @ct, @sensor, @verify, @ctype)
-      `);
-      inserted++;
-    } catch (e) {
-      errors++;
-      errList.push({ record: r.userId ?? r.employee_code, error: e.message });
-    }
-  }
-
-  logger.info(`writeCheckinOut: ${inserted} insertados, ${skipped} duplicados, ${errors} errores`);
-  return { inserted, skipped, errors, errList };
-}
-
-module.exports = { getAtt2000, queryAtt2000, testAtt2000Connection, writeCheckinOut, resetPool, getTableColumns, pickCol };
+module.exports = { getAtt2000, queryAtt2000, testAtt2000Connection, resetPool, getTableColumns, pickCol };
