@@ -38,9 +38,20 @@ function dayBounds(date) {
 async function withDayRecalcLock(date, fn, { label } = {}) {
   const key = keyFor(date);
   const { retries } = await withDeadlockRetry(() => sequelize.transaction(async (t) => {
-    // GET_LOCK devuelve 1 (tomado), 0 (timeout) o NULL (error). Si no se toma,
-    // seguimos igual: el reintento y la idempotencia cubren el caso raro.
-    await sequelize.query('SELECT GET_LOCK(?, ?) AS ok', { replacements: [key, LOCK_TIMEOUT_S], transaction: t }).catch(() => {});
+    // GET_LOCK devuelve 1 (tomado), 0 (timeout: otro proceso lo tiene) o NULL
+    // (error interno). Si NO se toma, NO se puede ejecutar fn: correría en paralelo
+    // con el tenedor real y la carrera de escritura (un snapshot viejo pisando uno
+    // nuevo, o al revés) vuelve. Por eso una adquisición fallida se trata como
+    // lock-wait RETRYABLE: withDeadlockRetry reintenta con una transacción y un
+    // lock nuevos; si se agotan los intentos, FALLA en vez de recalcular
+    // desprotegido. Un GET_LOCK que lance (conexión) también propaga, no se traga.
+    const [rows] = await sequelize.query('SELECT GET_LOCK(?, ?) AS ok', { replacements: [key, LOCK_TIMEOUT_S], transaction: t });
+    const ok = Array.isArray(rows) && rows[0] ? rows[0].ok : null;
+    if (ok !== 1) {
+      const err = new Error(`No se pudo tomar el lock de recálculo ${key} (GET_LOCK=${ok === null ? 'NULL/error' : ok})`);
+      err.code = 'ER_LOCK_WAIT_TIMEOUT'; // retryable por withDeadlockRetry (errno 1205)
+      throw err;
+    }
     try {
       await fn(t);
     } finally {
