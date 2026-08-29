@@ -61,15 +61,20 @@ describe('recalcDailySummary (sargable + lock por fecha)', () => {
     expect(mockQuery.mock.calls.some(c => /RELEASE_LOCK/i.test(c[0]))).toBe(true);
   });
 
-  test('un deadlock en el upsert se reintenta sin releer el día ni duplicar', async () => {
+  test('un deadlock reejecuta el bloque: relee el día bajo el lock y no duplica', async () => {
     let upserts = 0;
     wireQueries({ onUpsert: () => { upserts++; if (upserts < 2) throw deadlockErr(); return [{ affectedRows: 1 }]; } });
     await recalcDailySummary(1, new Date('2026-07-28T12:00:00-03:00'));
-    // El upsert (idempotente) se ejecutó 2 veces (1 deadlock + 1 éxito)…
+    // El upsert (idempotente por ON DUPLICATE KEY) se ejecutó 2 veces (1 deadlock
+    // + 1 éxito), sin duplicar filas.
     expect(upserts).toBe(2);
-    // …pero la lectura de marcas del día NO se repitió (está fuera del lock).
+    // La lectura del día está DENTRO del lock: el reintento reejecuta el bloque y
+    // relee, para que lo que se persiste salga de una lectura consistente (no de
+    // una vista vieja que podría pisar datos de un recálculo concurrente).
     const reads = mockQuery.mock.calls.filter(c => /SELECT\s+timestamp,\s*type\s+FROM attendance_logs/i.test(c[0]));
-    expect(reads.length).toBe(1);
+    expect(reads.length).toBe(2);
+    // Y esas lecturas corren dentro de la transacción del lock.
+    expect(reads.every(c => c[1].transaction === 'TX')).toBe(true);
   });
 
 });
