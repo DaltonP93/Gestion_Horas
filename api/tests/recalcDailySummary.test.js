@@ -150,4 +150,30 @@ describe('recalcDailySummary (legacy) — marcas sin tipo no fabrican jornada', 
     expect(r.worked).toBe(540);         // idéntico al par IN/OUT sin el unknown
     expect(r.status).toBe('present');
   });
+
+  test('el upsert REEMPLAZA first_in (no COALESCE): un NULL recalculado borra un first_in fabricado', async () => {
+    // Un día que el legacy viejo dejó con first_in fabricado desde un 'unknown'
+    // debe poder LIMPIARSE al reprocesar: con VALUES(first_in) NULL, el upsert
+    // tiene que reemplazar (no conservar) el valor obsoleto. Se verifica sobre la
+    // cláusula ON DUPLICATE KEY UPDATE, no sólo sobre los replacements.
+    mockQuery.mockReset();
+    mockQuery.mockImplementation(async (sql) => {
+      if (/FROM attendance_logs/i.test(sql) && /SELECT\s+timestamp/i.test(sql)) {
+        return [[{ timestamp: '2026-07-28 08:00:00', type: 'unknown' }]];
+      }
+      if (/FROM holidays/i.test(sql)) return [[null]];
+      if (/FROM employees/i.test(sql) && /schedules/i.test(sql)) return [[{ check_in: '08:00:00', tolerance_in: 5 }]];
+      if (/GET_LOCK/i.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/i.test(sql)) return [[]];
+      if (/INSERT INTO daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
+      return [[]];
+    });
+    await recalcDailySummary(1, new Date('2026-07-28T12:00:00-03:00'));
+    const upsert = mockQuery.mock.calls.find(c => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements.length === 7);
+    // La cláusula reemplaza first_in con VALUES(first_in); NO usa COALESCE.
+    expect(upsert[0]).toMatch(/first_in\s*=\s*VALUES\(first_in\)/);
+    expect(upsert[0]).not.toMatch(/COALESCE\(VALUES\(first_in\)/);
+    // Y el valor recalculado que reemplaza es NULL (día sin `in` explícito).
+    expect(upsert[1].replacements[2]).toBeNull();
+  });
 });

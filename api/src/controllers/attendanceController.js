@@ -338,7 +338,13 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
       INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, late_minutes, status)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        first_in        = COALESCE(VALUES(first_in), first_in),
+        -- first_in se REEMPLAZA (como last_out), no se conserva con COALESCE: el
+        -- recalculo relee TODO el dia (rango inicio..diaSiguiente), asi que
+        -- VALUES(first_in) es autoritativo. Si el dia ya no tiene una entrada
+        -- explicita, VALUES(first_in) es NULL y debe BORRAR un first_in previo,
+        -- incluido uno fabricado por el legacy viejo desde una marca sin tipo;
+        -- conservarlo dejaria un first_in bogus con worked 0 o un last_out real.
+        first_in        = VALUES(first_in),
         last_out        = VALUES(last_out),
         worked_minutes  = VALUES(worked_minutes),
         late_minutes    = VALUES(late_minutes),
