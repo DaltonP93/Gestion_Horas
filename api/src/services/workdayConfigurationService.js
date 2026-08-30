@@ -290,7 +290,7 @@ async function assertNoOverlap(employeeId, validFrom, validTo, excludeId, transa
 
 async function withEmployeeConfigLock(employeeId, fn) {
   const key = `sishoras:workcfg:${employeeId}`;
-  return withDeadlockRetry(() => sequelize.transaction(async (t) => {
+  const { result } = await withDeadlockRetry(() => sequelize.transaction(async (t) => {
     const [rows] = await sequelize.query(
       'SELECT GET_LOCK(?, ?) AS ok',
       { replacements: [key, LOCK_TIMEOUT_S], transaction: t },
@@ -311,6 +311,7 @@ async function withEmployeeConfigLock(employeeId, fn) {
       ).catch(() => {});
     }
   }), { label: `workday-config:${employeeId}` });
+  return result;
 }
 
 function valuesForInsert(employeeId, validFrom, validTo, snapshot, actorId, reason) {
