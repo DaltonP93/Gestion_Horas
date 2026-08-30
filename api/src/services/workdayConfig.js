@@ -244,20 +244,47 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
 
     forDate(employeeId, workDate) {
       const id = Number(employeeId);
+      const tramo = vigenteEn(history.get(id), workDate);
+      const contractId = contratoVigente(contracts.get(id), workDate);
 
       // 1. Turnera publicada para esa fecha exacta.
+      //
+      // La Turnera responde CUÁNDO trabaja ese día; el perfil histórico responde
+      // CUÁNTO y bajo qué políticas. Por eso una asignación diaria NO debe
+      // reemplazar silenciosamente el target contractual individual por el
+      // weekly_target genérico de la cabecera de la turnera (p. ej. 48 h para
+      // una persona cuyo perfil vigente es 36 h). El target de la turnera queda
+      // como fallback cuando no existe perfil histórico.
       const tramos = assignments.get(`${id}|${workDate}`);
       if (tramos && tramos.length) {
         const cfg = configDesdeTurnera(tramos);
-        if (cfg) return cfg;
+        if (cfg) {
+          const profile = tramo && !tramo.config_incomplete ? tramo : null;
+          return {
+            ...cfg,
+            weekly_target_minutes: profile?.weekly_target_minutes
+              ?? cfg.weekly_target_minutes
+              ?? null,
+            work_regime: profile?.work_regime ?? null,
+            night_start: profile?.night_start ?? null,
+            night_end: profile?.night_end ?? null,
+            rounding_policy: profile?.rounding_policy ?? null,
+            rounding_policy_version: profile?.rounding_policy_version ?? null,
+            rounding_policy_config: profile?.rounding_policy_config ?? null,
+            overtime_policy: profile?.overtime_policy ?? null,
+            overtime_policy_version: profile?.overtime_policy_version ?? null,
+            overtime_policy_config: profile?.overtime_policy_config ?? null,
+            contract_id: contractId,
+            profile_history_id: profile?.history_id ?? null,
+          };
+        }
       }
 
       // 2. Horario habitual con vigencia.
-      const tramo = vigenteEn(history.get(id), workDate);
       if (tramo && !tramo.config_incomplete) {
         return {
           ...tramo,
-          contract_id: contratoVigente(contracts.get(id), workDate),
+          contract_id: contractId,
           source: 'schedule_history',
         };
       }
