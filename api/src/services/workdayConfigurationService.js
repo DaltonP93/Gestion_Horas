@@ -648,7 +648,7 @@ async function getEffectiveConfiguration(employeeId, date) {
     kind,
     schedule_snapshot: historicalRow || null,
     profile: profileFromConfig(
-      cfg?.source === 'schedule_history' ? { ...historicalRow, ...cfg } : (cfg || historicalRow),
+      cfg?.source === 'schedule_history' ? { ...cfg, ...historicalRow } : (cfg || historicalRow),
     ),
     turnera: cfg?.source === 'shift_assignment' ? {
       shift_schedule_id: cfg.shift_schedule_id,
