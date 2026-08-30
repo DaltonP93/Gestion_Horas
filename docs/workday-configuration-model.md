@@ -73,10 +73,17 @@ No se backfillea el horario actual hacia el pasado.
 
 ## Precedencia
 
-1. `shift_assignments` de una Turnera **published** para la fecha.
-2. `employee_schedule_history` vigente y completo.
+1. `shift_assignments` de una Turnera **published** para la fecha define el
+   horario/segmentos del día.
+2. `employee_schedule_history` vigente y completo aporta el perfil individual
+   (carga semanal, régimen y policies).
 3. `employee_contracts` sólo aporta identidad/trazabilidad contractual.
 4. Sin configuración confiable: `historical_fallback`.
+
+`shift_schedules.weekly_target_minutes` se conserva como target de
+**planificación de la Turnera**, pero no sustituye el objetivo contractual
+individual. Si no existe perfil histórico, `weekly_target_minutes` del
+empleado queda `null`: no se inventan 48 h por el default de la Turnera.
 
 Una Turnera conflictiva (más de una publicada para el mismo empleado/día) se
 expone como conflicto; el horario elegido sólo sirve para trazabilidad y no
