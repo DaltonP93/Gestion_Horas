@@ -67,9 +67,28 @@ describe('snapshot puro', () => {
     expect(s.work_regime).toBeNull();
   });
 
-  test('acepta target custom', () => {
-    const s = svc.snapshotFromSchedule(schedule, { weekly_target_minutes: 2220 });
-    expect(s.weekly_target_minutes).toBe(2220);
+  test.each([
+    [2880, 48], [2700, 45], [2520, 42], [2160, 36],
+    [1920, 32], [1440, 24], [1200, 20], [2220, 37],
+  ])('acepta target semanal %i min (%i h) sin inferir régimen', (minutes) => {
+    const s = svc.snapshotFromSchedule(schedule, { weekly_target_minutes: minutes });
+    expect(s.weekly_target_minutes).toBe(minutes);
+    expect(s.work_regime).toBeNull();
+  });
+
+  test.each([
+    ['none', 0, 0],
+    ['punched', 0, 0],
+    ['fixed_unpaid', 45, 240],
+  ])('acepta break_mode %s', (mode, minutes, after) => {
+    const s = svc.snapshotFromSchedule(schedule, {
+      break_mode: mode,
+      break_minutes: minutes,
+      break_after_minutes: after,
+    });
+    expect(s.break_mode).toBe(mode);
+    expect(s.break_minutes).toBe(minutes);
+    expect(s.break_after_minutes).toBe(after);
   });
 
   test('rechaza snapshot incompleto', () => {
@@ -228,6 +247,19 @@ describe('updateHistory — snapshot no mutable', () => {
   });
 });
 
+describe('vigencias', () => {
+  test('valid_from y valid_to son inclusivos', () => {
+    const rows = [
+      { valid_from: '2025-01-01', valid_to: '2025-06-30', id: 1 },
+      { valid_from: '2025-07-01', valid_to: null, id: 2 },
+    ];
+    const { vigenteEn } = require('../src/services/workdayConfig');
+    expect(vigenteEn(rows, '2025-01-01').id).toBe(1);
+    expect(vigenteEn(rows, '2025-06-30').id).toBe(1);
+    expect(vigenteEn(rows, '2025-07-01').id).toBe(2);
+  });
+});
+
 describe('effective configuration', () => {
   function wireBaseDb({ permission = null, holiday = null } = {}) {
     sequelize.query.mockImplementation(async (sql) => {
@@ -237,6 +269,18 @@ describe('effective configuration', () => {
       return [[]];
     });
   }
+
+  test('sin configuración ni excepción queda fallback y expected null', async () => {
+    wireBaseDb();
+    mockLoadWorkdayConfig.mockResolvedValue({
+      historyFor: () => [],
+      forDate: () => null,
+    });
+    const r = await svc.getEffectiveConfiguration(1, '2026-08-30');
+    expect(r.calculation_mode_candidate).toBe('historical_fallback');
+    expect(r.expected_workday).toBeNull();
+    expect(r.profile).toBeNull();
+  });
 
   test('domingo puede ser día laboral por configuración', async () => {
     wireBaseDb();
@@ -261,6 +305,27 @@ describe('effective configuration', () => {
     expect(r.expected_workday).toBe(true);
     expect(r.kind).toBe('work');
     expect(r.profile.weekly_target_minutes).toBe(2160);
+  });
+
+  test('martes puede ser off por work_days histórico', async () => {
+    wireBaseDb();
+    const hist = [{
+      history_id: 1,
+      valid_from: '2026-01-01',
+      valid_to: null,
+      check_in: '08:00:00',
+      check_out: '17:00:00',
+      work_days: [2, 4, 5, 6],
+      config_incomplete: false,
+      source: 'schedule_history',
+    }];
+    mockLoadWorkdayConfig.mockResolvedValue({
+      historyFor: () => hist,
+      forDate: () => ({ ...hist[0], source: 'schedule_history' }),
+    });
+    const r = await svc.getEffectiveConfiguration(1, '2026-09-01'); // martes = 3
+    expect(r.expected_workday).toBe(false);
+    expect(r.kind).toBe('off');
   });
 
   test('vacación aprobada vuelve el día no laborable sin inventar ausencia', async () => {
@@ -301,5 +366,13 @@ describe('effective configuration', () => {
     expect(r.configuration_conflict).toBe(true);
     expect(r.expected_workday).toBeNull();
     expect(r.calculation_mode_candidate).toBe('historical_fallback');
+  });
+});
+
+describe('policy ausente', () => {
+  test('no inventa rounding ni overtime', () => {
+    const s = svc.snapshotFromSchedule(schedule, { weekly_target_minutes: 2160 });
+    expect(s.rounding_policy).toBeNull();
+    expect(s.overtime_policy).toBeNull();
   });
 });
