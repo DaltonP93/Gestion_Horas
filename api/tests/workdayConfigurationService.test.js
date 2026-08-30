@@ -91,6 +91,28 @@ describe('snapshot puro', () => {
     expect(s.break_after_minutes).toBe(after);
   });
 
+  test('rechaza work_days parcialmente inválido en vez de descartar tokens', () => {
+    expect(() => svc.normalizeWorkDays(['2', 'x', '3'])).toThrow(/exclusivamente valores 1\.\.7/i);
+    expect(() => svc.normalizeWorkDays('2,8,3')).toThrow(/exclusivamente valores 1\.\.7/i);
+  });
+
+  test('policy config debe ser objeto JSON, no array ni escalar', () => {
+    expect(() => svc.buildSnapshot({}, {
+      check_in: '08:00',
+      check_out: '17:00',
+      work_days: [2,3,4,5,6],
+      rounding_policy: 'custom',
+      rounding_policy_config: '[]',
+    })).toThrow(/objeto JSON/i);
+    expect(() => svc.buildSnapshot({}, {
+      check_in: '08:00',
+      check_out: '17:00',
+      work_days: [2,3,4,5,6],
+      overtime_policy: 'custom',
+      overtime_policy_config: '"texto"',
+    })).toThrow(/objeto JSON/i);
+  });
+
   test('rechaza snapshot incompleto', () => {
     expect(() => svc.buildSnapshot({}, {
       check_in: '08:00',
