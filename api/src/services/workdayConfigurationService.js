@@ -58,9 +58,9 @@ function normalizeInt(value, field, { min = 0, max = Number.MAX_SAFE_INTEGER, nu
 function normalizeWorkDays(value) {
   if (value == null || value === '') return null;
   const raw = Array.isArray(value) ? value : String(value).split(',');
-  const days = raw.map(Number).filter(Number.isInteger);
-  if (!days.length || days.some((d) => d < 1 || d > 7)) {
-    throw httpError(400, 'INVALID_WORK_DAYS', 'work_days debe contener valores 1..7 (1=Domingo, 7=Sábado)');
+  const days = raw.map((v) => Number(String(v).trim()));
+  if (!days.length || days.some((d) => !Number.isInteger(d) || d < 1 || d > 7)) {
+    throw httpError(400, 'INVALID_WORK_DAYS', 'work_days debe contener exclusivamente valores 1..7 (1=Domingo, 7=Sábado)');
   }
   return [...new Set(days)].sort((a, b) => a - b);
 }
@@ -76,16 +76,17 @@ function normalizePolicy(value, field) {
 
 function normalizeJson(value, field) {
   if (value == null || value === '') return null;
+  let parsed = value;
   if (typeof value === 'string') {
-    try { return JSON.parse(value); } catch {
+    try { parsed = JSON.parse(value); } catch {
       throw httpError(400, 'INVALID_POLICY_CONFIG', `${field} debe ser JSON válido`);
     }
   }
-  if (typeof value !== 'object' || Array.isArray(value)) {
+  if (typeof parsed !== 'object' || parsed == null || Array.isArray(parsed)) {
     throw httpError(400, 'INVALID_POLICY_CONFIG', `${field} debe ser un objeto JSON`);
   }
   // Fuerza serializabilidad y elimina prototipos extraños.
-  try { return JSON.parse(JSON.stringify(value)); } catch {
+  try { return JSON.parse(JSON.stringify(parsed)); } catch {
     throw httpError(400, 'INVALID_POLICY_CONFIG', `${field} no es serializable`);
   }
 }
