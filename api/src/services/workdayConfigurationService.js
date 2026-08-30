@@ -411,6 +411,28 @@ async function createHistory(employeeId, body, actorId) {
   });
 }
 
+function composeScheduleWithProfile(scheduleSnapshot, existing) {
+  if (!existing) return scheduleSnapshot;
+  return {
+    ...scheduleSnapshot,
+    // El nuevo horario define CUÁNDO y su descanso operativo.
+    // El perfil existente define CUÁNTO/régimen/policies y no se borra por
+    // cambiar de horario salvo que el payload lo sobrescriba explícitamente.
+    weekly_target_minutes: existing.weekly_target_minutes ?? null,
+    daily_target_minutes: existing.daily_target_minutes ?? null,
+    work_regime: existing.work_regime ?? null,
+    night_start: existing.night_start ?? null,
+    night_end: existing.night_end ?? null,
+    rounding_policy: existing.rounding_policy ?? null,
+    rounding_policy_version: existing.rounding_policy_version ?? null,
+    rounding_policy_config: existing.rounding_policy_config ?? null,
+    overtime_policy: existing.overtime_policy ?? null,
+    overtime_policy_version: existing.overtime_policy_version ?? null,
+    overtime_policy_config: existing.overtime_policy_config ?? null,
+    notes: existing.notes ?? null,
+  };
+}
+
 function existingAsBase(existing) {
   return rowToPublic(existing);
 }
@@ -445,7 +467,7 @@ async function updateHistory(id, body, actorId) {
         source = 'manual';
       } else {
         const schedule = await loadSchedule(Number(body.schedule_id), t);
-        snapshotBase = snapshotFromSchedule(schedule, {});
+        snapshotBase = composeScheduleWithProfile(snapshotFromSchedule(schedule, {}), existing);
         source = 'schedule_snapshot';
       }
     } else if (body?.resnapshot_schedule === true) {
@@ -453,7 +475,7 @@ async function updateHistory(id, body, actorId) {
         throw httpError(400, 'NO_SCHEDULE_TO_RESNAPSHOT', 'El tramo no tiene schedule_id para volver a tomar snapshot');
       }
       const schedule = await loadSchedule(Number(existing.schedule_id), t);
-      snapshotBase = snapshotFromSchedule(schedule, {});
+      snapshotBase = composeScheduleWithProfile(snapshotFromSchedule(schedule, {}), existing);
       source = 'schedule_resnapshot';
     }
 
@@ -711,6 +733,7 @@ module.exports = {
   normalizeWorkDays,
   buildSnapshot,
   snapshotFromSchedule,
+  composeScheduleWithProfile,
   rowToPublic,
   withEmployeeConfigLock,
   getHistory,
