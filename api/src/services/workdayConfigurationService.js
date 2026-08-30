@@ -597,14 +597,16 @@ async function getEffectiveConfiguration(employeeId, date) {
   if (!validDateISO(date)) throw httpError(400, 'INVALID_DATE', 'date debe ser una fecha real YYYY-MM-DD');
   await ensureEmployee(employeeId);
 
-  const [resolver, exception] = await Promise.all([
+  const [resolver, exception, fullHistory] = await Promise.all([
     loadWorkdayConfig([employeeId], { from: date, to: date }),
     loadCalendarException(employeeId, date),
+    getHistory(employeeId),
   ]);
 
   const cfg = resolver.forDate(employeeId, date);
-  const history = resolver.historyFor(employeeId);
-  const historicalRow = vigenteEn(history, date);
+  // Para la API de FASE C se usa la fila COMPLETA (incluye metadata/policies de
+  // la 075), no sólo la proyección mínima que consume WorkdayEngine.
+  const historicalRow = vigenteEn(fullHistory, date);
   const turneraConflict = Array.isArray(cfg?.conflict_shift_schedule_ids)
     && cfg.conflict_shift_schedule_ids.length > 1;
 
@@ -645,7 +647,9 @@ async function getEffectiveConfiguration(employeeId, date) {
     expected_workday: expectedWorkday,
     kind,
     schedule_snapshot: historicalRow || null,
-    profile: profileFromConfig(cfg || historicalRow),
+    profile: profileFromConfig(
+      cfg?.source === 'schedule_history' ? { ...historicalRow, ...cfg } : (cfg || historicalRow),
+    ),
     turnera: cfg?.source === 'shift_assignment' ? {
       shift_schedule_id: cfg.shift_schedule_id,
       check_in: cfg.check_in || null,
@@ -657,7 +661,7 @@ async function getEffectiveConfiguration(employeeId, date) {
     } : null,
     permission: exception.permission,
     holiday: exception.holiday,
-    config_incomplete: Boolean(historicalRow?.config_incomplete),
+    config_incomplete: Boolean(historicalRow && !historicalRow.snapshot_complete),
     contract_id: cfg?.contract_id ?? null,
   };
 }
