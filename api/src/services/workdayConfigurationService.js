@@ -596,6 +596,43 @@ function profileFromConfig(cfg) {
   };
 }
 
+function profileInputForEffective(cfg, historicalRow) {
+  if (!cfg) return historicalRow || null;
+  if (!historicalRow?.snapshot_complete) return cfg;
+
+  if (cfg.source !== 'shift_assignment') {
+    // Para horario habitual, la fila completa de 075 es autoritativa sobre la
+    // proyección mínima del resolver.
+    return { ...cfg, ...historicalRow };
+  }
+
+  // Turnera = CUÁNDO trabaja ese día; snapshot histórico = perfil/policies.
+  // Conservamos del plan diario sus segmentos, descanso y target diario, pero
+  // las políticas/versiones y la carga semanal individual vienen del snapshot.
+  return {
+    ...cfg,
+    weekly_target_minutes: historicalRow.weekly_target_minutes
+      ?? cfg.weekly_target_minutes
+      ?? null,
+    work_regime: historicalRow.work_regime ?? cfg.work_regime ?? null,
+    night_start: historicalRow.night_start ?? cfg.night_start ?? null,
+    night_end: historicalRow.night_end ?? cfg.night_end ?? null,
+    rounding_policy: historicalRow.rounding_policy ?? cfg.rounding_policy ?? null,
+    rounding_policy_version: historicalRow.rounding_policy_version ?? null,
+    rounding_policy_config: historicalRow.rounding_policy_config ?? null,
+    overtime_policy: historicalRow.overtime_policy ?? cfg.overtime_policy ?? null,
+    overtime_policy_version: historicalRow.overtime_policy_version ?? null,
+    overtime_policy_config: historicalRow.overtime_policy_config ?? null,
+    // El descanso y objetivo DIARIO pertenecen a la asignación concreta.
+    break_mode: cfg.break_mode ?? historicalRow.break_mode ?? null,
+    break_minutes: cfg.break_minutes ?? historicalRow.break_minutes ?? null,
+    break_after_minutes: cfg.break_after_minutes ?? historicalRow.break_after_minutes ?? null,
+    daily_target_minutes: cfg.daily_target_minutes
+      ?? historicalRow.daily_target_minutes
+      ?? null,
+  };
+}
+
 async function getEffectiveConfiguration(employeeId, date) {
   if (!validDateISO(date)) throw httpError(400, 'INVALID_DATE', 'date debe ser una fecha real YYYY-MM-DD');
   await ensureEmployee(employeeId);
@@ -650,9 +687,7 @@ async function getEffectiveConfiguration(employeeId, date) {
     expected_workday: expectedWorkday,
     kind,
     schedule_snapshot: historicalRow || null,
-    profile: profileFromConfig(
-      cfg?.source === 'schedule_history' ? { ...cfg, ...historicalRow } : (cfg || historicalRow),
-    ),
+    profile: profileFromConfig(profileInputForEffective(cfg, historicalRow)),
     turnera: cfg?.source === 'shift_assignment' ? {
       shift_schedule_id: cfg.shift_schedule_id,
       check_in: cfg.check_in || null,
