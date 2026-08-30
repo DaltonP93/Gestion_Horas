@@ -716,6 +716,7 @@ async function getEffectiveConfiguration(employeeId, date) {
       check_out: cfg.check_out || null,
       segments: cfg.segments || 0,
       weekly_target_minutes: cfg.weekly_target_minutes ?? null,
+      shift_weekly_target_minutes: cfg.shift_weekly_target_minutes ?? null,
       daily_target_minutes: cfg.daily_target_minutes ?? null,
       kind: cfg.kind || 'work',
     } : null,
