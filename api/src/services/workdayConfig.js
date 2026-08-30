@@ -100,10 +100,6 @@ async function loadScheduleHistory(employeeIds) {
       h.id AS history_id,
       h.employee_id,
       h.schedule_id,
-      h.schedule_name_snapshot,
-      h.snapshot_version,
-      h.snapshot_source,
-      h.change_reason,
       DATE_FORMAT(h.valid_from, '%Y-%m-%d') AS valid_from,
       DATE_FORMAT(h.valid_to,   '%Y-%m-%d') AS valid_to,
       -- FAIL-SAFE HISTÓRICO: los campos imprescindibles se leen SÓLO del snapshot
@@ -125,11 +121,7 @@ async function loadScheduleHistory(employeeIds) {
       h.daily_target_minutes,
       h.work_regime,
       h.overtime_policy,
-      h.overtime_policy_version,
-      h.overtime_policy_config,
       h.rounding_policy,
-      h.rounding_policy_version,
-      h.rounding_policy_config,
       h.night_start,
       h.night_end,
       -- FASE C: work_days es parte del snapshot y NO cae al schedules vivo.
