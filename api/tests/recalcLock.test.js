@@ -11,7 +11,15 @@ const { withDayRecalcLock, keyFor, dayBounds } = require('../src/services/recalc
 
 const deadlockErr = () => Object.assign(new Error('Deadlock found'), { errno: 1213, code: 'ER_LOCK_DEADLOCK' });
 
-beforeEach(() => { mockQuery.mockReset(); mockTransaction.mockClear(); mockQuery.mockResolvedValue([[]]); });
+// Por defecto GET_LOCK se toma (ok:1); el resto devuelve vacío. Un test lo
+// sobrescribe para simular que el lock NO se toma.
+function wireLockOk() {
+  mockQuery.mockImplementation(async (sql) => {
+    if (/GET_LOCK/i.test(sql)) return [[{ ok: 1 }]];
+    return [[]];
+  });
+}
+beforeEach(() => { mockQuery.mockReset(); mockTransaction.mockClear(); wireLockOk(); });
 
 describe('dayBounds (rango sargable)', () => {
   test('devuelve [inicio, díaSiguiente) del día', () => {
@@ -62,5 +70,29 @@ describe('withDayRecalcLock', () => {
     // Cada intento libera su propio lock.
     const releases = mockQuery.mock.calls.filter(c => /RELEASE_LOCK/i.test(c[0]));
     expect(releases.length).toBe(2);
+  });
+
+  test('si GET_LOCK NO se toma (0), NO ejecuta fn: reintenta y termina fallando', async () => {
+    // Otro proceso tiene el lock (timeout → 0). Ejecutar fn sin el lock reabriría
+    // la carrera de escritura, así que NO se ejecuta: se reintenta (lock-wait) y,
+    // al agotarse, se propaga el error en vez de recalcular desprotegido.
+    mockQuery.mockImplementation(async (sql) => {
+      if (/GET_LOCK/i.test(sql)) return [[{ ok: 0 }]];
+      return [[]];
+    });
+    const fn = jest.fn(async () => {});
+    await expect(withDayRecalcLock('2026-07-28', fn)).rejects.toThrow(/no se pudo tomar el lock/i);
+    expect(fn).not.toHaveBeenCalled();                 // nunca corre sin el lock
+    expect(mockTransaction).toHaveBeenCalledTimes(3);  // 3 intentos (retries por defecto)
+  });
+
+  test('si GET_LOCK devuelve NULL (error interno) tampoco ejecuta fn', async () => {
+    mockQuery.mockImplementation(async (sql) => {
+      if (/GET_LOCK/i.test(sql)) return [[{ ok: null }]];
+      return [[]];
+    });
+    const fn = jest.fn(async () => {});
+    await expect(withDayRecalcLock('2026-07-28', fn)).rejects.toThrow(/no se pudo tomar el lock/i);
+    expect(fn).not.toHaveBeenCalled();
   });
 });

@@ -246,17 +246,10 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
          timestamp instanceof Date ? timestamp : new Date(timestamp)
        );
 
-  // Rango SARGABLE [inicio, díaSiguiente): usa el índice idx_ts/idx_emp_ts y
-  // acota los locks de rango (a diferencia de DATE(timestamp), que fuerza
-  // scan del índice funcional y amplía los next-key locks → deadlocks).
   const { start, next } = dayBounds(date);
-  const [logs] = await sequelize.query(`
-    SELECT timestamp, type FROM attendance_logs
-    WHERE employee_id = ? AND timestamp >= ? AND timestamp < ?
-    ORDER BY timestamp ASC
-  `, { replacements: [employeeId, start, next] });
 
-  // ¿Es feriado o fin de semana? Marcar estado aunque no haya marcajes
+  // ¿Es feriado o fin de semana? Config estable (no compite con los marcajes),
+  // así que se resuelve fuera del lock.
   const [[holiday]] = await sequelize.query(
     'SELECT id, name FROM holidays WHERE date = ? AND active = 1 LIMIT 1',
     { replacements: [date] }
@@ -264,86 +257,108 @@ async function legacyRecalcDailySummary(employeeId, timestamp) {
   const dow = new Date(date + 'T12:00:00Z').getUTCDay(); // 0=Dom, 6=Sáb
   const isWeekend = (dow === 0 || dow === 6);
 
-  if (!logs.length) {
-    // Sin marcajes: si es feriado o fin de semana, registrar como tal (no absent)
-    if (holiday || isWeekend) {
-      const fallbackStatus = holiday ? 'holiday' : 'weekend';
-      // Bajo el lock por fecha: se serializa con el recálculo en bloque del
-      // mismo día (worker/cron) y se reintenta ante deadlock/lock-wait.
-      await withDayRecalcLock(date, async (t) => {
+  // La LECTURA del día y su ESCRITURA van JUNTAS bajo el mismo lock. Si el día se
+  // leyera fuera del lock (como antes), un recálculo viejo —que leyó ANTES de que
+  // se insertara un `in` explícito— podría tomar el lock después y pisar con
+  // VALUES() el first_in/last_out válido que escribió un recálculo nuevo. Como el
+  // upsert reemplaza (no COALESCE), esa carrera borraría datos buenos. Releer bajo
+  // el lock hace autoritativo lo que se persiste. El reintento por deadlock
+  // reejecuta este bloque: relee y reescribe de forma consistente, sin duplicar
+  // (upsert idempotente por ON DUPLICATE KEY).
+  await withDayRecalcLock(date, async (t) => {
+    // Rango SARGABLE [inicio, díaSiguiente): usa el índice idx_ts/idx_emp_ts y
+    // acota los locks de rango (a diferencia de DATE(timestamp), que fuerza scan
+    // del índice funcional y amplía los next-key locks → deadlocks).
+    const [logs] = await sequelize.query(`
+      SELECT timestamp, type FROM attendance_logs
+      WHERE employee_id = ? AND timestamp >= ? AND timestamp < ?
+      ORDER BY timestamp ASC
+    `, { replacements: [employeeId, start, next], transaction: t });
+
+    if (!logs.length) {
+      // Sin marcajes: si es feriado o fin de semana, registrar como tal (no absent).
+      if (holiday || isWeekend) {
+        const fallbackStatus = holiday ? 'holiday' : 'weekend';
         await sequelize.query(`
           INSERT INTO daily_summary (employee_id, date, worked_minutes, late_minutes, status)
           VALUES (?, ?, 0, 0, ?)
           ON DUPLICATE KEY UPDATE status = VALUES(status)
         `, { replacements: [employeeId, date, fallbackStatus], transaction: t });
-      }, { label: `recalcEmp:${date}:${employeeId}` });
+      }
+      return;
     }
-    return;
-  }
 
-  const firstIn  = logs.find(l => l.type === 'in');
-  const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
+    const firstIn  = logs.find(l => l.type === 'in');
+    const lastOut  = logs.slice().reverse().find(l => l.type === 'out');
 
-  // PRESENCIA con marcas sin tipo: una jornada puede quedar registrada sólo con
-  // marcas 'unknown' (p. ej. un marcaje móvil sin contexto para inferir in/out,
-  // ahora que resolveMarkType conserva 'unknown' en vez de fabricar una entrada).
-  // El legacy sólo miraba in/out y dejaba el día 'absent' pese a que la persona
-  // fichó, dejando el flujo atrapado como ausencia hasta que otra fuente aportara
-  // un tipo. Si hay actividad pero falta la entrada/salida explícita, la
-  // permanencia se ancla en la primera/última marca del día: es PRESENCIA, no
-  // ausencia. NO se infiere atraso desde una marca sin tipo (no sabemos si es la
-  // entrada), así que el atraso sólo se calcula con un `in` explícito.
-  const anchorIn  = firstIn || logs[0];
-  const anchorOut = lastOut || logs[logs.length - 1];
+    // Los BORDES y la PERMANENCIA salen EXCLUSIVAMENTE de marcas explícitas. Un
+    // 'unknown' prueba PRESENCIA (la persona fichó), pero no que sea entrada ni
+    // salida: no se puede anclar first_in/last_out ni computar worked_minutes
+    // desde él sin inventar in/out. Por eso:
+    //   · first_in / last_out = SÓLO el 'in' / 'out' explícito, o NULL;
+    //   · worked_minutes = permanencia entre in y out explícitos (0 si falta uno);
+    //   · late = sólo con 'in' explícito.
+    // El arreglo del falso 'absent' (una jornada de sólo-unknown quedaba como
+    // ausencia pese a la actividad) es SÓLO en el ESTADO, no en los bordes: un día
+    // con actividad no es ausencia, pero tampoco fabrica una jornada de 9 h desde
+    // dos marcas sin tipo. Corrige únicamente el camino LEGACY (flag OFF).
 
-  // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
-  // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
-  // no necesita zona horaria. La versión anterior construía el horario
-  // previsto con offset fijo `-03:00`, que no representa a America/Asuncion
-  // históricamente —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en
-  // fechas de invierno anteriores el atraso salía corrido una hora aunque
-  // first_in fuese exacto.
-  const inSec  = anchorIn  ? dbSecondsOfDay(anchorIn.timestamp)  : null;
-  const outSec = anchorOut ? dbSecondsOfDay(anchorOut.timestamp) : null;
+    // Todo el cálculo se hace en HORA DE PARED. Un turno se define en hora de
+    // pared ("entra 07:00") y el marcaje se guarda en hora de pared: compararlos
+    // no necesita zona horaria. La versión anterior construía el horario previsto
+    // con offset fijo `-03:00`, que no representa a America/Asuncion históricamente
+    // —Paraguay estuvo en UTC-4 hasta el 2024-10-06—, así que en fechas de invierno
+    // anteriores el atraso salía corrido una hora aunque first_in fuese exacto.
+    const inSec  = firstIn ? dbSecondsOfDay(firstIn.timestamp)  : null;
+    const outSec = lastOut ? dbSecondsOfDay(lastOut.timestamp) : null;
 
-  const workedMinutes = calc.workedMinutes({ firstInSeconds: inSec, lastOutSeconds: outSec });
+    const workedMinutes = calc.workedMinutes({ firstInSeconds: inSec, lastOutSeconds: outSec });
 
-  // Obtener horario del empleado
-  const [[emp]] = await sequelize.query(
-    'SELECT s.check_in, s.tolerance_in FROM employees e JOIN schedules s ON e.schedule_id = s.id WHERE e.id = ?',
-    { replacements: [employeeId] }
-  );
+    // Horario del empleado (config) para el cálculo de atraso; sólo hace falta con
+    // un `in` explícito.
+    let lateMinutes = 0;
+    if (firstIn) {
+      const [[emp]] = await sequelize.query(
+        'SELECT s.check_in, s.tolerance_in FROM employees e JOIN schedules s ON e.schedule_id = s.id WHERE e.id = ?',
+        { replacements: [employeeId], transaction: t }
+      );
+      if (emp) {
+        lateMinutes = calc.lateMinutes({
+          firstInSeconds: inSec,
+          checkInSeconds: calc.scheduleSeconds(emp.check_in),
+          toleranceMin: emp.tolerance_in || 0,
+        });
+      }
+    }
 
-  const lateMinutes = (firstIn && emp)
-    ? calc.lateMinutes({
-        firstInSeconds: dbSecondsOfDay(firstIn.timestamp),
-        checkInSeconds: calc.scheduleSeconds(emp.check_in),
-        toleranceMin: emp.tolerance_in || 0,
-      })
-    : 0;
+    // Con `in` explícito, el estado sale del cálculo (present/late). Sin `in` pero
+    // con actividad (cualquier marca, incluidas 'unknown' o una salida suelta), el
+    // día es PRESENTE: la persona fichó, no está ausente. No se inventan ni bordes
+    // ni permanencia por eso. (Sin marcas ya se resolvió arriba: feriado/finde o
+    // return.)
+    const status = firstIn
+      ? calc.dayStatus({ hasFirstIn: true, late: lateMinutes })
+      : 'present';
 
-  // Con `in` explícito, el estado sale del cálculo (present/late). Sin `in` pero
-  // con actividad, el día es PRESENTE (sin atraso inventado): la persona fichó.
-  const status = firstIn
-    ? calc.dayStatus({ hasFirstIn: true, late: lateMinutes })
-    : 'present';
-
-  // Bajo el lock por fecha (serializa con el recálculo en bloque del mismo día)
-  // y con reintento acotado ante deadlock/lock-wait.
-  await withDayRecalcLock(date, async (t) => {
     await sequelize.query(`
       INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, late_minutes, status)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
-        first_in        = COALESCE(VALUES(first_in), first_in),
+        -- first_in se REEMPLAZA (como last_out), no se conserva con COALESCE: el
+        -- recalculo relee TODO el dia bajo este lock, asi que VALUES(first_in) es
+        -- autoritativo. Si el dia ya no tiene una entrada explicita,
+        -- VALUES(first_in) es NULL y debe BORRAR un first_in previo, incluido uno
+        -- fabricado por el legacy viejo desde una marca sin tipo; conservarlo
+        -- dejaria un first_in bogus con worked 0 o junto a un last_out real.
+        first_in        = VALUES(first_in),
         last_out        = VALUES(last_out),
         worked_minutes  = VALUES(worked_minutes),
         late_minutes    = VALUES(late_minutes),
         status          = VALUES(status)
     `, { replacements: [
       employeeId, date,
-      anchorIn  ? anchorIn.timestamp  : null,
-      anchorOut ? anchorOut.timestamp : null,
+      firstIn  ? firstIn.timestamp  : null,
+      lastOut  ? lastOut.timestamp : null,
       workedMinutes, lateMinutes, status
     ], transaction: t });
   }, { label: `recalcEmp:${date}:${employeeId}` });
