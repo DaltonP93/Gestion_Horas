@@ -116,31 +116,8 @@ CALL mig_075_add_col(
 
 DROP PROCEDURE IF EXISTS mig_075_add_col;
 
-DROP PROCEDURE IF EXISTS mig_075_add_index;
-DELIMITER $$
-CREATE PROCEDURE mig_075_add_index(IN tbl VARCHAR(64), IN idx VARCHAR(64), IN ddl TEXT)
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM INFORMATION_SCHEMA.STATISTICS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = tbl
-      AND INDEX_NAME = idx
-  ) THEN
-    SET @s = CONCAT('ALTER TABLE ', tbl, ' ADD ', ddl);
-    PREPARE stmt FROM @s;
-    EXECUTE stmt;
-    DEALLOCATE PREPARE stmt;
-  END IF;
-END$$
-DELIMITER ;
-
-CALL mig_075_add_index(
-  'employee_schedule_history',
-  'idx_esh_emp_validity',
-  'INDEX idx_esh_emp_validity (employee_id, valid_from, valid_to)'
-);
-
-DROP PROCEDURE IF EXISTS mig_075_add_index;
+-- 072 ya creó idx_esh_emp_rango (employee_id, valid_from, valid_to), que es
+-- exactamente el índice requerido para resolver vigencias/solapamientos.
+-- No se agrega un índice duplicado en 075.
 
 SELECT 'Migración 075 lista: metadata de snapshot histórico y policies versionadas' AS info;
