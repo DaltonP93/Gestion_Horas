@@ -372,6 +372,57 @@ describe('effective configuration', () => {
     expect(r.calculation_mode_candidate).toBe('historical_fallback');
   });
 
+  test('Turnera conserva policies versionadas y target semanal del perfil histórico', async () => {
+    wireBaseDb();
+    const full = [{
+      id: 4,
+      employee_id: 1,
+      valid_from: '2026-01-01',
+      valid_to: null,
+      check_in: '08:00:00',
+      check_out: '17:00:00',
+      work_days: '2,3,4,5,6',
+      snapshot_version: 2,
+      weekly_target_minutes: 2160,
+      work_regime: 'special',
+      rounding_policy: 'nearest_5',
+      rounding_policy_version: 3,
+      rounding_policy_config: JSON.stringify({ step: 5 }),
+      overtime_policy: 'rrhh_review',
+      overtime_policy_version: 2,
+      overtime_policy_config: JSON.stringify({ approval: true }),
+    }];
+
+    // getHistory() es la consulta adicional del effective endpoint.
+    const oldImpl = sequelize.query.getMockImplementation();
+    sequelize.query.mockImplementation(async (sql, opts) => {
+      if (/FROM employee_schedule_history h/.test(sql)) return [full];
+      return oldImpl(sql, opts);
+    });
+
+    mockLoadWorkdayConfig.mockResolvedValue({
+      historyFor: () => [],
+      forDate: () => ({
+        source: 'shift_assignment',
+        shift_schedule_id: 11,
+        check_in: '18:00:00',
+        check_out: '06:00:00',
+        daily_target_minutes: 720,
+        weekly_target_minutes: 2880,
+        break_mode: 'punched',
+        break_minutes: 0,
+      }),
+    });
+
+    const r = await svc.getEffectiveConfiguration(1, '2026-08-30');
+    expect(r.profile.weekly_target_minutes).toBe(2160);
+    expect(r.profile.daily_target_minutes).toBe(720);
+    expect(r.profile.rounding_policy_version).toBe(3);
+    expect(r.profile.rounding_policy_config).toEqual({ step: 5 });
+    expect(r.profile.overtime_policy_version).toBe(2);
+    expect(r.turnera.daily_target_minutes).toBe(720);
+  });
+
   test('dos turneras incompatibles exponen conflicto y no declaran jornada esperada', async () => {
     wireBaseDb();
     mockLoadWorkdayConfig.mockResolvedValue({
