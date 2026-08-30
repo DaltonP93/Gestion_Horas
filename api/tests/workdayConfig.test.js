@@ -84,6 +84,44 @@ describe('precedencia de configuración', () => {
     expect(sinTurnera.source).toBe('schedule_history');
   });
 
+  test('Turnera define CUÁNDO pero el perfil individual conserva el target semanal', async () => {
+    mockTablas({
+      history: [{
+        employee_id: 1, history_id: 44, schedule_id: 5,
+        valid_from: '2024-01-01', valid_to: null,
+        check_in: '07:00:00', check_out: '15:00:00',
+        work_days: '2,3,4,5,6',
+        break_mode: 'none',
+        weekly_target_minutes: 2160, // 36 h individuales
+        work_regime: 'special',
+        overtime_policy: 'rrhh_review',
+      }],
+      assignments: [{
+        employee_id: 1, work_date: '2024-12-15', segment: 1, kind: 'work',
+        start_time: '18:00:00', end_time: '06:00:00',
+        minutes: 720, break_minutes: 0,
+        shift_schedule_id: 9,
+        weekly_target_minutes: 2880, // default genérico de la Turnera
+      }],
+      contracts: [{
+        contract_id: 7, employee_id: 1, start_date: '2024-01-01', end_date: null,
+      }],
+    });
+
+    const resolver = await loadWorkdayConfig([1], RANGO);
+    const cfg = resolver.forDate(1, '2024-12-15');
+
+    expect(cfg.source).toBe('shift_assignment');
+    expect(cfg.check_in).toBe('18:00:00');
+    expect(cfg.check_out).toBe('06:00:00');
+    expect(cfg.daily_target_minutes).toBe(720); // plan del día
+    expect(cfg.weekly_target_minutes).toBe(2160); // perfil individual
+    expect(cfg.work_regime).toBe('special');
+    expect(cfg.overtime_policy).toBe('rrhh_review');
+    expect(cfg.contract_id).toBe(7);
+    expect(cfg.profile_history_id).toBe(44);
+  });
+
   test('una turnera en borrador NO se usa', async () => {
     // El SQL filtra `ss.status = 'published'`, así que un borrador nunca llega.
     mockTablas({ assignments: [] });
