@@ -122,6 +122,23 @@ describe('precedencia de configuración', () => {
     expect(cfg.profile_history_id).toBe(44);
   });
 
+  test('Turnera sin perfil individual NO inventa target semanal contractual', async () => {
+    mockTablas({
+      assignments: [{
+        employee_id: 1, work_date: '2024-12-15', segment: 1, kind: 'work',
+        start_time: '08:00:00', end_time: '17:00:00',
+        minutes: 480, break_minutes: 60,
+        shift_schedule_id: 9,
+        weekly_target_minutes: 2880,
+      }],
+    });
+    const resolver = await loadWorkdayConfig([1], RANGO);
+    const cfg = resolver.forDate(1, '2024-12-15');
+    expect(cfg.source).toBe('shift_assignment');
+    expect(cfg.shift_weekly_target_minutes).toBe(2880);
+    expect(cfg.weekly_target_minutes).toBeNull();
+  });
+
   test('una turnera en borrador NO se usa', async () => {
     // El SQL filtra `ss.status = 'published'`, así que un borrador nunca llega.
     mockTablas({ assignments: [] });
