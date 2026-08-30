@@ -262,9 +262,12 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
           const profile = tramo && !tramo.config_incomplete ? tramo : null;
           return {
             ...cfg,
-            weekly_target_minutes: profile?.weekly_target_minutes
-              ?? cfg.weekly_target_minutes
-              ?? null,
+            // El weekly target de shift_schedules es un dato de PLANIFICACIÓN
+            // de la Turnera, no prueba del objetivo contractual individual.
+            // Sin perfil histórico explícito el target del empleado queda
+            // DESCONOCIDO; no se inventan 48 h por el default de la cabecera.
+            shift_weekly_target_minutes: cfg.weekly_target_minutes ?? null,
+            weekly_target_minutes: profile?.weekly_target_minutes ?? null,
             work_regime: profile?.work_regime ?? null,
             night_start: profile?.night_start ?? null,
             night_end: profile?.night_end ?? null,
