@@ -46,7 +46,7 @@ describe('precedencia de configuración', () => {
       history: [{
         employee_id: 1, schedule_id: 5,
         valid_from: '2024-01-01', valid_to: null,
-        check_in: '07:00:00', check_out: '15:00:00',
+        check_in: '07:00:00', check_out: '15:00:00', work_days: '2,3,4,5,6',
         tolerance_in: 10, tolerance_out: 0,
         break_mode: 'fixed_unpaid', break_minutes: 30, break_after_minutes: 0,
         weekly_target_minutes: 2880, daily_target_minutes: null,
@@ -63,7 +63,7 @@ describe('precedencia de configuración', () => {
     mockTablas({
       history: [{
         employee_id: 1, schedule_id: 5, valid_from: '2024-01-01', valid_to: null,
-        check_in: '07:00:00', check_out: '15:00:00', break_mode: 'none',
+        check_in: '07:00:00', check_out: '15:00:00', work_days: '2,3,4,5,6', break_mode: 'none',
       }],
       assignments: [{
         employee_id: 1, work_date: '2024-12-15', segment: 1, kind: 'work',
@@ -125,7 +125,7 @@ describe('precedencia de configuración', () => {
     mockTablas({
       history: [{
         employee_id: 1, valid_from: '2024-01-01', valid_to: null,
-        check_in: '08:00:00', check_out: '17:00:00', break_mode: 'none',
+        check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6', break_mode: 'none',
       }],
       contracts: [{ contract_id: 7, employee_id: 1, start_date: '2024-01-01', end_date: null }],
     });
@@ -272,12 +272,14 @@ describe('loadScheduleHistory expone work_days', () => {
   });
 
   test('work_days se toma del SNAPSHOT del historial, no del schedules vivo', async () => {
-    // Si se leyera siempre del `schedules` vivo, editar un horario reescribiría
-    // la expectativa de los tramos históricos. El COALESCE prefiere h.work_days.
+    // FASE C elimina el fallback al `schedules` vivo: work_days debe venir del
+    // snapshot. Si falta, el tramo es config_incomplete y cae a fallback.
     mockTablas({});
     await loadWorkdayConfig([1], RANGO);
     const sql = sequelize.query.mock.calls.map((c) => c[0]).join('\n');
-    expect(sql).toMatch(/COALESCE\(h\.work_days,\s*s\.work_days\)/);
+    expect(sql).toMatch(/h\.work_days/);
+    expect(sql).not.toMatch(/COALESCE\(h\.work_days/);
+    expect(sql).not.toMatch(/LEFT JOIN schedules/);
   });
 });
 
@@ -398,13 +400,14 @@ describe('snapshot histórico fail-safe (item 9)', () => {
     expect(sql).toMatch(/h\.check_in\s+AS check_in/);
     expect(sql).not.toMatch(/COALESCE\(h\.check_in,\s*s\.check_in\)/);
     expect(sql).not.toMatch(/COALESCE\(h\.tolerance_in/);
+    expect(sql).not.toMatch(/COALESCE\(h\.work_days/);
   });
 
   test('un tramo con snapshot congelado usa su propio check_in', async () => {
     mockTablas({
       history: [{
         employee_id: 1, schedule_id: 5, valid_from: '2024-01-01', valid_to: null,
-        check_in: '08:00:00', check_out: '16:00:00', break_mode: 'fixed_unpaid',
+        check_in: '08:00:00', check_out: '16:00:00', work_days: '2,3,4,5,6', break_mode: 'fixed_unpaid',
       }],
     });
     const cfg = await loadWorkdayConfig([1], RANGO);
@@ -412,6 +415,7 @@ describe('snapshot histórico fail-safe (item 9)', () => {
     expect(r).not.toBeNull();
     expect(r.check_in).toBe('08:00:00');
     expect(r.config_incomplete).toBe(false);
+    expect(r.work_days).toEqual([2, 3, 4, 5, 6]);
   });
 
   test('un tramo histórico SIN check_in es config_incomplete → cae al fallback', async () => {
@@ -426,5 +430,45 @@ describe('snapshot histórico fail-safe (item 9)', () => {
     });
     const cfg = await loadWorkdayConfig([1], RANGO);
     expect(cfg.forDate(1, '2024-12-15')).toBeNull();
+  });
+});
+
+
+describe('FASE C — profile y snapshot completo', () => {
+  test('expone régimen y policies versionadas desde el snapshot', () => {
+    const r = normalizeConfigRow({
+      history_id: 9,
+      schedule_id: 5,
+      schedule_name_snapshot: 'Nocturno',
+      snapshot_version: 3,
+      snapshot_source: 'schedule_snapshot',
+      check_in: '20:00:00',
+      check_out: '06:00:00',
+      work_days: '1,2,3,4,5,6,7',
+      work_regime: 'night',
+      rounding_policy: 'nearest_5',
+      rounding_policy_version: 2,
+      rounding_policy_config: JSON.stringify({ step: 5 }),
+      overtime_policy: 'custom_ot',
+      overtime_policy_version: 4,
+      overtime_policy_config: JSON.stringify({ mode: 'review' }),
+    });
+    expect(r.history_id).toBe(9);
+    expect(r.schedule_name_snapshot).toBe('Nocturno');
+    expect(r.snapshot_version).toBe(3);
+    expect(r.work_regime).toBe('night');
+    expect(r.rounding_policy).toBe('nearest_5');
+    expect(r.rounding_policy_config).toEqual({ step: 5 });
+    expect(r.overtime_policy_version).toBe(4);
+    expect(r.config_incomplete).toBe(false);
+  });
+
+  test('work_days ausente vuelve el snapshot incompleto aunque tenga horas', () => {
+    const r = normalizeConfigRow({
+      check_in: '08:00:00',
+      check_out: '17:00:00',
+      work_days: null,
+    });
+    expect(r.config_incomplete).toBe(true);
   });
 });
