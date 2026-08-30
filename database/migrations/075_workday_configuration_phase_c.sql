@@ -75,7 +75,7 @@ CALL mig_075_add_col(
 CALL mig_075_add_col(
   'employee_schedule_history',
   'snapshot_source',
-  "VARCHAR(30) NOT NULL DEFAULT 'manual' AFTER snapshot_version"
+  'VARCHAR(30) NOT NULL DEFAULT ''manual'' AFTER snapshot_version'
 );
 
 CALL mig_075_add_col(
