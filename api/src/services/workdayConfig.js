@@ -97,8 +97,13 @@ async function loadScheduleHistory(employeeIds) {
 
   const rows = await consultarOpcional('employee_schedule_history', `
     SELECT
+      h.id AS history_id,
       h.employee_id,
       h.schedule_id,
+      h.schedule_name_snapshot,
+      h.snapshot_version,
+      h.snapshot_source,
+      h.change_reason,
       DATE_FORMAT(h.valid_from, '%Y-%m-%d') AS valid_from,
       DATE_FORMAT(h.valid_to,   '%Y-%m-%d') AS valid_to,
       -- FAIL-SAFE HISTÓRICO: los campos imprescindibles se leen SÓLO del snapshot
@@ -118,14 +123,19 @@ async function loadScheduleHistory(employeeIds) {
       h.break_after_minutes,
       h.weekly_target_minutes,
       h.daily_target_minutes,
+      h.work_regime,
+      h.overtime_policy,
+      h.overtime_policy_version,
+      h.overtime_policy_config,
+      h.rounding_policy,
+      h.rounding_policy_version,
+      h.rounding_policy_config,
       h.night_start,
       h.night_end,
-      -- work_days conserva el respaldo al schedules vivo por compatibilidad con
-      -- el estado actual (todavía no hay escritor que lo snapshotee); el
-      -- contrato de FASE C es snapshotearlo también.
-      COALESCE(h.work_days, s.work_days) AS work_days
+      -- FASE C: work_days es parte del snapshot y NO cae al schedules vivo.
+      -- Si falta, la fila queda config_incomplete y el motor usa fallback.
+      h.work_days
     FROM employee_schedule_history h
-    LEFT JOIN schedules s ON s.id = h.schedule_id
     WHERE h.employee_id IN (${marcas(ids.length)})
     ORDER BY h.employee_id, h.valid_from
   `, ids);
@@ -421,16 +431,28 @@ function normalizeConfigRow(r) {
   const hora = (v) => (v != null ? String(v) : null);
   const num = (v) => (v != null ? Number(v) : null);
   const checkIn = hora(r.check_in);
+  const checkOut = hora(r.check_out);
+  const workDays = parseWorkDays(r.work_days);
+  const json = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'object') return v;
+    try { return JSON.parse(v); } catch { return null; }
+  };
   return {
+    history_id: num(r.history_id),
     schedule_id: num(r.schedule_id),
+    schedule_name_snapshot: r.schedule_name_snapshot || null,
+    snapshot_version: num(r.snapshot_version) || 1,
+    snapshot_source: r.snapshot_source || null,
+    change_reason: r.change_reason || null,
     valid_from: r.valid_from,
     valid_to: r.valid_to,
     check_in: checkIn,
-    // Un tramo histórico SIN hora de entrada snapshoteada es config_incomplete:
-    // no se puede calcular atraso ni jornada esperada de forma confiable y NO se
-    // completa con el horario vivo. El consumidor lo trata como fallback.
-    config_incomplete: checkIn == null,
-    check_out: hora(r.check_out),
+    check_out: checkOut,
+    // Un tramo histórico debe ser AUTOSUFICIENTE: entrada, salida y días
+    // laborables se leen exclusivamente del snapshot. Si falta cualquiera,
+    // se prefiere fallback antes que consultar un schedule mutable.
+    config_incomplete: checkIn == null || checkOut == null || !workDays?.length,
     tolerance_in: r.tolerance_in != null ? Number(r.tolerance_in) : 0,
     tolerance_out: r.tolerance_out != null ? Number(r.tolerance_out) : 0,
     break_mode: r.break_mode || 'punched',
@@ -438,12 +460,18 @@ function normalizeConfigRow(r) {
     break_after_minutes: r.break_after_minutes != null ? Number(r.break_after_minutes) : 0,
     weekly_target_minutes: num(r.weekly_target_minutes),
     daily_target_minutes: num(r.daily_target_minutes),
+    work_regime: r.work_regime || null,
+    overtime_policy: r.overtime_policy || null,
+    overtime_policy_version: num(r.overtime_policy_version),
+    overtime_policy_config: json(r.overtime_policy_config),
+    rounding_policy: r.rounding_policy || null,
+    rounding_policy_version: num(r.rounding_policy_version),
+    rounding_policy_config: json(r.rounding_policy_config),
     night_start: hora(r.night_start),
     night_end: hora(r.night_end),
-    // Días laborables del horario, ya normalizados a un array de DAYOFWEEK
-    // (1=Domingo … 7=Sábado, la convención de la migración 046). Se resuelve
-    // acá una sola vez para que el CSV crudo no circule por todo el motor.
-    work_days: parseWorkDays(r.work_days),
+    // Días laborables del snapshot, ya normalizados a DAYOFWEEK
+    // (1=Domingo … 7=Sábado).
+    work_days: workDays,
   };
 }
 
