@@ -174,6 +174,60 @@ describe('createHistory', () => {
   });
 });
 
+
+describe('updateHistory — snapshot no mutable', () => {
+  test('editar el perfil NO relee schedules ni cambia el horario congelado', async () => {
+    const existing = {
+      id: 10,
+      employee_id: 1,
+      schedule_id: 7,
+      schedule_name_snapshot: 'Nocturno viejo',
+      valid_from: '2024-01-01',
+      valid_to: null,
+      check_in: '20:00:00',
+      check_out: '06:00:00',
+      tolerance_in: 10,
+      tolerance_out: 5,
+      break_mode: 'fixed_unpaid',
+      break_minutes: 30,
+      break_after_minutes: 0,
+      weekly_target_minutes: 2520,
+      daily_target_minutes: 420,
+      work_regime: 'night',
+      work_days: '2,3,4,5,6',
+      snapshot_version: 1,
+      snapshot_source: 'schedule_snapshot',
+    };
+    let readCount = 0;
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/SELECT id, employee_id FROM employee_schedule_history/.test(sql)) return [[{ id: 10, employee_id: 1 }]];
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[]];
+      if (/WHERE id = \? LIMIT 1 FOR UPDATE/.test(sql)) return [[existing]];
+      if (/FROM employee_schedule_history/.test(sql) && /valid_from/.test(sql) && /FOR UPDATE/.test(sql)) return [[]];
+      if (/UPDATE employee_schedule_history SET/.test(sql)) return [{ affectedRows: 1 }];
+      if (/WHERE id = \? LIMIT 1/.test(sql)) {
+        readCount += 1;
+        return [[{ ...existing, weekly_target_minutes: 2160, snapshot_version: 2, snapshot_source: 'correction' }]];
+      }
+      return [[]];
+    });
+
+    const result = await svc.updateHistory(10, {
+      weekly_target_minutes: 2160,
+      reason: 'Cambio de carga',
+    }, 99);
+
+    expect(result.after.check_in).toBe('20:00:00');
+    expect(result.after.weekly_target_minutes).toBe(2160);
+    expect(result.after.snapshot_version).toBe(2);
+    expect(readCount).toBe(1);
+
+    const sqls = sequelize.query.mock.calls.map((x) => x[0]).join('\n');
+    expect(sqls).not.toMatch(/FROM schedules/);
+  });
+});
+
 describe('effective configuration', () => {
   function wireBaseDb({ permission = null, holiday = null } = {}) {
     sequelize.query.mockImplementation(async (sql) => {
