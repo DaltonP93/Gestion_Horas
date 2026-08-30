@@ -216,6 +216,41 @@ describe('createHistory', () => {
 });
 
 
+describe('schedule vs profile', () => {
+  test('cambiar horario conserva carga/régimen/policies del perfil', () => {
+    const nuevoHorario = svc.snapshotFromSchedule({
+      ...schedule,
+      id: 8,
+      name: 'Diurno nuevo',
+      check_in: '07:00:00',
+      check_out: '15:00:00',
+      break_minutes: 0,
+    }, {});
+    const composed = svc.composeScheduleWithProfile(nuevoHorario, {
+      weekly_target_minutes: 2160,
+      daily_target_minutes: 360,
+      work_regime: 'special',
+      night_start: '20:00:00',
+      night_end: '06:00:00',
+      rounding_policy: 'nearest_5',
+      rounding_policy_version: 3,
+      rounding_policy_config: { step: 5 },
+      overtime_policy: 'rrhh_review',
+      overtime_policy_version: 2,
+      overtime_policy_config: { approval: true },
+    });
+
+    expect(composed.schedule_id).toBe(8);
+    expect(composed.check_in).toBe('07:00:00');
+    expect(composed.check_out).toBe('15:00:00');
+    expect(composed.break_mode).toBe('none');
+    expect(composed.weekly_target_minutes).toBe(2160);
+    expect(composed.work_regime).toBe('special');
+    expect(composed.rounding_policy_version).toBe(3);
+    expect(composed.overtime_policy_version).toBe(2);
+  });
+});
+
 describe('updateHistory — snapshot no mutable', () => {
   test('editar el perfil NO relee schedules ni cambia el horario congelado', async () => {
     const existing = {
