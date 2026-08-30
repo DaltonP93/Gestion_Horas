@@ -49,6 +49,34 @@ function asyncHandler(fn) {
   return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+function auditSnapshot(row) {
+  if (!row) return null;
+  return {
+    employee_id: row.employee_id,
+    schedule_id: row.schedule_id ?? null,
+    valid_from: row.valid_from ?? null,
+    valid_to: row.valid_to ?? null,
+    check_in: row.check_in ?? null,
+    check_out: row.check_out ?? null,
+    tolerance_in: row.tolerance_in ?? null,
+    tolerance_out: row.tolerance_out ?? null,
+    work_days: row.work_days ?? null,
+    break_mode: row.break_mode ?? null,
+    break_minutes: row.break_minutes ?? null,
+    break_after_minutes: row.break_after_minutes ?? null,
+    weekly_target_minutes: row.weekly_target_minutes ?? null,
+    daily_target_minutes: row.daily_target_minutes ?? null,
+    work_regime: row.work_regime ?? null,
+    night_start: row.night_start ?? null,
+    night_end: row.night_end ?? null,
+    rounding_policy: row.rounding_policy ?? null,
+    rounding_policy_version: row.rounding_policy_version ?? null,
+    overtime_policy: row.overtime_policy ?? null,
+    overtime_policy_version: row.overtime_policy_version ?? null,
+    snapshot_version: row.snapshot_version ?? null,
+  };
+}
+
 router.get('/meta', view, (_req, res) => {
   res.json({
     validity: {
@@ -113,18 +141,8 @@ const updateHistory = asyncHandler(async (req, res) => {
     entity_id: id,
     details: {
       employee_id: result.after.employee_id,
-      before: {
-        valid_from: result.before.valid_from,
-        valid_to: result.before.valid_to,
-        schedule_id: result.before.schedule_id,
-        snapshot_version: result.before.snapshot_version,
-      },
-      after: {
-        valid_from: result.after.valid_from,
-        valid_to: result.after.valid_to,
-        schedule_id: result.after.schedule_id,
-        snapshot_version: result.after.snapshot_version,
-      },
+      before: auditSnapshot(result.before),
+      after: auditSnapshot(result.after),
       reason: req.body?.reason || req.body?.change_reason || null,
     },
   });
