@@ -247,6 +247,8 @@ async function ensureEmployee(employeeId, transaction) {
 async function getHistory(employeeId) {
   const [rows] = await sequelize.query(`
     SELECT h.*,
+           DATE_FORMAT(h.valid_from, '%Y-%m-%d') AS valid_from,
+           DATE_FORMAT(h.valid_to, '%Y-%m-%d') AS valid_to,
            u.full_name AS created_by_name,
            uu.full_name AS updated_by_name
       FROM employee_schedule_history h
