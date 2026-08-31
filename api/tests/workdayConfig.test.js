@@ -134,6 +134,13 @@ describe('precedencia de configuración', () => {
     });
     const resolver = await loadWorkdayConfig([1], RANGO);
     expect(resolver.forDate(1, '2024-12-15')).toBeNull();
+
+    // La planificación queda visible para RR.HH. sin transformarse en regla de
+    // cálculo antes de que exista snapshot histórico completo.
+    const planning = resolver.planningForDate(1, '2024-12-15');
+    expect(planning.source).toBe('shift_assignment');
+    expect(planning.check_in).toBe('08:00:00');
+    expect(planning.weekly_target_minutes).toBe(2880);
   });
 
   test('una turnera en borrador NO se usa', async () => {
