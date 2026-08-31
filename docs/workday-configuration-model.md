@@ -205,6 +205,38 @@ FASE C no:
 - escribe ATT2000;
 - despliega migraciones.
 
+## Validación histórica antes de configurar empleados
+
+La configuración nueva no es requisito para consultar Marcadas históricas.
+Mientras no exista snapshot completo y vigente, el reporte usa
+`historical_fallback`.
+
+Antes de cualquier rollout de configuración se debe comprobar, en sólo lectura:
+
+```bash
+cd api
+
+# 1) ¿La configuración existente cambiaría algo de 2025?
+node scripts/workday-config-impact-audit.js \
+  --from 2025-01-01 --to 2025-12-31 \
+  --require-no-impact
+
+# 2) Contraste del motor histórico contra el algoritmo legacy.
+node scripts/workday-engine-audit.js \
+  --from 2025-01-01 --to 2025-12-31 \
+  --out ./auditoria-2025
+```
+
+Para una instalación todavía no parametrizada se espera en el primer comando:
+
+- `configured = 0`;
+- `changed_by_configuration = 0`;
+- las jornadas con marcajes permanecen en `historical_fallback`.
+
+Este gate demuestra **aislamiento de configuración**, no corrige marcajes
+históricos desplazados. La reparación de `attendance_logs` sigue siendo un
+proceso separado y controlado contra ATT2000 READ-ONLY.
+
 ## Rollout posterior
 
 El rollout real pertenece a FASE E:
