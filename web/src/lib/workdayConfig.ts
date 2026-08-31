@@ -212,10 +212,36 @@ function minutesFromHours(v: string, maxHours?: number): number | null {
   return Math.round(n * 60)
 }
 
-function intOrZero(v: string): number {
-  const n = Number(v)
-  return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0
+function boundedInt(
+  v: string,
+  label: string,
+  { min = 0, max = Number.MAX_SAFE_INTEGER, nullable = false } = {},
+): number | null {
+  const s = String(v ?? '').trim()
+  if (!s) return nullable ? null : 0
+  const n = Number(s)
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw new Error(`${label} debe ser un entero entre ${min} y ${max}`)
+  }
+  return n
 }
+
+function isCivilDate(v: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ''))
+  if (!m) return false
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3])
+  if (mo < 1 || mo > 12 || d < 1) return false
+  const leap = y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)
+  const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1]
+  return d <= dim
+}
+
+function isClockTime(v: string): boolean {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(v || ''))
+  return !!m
+}
+
+const POLICY_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i
 
 function parsePolicyConfig(v: string, label: string): Record<string, unknown> | null {
   const s = String(v ?? '').trim()
@@ -234,18 +260,40 @@ function parsePolicyConfig(v: string, label: string): Record<string, unknown> | 
 
 export function validateWorkdayConfigForm(form: WorkdayConfigForm): string[] {
   const errors: string[] = []
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(form.valid_from)) errors.push('La fecha "Vigente desde" es obligatoria.')
-  if (form.valid_to && form.valid_to < form.valid_from) errors.push('"Vigente hasta" no puede ser anterior a "Vigente desde".')
-  if (!/^\d{2}:\d{2}$/.test(form.check_in)) errors.push('La hora de entrada es obligatoria.')
-  if (!/^\d{2}:\d{2}$/.test(form.check_out)) errors.push('La hora de salida es obligatoria.')
-  if (!form.work_days.length) errors.push('Seleccioná al menos un día laborable.')
+  if (!isCivilDate(form.valid_from)) errors.push('La fecha "Vigente desde" debe ser una fecha real.')
+  if (form.valid_to && !isCivilDate(form.valid_to)) errors.push('"Vigente hasta" debe ser una fecha real.')
+  if (form.valid_to && isCivilDate(form.valid_from) && isCivilDate(form.valid_to) && form.valid_to < form.valid_from) {
+    errors.push('"Vigente hasta" no puede ser anterior a "Vigente desde".')
+  }
+  if (!isClockTime(form.check_in)) errors.push('La hora de entrada debe ser HH:mm válida.')
+  if (!isClockTime(form.check_out)) errors.push('La hora de salida debe ser HH:mm válida.')
+  if (!form.work_days.length || form.work_days.some(d => !Number.isInteger(d) || d < 1 || d > 7)) {
+    errors.push('Seleccioná días laborables válidos.')
+  }
   if ((form.night_start && !form.night_end) || (!form.night_start && form.night_end)) {
     errors.push('La franja nocturna requiere inicio y fin.')
+  } else if (form.night_start && (!isClockTime(form.night_start) || !isClockTime(form.night_end))) {
+    errors.push('La franja nocturna debe usar horas HH:mm válidas.')
   }
+
+  try { boundedInt(form.tolerance_in, 'Tolerancia de entrada', { min: 0, max: 1440 }) } catch (e: any) { errors.push(e.message) }
+  try { boundedInt(form.tolerance_out, 'Tolerancia de salida', { min: 0, max: 1440 }) } catch (e: any) { errors.push(e.message) }
+  try { boundedInt(form.break_minutes, 'Minutos de descanso', { min: 0, max: 1440 }) } catch (e: any) { errors.push(e.message) }
+  try { boundedInt(form.break_after_minutes, 'Umbral de descanso', { min: 0, max: 1440 }) } catch (e: any) { errors.push(e.message) }
   try { minutesFromHours(form.weekly_target_hours, 168) } catch (e: any) { errors.push(e.message) }
   try { minutesFromHours(form.daily_target_hours, 24) } catch (e: any) { errors.push(e.message) }
+
+  if (form.rounding_policy.trim() && !POLICY_RE.test(form.rounding_policy.trim())) {
+    errors.push('Policy de redondeo debe ser un código de hasta 40 caracteres (letras, números, _ o -).')
+  }
+  if (form.overtime_policy.trim() && !POLICY_RE.test(form.overtime_policy.trim())) {
+    errors.push('Policy de horas extra debe ser un código de hasta 40 caracteres (letras, números, _ o -).')
+  }
+  try { boundedInt(form.rounding_policy_version, 'Versión de redondeo', { min: 1, max: 100000, nullable: true }) } catch (e: any) { errors.push(e.message) }
+  try { boundedInt(form.overtime_policy_version, 'Versión de horas extra', { min: 1, max: 100000, nullable: true }) } catch (e: any) { errors.push(e.message) }
   try { parsePolicyConfig(form.rounding_policy_config, 'Config de redondeo') } catch (e: any) { errors.push(e.message) }
   try { parsePolicyConfig(form.overtime_policy_config, 'Config de horas extra') } catch (e: any) { errors.push(e.message) }
+
   return [...new Set(errors)]
 }
 
@@ -258,22 +306,22 @@ export function workdayConfigPayload(form: WorkdayConfigForm) {
     valid_to: form.valid_to || null,
     check_in: form.check_in,
     check_out: form.check_out,
-    tolerance_in: intOrZero(form.tolerance_in),
-    tolerance_out: intOrZero(form.tolerance_out),
+    tolerance_in: boundedInt(form.tolerance_in, 'Tolerancia de entrada', { min: 0, max: 1440 }) as number,
+    tolerance_out: boundedInt(form.tolerance_out, 'Tolerancia de salida', { min: 0, max: 1440 }) as number,
     work_days: [...form.work_days].sort((a, b) => a - b),
     break_mode: form.break_mode,
-    break_minutes: intOrZero(form.break_minutes),
-    break_after_minutes: intOrZero(form.break_after_minutes),
+    break_minutes: boundedInt(form.break_minutes, 'Minutos de descanso', { min: 0, max: 1440 }) as number,
+    break_after_minutes: boundedInt(form.break_after_minutes, 'Umbral de descanso', { min: 0, max: 1440 }) as number,
     weekly_target_minutes: minutesFromHours(form.weekly_target_hours, 168),
     daily_target_minutes: minutesFromHours(form.daily_target_hours, 24),
     work_regime: form.work_regime || null,
     night_start: form.night_start || null,
     night_end: form.night_end || null,
     rounding_policy: form.rounding_policy.trim() || null,
-    rounding_policy_version: form.rounding_policy_version ? Number(form.rounding_policy_version) : null,
+    rounding_policy_version: boundedInt(form.rounding_policy_version, 'Versión de redondeo', { min: 1, max: 100000, nullable: true }),
     rounding_policy_config: parsePolicyConfig(form.rounding_policy_config, 'Config de redondeo'),
     overtime_policy: form.overtime_policy.trim() || null,
-    overtime_policy_version: form.overtime_policy_version ? Number(form.overtime_policy_version) : null,
+    overtime_policy_version: boundedInt(form.overtime_policy_version, 'Versión de horas extra', { min: 1, max: 100000, nullable: true }),
     overtime_policy_config: parsePolicyConfig(form.overtime_policy_config, 'Config de horas extra'),
     reason: form.reason.trim() || null,
     notes: form.notes.trim() || null,
