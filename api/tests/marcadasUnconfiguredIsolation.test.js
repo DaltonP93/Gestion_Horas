@@ -129,6 +129,68 @@ describe('Marcadas — aislamiento de empleados no configurados', () => {
     expectFallback(await run());
   });
 
+  test('Turnera 2025 + snapshot recién desde 2026 sigue en fallback para 2025', async () => {
+    wireDb({
+      history: [{
+        history_id: 7,
+        employee_id: 1,
+        schedule_id: 10,
+        valid_from: '2026-09-01',
+        valid_to: null,
+        check_in: '07:00:00',
+        check_out: '15:00:00',
+        work_days: '2,3,4,5,6',
+        break_mode: 'fixed_unpaid',
+        break_minutes: 30,
+        weekly_target_minutes: 2160,
+      }],
+      assignments: [{
+        employee_id: 1,
+        work_date: '2025-03-09',
+        segment: 1,
+        kind: 'work',
+        start_time: '08:00:00',
+        end_time: '17:00:00',
+        minutes: 480,
+        break_minutes: 60,
+        shift_schedule_id: 99,
+        weekly_target_minutes: 2880,
+      }],
+    });
+
+    expectFallback(await run());
+  });
+
+  test('Turnera 2025 + snapshot incompleto tampoco activa configured', async () => {
+    wireDb({
+      history: [{
+        history_id: 8,
+        employee_id: 1,
+        schedule_id: 10,
+        valid_from: '2025-01-01',
+        valid_to: null,
+        check_in: '07:00:00',
+        check_out: null,
+        work_days: '2,3,4,5,6',
+        weekly_target_minutes: 2160,
+      }],
+      assignments: [{
+        employee_id: 1,
+        work_date: '2025-03-09',
+        segment: 1,
+        kind: 'work',
+        start_time: '08:00:00',
+        end_time: '17:00:00',
+        minutes: 480,
+        break_minutes: 60,
+        shift_schedule_id: 99,
+        weekly_target_minutes: 2880,
+      }],
+    });
+
+    expectFallback(await run());
+  });
+
   test('contrato vigente sin snapshot tampoco activa configured', async () => {
     wireDb({
       contracts: [{
