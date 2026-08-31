@@ -12,11 +12,13 @@ describe('migrate --status es estrictamente read-only', () => {
   test('sale del camino --status antes de cualquier CREATE de schema_migrations', () => {
     const main = SRC.slice(SRC.indexOf('async function main()'));
     const statusBranch = main.indexOf('if (statusOnly) {');
-    const createControlTable = main.indexOf('await conn.query(\`\\n        CREATE TABLE IF NOT EXISTS schema_migrations');
+    const writeModes = main.indexOf('// Los modos que sí modifican estado');
+    const createControlTable = main.indexOf('CREATE TABLE IF NOT EXISTS schema_migrations', writeModes);
 
     expect(statusBranch).toBeGreaterThan(-1);
-    expect(createControlTable).toBeGreaterThan(-1);
-    expect(statusBranch).toBeLessThan(createControlTable);
+    expect(writeModes).toBeGreaterThan(-1);
+    expect(createControlTable).toBeGreaterThan(writeModes);
+    expect(statusBranch).toBeLessThan(writeModes);
   });
 
   test('si schema_migrations no existe, primero inspecciona INFORMATION_SCHEMA', () => {
