@@ -65,6 +65,15 @@ export default function ConfiguracionLaboralEmpleadoPage() {
   const canView = perms?.configuracion ? !!perms.configuracion.can_view : roleAllowed
   const canUpdate = perms?.configuracion ? !!perms.configuracion.can_update : roleAllowed
 
+  const metaQ = useQuery({
+    queryKey: ['workday-config-meta'],
+    queryFn: () => workdayConfigApi.meta(),
+    enabled: canView,
+    staleTime: 30_000,
+  })
+  const writesEnabled = metaQ.data?.writes_enabled === true
+  const canWrite = canUpdate && writesEnabled
+
   const employeeQ = useQuery({
     queryKey: ['employee', employeeId],
     queryFn: () => employeesApi.get(employeeId),
@@ -127,7 +136,7 @@ export default function ConfiguracionLaboralEmpleadoPage() {
             {employee ? `${employee.first_name} ${employee.last_name} · #${employee.code}` : 'Empleado'}
           </p>
         </div>
-        {canUpdate && (
+        {canWrite && (
           <button
             onClick={() => { setCreating(true); setEditing(null) }}
             className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
@@ -136,6 +145,17 @@ export default function ConfiguracionLaboralEmpleadoPage() {
           </button>
         )}
       </div>
+
+      {canUpdate && !writesEnabled && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/[0.08] dark:text-amber-200">
+          <p className="font-semibold">Modo sólo lectura</p>
+          <p className="mt-1">
+            Las vigencias pueden consultarse, pero crear/corregir/cerrar está bloqueado por
+            <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 text-xs dark:bg-amber-500/10">WORKDAY_CONFIG_WRITE_ENABLED</code>.
+            Esto es intencional durante el rollout.
+          </p>
+        </div>
+      )}
 
       {notice && (
         <div
@@ -226,7 +246,7 @@ export default function ConfiguracionLaboralEmpleadoPage() {
               <HistoryRow
                 key={row.id}
                 row={row}
-                canUpdate={canUpdate}
+                canUpdate={canWrite}
                 onEdit={() => { setEditing(row); setCreating(false) }}
                 onClose={() => setClosing(row)}
               />
