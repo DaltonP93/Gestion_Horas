@@ -71,14 +71,26 @@ Los solapamientos se bloquean en dos capas:
 
 No se backfillea el horario actual hacia el pasado.
 
-## Precedencia
+## Precedencia y gate de activación
+
+La configuración nueva es **opt-in por empleado y vigencia**. Mientras un
+empleado no tenga un snapshot histórico completo que cubra la fecha consultada,
+el cálculo permanece en `historical_fallback`, aunque existan horarios actuales,
+contratos o filas de Turnera. Esos datos no deben alterar reportes históricos
+antes de que RR.HH. configure formalmente al empleado.
+
+Una vez que existe snapshot completo y vigente:
 
 1. `shift_assignments` de una Turnera **published** para la fecha define el
    horario/segmentos del día.
-2. `employee_schedule_history` vigente y completo aporta el perfil individual
+2. `employee_schedule_history` vigente aporta el perfil individual
    (carga semanal, régimen y policies).
 3. `employee_contracts` sólo aporta identidad/trazabilidad contractual.
-4. Sin configuración confiable: `historical_fallback`.
+4. Si el snapshot falta o está incompleto: `historical_fallback`.
+
+Esto permite consultar 2024/2025 correctamente con el motor histórico mientras
+la parametrización se incorpora progresivamente empleado por empleado, sin
+cambiar los datos ni aplicar reglas actuales al pasado.
 
 `shift_schedules.weekly_target_minutes` se conserva como target de
 **planificación de la Turnera**, pero no sustituye el objetivo contractual
