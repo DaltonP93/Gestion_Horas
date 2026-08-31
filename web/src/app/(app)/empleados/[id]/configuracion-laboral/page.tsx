@@ -19,7 +19,7 @@ import {
   isRetroactive,
   modeLabel,
   validateWorkdayConfigForm,
-  workdayConfigPayload,
+  workdayConfigPayloadForSave,
   type EffectiveWorkdayConfig,
   type WorkdayConfigForm,
   type WorkdayHistoryRow,
@@ -451,7 +451,7 @@ function WorkdayConfigDialog({
 
     setSaving(true)
     try {
-      const payload = workdayConfigPayload(form)
+      const payload = workdayConfigPayloadForSave(form, row)
       if (editing && row) await workdayConfigApi.update(row.id, payload)
       else await workdayConfigApi.create(employeeId, payload)
       await onSaved()
