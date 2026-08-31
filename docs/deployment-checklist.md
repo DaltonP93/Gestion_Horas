@@ -5,9 +5,11 @@ Checklist para dejar el sistema 100% funcional en producción.
 ## 1. Base de datos
 
 > **FASE E / Workday Engine:** en una producción existente, NO ejecutar todavía
-> `npm run migrate` a ciegas. Primero usar `npm run migrate:status` y
-> `node api/scripts/workday-config-preflight.js --json`. Las migraciones
-> 072→075 requieren rollout controlado, backup y flags del motor en OFF.
+> `npm run migrate` a ciegas. Para un preflight estrictamente sin escritura usar
+> `node api/scripts/workday-config-preflight.js --json`. El comando
+> `migrate:status` queda reservado hasta integrar #154, que corrige su antiguo
+> efecto lateral de crear `schema_migrations`. Las migraciones 072→075 requieren
+> rollout controlado, backup y flags del motor en OFF.
 
 - [ ] Aplicar migration 005:
   ```bash
