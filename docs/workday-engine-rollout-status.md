@@ -83,8 +83,11 @@ recargar procesos, ejecutar:
 ```bash
 cd /var/www/html/Gestion_Horas/api
 
-npm run migrate:status
+# Preflight estrictamente READ-ONLY:
 node scripts/workday-config-preflight.js --json
+
+# migrate:status sólo después de integrar #154:
+# npm run migrate:status
 
 node scripts/workday-config-impact-audit.js \
   --from 2025-01-01 \
