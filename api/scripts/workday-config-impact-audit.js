@@ -16,7 +16,7 @@
  *   node scripts/workday-config-impact-audit.js --from 2025-01-01 --to 2025-01-31 --json
  *   node scripts/workday-config-impact-audit.js --from 2025-01-01 --to 2025-12-31 --require-no-impact
  *
- * No contiene INSERT/UPDATE/DELETE y no importa ningún módulo ATT2000.
+ * No contiene operaciones SQL de escritura y no importa ningún módulo ATT2000.
  */
 
 'use strict';
