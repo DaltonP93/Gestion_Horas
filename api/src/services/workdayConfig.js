@@ -86,6 +86,78 @@ async function consultarOpcional(tabla, sql, replacements) {
 const idsValidos = (lista) => [...new Set((lista || []).map(Number).filter(Number.isInteger))];
 const marcas = (n) => Array.from({ length: n }, () => '?').join(',');
 
+// 075 es metadata aditiva. El motor de reportes debe seguir funcionando si el
+// deploy de código ocurre antes de aplicar 075 sobre una instalación que ya
+// tenga 072/073. Sólo degradamos ante columnas CONOCIDAS de 075; cualquier otro
+// ER_BAD_FIELD_ERROR sigue siendo un fallo real de esquema.
+let phaseCMetadataAvailable = null;
+let phaseCMetadataWarned = false;
+const PHASE_C_METADATA_COLUMNS = [
+  'schedule_name_snapshot',
+  'snapshot_version',
+  'snapshot_source',
+  'change_reason',
+  'rounding_policy_version',
+  'rounding_policy_config',
+  'overtime_policy_version',
+  'overtime_policy_config',
+];
+
+function errorLayers(err) {
+  const out = [];
+  let cur = err;
+  for (let i = 0; cur && i < 4; i++) {
+    out.push(cur);
+    cur = cur.parent || cur.original || cur.cause;
+  }
+  return out;
+}
+
+function isMissingPhaseCMetadataError(err) {
+  return errorLayers(err).some((e) => {
+    if (!e) return false;
+    const badField = e.code === 'ER_BAD_FIELD_ERROR' || e.errno === 1054 || e.sqlState === '42S22';
+    if (!badField) return false;
+    const msg = String(e.sqlMessage || e.message || '').toLowerCase();
+    return PHASE_C_METADATA_COLUMNS.some((col) => msg.includes(col));
+  });
+}
+
+function phaseCMetadataSelect(enabled) {
+  if (enabled) {
+    return `
+      h.schedule_name_snapshot,
+      h.snapshot_version,
+      h.snapshot_source,
+      h.change_reason,`;
+  }
+  return `
+      NULL AS schedule_name_snapshot,
+      1 AS snapshot_version,
+      NULL AS snapshot_source,
+      NULL AS change_reason,`;
+}
+
+function phaseCPolicySelect(enabled) {
+  if (enabled) {
+    return `
+      h.overtime_policy_version,
+      h.overtime_policy_config,
+      h.rounding_policy_version,
+      h.rounding_policy_config,`;
+  }
+  return `
+      NULL AS overtime_policy_version,
+      NULL AS overtime_policy_config,
+      NULL AS rounding_policy_version,
+      NULL AS rounding_policy_config,`;
+}
+
+function resetPhaseCMetadataCacheForTests() {
+  phaseCMetadataAvailable = null;
+  phaseCMetadataWarned = false;
+}
+
 /**
  * Historial de vigencia de los empleados pedidos.
  *
@@ -95,15 +167,12 @@ async function loadScheduleHistory(employeeIds) {
   const ids = idsValidos(employeeIds);
   if (!ids.length) return new Map();
 
-  const rows = await consultarOpcional('employee_schedule_history', `
+  const queryHistory = (withPhaseCMetadata) => consultarOpcional('employee_schedule_history', `
     SELECT
       h.id AS history_id,
       h.employee_id,
       h.schedule_id,
-      h.schedule_name_snapshot,
-      h.snapshot_version,
-      h.snapshot_source,
-      h.change_reason,
+      ${phaseCMetadataSelect(withPhaseCMetadata)}
       DATE_FORMAT(h.valid_from, '%Y-%m-%d') AS valid_from,
       DATE_FORMAT(h.valid_to,   '%Y-%m-%d') AS valid_to,
       -- FAIL-SAFE HISTÓRICO: los campos imprescindibles se leen SÓLO del snapshot
@@ -125,11 +194,8 @@ async function loadScheduleHistory(employeeIds) {
       h.daily_target_minutes,
       h.work_regime,
       h.overtime_policy,
-      h.overtime_policy_version,
-      h.overtime_policy_config,
       h.rounding_policy,
-      h.rounding_policy_version,
-      h.rounding_policy_config,
+      ${phaseCPolicySelect(withPhaseCMetadata)}
       h.night_start,
       h.night_end,
       -- FASE C: work_days es parte del snapshot y NO cae al schedules vivo.
@@ -139,6 +205,27 @@ async function loadScheduleHistory(employeeIds) {
     WHERE h.employee_id IN (${marcas(ids.length)})
     ORDER BY h.employee_id, h.valid_from
   `, ids);
+
+  let rows;
+  if (phaseCMetadataAvailable === false) {
+    rows = await queryHistory(false);
+  } else {
+    try {
+      rows = await queryHistory(true);
+      phaseCMetadataAvailable = true;
+    } catch (err) {
+      if (!isMissingPhaseCMetadataError(err)) throw err;
+      phaseCMetadataAvailable = false;
+      if (!phaseCMetadataWarned) {
+        phaseCMetadataWarned = true;
+        logger.warn(
+          'Metadata de workday-config FASE C no disponible (migración 075 pendiente): '
+          + 'reportes continúan con snapshot 072/073 sin policies versionadas',
+        );
+      }
+      rows = await queryHistory(false);
+    }
+  }
 
   const porEmpleado = new Map();
   for (const r of rows) {
@@ -553,4 +640,6 @@ module.exports = {
   parseWorkDays,
   vigenteEn,
   configDesdeTurnera,
+  isMissingPhaseCMetadataError,
+  resetPhaseCMetadataCacheForTests,
 };
