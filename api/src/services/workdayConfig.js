@@ -86,6 +86,78 @@ async function consultarOpcional(tabla, sql, replacements) {
 const idsValidos = (lista) => [...new Set((lista || []).map(Number).filter(Number.isInteger))];
 const marcas = (n) => Array.from({ length: n }, () => '?').join(',');
 
+// 075 es metadata aditiva. El motor de reportes debe seguir funcionando si el
+// deploy de código ocurre antes de aplicar 075 sobre una instalación que ya
+// tenga 072/073. Sólo degradamos ante columnas CONOCIDAS de 075; cualquier otro
+// ER_BAD_FIELD_ERROR sigue siendo un fallo real de esquema.
+let phaseCMetadataAvailable = null;
+let phaseCMetadataWarned = false;
+const PHASE_C_METADATA_COLUMNS = [
+  'schedule_name_snapshot',
+  'snapshot_version',
+  'snapshot_source',
+  'change_reason',
+  'rounding_policy_version',
+  'rounding_policy_config',
+  'overtime_policy_version',
+  'overtime_policy_config',
+];
+
+function errorLayers(err) {
+  const out = [];
+  let cur = err;
+  for (let i = 0; cur && i < 4; i++) {
+    out.push(cur);
+    cur = cur.parent || cur.original || cur.cause;
+  }
+  return out;
+}
+
+function isMissingPhaseCMetadataError(err) {
+  return errorLayers(err).some((e) => {
+    if (!e) return false;
+    const badField = e.code === 'ER_BAD_FIELD_ERROR' || e.errno === 1054 || e.sqlState === '42S22';
+    if (!badField) return false;
+    const msg = String(e.sqlMessage || e.message || '').toLowerCase();
+    return PHASE_C_METADATA_COLUMNS.some((col) => msg.includes(col));
+  });
+}
+
+function phaseCMetadataSelect(enabled) {
+  if (enabled) {
+    return `
+      h.schedule_name_snapshot,
+      h.snapshot_version,
+      h.snapshot_source,
+      h.change_reason,`;
+  }
+  return `
+      NULL AS schedule_name_snapshot,
+      1 AS snapshot_version,
+      NULL AS snapshot_source,
+      NULL AS change_reason,`;
+}
+
+function phaseCPolicySelect(enabled) {
+  if (enabled) {
+    return `
+      h.overtime_policy_version,
+      h.overtime_policy_config,
+      h.rounding_policy_version,
+      h.rounding_policy_config,`;
+  }
+  return `
+      NULL AS overtime_policy_version,
+      NULL AS overtime_policy_config,
+      NULL AS rounding_policy_version,
+      NULL AS rounding_policy_config,`;
+}
+
+function resetPhaseCMetadataCacheForTests() {
+  phaseCMetadataAvailable = null;
+  phaseCMetadataWarned = false;
+}
+
 /**
  * Historial de vigencia de los empleados pedidos.
  *
@@ -95,10 +167,12 @@ async function loadScheduleHistory(employeeIds) {
   const ids = idsValidos(employeeIds);
   if (!ids.length) return new Map();
 
-  const rows = await consultarOpcional('employee_schedule_history', `
+  const queryHistory = (withPhaseCMetadata) => consultarOpcional('employee_schedule_history', `
     SELECT
+      h.id AS history_id,
       h.employee_id,
       h.schedule_id,
+      ${phaseCMetadataSelect(withPhaseCMetadata)}
       DATE_FORMAT(h.valid_from, '%Y-%m-%d') AS valid_from,
       DATE_FORMAT(h.valid_to,   '%Y-%m-%d') AS valid_to,
       -- FAIL-SAFE HISTÓRICO: los campos imprescindibles se leen SÓLO del snapshot
@@ -118,17 +192,40 @@ async function loadScheduleHistory(employeeIds) {
       h.break_after_minutes,
       h.weekly_target_minutes,
       h.daily_target_minutes,
+      h.work_regime,
+      h.overtime_policy,
+      h.rounding_policy,
+      ${phaseCPolicySelect(withPhaseCMetadata)}
       h.night_start,
       h.night_end,
-      -- work_days conserva el respaldo al schedules vivo por compatibilidad con
-      -- el estado actual (todavía no hay escritor que lo snapshotee); el
-      -- contrato de FASE C es snapshotearlo también.
-      COALESCE(h.work_days, s.work_days) AS work_days
+      -- FASE C: work_days es parte del snapshot y NO cae al schedules vivo.
+      -- Si falta, la fila queda config_incomplete y el motor usa fallback.
+      h.work_days
     FROM employee_schedule_history h
-    LEFT JOIN schedules s ON s.id = h.schedule_id
     WHERE h.employee_id IN (${marcas(ids.length)})
     ORDER BY h.employee_id, h.valid_from
   `, ids);
+
+  let rows;
+  if (phaseCMetadataAvailable === false) {
+    rows = await queryHistory(false);
+  } else {
+    try {
+      rows = await queryHistory(true);
+      phaseCMetadataAvailable = true;
+    } catch (err) {
+      if (!isMissingPhaseCMetadataError(err)) throw err;
+      phaseCMetadataAvailable = false;
+      if (!phaseCMetadataWarned) {
+        phaseCMetadataWarned = true;
+        logger.warn(
+          'Metadata de workday-config FASE C no disponible (migración 075 pendiente): '
+          + 'reportes continúan con snapshot 072/073 sin policies versionadas',
+        );
+      }
+      rows = await queryHistory(false);
+    }
+  }
 
   const porEmpleado = new Map();
   for (const r of rows) {
@@ -240,22 +337,69 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
   return {
     historyFor: (employeeId) => history.get(Number(employeeId)) || [],
 
+    // Visibilidad administrativa de la Turnera, SIN afirmar que ya puede
+    // usarse para cálculo. FASE C/UI puede mostrar una planificación existente
+    // aunque el empleado todavía no tenga snapshot histórico completo.
+    planningForDate(employeeId, workDate) {
+      const id = Number(employeeId);
+      const tramos = assignments.get(`${id}|${workDate}`);
+      return tramos && tramos.length ? configDesdeTurnera(tramos) : null;
+    },
+
     forDate(employeeId, workDate) {
       const id = Number(employeeId);
+      const tramo = vigenteEn(history.get(id), workDate);
+      const contractId = contratoVigente(contracts.get(id), workDate);
 
       // 1. Turnera publicada para esa fecha exacta.
+      //
+      // La Turnera responde CUÁNDO trabaja ese día; el perfil histórico responde
+      // CUÁNTO y bajo qué políticas. Por eso una asignación diaria NO debe
+      // reemplazar silenciosamente el target contractual individual por el
+      // weekly_target genérico de la cabecera de la turnera (p. ej. 48 h para
+      // una persona cuyo perfil vigente es 36 h). El target de la turnera queda
+      // como fallback cuando no existe perfil histórico.
       const tramos = assignments.get(`${id}|${workDate}`);
       if (tramos && tramos.length) {
+        // GATE DE ACTIVACIÓN: una Turnera publicada por sí sola NO habilita
+        // cálculo configurado. Mientras el empleado no tenga un snapshot
+        // histórico COMPLETO y vigente, el reporte debe seguir exactamente en
+        // historical_fallback. Esto evita que datos de planificación existentes
+        // cambien 2024/2025 antes de que RR.HH. configure formalmente al
+        // empleado.
+        const profile = tramo && !tramo.config_incomplete ? tramo : null;
+        if (!profile) return null;
+
         const cfg = configDesdeTurnera(tramos);
-        if (cfg) return cfg;
+        if (cfg) {
+          return {
+            ...cfg,
+            // El weekly target de shift_schedules es un dato de PLANIFICACIÓN
+            // de la Turnera, no prueba del objetivo contractual individual.
+            // Sin perfil histórico explícito el target del empleado queda
+            // DESCONOCIDO; no se inventan 48 h por el default de la cabecera.
+            shift_weekly_target_minutes: cfg.weekly_target_minutes ?? null,
+            weekly_target_minutes: profile?.weekly_target_minutes ?? null,
+            work_regime: profile?.work_regime ?? null,
+            night_start: profile?.night_start ?? null,
+            night_end: profile?.night_end ?? null,
+            rounding_policy: profile?.rounding_policy ?? null,
+            rounding_policy_version: profile?.rounding_policy_version ?? null,
+            rounding_policy_config: profile?.rounding_policy_config ?? null,
+            overtime_policy: profile?.overtime_policy ?? null,
+            overtime_policy_version: profile?.overtime_policy_version ?? null,
+            overtime_policy_config: profile?.overtime_policy_config ?? null,
+            contract_id: contractId,
+            profile_history_id: profile?.history_id ?? null,
+          };
+        }
       }
 
       // 2. Horario habitual con vigencia.
-      const tramo = vigenteEn(history.get(id), workDate);
       if (tramo && !tramo.config_incomplete) {
         return {
           ...tramo,
-          contract_id: contratoVigente(contracts.get(id), workDate),
+          contract_id: contractId,
           source: 'schedule_history',
         };
       }
@@ -421,16 +565,28 @@ function normalizeConfigRow(r) {
   const hora = (v) => (v != null ? String(v) : null);
   const num = (v) => (v != null ? Number(v) : null);
   const checkIn = hora(r.check_in);
+  const checkOut = hora(r.check_out);
+  const workDays = parseWorkDays(r.work_days);
+  const json = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'object') return v;
+    try { return JSON.parse(v); } catch { return null; }
+  };
   return {
+    history_id: num(r.history_id),
     schedule_id: num(r.schedule_id),
+    schedule_name_snapshot: r.schedule_name_snapshot || null,
+    snapshot_version: num(r.snapshot_version) || 1,
+    snapshot_source: r.snapshot_source || null,
+    change_reason: r.change_reason || null,
     valid_from: r.valid_from,
     valid_to: r.valid_to,
     check_in: checkIn,
-    // Un tramo histórico SIN hora de entrada snapshoteada es config_incomplete:
-    // no se puede calcular atraso ni jornada esperada de forma confiable y NO se
-    // completa con el horario vivo. El consumidor lo trata como fallback.
-    config_incomplete: checkIn == null,
-    check_out: hora(r.check_out),
+    check_out: checkOut,
+    // Un tramo histórico debe ser AUTOSUFICIENTE: entrada, salida y días
+    // laborables se leen exclusivamente del snapshot. Si falta cualquiera,
+    // se prefiere fallback antes que consultar un schedule mutable.
+    config_incomplete: checkIn == null || checkOut == null || !workDays?.length,
     tolerance_in: r.tolerance_in != null ? Number(r.tolerance_in) : 0,
     tolerance_out: r.tolerance_out != null ? Number(r.tolerance_out) : 0,
     break_mode: r.break_mode || 'punched',
@@ -438,12 +594,18 @@ function normalizeConfigRow(r) {
     break_after_minutes: r.break_after_minutes != null ? Number(r.break_after_minutes) : 0,
     weekly_target_minutes: num(r.weekly_target_minutes),
     daily_target_minutes: num(r.daily_target_minutes),
+    work_regime: r.work_regime || null,
+    overtime_policy: r.overtime_policy || null,
+    overtime_policy_version: num(r.overtime_policy_version),
+    overtime_policy_config: json(r.overtime_policy_config),
+    rounding_policy: r.rounding_policy || null,
+    rounding_policy_version: num(r.rounding_policy_version),
+    rounding_policy_config: json(r.rounding_policy_config),
     night_start: hora(r.night_start),
     night_end: hora(r.night_end),
-    // Días laborables del horario, ya normalizados a un array de DAYOFWEEK
-    // (1=Domingo … 7=Sábado, la convención de la migración 046). Se resuelve
-    // acá una sola vez para que el CSV crudo no circule por todo el motor.
-    work_days: parseWorkDays(r.work_days),
+    // Días laborables del snapshot, ya normalizados a DAYOFWEEK
+    // (1=Domingo … 7=Sábado).
+    work_days: workDays,
   };
 }
 
@@ -478,4 +640,6 @@ module.exports = {
   parseWorkDays,
   vigenteEn,
   configDesdeTurnera,
+  isMissingPhaseCMetadataError,
+  resetPhaseCMetadataCacheForTests,
 };
