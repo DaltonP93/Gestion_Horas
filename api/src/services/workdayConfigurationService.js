@@ -666,7 +666,9 @@ async function getEffectiveConfiguration(employeeId, date) {
   ]);
 
   const cfg = resolver.forDate(employeeId, date);
-  const planning = resolver.planningForDate ? resolver.planningForDate(employeeId, date) : null;
+  const planning = resolver.planningForDate
+    ? resolver.planningForDate(employeeId, date)
+    : (cfg?.source === 'shift_assignment' ? cfg : null);
   // Para la API de FASE C se usa la fila COMPLETA (incluye metadata/policies de
   // la 075), no sólo la proyección mínima que consume WorkdayEngine.
   const historicalRow = vigenteEn(fullHistory, date);
