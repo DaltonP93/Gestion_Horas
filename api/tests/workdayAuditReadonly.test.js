@@ -23,6 +23,7 @@ const SCRIPTS = [
   'daily-summary-dryrun.js',
   'benchmark-marcadas-memory.js',
   'workday-config-preflight.js',
+  'workday-config-impact-audit.js',
 ];
 
 /** Quita comentarios: el encabezado NOMBRA las sentencias prohibidas. */
