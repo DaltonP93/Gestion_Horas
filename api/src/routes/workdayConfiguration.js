@@ -120,10 +120,8 @@ const createHistory = asyncHandler(async (req, res) => {
     entity_id: created.id,
     details: {
       employee_id: id,
-      valid_from: created.valid_from,
-      valid_to: created.valid_to,
-      schedule_id: created.schedule_id,
-      snapshot_version: created.snapshot_version,
+      before: null,
+      after: auditSnapshot(created),
       reason: created.change_reason || null,
     },
   });
@@ -165,8 +163,8 @@ const closeHistory = asyncHandler(async (req, res) => {
     entity_id: id,
     details: {
       employee_id: result.after.employee_id,
-      before_valid_to: result.before.valid_to,
-      valid_to: result.after.valid_to,
+      before: auditSnapshot(result.before),
+      after: auditSnapshot(result.after),
       reason: req.body?.reason || null,
     },
   });
