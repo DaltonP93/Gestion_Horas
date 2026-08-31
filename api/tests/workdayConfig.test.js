@@ -122,7 +122,7 @@ describe('precedencia de configuración', () => {
     expect(cfg.profile_history_id).toBe(44);
   });
 
-  test('Turnera sin perfil individual NO inventa target semanal contractual', async () => {
+  test('Turnera sin snapshot histórico completo NO activa configured', async () => {
     mockTablas({
       assignments: [{
         employee_id: 1, work_date: '2024-12-15', segment: 1, kind: 'work',
@@ -133,10 +133,7 @@ describe('precedencia de configuración', () => {
       }],
     });
     const resolver = await loadWorkdayConfig([1], RANGO);
-    const cfg = resolver.forDate(1, '2024-12-15');
-    expect(cfg.source).toBe('shift_assignment');
-    expect(cfg.shift_weekly_target_minutes).toBe(2880);
-    expect(cfg.weekly_target_minutes).toBeNull();
+    expect(resolver.forDate(1, '2024-12-15')).toBeNull();
   });
 
   test('una turnera en borrador NO se usa', async () => {
@@ -149,10 +146,14 @@ describe('precedencia de configuración', () => {
     expect(sql).toMatch(/ss\.status = 'published'/);
   });
 
-  test('un día off/vacaciones no devuelve horario: marca non_working', async () => {
-    // Devolver un horario para un día de vacaciones haría que la persona
-    // figure llegando tarde todos los días que no trabajó.
+  test('un día off/vacaciones de Turnera sólo aplica si el empleado ya tiene snapshot vigente', async () => {
+    // La planificación por sí sola no debe cambiar reportes históricos de un
+    // empleado todavía no configurado.
     mockTablas({
+      history: [{
+        employee_id: 1, schedule_id: 5, valid_from: '2024-01-01', valid_to: null,
+        check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6',
+      }],
       assignments: [{
         employee_id: 1, work_date: '2024-12-15', segment: 1, kind: 'vacation',
         start_time: null, end_time: null, shift_schedule_id: 9,
@@ -163,6 +164,17 @@ describe('precedencia de configuración', () => {
     expect(r.non_working).toBe(true);
     expect(r.kind).toBe('vacation');
     expect(r.check_in).toBeUndefined();
+  });
+
+  test('Turnera off/vacation sin snapshot del empleado queda en fallback', async () => {
+    mockTablas({
+      assignments: [{
+        employee_id: 1, work_date: '2024-12-15', segment: 1, kind: 'vacation',
+        start_time: null, end_time: null, shift_schedule_id: 9,
+      }],
+    });
+    const cfg = await loadWorkdayConfig([1], RANGO);
+    expect(cfg.forDate(1, '2024-12-15')).toBeNull();
   });
 
   test('el contrato solo NO habilita el modo configured', async () => {
