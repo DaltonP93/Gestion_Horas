@@ -27,6 +27,8 @@
   - vigencias sin solapamiento;
   - perfil laboral;
   - effective-config;
+  - gate opt-in por empleado/vigencia: sin snapshot completo => historical_fallback;
+  - auditor read-only de impacto histórico antes/después de configuración;
   - APIs + RBAC + auditoría;
   - migración 075;
   - tests/CI/Codex pendientes de cierre.
@@ -52,6 +54,8 @@ Durante FASE C:
 - NO continuar reparación histórica febrero 2025+.
 - NO modificar `attendance_logs` históricos.
 - ATT2000 estrictamente READ-ONLY.
+- La existencia de Turnera/contrato/schedule actual NO activa configured sin snapshot histórico completo.
+- Reportes 2024/2025 de empleados no configurados deben permanecer en historical_fallback.
 
 ## Base
 
