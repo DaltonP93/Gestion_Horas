@@ -117,6 +117,8 @@ async function main() {
   }
 
   const flags = {
+    WORKDAY_CONFIG_WRITE_ENABLED:
+      process.env.WORKDAY_CONFIG_WRITE_ENABLED === 'true',
     WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED:
       process.env.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED === 'true',
     WORKDAY_ENGINE_STATUS_074_ENABLED:
@@ -128,7 +130,8 @@ async function main() {
     && dailyHas074
     && migrations.every((m) => m.recorded);
 
-  const safeForDevelopment = !flags.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED
+  const safeForDevelopment = !flags.WORKDAY_CONFIG_WRITE_ENABLED
+    && !flags.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED
     && !flags.WORKDAY_ENGINE_STATUS_074_ENABLED;
 
   const report = {
@@ -153,8 +156,10 @@ async function main() {
     console.log(`columnas faltantes: ${missingHistoryColumns.length ? missingHistoryColumns.join(', ') : 'ninguna'}`);
     console.log(`daily_summary ENUM 074: ${dailyHas074 ? 'sí' : 'no'}`);
     for (const m of migrations) console.log(`${m.recorded ? '✓' : '✗'} ${m.filename}`);
-    console.log(`writer flag: ${flags.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED ? 'ON' : 'OFF'}`);
+    console.log(`config writer flag: ${flags.WORKDAY_CONFIG_WRITE_ENABLED ? 'ON' : 'OFF'}`);
+    console.log(`summary writer flag: ${flags.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED ? 'ON' : 'OFF'}`);
     console.log(`status074 flag: ${flags.WORKDAY_ENGINE_STATUS_074_ENABLED ? 'ON' : 'OFF'}`);
+    console.log(`flags seguros pre-rollout: ${safeForDevelopment ? 'SÍ' : 'NO'}`);
     console.log(`schema listo FASE C: ${schemaReady ? 'SÍ' : 'NO'}`);
   }
 
