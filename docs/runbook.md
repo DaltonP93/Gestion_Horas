@@ -55,10 +55,12 @@ pm2 logs sishoras-bridge --lines 20   # confirmar arranque OK
 **Diagnóstico en orden:**
 
 ### 1. ¿El reloj tiene red?
+
+Tomar la IP del dispositivo desde la configuración local/BD; no mantener IPs
+internas en el repositorio.
+
 ```bash
-ping -c 3 10.0.0.160   # Comedor
-ping -c 3 10.0.0.161   # Lavadero
-ping -c 3 10.0.0.162   # Gerencia
+ping -c 3 <DEVICE_IP>
 ```
 
 ### 2. ¿Está enviando heartbeat PUSH?
@@ -72,10 +74,10 @@ Si `lastSeen` es > 15 min atrás o null → el reloj perdió la conexión ADMS.
 ### 3. ¿Está configurado ADMS?
 Ir al reloj: Menú → Comm → Cloud Server → confirmar IP/puerto (ver `docs/zkteco-push-setup.md`).
 
-### 4. Como fallback, forzar descarga manual
-```
-/configuracion → Relojes → Conectar al reloj → Descargar → att2000 + MySQL local
-```
+### 4. Como fallback, forzar una lectura/descarga controlada
+
+Usar sólo los caminos que terminan en MySQL local. att2000 es fuente de lectura:
+ningún procedimiento de recovery debe escribir en SQL Server.
 
 ### 5. Si ningún flujo funciona
 Verificar que el **servicio Windows Attendance Management** en ADVENTISTA esté detenido:
@@ -106,24 +108,18 @@ sudo mysql asistencia < database/migrations/005_attendance_logs_unique.sql
 
 ---
 
-## 🔥 Incidente: att2000 no recibe marcajes
+## 🔥 Incidente: no se puede LEER att2000
+
+att2000 es **estrictamente READ-ONLY**. SisHoras no replica marcajes hacia
+`CHECKINOUT` y no existe `ATT2000_WRITE_ENABLED` en el código actual.
 
 **Diagnóstico:**
-```bash
-# Confirmar que el flag está activo
-grep ATT2000_WRITE_ENABLED /var/www/html/Gestion_Horas/api/.env
+- verificar conectividad de red al SQL Server;
+- verificar que el usuario configurado tenga permisos de sólo lectura;
+- ejecutar el test de conexión/introspección disponible en el sistema;
+- revisar logs por errores de conexión o timeout.
 
-# Probar conexión manual
-curl -X POST http://localhost:4000/api/sync/test-conn \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"host":"sqlserver.example.internal","user":"sishoras_integration","password":"<CONFIGURAR_SOLO_EN_API_ENV>"}'
-```
-
-**Solución:**
-1. `ATT2000_WRITE_ENABLED=true` en `api/.env`
-2. `pm2 reload sishoras-api`
-3. Verificar logs: `pm2 logs sishoras-api | grep writeCheckinOut`
+**Nunca** resolver este incidente agregando INSERT/UPDATE/DELETE sobre att2000.
 
 ---
 
@@ -131,27 +127,24 @@ curl -X POST http://localhost:4000/api/sync/test-conn \
 
 1. Dar de alta en UI: `/configuracion → Relojes → + Nuevo`
    - Nombre, IP, puerto 4370
-2. Configurar ADMS en el reloj apuntando a `10.0.0.20:8080` (IP, no nombre: el reloj va con *Domain Name* en OFF)
-3. (Opcional) agregar SN a whitelist: `api/.env` → `ZKTECO_PUSH_WHITELIST=101,103,1,NUEVO_SN`
+2. Configurar ADMS apuntando a la IP/puerto local del Bridge definidos en el entorno (no documentarlos en el repositorio público).
+3. (Opcional) agregar el serial a la whitelist local de `api/.env`.
 4. `pm2 reload sishoras-api sishoras-bridge`
 5. Verificar con `curl http://localhost:8081/push-state`
 
 ---
 
-## 🔧 Procedimiento: migrar código de empleado
+## 🔧 Procedimiento: cambiar el código de un empleado
 
-Cuando el código ZKTeco (`USERID`) de un empleado cambia:
+Los cambios administrativos de identificación se hacen únicamente en la base
+propia de SisHoras y mediante las pantallas/procedimientos soportados.
 
-```sql
--- En MySQL
-UPDATE employees SET code = 'NUEVO_CODE' WHERE id = <id>;
+att2000 no se modifica desde Gestion_Horas. Si la fuente externa requiere una
+corrección de USERID, debe realizarla el administrador del sistema fuente con su
+propio procedimiento, fuera de SisHoras y con trazabilidad independiente.
 
--- En att2000 (SQL Server)
-UPDATE USERINFO SET USERID = <nuevo> WHERE USERID = <viejo>;
-UPDATE CHECKINOUT SET USERID = <nuevo> WHERE USERID = <viejo>;
-```
-
-Los marcajes históricos ya en `attendance_logs` no necesitan cambio — `employee_id` es FK interno.
+Los marcajes históricos ya persistidos en `attendance_logs` usan
+`employee_id` interno y no deben reescribirse por este motivo.
 
 ---
 
