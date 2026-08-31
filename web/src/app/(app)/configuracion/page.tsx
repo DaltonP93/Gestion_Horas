@@ -82,6 +82,10 @@ function ConfiguracionPageInner() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Configuración</h1>
         <div className="flex gap-2 flex-wrap">
+          <a href="/configuracion/laboral"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium shadow-sm hover:bg-indigo-700 transition-colors">
+            👥 Configuración laboral
+          </a>
           <a href="/configuracion/turnos"
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium shadow-sm hover:bg-blue-700 transition-colors">
             🕐 Turnos y horarios

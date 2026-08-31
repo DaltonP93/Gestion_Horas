@@ -134,6 +134,21 @@ export const employeesApi = {
     api.get(`/api/employees/${id}/attendance`, { params }).then(r => r.data),
 }
 
+// ─── Configuración laboral histórica ─────────────────────────────
+export const workdayConfigApi = {
+  meta: () => api.get('/api/workday-config/meta').then(r => r.data),
+  history: (employeeId: number) =>
+    api.get(`/api/workday-config/employees/${employeeId}/history`).then(r => r.data),
+  effective: (employeeId: number, date: string) =>
+    api.get(`/api/workday-config/employees/${employeeId}/effective`, { params: { date } }).then(r => r.data),
+  create: (employeeId: number, data: object) =>
+    api.post(`/api/workday-config/employees/${employeeId}/history`, data).then(r => r.data),
+  update: (historyId: number, data: object) =>
+    api.patch(`/api/workday-config/history/${historyId}`, data).then(r => r.data),
+  close: (historyId: number, validTo: string, reason?: string) =>
+    api.post(`/api/workday-config/history/${historyId}/close`, { valid_to: validTo, reason }).then(r => r.data),
+}
+
 // ─── Asistencia ───────────────────────────────────────────────────
 export const attendanceApi = {
   live: ()              => api.get('/api/attendance/live').then(r => r.data),
