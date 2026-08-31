@@ -22,6 +22,26 @@ const WORK_REGIMES = new Set(['day', 'night', 'mixed', 'special', 'custom']);
 const BREAK_MODES = new Set(['none', 'punched', 'fixed_unpaid']);
 const POLICY_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 
+/**
+ * Kill switch global de writers de configuración laboral.
+ *
+ * Fail-closed: sólo el string exacto "true" habilita escrituras. La ausencia
+ * de la variable, "false", "1", "TRUE", etc. mantienen el sistema en sólo
+ * lectura. Los GET/effective-config/reportes no dependen de este switch.
+ */
+function isWriteEnabled() {
+  return process.env.WORKDAY_CONFIG_WRITE_ENABLED === 'true';
+}
+
+function assertWriteEnabled() {
+  if (isWriteEnabled()) return;
+  throw httpError(
+    503,
+    'WORKDAY_CONFIG_WRITES_DISABLED',
+    'La configuración laboral está en modo sólo lectura durante el rollout',
+  );
+}
+
 function httpError(status, code, message) {
   const err = new Error(message);
   err.status = status;
@@ -353,6 +373,7 @@ function valuesForInsert(employeeId, validFrom, validTo, snapshot, actorId, reas
 }
 
 async function createHistory(employeeId, body, actorId) {
+  assertWriteEnabled();
   const validFrom = body?.valid_from;
   const validTo = body?.valid_to || null;
   validateValidity(validFrom, validTo);
@@ -438,6 +459,7 @@ function existingAsBase(existing) {
 }
 
 async function updateHistory(id, body, actorId) {
+  assertWriteEnabled();
   const [probe] = await sequelize.query(
     'SELECT id, employee_id FROM employee_schedule_history WHERE id = ? LIMIT 1',
     { replacements: [id] },
@@ -560,6 +582,7 @@ async function updateHistory(id, body, actorId) {
 }
 
 async function closeHistory(id, validTo, actorId, reason) {
+  assertWriteEnabled();
   if (!validDateISO(validTo)) throw httpError(400, 'INVALID_VALID_TO', 'valid_to debe ser YYYY-MM-DD');
   return updateHistory(id, { valid_to: validTo, reason: reason || 'Cierre de vigencia' }, actorId);
 }
@@ -738,6 +761,8 @@ async function getEffectiveConfiguration(employeeId, date) {
 module.exports = {
   WORK_REGIMES,
   BREAK_MODES,
+  isWriteEnabled,
+  assertWriteEnabled,
   validDateISO,
   normalizeWorkDays,
   buildSnapshot,
