@@ -4,6 +4,11 @@ Checklist para dejar el sistema 100% funcional en producción.
 
 ## 1. Base de datos
 
+> **FASE E / Workday Engine:** en una producción existente, NO ejecutar todavía
+> `npm run migrate` a ciegas. Primero usar `npm run migrate:status` y
+> `node api/scripts/workday-config-preflight.js --json`. Las migraciones
+> 072→075 requieren rollout controlado, backup y flags del motor en OFF.
+
 - [ ] Aplicar migration 005:
   ```bash
   sudo mysql asistencia < database/migrations/005_attendance_logs_unique.sql
@@ -13,14 +18,23 @@ Checklist para dejar el sistema 100% funcional en producción.
 ## 2. Variables de entorno
 
 En `api/.env`:
+
 ```
-ATT2000_WRITE_ENABLED=true          # replicar PUSH → att2000.CHECKINOUT
-ATT2000_PULL_CRON=*/10 * * * *      # respaldo (opcional)
-ATT_HOST=sqlserver.example.internal
-ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
+# att2000 es FUENTE READ-ONLY. No existe ni debe agregarse un flag de escritura.
+ATT_HOST=<sqlserver-att2000>
+ATT_PORT=1433
+ATT_USER=<usuario-solo-lectura>
+ATT_PASSWORD=<secreto-local>
+ATT_DATABASE=att2000
+
+ATT2000_PULL_CRON=*/10 * * * *      # lectura periódica opcional
 BRIDGE_URL=http://localhost:8081
-ZKTECO_PUSH_WHITELIST=101,103,1     # SNs permitidos (opcional)
+ZKTECO_PUSH_WHITELIST=<seriales-autorizados-opcional>
 ```
+
+> **Invariante:** Gestion_Horas nunca ejecuta INSERT/UPDATE/DELETE sobre att2000.
+> Si un entorno todavía contiene `ATT2000_WRITE_ENABLED`, es una variable obsoleta
+> y debe eliminarse; el código actual no la consume.
 
 En `bridge/.env`:
 ```
@@ -41,20 +55,20 @@ ZKTECO_AUTO_POLL=false              # PUSH es el canal principal
 
 Verificar: `netstat -an | findstr :4370` no debe mostrar conexiones ESTABLISHED desde otra IP.
 
-## 4. Firewall Linux (servidor antigravity)
+## 4. Firewall Linux
+
+Usar el segmento LAN real del entorno; no documentarlo en el repositorio público.
 
 ```bash
-sudo ufw allow from 10.0.0.0/24 to any port 8080   # PUSH ZKTeco
-sudo ufw allow from 10.0.0.0/24 to any port 4370   # ping a relojes
+sudo ufw allow from <LAN_CIDR> to any port 8080   # PUSH ZKTeco
+sudo ufw allow from <LAN_CIDR> to any port 4370   # acceso a relojes
 sudo ufw status
 ```
 
 ## 5. Configurar relojes
 
-Ver `docs/zkteco-push-setup.md`. Para cada reloj:
-- [ ] Comedor (10.0.0.160)
-- [ ] Lavadero (10.0.0.161)
-- [ ] Gerencia (10.0.0.162)
+Ver `docs/zkteco-push-setup.md`. Repetir la validación para cada reloj autorizado
+tomando IP/serial desde la configuración local o la base de datos, no desde este repositorio.
 
 ## 6. Actualizar código + reiniciar
 
@@ -102,7 +116,7 @@ node scripts/simulate-push.js localhost:8080 TEST 123 1
 - [ ] `pm2 logs sishoras-bridge` → `PUSH de SN=...`
 - [ ] `/dashboard` → marcaje en vivo vía Socket.io
 - [ ] MySQL: `SELECT * FROM attendance_logs ORDER BY id DESC LIMIT 5;`
-- [ ] SQL Server: `SELECT TOP 5 * FROM CHECKINOUT ORDER BY CHECKTIME DESC;`
+- [ ] SQL Server att2000: sólo lectura; opcionalmente verificar que la fuente sigue accesible con un `SELECT`. No esperar replicación desde SisHoras.
 
 ## 11. Monitoreo post-deploy
 
