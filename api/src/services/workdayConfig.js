@@ -257,9 +257,17 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
       // como fallback cuando no existe perfil histórico.
       const tramos = assignments.get(`${id}|${workDate}`);
       if (tramos && tramos.length) {
+        // GATE DE ACTIVACIÓN: una Turnera publicada por sí sola NO habilita
+        // cálculo configurado. Mientras el empleado no tenga un snapshot
+        // histórico COMPLETO y vigente, el reporte debe seguir exactamente en
+        // historical_fallback. Esto evita que datos de planificación existentes
+        // cambien 2024/2025 antes de que RR.HH. configure formalmente al
+        // empleado.
+        const profile = tramo && !tramo.config_incomplete ? tramo : null;
+        if (!profile) return null;
+
         const cfg = configDesdeTurnera(tramos);
         if (cfg) {
-          const profile = tramo && !tramo.config_incomplete ? tramo : null;
           return {
             ...cfg,
             // El weekly target de shift_schedules es un dato de PLANIFICACIÓN
