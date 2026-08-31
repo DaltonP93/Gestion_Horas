@@ -666,11 +666,14 @@ async function getEffectiveConfiguration(employeeId, date) {
   ]);
 
   const cfg = resolver.forDate(employeeId, date);
+  const planning = resolver.planningForDate ? resolver.planningForDate(employeeId, date) : null;
   // Para la API de FASE C se usa la fila COMPLETA (incluye metadata/policies de
   // la 075), no sólo la proyección mínima que consume WorkdayEngine.
   const historicalRow = vigenteEn(fullHistory, date);
   const turneraConflict = Array.isArray(cfg?.conflict_shift_schedule_ids)
     && cfg.conflict_shift_schedule_ids.length > 1;
+  const planningConflict = Array.isArray(planning?.conflict_shift_schedule_ids)
+    && planning.conflict_shift_schedule_ids.length > 1;
 
   let expectedWorkday = null;
   let kind = null;
@@ -710,15 +713,18 @@ async function getEffectiveConfiguration(employeeId, date) {
     kind,
     schedule_snapshot: historicalRow || null,
     profile: profileFromConfig(profileInputForEffective(cfg, historicalRow)),
-    turnera: cfg?.source === 'shift_assignment' ? {
-      shift_schedule_id: cfg.shift_schedule_id,
-      check_in: cfg.check_in || null,
-      check_out: cfg.check_out || null,
-      segments: cfg.segments || 0,
-      weekly_target_minutes: cfg.weekly_target_minutes ?? null,
-      shift_weekly_target_minutes: cfg.shift_weekly_target_minutes ?? null,
-      daily_target_minutes: cfg.daily_target_minutes ?? null,
-      kind: cfg.kind || 'work',
+    turnera: planning?.source === 'shift_assignment' ? {
+      shift_schedule_id: planning.shift_schedule_id,
+      check_in: planning.check_in || null,
+      check_out: planning.check_out || null,
+      segments: planning.segments || 0,
+      shift_weekly_target_minutes: planning.weekly_target_minutes ?? null,
+      daily_target_minutes: planning.daily_target_minutes ?? null,
+      kind: planning.kind || 'work',
+      conflict_shift_schedule_ids: planning.conflict_shift_schedule_ids || null,
+      active_for_calculation: cfg?.source === 'shift_assignment',
+      pending_employee_configuration: cfg?.source !== 'shift_assignment',
+      planning_conflict: planningConflict,
     } : null,
     permission: exception.permission,
     holiday: exception.holiday,
