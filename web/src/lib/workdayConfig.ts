@@ -34,8 +34,11 @@ export interface WorkdayHistoryRow {
   night_end: string | null
   rounding_policy: string | null
   rounding_policy_version?: number | null
+  rounding_policy_config?: Record<string, unknown> | null
   overtime_policy: string | null
   overtime_policy_version?: number | null
+  overtime_policy_config?: Record<string, unknown> | null
+  notes?: string | null
   snapshot_version?: number | null
   snapshot_source?: string | null
   snapshot_complete?: boolean
