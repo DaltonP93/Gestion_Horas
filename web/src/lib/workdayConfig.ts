@@ -195,11 +195,12 @@ export function applyScheduleToForm(form: WorkdayConfigForm, schedule: WorkdaySc
   }
 }
 
-function minutesFromHours(v: string): number | null {
+function minutesFromHours(v: string, maxHours?: number): number | null {
   const s = String(v ?? '').trim()
   if (!s) return null
   const n = Number(s)
   if (!Number.isFinite(n) || n < 0) throw new Error('Las horas objetivo deben ser números positivos')
+  if (maxHours != null && n > maxHours) throw new Error(`Las horas objetivo no pueden superar ${maxHours} h`)
   return Math.round(n * 60)
 }
 
@@ -218,8 +219,8 @@ export function validateWorkdayConfigForm(form: WorkdayConfigForm): string[] {
   if ((form.night_start && !form.night_end) || (!form.night_start && form.night_end)) {
     errors.push('La franja nocturna requiere inicio y fin.')
   }
-  try { minutesFromHours(form.weekly_target_hours) } catch (e: any) { errors.push(e.message) }
-  try { minutesFromHours(form.daily_target_hours) } catch (e: any) { errors.push(e.message) }
+  try { minutesFromHours(form.weekly_target_hours, 168) } catch (e: any) { errors.push(e.message) }
+  try { minutesFromHours(form.daily_target_hours, 24) } catch (e: any) { errors.push(e.message) }
   return [...new Set(errors)]
 }
 
@@ -238,8 +239,8 @@ export function workdayConfigPayload(form: WorkdayConfigForm) {
     break_mode: form.break_mode,
     break_minutes: intOrZero(form.break_minutes),
     break_after_minutes: intOrZero(form.break_after_minutes),
-    weekly_target_minutes: minutesFromHours(form.weekly_target_hours),
-    daily_target_minutes: minutesFromHours(form.daily_target_hours),
+    weekly_target_minutes: minutesFromHours(form.weekly_target_hours, 168),
+    daily_target_minutes: minutesFromHours(form.daily_target_hours, 24),
     work_regime: form.work_regime || null,
     night_start: form.night_start || null,
     night_end: form.night_end || null,
