@@ -6,8 +6,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { format } from 'date-fns'
 import {
-  AlertTriangle, ArrowLeft, CalendarDays, CheckCircle2, Clock3, Edit3,
-  History, Info, Plus, Save, ShieldCheck, X,
+  AlertTriangle, ArrowLeft, CalendarDays, Clock3, Edit3,
+  History, Plus, Save, ShieldCheck, X,
 } from 'lucide-react'
 import { api, employeesApi, workdayConfigApi } from '@/lib/api'
 import { hasRole } from '@/lib/useCurrentUser'
@@ -609,11 +609,29 @@ function WorkdayConfigDialog({
               <Field label="Versión redondeo">
                 <input type="number" min={1} value={form.rounding_policy_version} onChange={e => set('rounding_policy_version', e.target.value)} className={inputCls} />
               </Field>
+              <Field label="Config redondeo (JSON)">
+                <textarea
+                  rows={4}
+                  value={form.rounding_policy_config}
+                  onChange={e => set('rounding_policy_config', e.target.value)}
+                  className={inputCls}
+                  placeholder={'{\n  "step": 5\n}'}
+                />
+              </Field>
               <Field label="Policy horas extra">
                 <input value={form.overtime_policy} onChange={e => set('overtime_policy', e.target.value)} className={inputCls} placeholder="rrhh_review, ..." />
               </Field>
               <Field label="Versión horas extra">
                 <input type="number" min={1} value={form.overtime_policy_version} onChange={e => set('overtime_policy_version', e.target.value)} className={inputCls} />
+              </Field>
+              <Field label="Config horas extra (JSON)">
+                <textarea
+                  rows={4}
+                  value={form.overtime_policy_config}
+                  onChange={e => set('overtime_policy_config', e.target.value)}
+                  className={inputCls}
+                  placeholder={'{\n  "approval": "rrhh"\n}'}
+                />
               </Field>
             </div>
             <p className="mt-3 text-xs text-slate-500">
