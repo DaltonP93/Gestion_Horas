@@ -20,10 +20,18 @@ jest.mock('../src/services/workdayConfig', () => ({
 const { sequelize } = require('../src/config/database');
 const svc = require('../src/services/workdayConfigurationService');
 
+const ORIGINAL_WRITE_FLAG = process.env.WORKDAY_CONFIG_WRITE_ENABLED;
+
 beforeEach(() => {
+  process.env.WORKDAY_CONFIG_WRITE_ENABLED = 'true';
   sequelize.query.mockReset();
   sequelize.transaction.mockClear();
   mockLoadWorkdayConfig.mockReset();
+});
+
+afterAll(() => {
+  if (ORIGINAL_WRITE_FLAG === undefined) delete process.env.WORKDAY_CONFIG_WRITE_ENABLED;
+  else process.env.WORKDAY_CONFIG_WRITE_ENABLED = ORIGINAL_WRITE_FLAG;
 });
 
 const schedule = {
@@ -37,6 +45,40 @@ const schedule = {
   work_days: '2,3,4,5,6',
   active: 1,
 };
+
+describe('kill switch de escritura', () => {
+  test('fail-closed: sólo el string exacto true habilita writers', () => {
+    for (const value of [undefined, '', 'false', '1', 'TRUE', 'yes']) {
+      if (value === undefined) delete process.env.WORKDAY_CONFIG_WRITE_ENABLED;
+      else process.env.WORKDAY_CONFIG_WRITE_ENABLED = value;
+      expect(svc.isWriteEnabled()).toBe(false);
+    }
+    process.env.WORKDAY_CONFIG_WRITE_ENABLED = 'true';
+    expect(svc.isWriteEnabled()).toBe(true);
+  });
+
+  test('createHistory bloquea antes de consultar la BD cuando el flag está OFF', async () => {
+    process.env.WORKDAY_CONFIG_WRITE_ENABLED = 'false';
+    await expect(svc.createHistory(1, {
+      schedule_id: 7,
+      valid_from: '2026-09-01',
+    }, 99)).rejects.toMatchObject({
+      status: 503,
+      code: 'WORKDAY_CONFIG_WRITES_DISABLED',
+    });
+    expect(sequelize.query).not.toHaveBeenCalled();
+    expect(sequelize.transaction).not.toHaveBeenCalled();
+  });
+
+  test('updateHistory y closeHistory también fallan cerrados', async () => {
+    delete process.env.WORKDAY_CONFIG_WRITE_ENABLED;
+    await expect(svc.updateHistory(10, { weekly_target_minutes: 2160 }, 99))
+      .rejects.toMatchObject({ status: 503, code: 'WORKDAY_CONFIG_WRITES_DISABLED' });
+    await expect(svc.closeHistory(10, '2026-09-30', 99, 'cierre'))
+      .rejects.toMatchObject({ status: 503, code: 'WORKDAY_CONFIG_WRITES_DISABLED' });
+    expect(sequelize.query).not.toHaveBeenCalled();
+  });
+});
 
 describe('snapshot puro', () => {
   test('snapshotFromSchedule congela los campos mutables del horario', () => {
