@@ -66,18 +66,19 @@ Cargar el esquema base y aplicar las migraciones con el runner (registra el
 estado en `schema_migrations`, idempotente).
 
 > **Producción existente / FASE E Workday Engine:** no ejecutar `npm run migrate`
-> de forma automática. Primero usar `npm run migrate:status` y
-> `node scripts/workday-config-preflight.js --json`. Las migraciones 072→075
-> se aplican sólo después de backup, revisión y autorización explícita, con los
-> flags de escritura del motor en OFF.
+> de forma automática. El preflight estrictamente sin escritura es
+> `node scripts/workday-config-preflight.js --json`. `migrate:status` sólo debe
+> considerarse read-only después de integrar #154. Las migraciones 072→075 se
+> aplican únicamente después de backup, revisión y autorización explícita, con
+> los flags de escritura del motor en OFF.
 
 ```bash
 mysql -u root -p asistencia < database/init.sql
 
 # Instalación nueva/vacía: runner de migraciones.
-# Producción existente: comenzar SIEMPRE por migrate:status.
+# Producción existente: usar primero workday-config-preflight.js --json.
 cd api
-npm run migrate:status     # sólo lectura
+# npm run migrate:status   # usar como read-only después de integrar #154
 # npm run migrate          # aplicar pendientes sólo dentro de un rollout aprobado
 ```
 
