@@ -14,7 +14,7 @@ export default function ConfiguracionLaboralIndexPage() {
 
   const employeesQ = useQuery({
     queryKey: ['employees', 'workday-config-index'],
-    queryFn: () => employeesApi.list({ status: 'active' }),
+    queryFn: () => employeesApi.list({ status: 'active', limit: 1000 }),
     enabled: allowed,
   })
 
@@ -89,7 +89,7 @@ export default function ConfiguracionLaboralIndexPage() {
                   </p>
                   <p className="text-xs text-slate-500">
                     #{e.code} · {e.department || e.department_name || 'Sin departamento'}
-                    {e.schedule_name ? ` · turno actual: ${e.schedule_name}` : ''}
+                    {e.schedule ? ` · turno actual: ${e.schedule}` : ''}
                   </p>
                 </div>
                 <Link
