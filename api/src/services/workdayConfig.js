@@ -242,6 +242,15 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
   return {
     historyFor: (employeeId) => history.get(Number(employeeId)) || [],
 
+    // Visibilidad administrativa de la Turnera, SIN afirmar que ya puede
+    // usarse para cálculo. FASE C/UI puede mostrar una planificación existente
+    // aunque el empleado todavía no tenga snapshot histórico completo.
+    planningForDate(employeeId, workDate) {
+      const id = Number(employeeId);
+      const tramos = assignments.get(`${id}|${workDate}`);
+      return tramos && tramos.length ? configDesdeTurnera(tramos) : null;
+    },
+
     forDate(employeeId, workDate) {
       const id = Number(employeeId);
       const tramo = vigenteEn(history.get(id), workDate);
