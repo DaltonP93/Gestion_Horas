@@ -41,6 +41,11 @@ describe('FASE C routing/RBAC/audit', () => {
     expect((route.match(/after:\s*auditSnapshot/g) || []).length).toBeGreaterThanOrEqual(3);
   });
 
+  test('meta expone el estado del kill switch de escritura', () => {
+    expect(route).toMatch(/writes_enabled:\s*svc\.isWriteEnabled\(\)/);
+    expect(route).toMatch(/write_mode:/);
+  });
+
   test('expone historial, perfil, cierre y effective-config', () => {
     expect(route).toMatch(/employees\/:employeeId\/history/);
     expect(route).toMatch(/employees\/:employeeId\/profiles/);
@@ -63,6 +68,14 @@ describe('FASE C safety del nuevo backend', () => {
     expect(service).not.toMatch(/INSERT\s+INTO\s+daily_summary/i);
     expect(service).not.toMatch(/UPDATE\s+daily_summary/i);
     expect(service).not.toMatch(/DELETE\s+FROM\s+daily_summary/i);
+  });
+
+  test('los writers están detrás de WORKDAY_CONFIG_WRITE_ENABLED fail-closed', () => {
+    expect(service).toMatch(/WORKDAY_CONFIG_WRITE_ENABLED/);
+    expect(service).toMatch(/WORKDAY_CONFIG_WRITES_DISABLED/);
+    expect(service).toMatch(/async function createHistory[\s\S]{0,160}assertWriteEnabled\(\)/);
+    expect(service).toMatch(/async function updateHistory[\s\S]{0,160}assertWriteEnabled\(\)/);
+    expect(service).toMatch(/async function closeHistory[\s\S]{0,160}assertWriteEnabled\(\)/);
   });
 
   test('el snapshot writer no lee employees.schedule_id', () => {
