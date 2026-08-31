@@ -37,7 +37,34 @@ describe('workdayConfig UI model', () => {
 
   test('vigencia siempre requiere fecha efectiva explícita', () => {
     const f = emptyWorkdayConfigForm('')
-    expect(validateWorkdayConfigForm(f)).toContain('La fecha "Vigente desde" es obligatoria.')
+    expect(validateWorkdayConfigForm(f)).toContain('La fecha "Vigente desde" debe ser una fecha real.')
+  })
+
+  test('rechaza fechas y horas civiles imposibles sin reinterpretar zona horaria', () => {
+    const f = emptyWorkdayConfigForm('2026-02-31')
+    f.check_in = '25:00'
+    f.check_out = '17:99'
+    const errors = validateWorkdayConfigForm(f).join(' ')
+    expect(errors).toContain('fecha real')
+    expect(errors).toContain('entrada debe ser HH:mm válida')
+    expect(errors).toContain('salida debe ser HH:mm válida')
+  })
+
+  test('rechaza enteros fuera de límites en tolerancias, descansos y versiones', () => {
+    const f = emptyWorkdayConfigForm('2026-09-01')
+    f.tolerance_in = '-1'
+    f.break_minutes = '1441'
+    f.rounding_policy_version = '0'
+    const errors = validateWorkdayConfigForm(f).join(' ')
+    expect(errors).toContain('Tolerancia de entrada')
+    expect(errors).toContain('Minutos de descanso')
+    expect(errors).toContain('Versión de redondeo')
+  })
+
+  test('rechaza nombres de policy que el backend tampoco aceptaría', () => {
+    const f = emptyWorkdayConfigForm('2026-09-01')
+    f.rounding_policy = 'no permitido!'
+    expect(validateWorkdayConfigForm(f).join(' ')).toContain('Policy de redondeo')
   })
 
   test('rechaza fin anterior al inicio', () => {
