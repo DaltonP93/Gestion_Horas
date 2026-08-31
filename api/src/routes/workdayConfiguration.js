@@ -71,8 +71,10 @@ function auditSnapshot(row) {
     night_end: row.night_end ?? null,
     rounding_policy: row.rounding_policy ?? null,
     rounding_policy_version: row.rounding_policy_version ?? null,
+    rounding_policy_config: row.rounding_policy_config ?? null,
     overtime_policy: row.overtime_policy ?? null,
     overtime_policy_version: row.overtime_policy_version ?? null,
+    overtime_policy_config: row.overtime_policy_config ?? null,
     snapshot_version: row.snapshot_version ?? null,
   };
 }
