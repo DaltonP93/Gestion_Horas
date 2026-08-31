@@ -37,6 +37,7 @@ import EmployeeDocuments from '@/components/EmployeeDocuments'
 import BiometriaRelojes from '@/components/BiometriaRelojes'
 import EmployeeEditModal from '@/components/EmployeeEditModal'
 import { hasRole, useCurrentUser } from '@/lib/useCurrentUser'
+import { useNavPermissions } from '@/lib/navModules'
 import dynamic from 'next/dynamic'
 const FaceEnroll = dynamic(() => import('@/components/FaceEnroll'), { ssr: false })
 
@@ -97,6 +98,7 @@ export default function EmpleadoDetallePage() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const currentUser = useCurrentUser()
+  const { perms: navPerms } = useNavPermissions()
 
   const [feedback, setFeedback] = useState<Feedback>(null)
   useEffect(() => {
@@ -176,7 +178,10 @@ export default function EmpleadoDetallePage() {
   const canViewLegal       = !!caps.legal_view
   const canEditAny         = !!caps.personal_update || !!caps.legal_update
   const canChangeStatus    = !!caps.status_change
-  const canConfigureWorkday = hasRole(currentUser, 'admin', 'gth', 'hr')
+  const canConfigureByRole = hasRole(currentUser, 'admin', 'gth', 'hr')
+  const canConfigureWorkday = navPerms?.configuracion
+    ? !!navPerms.configuracion.can_view
+    : canConfigureByRole
 
   const histRows = history || []
   const workedDays  = histRows.filter((r: any) => r.status === 'present' || r.status === 'late').length
