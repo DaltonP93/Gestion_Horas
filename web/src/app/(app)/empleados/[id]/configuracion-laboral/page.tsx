@@ -231,6 +231,7 @@ export default function ConfiguracionLaboralEmpleadoPage() {
 
       {(creating || editing) && (
         <WorkdayConfigDialog
+          employeeId={employeeId}
           employeeName={employee ? `${employee.first_name} ${employee.last_name}` : `#${employeeId}`}
           row={editing}
           schedules={schedules}
@@ -395,8 +396,9 @@ function HistoryRow({
 }
 
 function WorkdayConfigDialog({
-  employeeName, row, schedules, today, onClose, onSaved,
+  employeeId, employeeName, row, schedules, today, onClose, onSaved,
 }: {
+  employeeId: number
   employeeName: string
   row: WorkdayHistoryRow | null
   schedules: WorkdaySchedule[]
@@ -451,7 +453,7 @@ function WorkdayConfigDialog({
     try {
       const payload = workdayConfigPayload(form)
       if (editing && row) await workdayConfigApi.update(row.id, payload)
-      else await workdayConfigApi.create(Number(row?.employee_id) || Number(location.pathname.split('/')[2]), payload)
+      else await workdayConfigApi.create(employeeId, payload)
       await onSaved()
     } catch (e: any) {
       setError(e?.response?.data?.error || e?.response?.data?.message || e.message || 'No se pudo guardar')
@@ -460,8 +462,8 @@ function WorkdayConfigDialog({
     }
   }
 
-  // El id del empleado se obtiene de la ruta sólo al crear. Al editar ya viene
-  // en el snapshot. No se lee employees.schedule_id en ningún caso.
+  // No se lee employees.schedule_id en ningún caso: el usuario selecciona
+  // explícitamente el catálogo que quiere snapshotear.
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4" role="dialog" aria-modal="true">
       <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-[#0d0d0f]">
