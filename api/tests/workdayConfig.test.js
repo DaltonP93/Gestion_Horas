@@ -15,7 +15,10 @@ jest.mock('../src/config/logger', () => ({ warn: jest.fn(), info: jest.fn(), err
 const { sequelize } = require('../src/config/database');
 const {
   loadWorkdayConfig, vigenteEn, configDesdeTurnera, normalizeConfigRow,
+  resetPhaseCMetadataCacheForTests,
 } = require('../src/services/workdayConfig');
+
+afterEach(() => resetPhaseCMetadataCacheForTests());
 
 /**
  * `loadWorkdayConfig` emite tres consultas en paralelo. Se responde según qué
@@ -507,6 +510,72 @@ describe('snapshot histórico fail-safe (item 9)', () => {
   });
 });
 
+
+describe('FASE C — compatibilidad cuando 075 todavía no fue aplicada', () => {
+  test('si sólo faltan columnas conocidas de 075, cae a aliases NULL sin romper Marcadas', async () => {
+    sequelize.query.mockReset();
+    let fullHistoryAttempts = 0;
+    let legacyHistoryAttempts = 0;
+
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/employee_schedule_history/.test(sql)) {
+        if (/h\.schedule_name_snapshot/.test(sql)) {
+          fullHistoryAttempts++;
+          const err = new Error("Unknown column 'h.schedule_name_snapshot' in 'field list'");
+          err.code = 'ER_BAD_FIELD_ERROR';
+          err.errno = 1054;
+          err.sqlState = '42S22';
+          throw err;
+        }
+        legacyHistoryAttempts++;
+        return [[{
+          employee_id: 1,
+          history_id: 10,
+          schedule_id: 5,
+          valid_from: '2024-01-01',
+          valid_to: null,
+          check_in: '08:00:00',
+          check_out: '17:00:00',
+          work_days: '2,3,4,5,6',
+          break_mode: 'none',
+          weekly_target_minutes: 2160,
+        }]];
+      }
+      if (/shift_assignments/.test(sql)) return [[]];
+      if (/employee_contracts/.test(sql)) return [[]];
+      return [[]];
+    });
+
+    const first = await loadWorkdayConfig([1], RANGO);
+    expect(first.forDate(1, '2024-12-15').check_in).toBe('08:00:00');
+    expect(first.forDate(1, '2024-12-15').snapshot_version).toBe(1);
+    expect(fullHistoryAttempts).toBe(1);
+    expect(legacyHistoryAttempts).toBe(1);
+
+    // Cache de capacidad: no vuelve a provocar el mismo error en cada reporte.
+    await loadWorkdayConfig([1], RANGO);
+    expect(fullHistoryAttempts).toBe(1);
+    expect(legacyHistoryAttempts).toBe(2);
+  });
+
+  test('un ER_BAD_FIELD_ERROR ajeno a 075 NO se oculta como fallback', async () => {
+    sequelize.query.mockReset();
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/employee_schedule_history/.test(sql)) {
+        const err = new Error("Unknown column 'h.campo_roto' in 'field list'");
+        err.code = 'ER_BAD_FIELD_ERROR';
+        err.errno = 1054;
+        err.sqlState = '42S22';
+        throw err;
+      }
+      if (/shift_assignments/.test(sql)) return [[]];
+      if (/employee_contracts/.test(sql)) return [[]];
+      return [[]];
+    });
+
+    await expect(loadWorkdayConfig([1], RANGO)).rejects.toThrow(/campo_roto/);
+  });
+});
 
 describe('FASE C — lectura completa de metadata 075', () => {
   test('la consulta histórica trae provenance y policies versionadas', async () => {
