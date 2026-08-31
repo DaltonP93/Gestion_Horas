@@ -575,10 +575,10 @@ function WorkdayConfigDialog({
           <fieldset className="grid gap-4 rounded-2xl border border-slate-200 p-4 md:grid-cols-3 dark:border-white/[0.08]">
             <legend className="px-2 text-sm font-semibold">Perfil laboral</legend>
             <Field label="Objetivo semanal (horas)">
-              <input type="number" min={0} step="0.25" value={form.weekly_target_hours} onChange={e => set('weekly_target_hours', e.target.value)} className={inputCls} placeholder="Ej: 36, 42, 45, 48" />
+              <input type="number" min={0} max={168} step="0.25" value={form.weekly_target_hours} onChange={e => set('weekly_target_hours', e.target.value)} className={inputCls} placeholder="Ej: 36, 42, 45, 48" />
             </Field>
             <Field label="Objetivo diario (horas)">
-              <input type="number" min={0} step="0.25" value={form.daily_target_hours} onChange={e => set('daily_target_hours', e.target.value)} className={inputCls} placeholder="Opcional" />
+              <input type="number" min={0} max={24} step="0.25" value={form.daily_target_hours} onChange={e => set('daily_target_hours', e.target.value)} className={inputCls} placeholder="Opcional" />
             </Field>
             <Field label="Régimen">
               <select value={form.work_regime} onChange={e => set('work_regime', e.target.value as WorkdayConfigForm['work_regime'])} className={inputCls}>
@@ -694,7 +694,8 @@ function CloseDialog({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [date, setDate] = useState(today)
+  const minCloseDate = String(row.valid_from).slice(0, 10)
+  const [date, setDate] = useState(today < minCloseDate ? minCloseDate : today)
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -728,7 +729,7 @@ function CloseDialog({
           </p>
         </div>
         <Field label="Último día de vigencia">
-          <input type="date" min={String(row.valid_from).slice(0,10)} value={date} onChange={e => setDate(e.target.value)} className={inputCls} />
+          <input type="date" min={minCloseDate} value={date} onChange={e => setDate(e.target.value)} className={inputCls} />
         </Field>
         <Field label="Motivo *">
           <input value={reason} onChange={e => setReason(e.target.value)} className={inputCls} placeholder="Cambio de turno, baja, traslado..." />
