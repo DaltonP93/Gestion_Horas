@@ -26,7 +26,7 @@ import { es } from 'date-fns/locale'
 import {
   ArrowLeft, User, Clock, Calendar, CheckCircle, XCircle, X,
   AlertCircle, Briefcase, UserX, UserCheck, ShieldAlert, Building2,
-  MapPin, Coins, Fingerprint, Pencil,
+  MapPin, Coins, Fingerprint, Pencil, SlidersHorizontal,
 } from 'lucide-react'
 import Link from 'next/link'
 import { employeesApi, api } from '@/lib/api'
@@ -173,9 +173,10 @@ export default function EmpleadoDetallePage() {
   if (isLoading) return <div className="p-6 text-slate-400 dark:text-white/30">Cargando...</div>
   if (error || !emp) return <div className="p-6 text-red-500">Empleado no encontrado</div>
 
-  const canViewLegal    = !!caps.legal_view
-  const canEditAny      = !!caps.personal_update || !!caps.legal_update
-  const canChangeStatus = !!caps.status_change
+  const canViewLegal       = !!caps.legal_view
+  const canEditAny         = !!caps.personal_update || !!caps.legal_update
+  const canChangeStatus    = !!caps.status_change
+  const canConfigureWorkday = ['super_admin', 'admin', 'gth', 'hr'].includes(String(currentUser?.role || ''))
 
   const histRows = history || []
   const workedDays  = histRows.filter((r: any) => r.status === 'present' || r.status === 'late').length
@@ -242,6 +243,14 @@ export default function EmpleadoDetallePage() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canConfigureWorkday && (
+              <Link
+                href={`/empleados/${id}/configuracion-laboral`}
+                className="inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/20 dark:bg-indigo-500/10 dark:text-indigo-300"
+              >
+                <SlidersHorizontal size={14} /> Configuración laboral
+              </Link>
+            )}
             {canEditAny && (
               <button
                 type="button"
