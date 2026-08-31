@@ -339,6 +339,34 @@ describe('effective configuration', () => {
     expect(r.profile).toBeNull();
   });
 
+  test('Turnera existente sin snapshot queda visible pero INACTIVA para cálculo', async () => {
+    wireBaseDb();
+    mockLoadWorkdayConfig.mockResolvedValue({
+      historyFor: () => [],
+      forDate: () => null,
+      planningForDate: () => ({
+        source: 'shift_assignment',
+        shift_schedule_id: 99,
+        check_in: '08:00:00',
+        check_out: '17:00:00',
+        daily_target_minutes: 480,
+        weekly_target_minutes: 2880,
+        segments: 1,
+        kind: 'work',
+      }),
+    });
+
+    const r = await svc.getEffectiveConfiguration(1, '2026-08-30');
+    expect(r.calculation_mode_candidate).toBe('historical_fallback');
+    expect(r.expected_workday).toBeNull();
+    expect(r.turnera).toMatchObject({
+      shift_schedule_id: 99,
+      active_for_calculation: false,
+      pending_employee_configuration: true,
+      shift_weekly_target_minutes: 2880,
+    });
+  });
+
   test('domingo puede ser día laboral por configuración', async () => {
     wireBaseDb();
     const hist = [{
