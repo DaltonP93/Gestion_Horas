@@ -5,12 +5,14 @@ import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Search, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { employeesApi } from '@/lib/api'
-import { hasRole, useCurrentUser } from '@/lib/useCurrentUser'
+import { hasRole } from '@/lib/useCurrentUser'
+import { useNavPermissions } from '@/lib/navModules'
 
 export default function ConfiguracionLaboralIndexPage() {
-  const user = useCurrentUser()
+  const { user, perms } = useNavPermissions()
   const [search, setSearch] = useState('')
-  const allowed = hasRole(user, 'admin', 'gth', 'hr')
+  const roleAllowed = hasRole(user, 'admin', 'gth', 'hr')
+  const allowed = perms?.configuracion ? !!perms.configuracion.can_view : roleAllowed
 
   const employeesQ = useQuery({
     queryKey: ['employees', 'workday-config-index'],
