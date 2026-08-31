@@ -109,6 +109,29 @@ describe('workdayConfig UI model', () => {
     expect(errors).toContain('24 h')
   })
 
+  test('policy configs JSON hacen round-trip como objetos, no strings', () => {
+    const f = emptyWorkdayConfigForm('2026-09-01')
+    f.rounding_policy = 'nearest_5'
+    f.rounding_policy_version = '2'
+    f.rounding_policy_config = '{"step":5}'
+    f.overtime_policy = 'rrhh_review'
+    f.overtime_policy_version = '1'
+    f.overtime_policy_config = '{"approval":"rrhh"}'
+
+    const p = workdayConfigPayload(f)
+    expect(p.rounding_policy_config).toEqual({ step: 5 })
+    expect(p.overtime_policy_config).toEqual({ approval: 'rrhh' })
+  })
+
+  test('policy config rechaza JSON inválido o arrays', () => {
+    const f = emptyWorkdayConfigForm('2026-09-01')
+    f.rounding_policy_config = '{'
+    expect(validateWorkdayConfigForm(f).join(' ')).toContain('JSON válido')
+
+    f.rounding_policy_config = '[]'
+    expect(validateWorkdayConfigForm(f).join(' ')).toContain('objeto JSON')
+  })
+
   test('retroactividad se detecta por fecha civil, sin Date/timezone', () => {
     expect(isRetroactive('2025-01-01', '2026-08-30')).toBe(true)
     expect(isRetroactive('2026-08-30', '2026-08-30')).toBe(false)
