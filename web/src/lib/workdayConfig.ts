@@ -63,8 +63,10 @@ export interface EffectiveWorkdayConfig {
     night_end?: string | null
     rounding_policy?: string | null
     rounding_policy_version?: number | null
+    rounding_policy_config?: Record<string, unknown> | null
     overtime_policy?: string | null
     overtime_policy_version?: number | null
+    overtime_policy_config?: Record<string, unknown> | null
   } | null
   turnera: {
     shift_schedule_id: number | null
@@ -103,8 +105,10 @@ export interface WorkdayConfigForm {
   night_end: string
   rounding_policy: string
   rounding_policy_version: string
+  rounding_policy_config: string
   overtime_policy: string
   overtime_policy_version: string
+  overtime_policy_config: string
   reason: string
   notes: string
 }
@@ -133,8 +137,10 @@ export function emptyWorkdayConfigForm(today: string): WorkdayConfigForm {
     night_end: '',
     rounding_policy: '',
     rounding_policy_version: '',
+    rounding_policy_config: '',
     overtime_policy: '',
     overtime_policy_version: '',
+    overtime_policy_config: '',
     reason: '',
     notes: '',
   }
@@ -170,10 +176,12 @@ export function formFromHistory(row: WorkdayHistoryRow): WorkdayConfigForm {
     night_end: time5(row.night_end),
     rounding_policy: row.rounding_policy || '',
     rounding_policy_version: row.rounding_policy_version == null ? '' : String(row.rounding_policy_version),
+    rounding_policy_config: row.rounding_policy_config ? JSON.stringify(row.rounding_policy_config, null, 2) : '',
     overtime_policy: row.overtime_policy || '',
     overtime_policy_version: row.overtime_policy_version == null ? '' : String(row.overtime_policy_version),
+    overtime_policy_config: row.overtime_policy_config ? JSON.stringify(row.overtime_policy_config, null, 2) : '',
     reason: '',
-    notes: '',
+    notes: row.notes || '',
   }
 }
 
@@ -209,6 +217,21 @@ function intOrZero(v: string): number {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0
 }
 
+function parsePolicyConfig(v: string, label: string): Record<string, unknown> | null {
+  const s = String(v ?? '').trim()
+  if (!s) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(s)
+  } catch {
+    throw new Error(`${label} debe ser JSON válido`)
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${label} debe ser un objeto JSON`)
+  }
+  return parsed as Record<string, unknown>
+}
+
 export function validateWorkdayConfigForm(form: WorkdayConfigForm): string[] {
   const errors: string[] = []
   if (!/^\d{4}-\d{2}-\d{2}$/.test(form.valid_from)) errors.push('La fecha "Vigente desde" es obligatoria.')
@@ -221,6 +244,8 @@ export function validateWorkdayConfigForm(form: WorkdayConfigForm): string[] {
   }
   try { minutesFromHours(form.weekly_target_hours, 168) } catch (e: any) { errors.push(e.message) }
   try { minutesFromHours(form.daily_target_hours, 24) } catch (e: any) { errors.push(e.message) }
+  try { parsePolicyConfig(form.rounding_policy_config, 'Config de redondeo') } catch (e: any) { errors.push(e.message) }
+  try { parsePolicyConfig(form.overtime_policy_config, 'Config de horas extra') } catch (e: any) { errors.push(e.message) }
   return [...new Set(errors)]
 }
 
@@ -246,8 +271,10 @@ export function workdayConfigPayload(form: WorkdayConfigForm) {
     night_end: form.night_end || null,
     rounding_policy: form.rounding_policy.trim() || null,
     rounding_policy_version: form.rounding_policy_version ? Number(form.rounding_policy_version) : null,
+    rounding_policy_config: parsePolicyConfig(form.rounding_policy_config, 'Config de redondeo'),
     overtime_policy: form.overtime_policy.trim() || null,
     overtime_policy_version: form.overtime_policy_version ? Number(form.overtime_policy_version) : null,
+    overtime_policy_config: parsePolicyConfig(form.overtime_policy_config, 'Config de horas extra'),
     reason: form.reason.trim() || null,
     notes: form.notes.trim() || null,
   }
