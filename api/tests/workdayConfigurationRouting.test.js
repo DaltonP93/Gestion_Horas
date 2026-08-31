@@ -33,12 +33,12 @@ describe('FASE C routing/RBAC/audit', () => {
     expect(route).toMatch(/requirePermission\(['"]configuracion['"],\s*['"]update['"]\)/);
   });
 
-  test('create/update/close registran auditoría', () => {
+  test('create/update/close registran auditoría before/after', () => {
     expect(route).toMatch(/workday_config\.create/);
     expect(route).toMatch(/workday_config\.update/);
     expect(route).toMatch(/workday_config\.close/);
-    expect(route).toMatch(/before:\s*auditSnapshot/);
-    expect(route).toMatch(/after:\s*auditSnapshot/);
+    expect((route.match(/before:\s*(?:null|auditSnapshot)/g) || []).length).toBeGreaterThanOrEqual(3);
+    expect((route.match(/after:\s*auditSnapshot/g) || []).length).toBeGreaterThanOrEqual(3);
   });
 
   test('expone historial, perfil, cierre y effective-config', () => {
