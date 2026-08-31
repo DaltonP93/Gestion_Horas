@@ -10,7 +10,8 @@ import {
   History, Info, Plus, Save, ShieldCheck, X,
 } from 'lucide-react'
 import { api, employeesApi, workdayConfigApi } from '@/lib/api'
-import { hasRole, useCurrentUser } from '@/lib/useCurrentUser'
+import { hasRole } from '@/lib/useCurrentUser'
+import { useNavPermissions } from '@/lib/navModules'
 import {
   DAY_LABELS,
   applyScheduleToForm,
@@ -52,7 +53,7 @@ export default function ConfiguracionLaboralEmpleadoPage() {
   const { id } = useParams<{ id: string }>()
   const employeeId = Number(id)
   const qc = useQueryClient()
-  const user = useCurrentUser()
+  const { user, perms } = useNavPermissions()
   const today = format(new Date(), 'yyyy-MM-dd')
   const [effectiveDate, setEffectiveDate] = useState(today)
   const [editing, setEditing] = useState<WorkdayHistoryRow | null>(null)
@@ -60,7 +61,9 @@ export default function ConfiguracionLaboralEmpleadoPage() {
   const [closing, setClosing] = useState<WorkdayHistoryRow | null>(null)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
 
-  const allowed = hasRole(user, 'admin', 'gth', 'hr')
+  const roleAllowed = hasRole(user, 'admin', 'gth', 'hr')
+  const canView = perms?.configuracion ? !!perms.configuracion.can_view : roleAllowed
+  const canUpdate = perms?.configuracion ? !!perms.configuracion.can_update : roleAllowed
 
   const employeeQ = useQuery({
     queryKey: ['employee', employeeId],
@@ -70,17 +73,17 @@ export default function ConfiguracionLaboralEmpleadoPage() {
   const historyQ = useQuery({
     queryKey: ['workday-config-history', employeeId],
     queryFn: () => workdayConfigApi.history(employeeId),
-    enabled: allowed && employeeId > 0,
+    enabled: canView && employeeId > 0,
   })
   const effectiveQ = useQuery({
     queryKey: ['workday-config-effective', employeeId, effectiveDate],
     queryFn: () => workdayConfigApi.effective(employeeId, effectiveDate),
-    enabled: allowed && employeeId > 0 && !!effectiveDate,
+    enabled: canView && employeeId > 0 && !!effectiveDate,
   })
   const schedulesQ = useQuery({
     queryKey: ['schedules-active'],
     queryFn: () => api.get('/api/schedules').then(r => r.data),
-    enabled: allowed,
+    enabled: canView,
     staleTime: 60_000,
   })
 
@@ -97,7 +100,7 @@ export default function ConfiguracionLaboralEmpleadoPage() {
   }
 
   if (!user) return <div className="p-6 text-slate-400">Cargando permisos...</div>
-  if (!allowed) {
+  if (!canView) {
     return (
       <div className="p-6 max-w-3xl">
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-800">
@@ -124,12 +127,14 @@ export default function ConfiguracionLaboralEmpleadoPage() {
             {employee ? `${employee.first_name} ${employee.last_name} · #${employee.code}` : 'Empleado'}
           </p>
         </div>
-        <button
-          onClick={() => { setCreating(true); setEditing(null) }}
-          className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
-        >
-          <Plus size={16} /> Nueva vigencia
-        </button>
+        {canUpdate && (
+          <button
+            onClick={() => { setCreating(true); setEditing(null) }}
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+          >
+            <Plus size={16} /> Nueva vigencia
+          </button>
+        )}
       </div>
 
       {notice && (
@@ -221,6 +226,7 @@ export default function ConfiguracionLaboralEmpleadoPage() {
               <HistoryRow
                 key={row.id}
                 row={row}
+                canUpdate={canUpdate}
                 onEdit={() => { setEditing(row); setCreating(false) }}
                 onClose={() => setClosing(row)}
               />
@@ -346,9 +352,10 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function HistoryRow({
-  row, onEdit, onClose,
+  row, canUpdate, onEdit, onClose,
 }: {
   row: WorkdayHistoryRow
+  canUpdate: boolean
   onEdit: () => void
   onClose: () => void
 }) {
@@ -380,16 +387,18 @@ function HistoryRow({
             <p className="mt-2 text-xs text-slate-500">Motivo: {row.change_reason}</p>
           )}
         </div>
-        <div className="flex gap-2">
-          <button onClick={onEdit} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
-            <Edit3 size={13} /> Corregir
-          </button>
-          {!row.valid_to && (
-            <button onClick={onClose} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50">
-              <X size={13} /> Cerrar vigencia
+        {canUpdate && (
+          <div className="flex gap-2">
+            <button onClick={onEdit} className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium hover:bg-slate-50">
+              <Edit3 size={13} /> Corregir
             </button>
-          )}
-        </div>
+            {!row.valid_to && (
+              <button onClick={onClose} className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50">
+                <X size={13} /> Cerrar vigencia
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
