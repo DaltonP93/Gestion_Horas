@@ -252,6 +252,27 @@ export function workdayConfigPayload(form: WorkdayConfigForm) {
   }
 }
 
+export function workdayConfigPayloadForSave(
+  form: WorkdayConfigForm,
+  original?: WorkdayHistoryRow | null,
+) {
+  const payload = workdayConfigPayload(form)
+  if (!original) return payload
+
+  const originalSchedule = original.schedule_id == null ? null : Number(original.schedule_id)
+  const selectedSchedule = form.schedule_id ? Number(form.schedule_id) : null
+
+  // updateHistory interpreta la PRESENCIA de schedule_id como una orden de
+  // volver a snapshotear el catálogo vivo. Por eso en una corrección de
+  // profile/vigencia se omite si no cambió: editar 36 h o una nota jamás debe
+  // releer un schedule que pudo haber cambiado desde que nació el snapshot.
+  if (originalSchedule === selectedSchedule) {
+    const { schedule_id: _unchanged, ...withoutSchedule } = payload
+    return withoutSchedule
+  }
+  return payload
+}
+
 export function isRetroactive(validFrom: string, today: string): boolean {
   return Boolean(validFrom && today && validFrom < today)
 }
