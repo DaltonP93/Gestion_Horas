@@ -508,6 +508,23 @@ describe('snapshot histórico fail-safe (item 9)', () => {
 });
 
 
+describe('FASE C — lectura completa de metadata 075', () => {
+  test('la consulta histórica trae provenance y policies versionadas', async () => {
+    mockTablas({});
+    await loadWorkdayConfig([1], RANGO);
+    const sql = sequelize.query.mock.calls.map((x) => x[0]).join('\n');
+
+    expect(sql).toMatch(/h\.schedule_name_snapshot/);
+    expect(sql).toMatch(/h\.snapshot_version/);
+    expect(sql).toMatch(/h\.snapshot_source/);
+    expect(sql).toMatch(/h\.change_reason/);
+    expect(sql).toMatch(/h\.rounding_policy_version/);
+    expect(sql).toMatch(/h\.rounding_policy_config/);
+    expect(sql).toMatch(/h\.overtime_policy_version/);
+    expect(sql).toMatch(/h\.overtime_policy_config/);
+  });
+});
+
 describe('FASE C — profile y snapshot completo', () => {
   test('expone régimen y policies versionadas desde el snapshot', () => {
     const r = normalizeConfigRow({
