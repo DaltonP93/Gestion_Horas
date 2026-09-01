@@ -81,6 +81,8 @@ function auditSnapshot(row) {
 
 router.get('/meta', view, (_req, res) => {
   res.json({
+    writes_enabled: svc.isWriteEnabled(),
+    write_mode: svc.isWriteEnabled() ? 'enabled' : 'read_only',
     validity: {
       valid_from: 'inclusive',
       valid_to: 'inclusive',
