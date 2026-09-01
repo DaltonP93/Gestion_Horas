@@ -1,16 +1,18 @@
 # Estado — Workday Engine / Configuración laboral
 
-Última actualización: 2026-08-31, después de integrar FASE C/D en `main`.
+Última actualización: 2026-09-01, tras verificar el estado real de `main` (HEAD `53fee69`) y los merges #153–#156.
 
 ## Estado GitHub confirmado
 
-- `main`: `d6498cfcdec97263a756ae0a217d9f195b053ef5`.
+- `main`: `53fee693e46b9a5b2a27de848fa2e3974bac55d5` (HEAD, merge del PR #155).
 - PR #149 (FASE C backend) integrado.
 - PR #150 (FASE D UI, stacked) integrado.
 - PR #151 aplicó el mismo árbol de FASE D sobre `main`.
 - PR #152 fue un merge redundante posterior y **no cambió ningún archivo**.
-- El árbol final de `main` es igual al árbol funcional validado de FASE C + FASE D.
-- CI post-merge de `main`: API, Web y Bridge verdes.
+- Merges posteriores a #152, todos integrados en `main`: #156 (AI handoff), #153 (runbook post-merge), #154 (`migrate --status` estrictamente read-only) y #155 (kill switch fail-closed de escritura de configuración laboral).
+- No hay PR abiertos al momento de esta actualización.
+- El árbol funcional de FASE C + FASE D permanece validado; lo posterior es documentación e higiene read-only más el kill switch de escritura, que **no** habilita writers.
+- CI de `main` sobre el HEAD actual (workflow `CI`, run #548): API, Web y Bridge verdes (`success`).
 
 ## Fases
 
@@ -72,6 +74,8 @@ Hasta cerrar FASE E:
 - NO continuar reparación histórica febrero 2025+ hasta cerrar el baseline/auditoría.
 - NO modificar `attendance_logs` históricos fuera del procedimiento de reparación aprobado.
 - ATT2000 estrictamente READ-ONLY.
+- Prerrequisito de datos de FASE C: las migraciones `072_employee_schedule_history`, `073_workday_profile_and_overlap_guard` y `075_workday_configuration_phase_c` deben aplicarse como **conjunto completo**. El único estado degradado seguro es con la tabla `employee_schedule_history` ausente (072 sin aplicar): ahí `loadScheduleHistory` devuelve historial vacío y las jornadas caen en `historical_fallback` por diseño (degradación ante "tabla no existe", código 42S02). Los estados intermedios NO son equivalentes: con 072 aplicada pero 073 pendiente la consulta puede fallar por columnas de perfil ausentes (propaga error, no degrada); con sólo 075 pendiente `workdayConfig.js` reintenta sin metadata FASE C y resuelve los snapshots 072/073 (tampoco es `historical_fallback`). Por eso un estado parcial se trata como **NO-GO** hasta aplicar el conjunto completo. Aplicarlas es parte de FASE E y requiere autorización explícita (ver secuencia posterior).
+- Writer de configuración laboral en OFF: `WORKDAY_CONFIG_WRITE_ENABLED` es fail-closed, con default `false` (sólo el string exacto `"true"` habilita escrituras; ver `api/.env.example`). Este runbook NO propone activarlo.
 - La existencia de Turnera/contrato/`employees.schedule_id` NO activa `configured` sin snapshot histórico completo.
 - Empleados no configurados deben permanecer en `historical_fallback`.
 
@@ -86,8 +90,10 @@ cd /var/www/html/Gestion_Horas/api
 # Preflight estrictamente READ-ONLY:
 node scripts/workday-config-preflight.js --json
 
-# migrate:status sólo después de integrar #154:
-# npm run migrate:status
+# migrate:status (#154 integrado; estrictamente READ-ONLY): entrega el
+# inventario COMPLETO de migraciones pendientes que el preflight no cubre
+# y que el paso posterior de rollout necesita. No modifica estado.
+npm run migrate:status
 
 node scripts/workday-config-impact-audit.js \
   --from 2025-01-01 \
