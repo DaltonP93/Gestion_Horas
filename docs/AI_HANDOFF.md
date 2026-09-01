@@ -1,7 +1,7 @@
 # AI handoff — Gestion_Horas
 
 > **Actualizado:** 2026-09-01  
-> **Baseline confirmado:** `main@d6498cfcdec97263a756ae0a217d9f195b053ef5`  
+> **Baseline confirmado:** `main@53fee693e46b9a5b2a27de848fa2e3974bac55d5`  
 > **Regla de lectura:** leer primero `CLAUDE.md` y el código de los módulos afectados. Este documento reúne contexto operativo sin sustituir la verificación del estado actual.
 
 ## Propósito del producto
@@ -35,11 +35,11 @@ La fuente SQL Server `att2000` es un origen de marcaciones: el sistema puede lee
 
 ## Estado confirmado al 2026-09-01
 
-- `main` está en `d6498cf`, merge del PR #152 de configuración de jornada (fase C).
-- Los merges recientes #149, #150 y #151 también preceden al HEAD actual.
-- Los PR #153, #154 y #155 estaban abiertos al revisar este handoff; no forman parte del baseline de `main`.
-- En particular, los cambios propuestos de documentación post-merge, de estado read-only de migraciones y del kill switch fail-closed deben evaluarse como trabajo pendiente hasta que estén fusionados y verificados.
-- Este archivo no registra un resultado de producción ni de CI para el HEAD actual. No inferir que un merge o un check previo autoriza un despliegue.
+- `main` está en `53fee693e46b9a5b2a27de848fa2e3974bac55d5`, merge del PR #155 (kill switch fail-closed de escritura de configuración laboral).
+- Orden de merges posterior a #152, todos ya fusionados en `main`: #156 (este AI handoff), #153 (runbook post-merge), #154 (`migrate --status` estrictamente read-only) y #155 (kill switch de escritura).
+- No hay PR abiertos al momento de esta actualización.
+- CI de `main` sobre el HEAD actual (workflow `CI`, run #548): API, Web y Bridge en verde (`success`).
+- Un CI verde y estos merges NO autorizan por sí solos un despliegue, una migración ni la activación de writers: FASE E sigue pendiente y con gates abiertos (ver `docs/workday-engine-rollout-status.md`).
 
 ## Operación y límites
 
