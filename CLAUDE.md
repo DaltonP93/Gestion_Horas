@@ -1,5 +1,7 @@
 # SisHoras — Sistema de Gestión de Asistencia
 
+@docs/AI_HANDOFF.md
+
 ## Descripción
 Reemplazo del sistema ZKTeco (SisHoras legacy) por una aplicación web moderna.
 Conecta a relojes biométricos ZKTeco y genera reportes de asistencia por empleado, día, semana y mes.
