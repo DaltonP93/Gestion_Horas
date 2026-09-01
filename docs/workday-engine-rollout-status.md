@@ -90,8 +90,10 @@ cd /var/www/html/Gestion_Horas/api
 # Preflight estrictamente READ-ONLY:
 node scripts/workday-config-preflight.js --json
 
-# migrate:status ya disponible (#154 integrado; es estrictamente READ-ONLY):
-# npm run migrate:status
+# migrate:status (#154 integrado; estrictamente READ-ONLY): entrega el
+# inventario COMPLETO de migraciones pendientes que el preflight no cubre
+# y que el paso posterior de rollout necesita. No modifica estado.
+npm run migrate:status
 
 node scripts/workday-config-impact-audit.js \
   --from 2025-01-01 \
