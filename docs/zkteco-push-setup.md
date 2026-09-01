@@ -16,9 +16,12 @@ ZKTeco binario y elimina el conflicto con el Attendance Management Program.
 
 ## Datos del servidor SisHoras
 
+Usar los valores reales del entorno local. No almacenar IPs internas ni seriales
+de relojes en este repositorio público.
+
 | Campo | Valor |
 |---|---|
-| Server Address | `10.0.0.20` (IP interna del servidor del bridge — usar IP, no nombre: abajo se deja *Domain Name* en OFF) |
+| Server Address | `<BRIDGE_LAN_IP>` |
 | Server Port | `8080` |
 | HTTPS | OFF |
 | Proxy | OFF |
@@ -26,18 +29,13 @@ ZKTeco binario y elimina el conflicto con el Attendance Management Program.
 
 ## Pasos en cada reloj
 
-Repetir en los 3 relojes:
-
-| Reloj | IP |
-|---|---|
-| Comedor | 10.0.0.160 |
-| Lavadero | 10.0.0.161 |
-| Gerencia | 10.0.0.162 |
+Repetir para cada reloj autorizado tomando IP y serial desde la documentación
+privada/BD del entorno.
 
 1. En el teclado del reloj: **Menú → Comm (Comunicación) → Cloud Server Setting**
    (en firmwares viejos aparece como **ADMS** o **WebServer**).
 2. Configurar:
-   - **Server Address:** `10.0.0.20`
+   - **Server Address:** `<BRIDGE_LAN_IP>`
    - **Server Port:** `8080`
    - **Enable Domain Name:** OFF
    - **Enable Proxy Server:** OFF
@@ -59,21 +57,14 @@ Una vez reiniciado:
 5. En la UI web: `/configuracion → Relojes → expandir reloj → Verificar PUSH`
    - Debe mostrar "✅ PUSH ADMS activo" con el último heartbeat.
 
-## Replicación a att2000
+## att2000 — fuente estrictamente READ-ONLY
 
-Para que los marcajes recibidos por PUSH se escriban también en
-`att2000.CHECKINOUT` (SQL Server), activar en `api/.env`:
+Gestion_Horas **no replica** marcajes hacia `att2000.CHECKINOUT`. El conector
+sólo puede leer/introspectar la fuente SQL Server; no existe un writer ni debe
+crearse uno como parte de la configuración PUSH.
 
-```
-ATT2000_WRITE_ENABLED=true
-ATT_HOST=sqlserver.example.internal
-ATT_PORT=1433
-ATT_USER=sishoras_integration
-ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
-ATT_DATABASE=att2000
-```
-
-Luego `pm2 reload sishoras-api`.
+Las credenciales `ATT_*` del entorno deben corresponder a un usuario de sólo
+lectura.
 
 ## Cron respaldo (opcional)
 

@@ -63,15 +63,23 @@ CREATE DATABASE asistencia CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
 
 Cargar el esquema base y aplicar las migraciones con el runner (registra el
-estado en `schema_migrations`, idempotente):
+estado en `schema_migrations`, idempotente).
+
+> **Producción existente / FASE E Workday Engine:** no ejecutar `npm run migrate`
+> de forma automática. El preflight estrictamente sin escritura es
+> `node scripts/workday-config-preflight.js --json`. `migrate:status` sólo debe
+> considerarse read-only después de integrar #154. Las migraciones 072→075 se
+> aplican únicamente después de backup, revisión y autorización explícita, con
+> los flags de escritura del motor en OFF.
 
 ```bash
 mysql -u root -p asistencia < database/init.sql
 
-# Runner de migraciones (aplica database/migrations/*.sql pendientes)
+# Instalación nueva/vacía: runner de migraciones.
+# Producción existente: usar primero workday-config-preflight.js --json.
 cd api
-npm run migrate            # aplica pendientes
-npm run migrate:status     # lista estado sin aplicar
+# npm run migrate:status   # usar como read-only después de integrar #154
+# npm run migrate          # aplicar pendientes sólo dentro de un rollout aprobado
 ```
 
 > **BD existente** que ya tenía las migraciones aplicadas a mano: adoptá el
@@ -145,9 +153,11 @@ redis-server
 
 Abrir: http://localhost:3000
 
-**Usuario por defecto:**
-- Username: `admin`
-- Password: `Admin1234!`
+**Cuenta bootstrap:**
+- No usar credenciales documentadas/compartidas en producción.
+- Crear o rotar la contraseña del administrador durante la instalación y
+  almacenarla fuera del repositorio.
+- Verificar antes del go-live que no quede ninguna credencial bootstrap activa.
 
 ---
 
