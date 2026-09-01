@@ -24,6 +24,8 @@ const MODULES = [
   { key: 'nomina',         label: 'Nómina SAA',           section: 'gestion' },
   // Admin
   { key: 'departamentos',  label: 'Departamentos',        section: 'admin'   },
+  { key: 'empresas',       label: 'Empresas',             section: 'admin'   },
+  { key: 'centros_costo',  label: 'Centros de costo',     section: 'admin'   },
   { key: 'usuarios',       label: 'Usuarios',             section: 'admin'   },
   { key: 'ingresos',       label: 'Ingresos / Egresos',   section: 'gestion' },
   { key: 'lactancia',      label: 'Maternidad / Lactancia', section: 'gestion' },
