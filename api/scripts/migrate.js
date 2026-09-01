@@ -61,21 +61,48 @@ async function main() {
   const statusOnly = process.argv.includes('--status');
   const conn = await mysql.createConnection(DB);
   try {
-    await conn.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        filename   VARCHAR(255) PRIMARY KEY,
-        applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-    `);
-    const [applied] = await conn.query('SELECT filename FROM schema_migrations');
-    const done = new Set(applied.map(r => r.filename));
     const files = listMigrationFiles();
-    const pending = files.filter(f => !done.has(f));
 
+    // --status debe ser ESTRICTAMENTE READ-ONLY. Antes este comando ejecutaba
+    // CREATE TABLE IF NOT EXISTS schema_migrations, lo que violaba el contrato
+    // de preflight en producción. Primero se inspecciona INFORMATION_SCHEMA;
+    // si la tabla de control todavía no existe, se reportan todas las
+    // migraciones como pendientes sin crear absolutamente nada.
+    const [schemaRows] = await conn.query(
+      `SELECT 1 AS ok
+         FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'schema_migrations'
+        LIMIT 1`,
+    );
+    const schemaMigrationsExists = Boolean(schemaRows[0]);
+
+    let done = new Set();
+    if (schemaMigrationsExists) {
+      const [applied] = await conn.query('SELECT filename FROM schema_migrations');
+      done = new Set(applied.map(r => r.filename));
+    }
+
+    const pending = files.filter(f => !done.has(f));
     console.log(`Migraciones: ${files.length} totales, ${done.size} aplicadas, ${pending.length} pendientes.`);
+
     if (statusOnly) {
+      if (!schemaMigrationsExists) {
+        console.log('  schema_migrations no existe; --status no la crea (modo read-only).');
+      }
       pending.forEach(f => console.log(`  pendiente: ${f}`));
       return;
+    }
+
+    // Los modos que sí modifican estado (migrate/baseline) crean la tabla de
+    // control si todavía no existe.
+    if (!schemaMigrationsExists) {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          filename   VARCHAR(255) PRIMARY KEY,
+          applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
     }
     const baselineArg = process.argv.find(a => a === '--baseline' || a.startsWith('--baseline='));
     if (baselineArg) {
