@@ -12,6 +12,7 @@ jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 
 const { sequelize } = require('../src/config/database');
 const audit = require('../src/services/audit');
+const orgScope = require('../src/services/orgScope');
 const router = require('../src/routes/costCenters');
 
 function handlerFor(method, path) {
@@ -79,4 +80,37 @@ test('POST válido inserta, 201 y audita', async () => {
   expect(res.status).toHaveBeenCalledWith(201);
   expect(audit.log).toHaveBeenCalledTimes(1);
   expect(audit.log.mock.calls[0][0].action).toBe('cost_center.create');
+});
+
+test('★ rol con alcance NO puede crear un centro de costo GLOBAL (company_id null) → 403, sin insertar', async () => {
+  process.env.GOVERNANCE_WRITE_ENABLED = 'true';
+  const spy = jest.spyOn(orgScope, 'getOrgScope')
+    .mockResolvedValue({ unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [] });
+  const res = mkRes();
+  await handlerFor('post', '/')(
+    { user: { id: 11, role: 'manager' }, body: { company_id: null, code: 'CCX', name: 'X', active: true }, correlationId: 'c4', headers: {} },
+    res, jest.fn(),
+  );
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(res.json.mock.calls[0][0].code).toBe('OUT_OF_SCOPE');
+  expect(sequelize.query).not.toHaveBeenCalled(); // ni companyExists ni INSERT
+  expect(audit.log).not.toHaveBeenCalled();
+  spy.mockRestore();
+});
+
+test('rol con alcance SÍ puede crear un centro de costo en una empresa de su alcance', async () => {
+  process.env.GOVERNANCE_WRITE_ENABLED = 'true';
+  const spy = jest.spyOn(orgScope, 'getOrgScope')
+    .mockResolvedValue({ unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [] });
+  sequelize.query
+    .mockResolvedValueOnce([[{ ok: 1 }]])  // companyExists (empresa 9 en alcance)
+    .mockResolvedValueOnce([7, 1]);        // createCostCenter [insertId, affectedRows]
+  const res = mkRes();
+  await handlerFor('post', '/')(
+    { user: { id: 11, role: 'manager' }, body: { company_id: 9, code: 'CCY', name: 'Y', active: true }, correlationId: 'c5', headers: {} },
+    res, jest.fn(),
+  );
+  expect(res.status).toHaveBeenCalledWith(201);
+  expect(res.json.mock.calls[0][0].id).toBe(7);
+  spy.mockRestore();
 });

@@ -59,8 +59,16 @@ router.get('/:id', requirePermission('centros_costo', 'view'), asyncHandler(asyn
 router.post('/', requirePermission('centros_costo', 'create'), validate(createSchema), asyncHandler(async (req, res) => {
   governance.assertWriteEnabled();
   const { reason, ...data } = req.body;
+  const scope = await orgScope.getOrgScope(req.user);
+  // Un rol con alcance no puede crear un centro de costo GLOBAL (sin empresa):
+  // canSeeCostCenter(null) es false para roles con alcance, así que lo crearía
+  // y luego no podría verlo (201 seguido de 404). Consistente con el alta de
+  // candidatos, que también exige empresa/sucursal a los roles con alcance.
+  if (!scope.unrestricted && (data.company_id ?? null) == null) {
+    return res.status(403).json({ error: 'Un rol con alcance debe asignar el centro de costo a una empresa de su alcance', code: 'OUT_OF_SCOPE' });
+  }
   // Alcance: rechaza referenciar una empresa fuera del alcance del usuario.
-  orgScope.assertCompanyInScope(await orgScope.getOrgScope(req.user), data.company_id ?? null);
+  orgScope.assertCompanyInScope(scope, data.company_id ?? null);
   if (data.company_id != null && !(await governance.companyExists(data.company_id))) {
     return res.status(400).json({ error: 'company_id no corresponde a una empresa existente' });
   }
@@ -90,6 +98,11 @@ router.patch('/:id', requirePermission('centros_costo', 'update'), validate(upda
 
   const { reason } = req.body;
   if (Object.prototype.hasOwnProperty.call(req.body, 'company_id')) {
+    // Un rol con alcance no puede dejar el centro de costo SIN empresa (global):
+    // dejaría de verlo. Sólo un rol global puede tener centros sin empresa.
+    if (!scope.unrestricted && (req.body.company_id ?? null) == null) {
+      return res.status(403).json({ error: 'Un rol con alcance no puede quitar la empresa de un centro de costo', code: 'OUT_OF_SCOPE' });
+    }
     // Alcance: no permitir reasignar a una empresa fuera del alcance.
     orgScope.assertCompanyInScope(scope, req.body.company_id ?? null);
     if (req.body.company_id != null && !(await governance.companyExists(req.body.company_id))) {
