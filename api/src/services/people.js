@@ -17,6 +17,7 @@
  */
 
 const { sequelize } = require('../config/database');
+const { parseCivilDate, civilDateISO } = require('../utils/civilDate');
 
 function isWriteEnabled() {
   return process.env.PEOPLE_WRITE_ENABLED === 'true';
@@ -283,6 +284,11 @@ async function validateAssignmentRefs(scope, data, transaction) {
  * todavía no existen).
  */
 async function createAssignment(employeeId, data, userId, scope) {
+  // Fecha civil REAL (no sólo formato) antes de abrir transacción: rechaza
+  // 2025-02-29, 2026-13-01, etc. Defensa en profundidad además del schema Joi.
+  if (!parseCivilDate(data.valid_from)) {
+    throw httpError(400, 'INVALID_DATE', 'valid_from no es una fecha civil válida');
+  }
   let committed = false;
   const tx = await sequelize.transaction();
   try {
@@ -303,7 +309,13 @@ async function createAssignment(employeeId, data, userId, scope) {
       { replacements: [employeeId], transaction: tx },
     );
     const open = openRows[0] || null;
-    if (open && String(open.valid_from) >= String(data.valid_from)) {
+    // El driver mysql entrega columnas DATE como objeto Date (no hay
+    // dateStrings), así que `String(open.valid_from)` daría 'Wed Apr 01 2026…'
+    // y una comparación de strings sería SIEMPRE verdadera (una letra > un
+    // dígito), rechazando toda vigencia posterior. Normalizamos ambos lados a
+    // fecha civil ISO (parseCivilDate acepta Date y string) antes de comparar.
+    const openISO = open ? civilDateISO(parseCivilDate(open.valid_from)) : null;
+    if (open && openISO && openISO >= data.valid_from) {
       throw httpError(409, 'ASSIGNMENT_OUT_OF_ORDER',
         'Ya existe una vigencia abierta con fecha igual o posterior; corregí las fechas');
     }

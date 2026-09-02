@@ -84,6 +84,32 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
       people.createAssignment(ids.emp2, { valid_from: '2026-02-01' }, 1),
     ).rejects.toMatchObject({ status: 409, code: 'ASSIGNMENT_OUT_OF_ORDER' });
   });
+
+  test('★ vigencia POSTERIOR con una abierta previa → éxito, cierra la previa a nueva-1día', async () => {
+    // Caso que expone el bug de comparación Date/String: con MySQL real
+    // open.valid_from es un objeto Date. Si el guard comparara con String()
+    // esta creación válida se rechazaría con 409. Setup self-contenido en emp.
+    await conn.query('DELETE FROM employee_assignments WHERE employee_id = ?', [ids.emp]);
+    await conn.query(
+      'INSERT INTO employee_assignments (employee_id, valid_from, created_by) VALUES (?, ?, ?)',
+      [ids.emp, '2026-01-01', 1],
+    );
+    const r = await people.createAssignment(ids.emp, { valid_from: '2026-06-01' }, 1);
+    expect(Number(r.id)).toBeGreaterThan(0);
+    expect(r.closed_previous).toBeTruthy();
+    // La previa quedó cerrada el día ANTERIOR al nuevo valid_from (TZ-safe con DATE_FORMAT).
+    const [[prev]] = await conn.query(
+      "SELECT DATE_FORMAT(valid_to, '%Y-%m-%d') AS vt FROM employee_assignments WHERE id = ?",
+      [r.closed_previous],
+    );
+    expect(prev.vt).toBe('2026-05-31');
+    // Exactamente una vigencia abierta.
+    const [[{ n }]] = await conn.query(
+      'SELECT COUNT(*) AS n FROM employee_assignments WHERE employee_id = ? AND valid_to IS NULL',
+      [ids.emp],
+    );
+    expect(Number(n)).toBe(1);
+  });
 });
 
 // ── P1-A: aislamiento por alcance organizacional (cross-scope) ───────────────

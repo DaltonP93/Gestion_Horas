@@ -70,12 +70,15 @@ describe('convertCandidate — atómica', () => {
 });
 
 describe('createAssignment — atómica con lock del empleado', () => {
-  test('cierra la vigencia previa y crea la nueva; commit', async () => {
+  test('cierra la vigencia previa (POSTERIOR, éxito) y crea la nueva; commit', async () => {
+    // ★ open.valid_from viene como objeto Date (el driver mysql no usa
+    // dateStrings): si el guard comparara con String() daría 'Wed Jan 01 2025…'
+    // >= '2026-03-01' == true y rechazaría ESTA creación válida con 409.
     sequelize.query
-      .mockResolvedValueOnce([[{ id: 50 }]])                       // SELECT employees FOR UPDATE
-      .mockResolvedValueOnce([[{ id: 7, valid_from: '2025-01-01' }]]) // SELECT open
-      .mockResolvedValueOnce([{}])                                 // UPDATE cierre
-      .mockResolvedValueOnce([{ insertId: 8 }]);                   // INSERT
+      .mockResolvedValueOnce([[{ id: 50 }]])                                   // SELECT employees FOR UPDATE
+      .mockResolvedValueOnce([[{ id: 7, valid_from: new Date(Date.UTC(2025, 0, 1)) }]]) // SELECT open (Date real)
+      .mockResolvedValueOnce([{}])                                             // UPDATE cierre
+      .mockResolvedValueOnce([8, 1]);                                          // INSERT: forma real [insertId, affectedRows]
     const r = await people.createAssignment(50, { valid_from: '2026-03-01' }, 7);
     expect(r).toEqual({ id: 8, closed_previous: 7 });
     expect(sequelize.query.mock.calls[0][0]).toMatch(/SELECT id FROM employees WHERE id = \? FOR UPDATE/);
@@ -86,21 +89,36 @@ describe('createAssignment — atómica con lock del empleado', () => {
     sequelize.query
       .mockResolvedValueOnce([[{ id: 50 }]])
       .mockResolvedValueOnce([[]])
-      .mockResolvedValueOnce([{ insertId: 3 }]);
+      .mockResolvedValueOnce([3, 1]);                                          // INSERT: forma real
     expect(await people.createAssignment(50, { valid_from: '2026-01-01' }, 1)).toEqual({ id: 3, closed_previous: null });
   });
 
-  test('fuera de orden (vigencia abierta posterior) → 409 y rollback', async () => {
+  test('fuera de orden (vigencia abierta POSTERIOR, Date real) → 409 y rollback', async () => {
     sequelize.query
       .mockResolvedValueOnce([[{ id: 50 }]])
-      .mockResolvedValueOnce([[{ id: 7, valid_from: '2026-06-01' }]]);
+      .mockResolvedValueOnce([[{ id: 7, valid_from: new Date(Date.UTC(2026, 5, 1)) }]]); // open 2026-06-01 (Date)
     await expect(people.createAssignment(50, { valid_from: '2026-03-01' }, 1)).rejects.toMatchObject({ status: 409, code: 'ASSIGNMENT_OUT_OF_ORDER' });
     expect(sequelize.__tx.rollback).toHaveBeenCalled();
+  });
+
+  test('misma fecha que la vigencia abierta (Date real) → 409', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 50 }]])
+      .mockResolvedValueOnce([[{ id: 7, valid_from: new Date(Date.UTC(2026, 2, 1)) }]]); // open 2026-03-01
+    await expect(people.createAssignment(50, { valid_from: '2026-03-01' }, 1)).rejects.toMatchObject({ status: 409, code: 'ASSIGNMENT_OUT_OF_ORDER' });
   });
 
   test('empleado inexistente (lock vacío) → 400', async () => {
     sequelize.query.mockResolvedValueOnce([[]]);
     await expect(people.createAssignment(999, { valid_from: '2026-01-01' }, 1)).rejects.toMatchObject({ status: 400, code: 'EMPLOYEE_NOT_FOUND' });
+  });
+
+  test('★ fecha civil imposible (2025-02-29) → 400 sin abrir transacción', async () => {
+    await expect(people.createAssignment(50, { valid_from: '2025-02-29' }, 1))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+    // No debió tocar la BD ni abrir transacción.
+    expect(sequelize.query).not.toHaveBeenCalled();
+    expect(sequelize.transaction).not.toHaveBeenCalled();
   });
 });
 

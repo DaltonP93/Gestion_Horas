@@ -19,6 +19,12 @@ const people = require('../services/people');
 const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
+const { parseCivilDate } = require('../utils/civilDate');
+
+// Fecha civil REAL (no sólo formato): rechaza 2025-02-29, 2026-13-01, etc.
+const civilDate = Joi.string()
+  .pattern(/^\d{4}-\d{2}-\d{2}$/)
+  .custom((v, helpers) => (parseCivilDate(v) ? v : helpers.error('any.invalid')));
 
 router.use(authenticate);
 
@@ -28,7 +34,7 @@ const createSchema = Joi.object({
   cost_center_id:   Joi.number().integer().positive().allow(null),
   job_title:        Joi.string().trim().max(100).allow(null, ''),
   reference_salary: Joi.number().min(0).allow(null),
-  valid_from:       Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/).required(),
+  valid_from:       civilDate.required(),
   change_reason:    Joi.string().trim().max(500).allow(null, ''),
 });
 
