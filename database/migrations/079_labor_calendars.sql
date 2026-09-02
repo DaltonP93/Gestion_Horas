@@ -9,6 +9,16 @@
 --     horaria (default America/Asuncion), inicio de semana (0=domingo) y
 --     vigencia efectiva (`valid_from`/`valid_to`). Versionar = crear una nueva
 --     fila vigente; no se sobreescribe el pasado.
+--
+--     ALCANCE DEL CÓDIGO (decisión explícita): `code` es único DENTRO de un
+--     alcance (global / empresa / sucursal), no global. Así dos empresas o dos
+--     sucursales pueden usar el mismo código (p.ej. 'ESTANDAR') sin colisionar,
+--     y cada alcance versiona por `valid_from`. Se implementa con una columna
+--     generada `scope_key` = COALESCE(company_id,0):COALESCE(branch_id,0) y una
+--     UNIQUE(scope_key, code, valid_from). La columna generada mantiene la
+--     unicidad incluso para el alcance GLOBAL (0:0), donde dos NULL no colisionan
+--     por sí solos en una UNIQUE. El resolutor elige la versión por alcance +
+--     fecha con precedencia sucursal > empresa > global.
 --   * `calendar_exceptions`— días puntuales del calendario: no laborable,
 --     laborable (excepción que habilita un día normalmente de descanso) o
 --     especial. UNIQUE(calendar_id, day).
@@ -33,18 +43,28 @@ CREATE TABLE IF NOT EXISTS labor_calendars (
   active       TINYINT(1)   NOT NULL DEFAULT 1,
   valid_from   DATE         NOT NULL,
   valid_to     DATE         NULL,                     -- NULL = vigente
+  -- Clave de alcance (columna generada, determinista): 0 = "sin dimensión".
+  -- Hace la unicidad por-alcance robusta también para el alcance global (0:0).
+  scope_key    VARCHAR(41)  AS (CONCAT(COALESCE(company_id, 0), ':', COALESCE(branch_id, 0))) STORED,
   created_by   INT          NULL,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  -- Versionado real: un mismo `code` puede tener VARIAS versiones, cada una con
-  -- su vigencia. La unicidad es por (code, valid_from), no por code, para no
-  -- impedir versiones. El resolutor elige la versión por alcance + fecha.
-  UNIQUE KEY uq_labor_calendars_code_from (code, valid_from),
+  -- Versionado real + código por ALCANCE: un mismo `code` admite VARIAS
+  -- versiones (por `valid_from`) y puede repetirse en OTRO alcance (otra empresa
+  -- o sucursal). La unicidad es por (scope_key, code, valid_from), nunca por
+  -- `code` a secas. El resolutor elige la versión por alcance + fecha.
+  UNIQUE KEY uq_labor_calendars_scope_code_from (scope_key, code, valid_from),
   KEY ix_labor_calendars_code (code),
   KEY ix_labor_calendars_scope (company_id, branch_id),
   KEY ix_labor_calendars_valid (valid_from, valid_to),
-  CONSTRAINT fk_labor_cal_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
-  CONSTRAINT fk_labor_cal_branch  FOREIGN KEY (branch_id)  REFERENCES branches(id)  ON DELETE SET NULL
+  -- ON DELETE RESTRICT (no SET NULL): `company_id`/`branch_id` son columnas base
+  -- de la generada `scope_key` indexada; MySQL prohíbe SET NULL/CASCADE sobre la
+  -- base de una columna generada indexada. RESTRICT también es la semántica más
+  -- segura para configuración: no se orfana un calendario silenciosamente ni se
+  -- fusiona su alcance a "global" al borrar la empresa/sucursal — el borrado se
+  -- bloquea mientras exista el calendario (F1 desactiva por estado, no borra).
+  CONSTRAINT fk_labor_cal_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE RESTRICT,
+  CONSTRAINT fk_labor_cal_branch  FOREIGN KEY (branch_id)  REFERENCES branches(id)  ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS calendar_exceptions (

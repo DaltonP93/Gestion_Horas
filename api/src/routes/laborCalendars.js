@@ -20,6 +20,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const calendar = require('../services/calendarService');
+const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
 
@@ -70,8 +71,9 @@ function idParam(req, res) {
   return id;
 }
 
-router.get('/', requirePermission('calendario', 'view'), asyncHandler(async (_req, res) => {
-  res.json({ data: await calendar.listCalendars() });
+router.get('/', requirePermission('calendario', 'view'), asyncHandler(async (req, res) => {
+  const scope = await orgScope.getOrgScope(req.user);
+  res.json({ data: await calendar.listCalendars(scope) });
 }));
 
 // READ-ONLY: jornada vigente de un empleado (delegada en workdayConfig).
@@ -80,17 +82,34 @@ router.get('/workday/:empId', requirePermission('calendario', 'view'), asyncHand
   if (!Number.isFinite(empId) || empId <= 0) return res.status(400).json({ error: 'empId inválido' });
   const date = typeof req.query.date === 'string' ? req.query.date : null;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date (YYYY-MM-DD) requerido' });
+  // Alcance del EMPLEADO: no se puede consultar la jornada de cualquier empleado.
+  // Fuera de alcance → 404 (no se filtra existencia entre departamentos/sucursales).
+  const scope = await orgScope.getOrgScope(req.user);
+  if (scope && !scope.unrestricted) {
+    const refs = await orgScope.loadEmployeeOrgRefs(empId);
+    if (!refs || !orgScope.canSeeEmployeeRefs(scope, refs)) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+  }
   res.json({ employee_id: empId, date, ...(await calendar.readWorkdayForDate(empId, date)) });
 }));
 
 // Resolutor efectivo POR ALCANCE + fecha (elige la versión aplicable por día).
 router.get('/effective', requirePermission('calendario', 'view'), validate(effectiveScopeSchema, 'query'), asyncHandler(async (req, res) => {
-  const scope = {
+  const reqScope = {
     company_id: req.query.company_id ? Number(req.query.company_id) : null,
     branch_id: req.query.branch_id ? Number(req.query.branch_id) : null,
   };
+  // El endpoint no debe aceptar empresa/sucursal AJENA al alcance del actor.
+  const scope = await orgScope.getOrgScope(req.user);
   try {
-    res.json(await calendar.resolveEffectiveByScope(scope, req.query.from, req.query.to));
+    orgScope.assertCompanyInScope(scope, reqScope.company_id);
+    orgScope.assertBranchInScope(scope, reqScope.branch_id);
+  } catch (err) {
+    return res.status(err.status || 403).json({ error: err.message, code: err.code });
+  }
+  try {
+    res.json(await calendar.resolveEffectiveByScope(reqScope, req.query.from, req.query.to));
   } catch (err) {
     if (err.status === 400) return res.status(400).json({ error: err.message });
     throw err;
@@ -100,24 +119,35 @@ router.get('/effective', requirePermission('calendario', 'view'), validate(effec
 router.get('/:id', requirePermission('calendario', 'view'), asyncHandler(async (req, res) => {
   const id = idParam(req, res); if (id == null) return;
   const row = await calendar.getCalendar(id);
-  if (!row) return res.status(404).json({ error: 'Calendario no encontrado' });
+  const scope = await orgScope.getOrgScope(req.user);
+  // Fuera de alcance → 404 (los globales sí son visibles).
+  if (!row || !orgScope.canSeeCalendar(scope, row)) {
+    return res.status(404).json({ error: 'Calendario no encontrado' });
+  }
   res.json({ data: row });
 }));
 
 router.get('/:id/exceptions', requirePermission('calendario', 'view'), asyncHandler(async (req, res) => {
   const id = idParam(req, res); if (id == null) return;
+  const cal = await calendar.getCalendar(id);
+  const scope = await orgScope.getOrgScope(req.user);
+  if (!cal || !orgScope.canSeeCalendar(scope, cal)) {
+    return res.status(404).json({ error: 'Calendario no encontrado' });
+  }
   res.json({ calendar_id: id, data: await calendar.listExceptions(id) });
 }));
 
 router.get('/:id/effective', requirePermission('calendario', 'view'), validate(effectiveSchema, 'query'), asyncHandler(async (req, res) => {
   const id = idParam(req, res); if (id == null) return;
+  const scope = await orgScope.getOrgScope(req.user);
   // `undefined` (no override) → el servicio usa los work_days PERSISTIDOS del
-  // calendario; un query param los sobreescribe explícitamente.
+  // calendario; un query param los sobreescribe explícitamente. El servicio
+  // aplica el ALCANCE (calendario fuera de alcance → null → 404).
   const workDays = req.query.work_days
     ? String(req.query.work_days).split(',').map(Number)
     : undefined;
   try {
-    const eff = await calendar.resolveEffective(id, req.query.from, req.query.to, { workDays });
+    const eff = await calendar.resolveEffective(id, req.query.from, req.query.to, { workDays, scope });
     if (!eff) return res.status(404).json({ error: 'Calendario no encontrado' });
     res.json({ calendar_id: id, ...eff });
   } catch (err) {
@@ -129,6 +159,9 @@ router.get('/:id/effective', requirePermission('calendario', 'view'), validate(e
 router.post('/', requirePermission('calendario', 'create'), validate(createSchema), asyncHandler(async (req, res) => {
   calendar.assertWriteEnabled();
   const { reason, ...data } = req.body;
+  // Alcance + coherencia sucursal → empresa de las referencias del calendario.
+  const scope = await orgScope.getOrgScope(req.user);
+  await calendar.validateCalendarRefs(scope, data);
   let id;
   try {
     id = await calendar.createCalendar(data, req.user?.id || null);
@@ -148,7 +181,17 @@ router.post('/:id/exceptions', requirePermission('calendario', 'create'), valida
   calendar.assertWriteEnabled();
   const id = idParam(req, res); if (id == null) return;
   const cal = await calendar.getCalendar(id);
-  if (!cal) return res.status(404).json({ error: 'Calendario no encontrado' });
+  const scope = await orgScope.getOrgScope(req.user);
+  // Sólo se pueden agregar excepciones a un calendario dentro del alcance (los
+  // globales cuentan como visibles pero un writer scoped no debería mutarlos: se
+  // exige empresa/sucursal en alcance). Fuera de alcance → 404.
+  if (!cal || !orgScope.canSeeCalendar(scope, cal)) {
+    return res.status(404).json({ error: 'Calendario no encontrado' });
+  }
+  // Un writer con alcance no puede mutar un calendario GLOBAL (que afecta a todos).
+  if (scope && !scope.unrestricted && cal.company_id == null && cal.branch_id == null) {
+    return res.status(403).json({ error: 'No podés modificar un calendario global', code: 'OUT_OF_SCOPE' });
+  }
   const { reason, ...data } = req.body;
   await calendar.upsertException(id, data, req.user?.id || null);
   audit.log({

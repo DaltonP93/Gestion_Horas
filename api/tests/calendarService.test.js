@@ -81,10 +81,10 @@ describe('lectura de jornada — 3 estados de esquema', () => {
     expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
   });
 
-  test('incomplete: tabla sin columnas de 073 → respuesta controlada (no error crudo)', async () => {
+  test('incomplete: tabla sin NINGUNA columna de 073 → respuesta controlada (no error crudo)', async () => {
     sequelize.query
       .mockResolvedValueOnce([[{ ok: 1 }]]) // TABLES existe
-      .mockResolvedValueOnce([[]]);         // COLUMNS work_regime ausente
+      .mockResolvedValueOnce([[]]);         // COLUMNS: ninguna
     const r = await svc.readWorkdayForDate(50, '2026-01-05');
     expect(r.schema_state).toBe('incomplete');
     expect(r.workday).toBeNull();
@@ -92,14 +92,39 @@ describe('lectura de jornada — 3 estados de esquema', () => {
     expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
   });
 
-  test('complete: delega en workdayConfig (read-only)', async () => {
+  test('incomplete: 073 PARCIAL (falta daily_target_minutes) → incomplete, NO delega', async () => {
+    // Están casi todas las columnas de 073 pero falta una que usa loadScheduleHistory.
+    const cols = ['work_regime', 'overtime_policy', 'rounding_policy', 'night_start', 'night_end', 'work_days']
+      .map((name) => ({ name })); // falta daily_target_minutes
+    sequelize.query
+      .mockResolvedValueOnce([[{ ok: 1 }]]) // TABLES existe
+      .mockResolvedValueOnce([cols]);       // COLUMNS incompletas
+    const r = await svc.readWorkdayForDate(50, '2026-01-05');
+    expect(r.schema_state).toBe('incomplete');
+    expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
+  });
+
+  test('complete: TODAS las columnas de 073 → delega en workdayConfig (read-only)', async () => {
+    const cols = ['daily_target_minutes', 'work_regime', 'overtime_policy', 'rounding_policy', 'night_start', 'night_end', 'work_days']
+      .map((name) => ({ name }));
     sequelize.query
       .mockResolvedValueOnce([[{ ok: 1 }]]) // TABLES
-      .mockResolvedValueOnce([[{ ok: 1 }]]); // COLUMNS work_regime presente
+      .mockResolvedValueOnce([cols]);       // COLUMNS completas
     const forDate = jest.fn().mockReturnValue({ source: 'employee_schedule_history', config: { check_in: '08:00:00' } });
     workdayConfig.loadWorkdayConfig.mockResolvedValueOnce({ forDate });
     const r = await svc.readWorkdayForDate(50, '2026-01-05');
     expect(r.schema_state).toBe('complete');
     expect(r.workday.source).toBe('employee_schedule_history');
+  });
+});
+
+describe('createCalendar — fechas civiles reales', () => {
+  test('rechaza fecha imposible (2026-02-30) → 400 INVALID_DATE', async () => {
+    await expect(svc.createCalendar({ code: 'X', name: 'x', valid_from: '2026-02-30' }, null))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+  });
+  test('rechaza vigencia invertida real → 400 INVALID_VALIDITY', async () => {
+    await expect(svc.createCalendar({ code: 'X', name: 'x', valid_from: '2026-05-01', valid_to: '2026-01-01' }, null))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_VALIDITY' });
   });
 });

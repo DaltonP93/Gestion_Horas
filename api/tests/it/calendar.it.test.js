@@ -71,6 +71,48 @@ describeIT('calendario (integración) — versionado y jornada', () => {
     ).rejects.toMatchObject({ status: 400, code: 'INVALID_VALIDITY' });
   });
 
+  test('createCalendar rechaza fecha civil imposible (2026-02-30) → 400 INVALID_DATE', async () => {
+    await expect(
+      svc.createCalendar({ code: `${ids.code}D`, name: 'bad', valid_from: '2026-02-30' }, null),
+    ).rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+  });
+
+  test('código por ALCANCE: mismo code+valid_from en OTRA empresa NO colisiona; misma empresa sí', async () => {
+    const [coB] = await conn.query('INSERT INTO companies (code, legal_name, active) VALUES (?, ?, 1)', [`${ids.code}COB`, 'B']);
+    ids.companyB = coB.insertId;
+    // Mismo code y valid_from que v2 (company A), pero en company B → permitido.
+    await expect(
+      conn.query(
+        "INSERT INTO labor_calendars (code, name, company_id, active, valid_from) VALUES (?, 'otra empresa', ?, 1, '2026-01-01')",
+        [ids.code, ids.companyB],
+      ),
+    ).resolves.toBeTruthy();
+    // Mismo code + valid_from en la MISMA empresa A → colisiona (UNIQUE por alcance).
+    await expect(
+      conn.query(
+        "INSERT INTO labor_calendars (code, name, company_id, active, valid_from) VALUES (?, 'dup', ?, 1, '2026-01-01')",
+        [ids.code, ids.company],
+      ),
+    ).rejects.toThrow(/Duplicate|ER_DUP/i);
+    await conn.query('DELETE FROM labor_calendars WHERE company_id = ?', [ids.companyB]);
+    await conn.query('DELETE FROM companies WHERE id = ?', [ids.companyB]);
+  });
+
+  test('listCalendars aplica ALCANCE: rol con alcance ve global + su empresa, no otra', async () => {
+    // Global + otra empresa, temporales.
+    const [g] = await conn.query("INSERT INTO labor_calendars (code, name, active, valid_from) VALUES (?, 'global', 1, '2026-01-01')", [`${ids.code}G`]);
+    const [coC] = await conn.query('INSERT INTO companies (code, legal_name, active) VALUES (?, ?, 1)', [`${ids.code}COC`, 'C']);
+    const [oc] = await conn.query("INSERT INTO labor_calendars (code, name, company_id, active, valid_from) VALUES (?, 'ajena', ?, 1, '2026-01-01')", [`${ids.code}O`, coC.insertId]);
+    const scope = { unrestricted: false, companyIds: [ids.company], branchIds: [], departmentIds: [] };
+    const rows = await svc.listCalendars(scope);
+    const seen = new Set(rows.map((r) => r.id));
+    expect(seen.has(g.insertId)).toBe(true);       // global visible
+    expect(seen.has(ids.v2)).toBe(true);           // empresa propia
+    expect(seen.has(oc.insertId)).toBe(false);     // empresa ajena NO
+    await conn.query('DELETE FROM labor_calendars WHERE id IN (?, ?)', [g.insertId, oc.insertId]);
+    await conn.query('DELETE FROM companies WHERE id = ?', [coC.insertId]);
+  });
+
   describe('jornada — estados de esquema reales', () => {
     afterEach(async () => {
       await conn.query('DROP TABLE IF EXISTS employee_schedule_history');
@@ -83,10 +125,23 @@ describeIT('calendario (integración) — versionado y jornada', () => {
       expect(r.workday).toEqual({ source: 'historical_fallback', config: null });
     });
 
-    test('incomplete: tabla sin columnas 073 → respuesta controlada (no error crudo)', async () => {
+    test('incomplete: tabla SIN ninguna columna 073 → respuesta controlada (no error crudo)', async () => {
       await conn.query(
         `CREATE TABLE employee_schedule_history (
            id INT AUTO_INCREMENT PRIMARY KEY, employee_id INT, valid_from DATE, valid_to DATE, check_in TIME
+         ) ENGINE=InnoDB`,
+      );
+      const r = await svc.readWorkdayForDate(1, '2026-01-05');
+      expect(r.schema_state).toBe('incomplete');
+      expect(r.workday).toBeNull();
+    });
+
+    test('incomplete: tabla con SÓLO work_regime (073 parcial) → incomplete, NO error SQL', async () => {
+      // El viejo centinela único `work_regime` marcaría 'complete' y explotaría al
+      // leer daily_target_minutes/night_start… Ahora exige TODAS las columnas 073.
+      await conn.query(
+        `CREATE TABLE employee_schedule_history (
+           id INT AUTO_INCREMENT PRIMARY KEY, employee_id INT, valid_from DATE, valid_to DATE, work_regime VARCHAR(20)
          ) ENGINE=InnoDB`,
       );
       const r = await svc.readWorkdayForDate(1, '2026-01-05');

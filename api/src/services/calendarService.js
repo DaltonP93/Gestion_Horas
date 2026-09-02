@@ -72,10 +72,18 @@ function parseWorkDays(value) {
 const CALENDAR_COLS = `id, code, name, company_id, branch_id, timezone, week_start,
             work_days, active, valid_from, valid_to`;
 
-async function listCalendars() {
+/**
+ * Lista calendarios aplicando ALCANCE: un rol con alcance ve los GLOBALES (que
+ * aplican a todos) y los de su empresa/sucursal; nunca los de otra empresa.
+ */
+async function listCalendars(scope) {
+  const orgScope = require('./orgScope');
+  const frag = orgScope.calendarScopeFilter(scope);
+  const where = frag.clause ? `WHERE ${frag.clause.replace(/^AND\s+/, '')}` : '';
   return optionalQuery(
     `SELECT ${CALENDAR_COLS}, created_at, updated_at
-       FROM labor_calendars ORDER BY code, valid_from DESC`,
+       FROM labor_calendars ${where} ORDER BY code, valid_from DESC`,
+    frag.params,
   );
 }
 
@@ -87,9 +95,40 @@ async function getCalendar(id) {
   return rows[0] || null;
 }
 
+/**
+ * Valida existencia, ALCANCE y coherencia sucursal → empresa de las referencias
+ * de un calendario. Fuera de alcance → 403; sucursal ajena a la empresa → 400.
+ */
+async function validateCalendarRefs(scope, data) {
+  const orgScope = require('./orgScope');
+  const companyId = data.company_id ?? null;
+  const branchId = data.branch_id ?? null;
+  if (branchId != null) {
+    const [b] = await sequelize.query('SELECT id, company_id FROM branches WHERE id = ? LIMIT 1', { replacements: [branchId] });
+    if (!b.length) throw httpError(400, 'BRANCH_NOT_FOUND', 'La sucursal referenciada no existe');
+    orgScope.assertBranchInScope(scope, branchId);
+    if (companyId != null && b[0].company_id != null && Number(b[0].company_id) !== Number(companyId)) {
+      throw httpError(400, 'INCOHERENT_SCOPE', 'La sucursal no pertenece a la empresa indicada');
+    }
+  }
+  if (companyId != null) {
+    const [c] = await sequelize.query('SELECT id FROM companies WHERE id = ? LIMIT 1', { replacements: [companyId] });
+    if (!c.length) throw httpError(400, 'COMPANY_NOT_FOUND', 'La empresa referenciada no existe');
+    orgScope.assertCompanyInScope(scope, companyId);
+  }
+}
+
 async function createCalendar(data, userId) {
+  const { parseCivilDate } = require('../utils/civilDate');
+  // Fechas civiles REALES (no sólo formato): rechaza p.ej. 2026-02-30.
+  if (!parseCivilDate(data.valid_from)) {
+    throw httpError(400, 'INVALID_DATE', 'valid_from no es una fecha civil válida');
+  }
+  if (data.valid_to != null && data.valid_to !== '' && !parseCivilDate(data.valid_to)) {
+    throw httpError(400, 'INVALID_DATE', 'valid_to no es una fecha civil válida');
+  }
   // Versionado válido: la vigencia debe ser coherente.
-  if (data.valid_to != null && String(data.valid_to) < String(data.valid_from)) {
+  if (data.valid_to != null && data.valid_to !== '' && String(data.valid_to) < String(data.valid_from)) {
     throw httpError(400, 'INVALID_VALIDITY', 'valid_to no puede ser anterior a valid_from');
   }
   const [result] = await sequelize.query(
@@ -152,9 +191,15 @@ async function exceptionsInRange(calendarId, from, to) {
  * Calendario efectivo del rango POR ID. Usa los `work_days` PERSISTIDOS del
  * calendario salvo que se pase un override explícito.
  */
-async function resolveEffective(calendarId, from, to, { workDays } = {}) {
+async function resolveEffective(calendarId, from, to, { workDays, scope } = {}) {
   const cal = await getCalendar(calendarId);
   if (!cal) return null; // calendario inexistente → el caller responde 404
+  // ALCANCE: un calendario fuera del alcance del actor se trata como inexistente
+  // (404), sin filtrar existencia. Los globales sí son visibles.
+  if (scope) {
+    const orgScope = require('./orgScope');
+    if (!orgScope.canSeeCalendar(scope, cal)) return null;
+  }
   const effectiveWorkDays = workDays !== undefined ? workDays : parseWorkDays(cal.work_days);
   const [holidaySet, exceptionMap] = await Promise.all([
     holidaysInRange(from, to),
@@ -247,10 +292,30 @@ async function resolveEffectiveByScope(scope, from, to) {
 // ─── Integración READ-ONLY con snapshots de jornada ─────────────────────────
 
 /**
+ * Columnas de 073 que `workdayConfig.loadScheduleHistory` LEE del snapshot
+ * histórico. Si falta CUALQUIERA, la consulta de jornada fallaría con un error
+ * SQL crudo; por eso el estado del esquema exige TODAS, no sólo un centinela.
+ */
+const WORKDAY_073_COLUMNS = [
+  'daily_target_minutes',
+  'work_regime',
+  'overtime_policy',
+  'rounding_policy',
+  'night_start',
+  'night_end',
+  'work_days',
+];
+
+/**
  * Estado del esquema de jornada histórica (072/073/075):
  *   - 'missing'    : la tabla employee_schedule_history no existe (072 sin aplicar).
- *   - 'incomplete' : la tabla existe pero faltan columnas de 073 (esquema parcial).
- *   - 'complete'   : tabla y columnas de 073 presentes (075 lo maneja workdayConfig).
+ *   - 'incomplete' : la tabla existe pero falta ALGUNA columna de 073 (parcial).
+ *   - 'complete'   : tabla y TODAS las columnas de 073 presentes.
+ *
+ * Se comprueba el conjunto COMPLETO de columnas que usa loadScheduleHistory
+ * (no un único centinela `work_regime`): un esquema con 072 pero 073 a medias
+ * —p.ej. sin `daily_target_minutes` o `night_start`— también es 'incomplete' y
+ * NUNCA llega a `loadWorkdayConfig` (evita el error SQL por columna ausente).
  */
 async function workdaySchemaState() {
   const [tbl] = await sequelize.query(
@@ -258,12 +323,13 @@ async function workdaySchemaState() {
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_schedule_history' LIMIT 1`,
   );
   if (!tbl.length) return 'missing';
-  const [col] = await sequelize.query(
-    `SELECT 1 AS ok FROM information_schema.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_schedule_history'
-        AND COLUMN_NAME = 'work_regime' LIMIT 1`,
+  const [cols] = await sequelize.query(
+    `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_schedule_history'`,
   );
-  return col.length ? 'complete' : 'incomplete';
+  const present = new Set(cols.map((c) => String(c.name).toLowerCase()));
+  const missing = WORKDAY_073_COLUMNS.filter((c) => !present.has(c));
+  return missing.length ? 'incomplete' : 'complete';
 }
 
 /**
@@ -294,6 +360,7 @@ module.exports = {
   isDupError,
   listCalendars,
   getCalendar,
+  validateCalendarRefs,
   createCalendar,
   listExceptions,
   upsertException,

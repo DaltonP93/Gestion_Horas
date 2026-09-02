@@ -100,8 +100,11 @@ describeIT('migraciones FASE F (integración)', () => {
     expect(Object.values(uniques)).not.toContain('code');
   });
 
-  test('079: calendar_exceptions CASCADE al calendario; FKs de alcance SET NULL', async () => {
+  test('079: calendar_exceptions CASCADE al calendario; FKs de alcance RESTRICT', async () => {
     expect(await fkRule('calendar_exceptions', 'fk_cal_exc_calendar')).toBe('CASCADE');
-    expect(await fkRule('labor_calendars', 'fk_labor_cal_company')).toBe('SET NULL');
+    // company_id/branch_id son base de la columna generada indexada scope_key →
+    // RESTRICT (SET NULL prohibido por MySQL en ese caso).
+    expect(await fkRule('labor_calendars', 'fk_labor_cal_company')).toBe('RESTRICT');
+    expect(await fkRule('labor_calendars', 'fk_labor_cal_branch')).toBe('RESTRICT');
   });
 });

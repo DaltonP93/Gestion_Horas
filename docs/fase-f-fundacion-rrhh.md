@@ -165,11 +165,27 @@ Flag nuevo: **`PEOPLE_WRITE_ENABLED`** — default `false` (fail-closed), sólo
 Encadena sobre F2. Complementa —sin duplicar— la tabla `holidays` (feriados) y
 el motor de jornada. Agrega (migración `079`):
 
-- **`labor_calendars` — versionado REAL**: `UNIQUE(code, valid_from)` (no por
-  `code`), así un mismo calendario puede tener **varias versiones** con vigencia
-  distinta. Persiste `work_days` (1..7), alcance opcional por empresa/sucursal,
-  `timezone` (default `America/Asuncion`) y `week_start`. `createCalendar` valida
-  `valid_from <= valid_to` (400).
+- **`labor_calendars` — versionado REAL + código por ALCANCE (P1-B)**: la
+  unicidad es por `(scope_key, code, valid_from)` —**nunca** por `code` a
+  secas—, donde `scope_key` es una columna **generada** determinista
+  (`COALESCE(company_id,0):COALESCE(branch_id,0)`). Decisión explícita: el
+  `code` es único **dentro de un alcance** (global / empresa / sucursal), así dos
+  empresas o sucursales pueden repetir el mismo código, y cada alcance versiona
+  por `valid_from`. Persiste `work_days` (1..7), `timezone` (default
+  `America/Asuncion`) y `week_start`. Las FKs de alcance son `ON DELETE RESTRICT`
+  (MySQL prohíbe `SET NULL`/`CASCADE` sobre la base de una columna generada
+  indexada; además preserva la config). `createCalendar` valida **fechas civiles
+  reales** (rechaza p.ej. `2026-02-30` → 400 `INVALID_DATE`) y
+  `valid_from <= valid_to` (400 `INVALID_VALIDITY`).
+- **ALCANCE en todas las rutas de calendario (P1-B)**: `list`/`:id`/`exceptions`/
+  `:id/effective` sólo muestran el calendario **global** aplicable o uno **dentro
+  del alcance** del actor; un calendario de otra empresa/sucursal → **404** (no
+  filtra existencia). El resolutor `GET /effective` **no acepta** empresa/sucursal
+  ajena (→ 403 `OUT_OF_SCOPE`). `GET /workday/:empId` verifica el **alcance del
+  empleado** (404 fuera de alcance). Writers de calendario/excepciones validan
+  alcance y **coherencia sucursal → empresa**; un writer con alcance no puede
+  mutar un calendario **global** (403). `validateCalendarRefs` reutiliza
+  `orgScope` (sin duplicar).
 - **`calendar_exceptions`** — días puntuales: `nonworking` / `working`
   (habilita un día de descanso) / `special`.
 - **Lógica pura `laborCalendar.js`** — clasifica cada fecha (laborable/no)
@@ -185,13 +201,19 @@ el motor de jornada. Agrega (migración `079`):
   /api/labor-calendars/workday/:empId`:
   - tabla `employee_schedule_history` ausente → `schema_state:'missing'` +
     `historical_fallback`;
-  - esquema parcial (072 sin 073) → `schema_state:'incomplete'` con mensaje
-    controlado (**nunca** un error SQL crudo ni un fallback silencioso);
+  - esquema parcial → `schema_state:'incomplete'` con mensaje controlado
+    (**nunca** un error SQL crudo ni un fallback silencioso). La detección (P1-B)
+    exige el **conjunto COMPLETO** de columnas que lee `loadScheduleHistory`
+    (`daily_target_minutes`, `work_regime`, `overtime_policy`, `rounding_policy`,
+    `night_start`, `night_end`, `work_days`), no un único centinela: una tabla con
+    sólo `work_regime` es `incomplete` y **no** llega a `loadWorkdayConfig`;
   - esquema completo → delega en `workdayConfig` (`schema_state:'complete'`).
   **No** recalcula ni modifica `attendance_logs`/`daily_summary`/att2000.
 - **Degradación** de lectura de calendario/feriados ante tabla ausente (42S02).
-  UI mínima: `/configuracion/calendario-laboral` (consulta de rango). Versionado
-  y los tres estados probados en integración (`tests/it/calendar.it.test.js`).
+  UI mínima: `/configuracion/calendario-laboral` (consulta de rango). Versionado,
+  código por alcance, aislamiento cross-scope y los tres estados (incl. 073
+  parcial) probados en integración contra MySQL real
+  (`tests/it/calendar.it.test.js`) y con la DB mockeada (`tests/calendarScope.test.js`).
 
 Flag nuevo: **`CALENDAR_WRITE_ENABLED`** — default `false` (fail-closed).
 

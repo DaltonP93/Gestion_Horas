@@ -210,6 +210,39 @@ function candidateScopeFilter(scope, { companyCol = 'company_id', branchCol = 'b
   return { clause: `AND (${ors.join(' OR ')})`, params };
 }
 
+// ─── Alcance de CALENDARIOS (global visible + empresa/sucursal) ──────────────
+
+/**
+ * ¿El actor puede ver este calendario? A diferencia de un candidato, un
+ * calendario GLOBAL (company_id y branch_id NULL) SÍ es visible para roles con
+ * alcance —aplica a todos—. Si no es global, exige empresa o sucursal en alcance.
+ */
+function canSeeCalendar(scope, cal) {
+  if (!scope || scope.unrestricted) return true;
+  if (!cal) return false;
+  const company = cal.company_id ?? null;
+  const branch = cal.branch_id ?? null;
+  if (company == null && branch == null) return true; // global aplica a todos
+  if (branch != null && (scope.branchIds || []).includes(branch)) return true;
+  if (company != null && (scope.companyIds || []).includes(company)) return true;
+  return false;
+}
+
+/**
+ * Fragmento SQL para filtrar calendarios por alcance INCLUYENDO los globales.
+ * Unrestricted → sin filtro.
+ */
+function calendarScopeFilter(scope, { companyCol = 'company_id', branchCol = 'branch_id' } = {}) {
+  if (!scope || scope.unrestricted) return { clause: '', params: [] };
+  const cids = scope.companyIds || [];
+  const bids = scope.branchIds || [];
+  const ors = [`(${companyCol} IS NULL AND ${branchCol} IS NULL)`]; // global siempre visible
+  const params = [];
+  if (bids.length) { ors.push(`${branchCol} IN (${bids.map(() => '?').join(',')})`); params.push(...bids); }
+  if (cids.length) { ors.push(`${companyCol} IN (${cids.map(() => '?').join(',')})`); params.push(...cids); }
+  return { clause: `AND (${ors.join(' OR ')})`, params };
+}
+
 module.exports = {
   getOrgScope,
   scopeFilter,
@@ -223,4 +256,6 @@ module.exports = {
   canSeeEmployeeRefs,
   canSeeCandidateRefs,
   candidateScopeFilter,
+  canSeeCalendar,
+  calendarScopeFilter,
 };
