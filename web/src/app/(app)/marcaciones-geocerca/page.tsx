@@ -1,7 +1,8 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { MapPinOff, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
+import { MapPinOff, ArrowDownLeft, ArrowUpRight, Download } from 'lucide-react'
 import { api } from '@/lib/api'
+import { downloadCsv } from '@/lib/csvExport'
 
 interface Row {
   id: number; employee_id: number; code: string; name: string; department: string
@@ -30,6 +31,15 @@ export default function MarcacionesGeocercaPage() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => { api.get('/api/employees/departments').then(r => setDepts(r.data || [])).catch(() => {}) }, [])
+
+  function exportCsv() {
+    if (!rows.length) return
+    downloadCsv(
+      `marcaciones-geocerca_${from}_${to}.csv`,
+      ['Fecha/hora', 'Código', 'Empleado', 'Departamento', 'Tipo', 'Origen', 'Distancia (m)', 'Latitud', 'Longitud'],
+      rows.map(r => [r.marked_at, r.code, r.name, r.department, r.type === 'in' ? 'Entrada' : 'Salida', sourceLabel(r.source), r.distance_m, r.latitude, r.longitude]),
+    )
+  }
 
   return (
     <div className="p-6 space-y-5 max-w-5xl">
@@ -60,6 +70,10 @@ export default function MarcacionesGeocercaPage() {
               {depts.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </div>
+          <button onClick={exportCsv} disabled={!rows.length}
+            className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm flex items-center gap-2 disabled:opacity-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+            <Download size={15} /> Exportar CSV
+          </button>
         </div>
       </section>
 
