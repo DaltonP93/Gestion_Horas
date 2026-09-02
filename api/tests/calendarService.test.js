@@ -92,10 +92,21 @@ describe('lectura de jornada — 3 estados de esquema', () => {
     expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
   });
 
+  // Conjunto COMPLETO que exige workdaySchemaState (base 072/073 + 075/phaseC).
+  const FULL_COLS = [
+    'schedule_id', 'valid_from', 'valid_to',
+    'check_in', 'check_out', 'tolerance_in', 'tolerance_out',
+    'break_mode', 'break_minutes', 'break_after_minutes',
+    'weekly_target_minutes', 'daily_target_minutes',
+    'work_regime', 'overtime_policy', 'rounding_policy',
+    'night_start', 'night_end', 'work_days',
+    'schedule_name_snapshot', 'snapshot_version', 'snapshot_source', 'change_reason',
+    'overtime_policy_version', 'overtime_policy_config',
+    'rounding_policy_version', 'rounding_policy_config',
+  ];
+
   test('incomplete: 073 PARCIAL (falta daily_target_minutes) → incomplete, NO delega', async () => {
-    // Están casi todas las columnas de 073 pero falta una que usa loadScheduleHistory.
-    const cols = ['work_regime', 'overtime_policy', 'rounding_policy', 'night_start', 'night_end', 'work_days']
-      .map((name) => ({ name })); // falta daily_target_minutes
+    const cols = FULL_COLS.filter((c) => c !== 'daily_target_minutes').map((name) => ({ name }));
     sequelize.query
       .mockResolvedValueOnce([[{ ok: 1 }]]) // TABLES existe
       .mockResolvedValueOnce([cols]);       // COLUMNS incompletas
@@ -104,9 +115,33 @@ describe('lectura de jornada — 3 estados de esquema', () => {
     expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
   });
 
-  test('complete: TODAS las columnas de 073 → delega en workdayConfig (read-only)', async () => {
-    const cols = ['daily_target_minutes', 'work_regime', 'overtime_policy', 'rounding_policy', 'night_start', 'night_end', 'work_days']
+  test('incomplete: 072 BASE ausente (7 de 073 presentes pero sin check_in/check_out) → incomplete', async () => {
+    // Tiene las 7 columnas de 073 + phaseC pero le falta la base 072 (check_in/out…).
+    const cols = FULL_COLS.filter((c) => c !== 'check_in' && c !== 'check_out').map((name) => ({ name }));
+    sequelize.query
+      .mockResolvedValueOnce([[{ ok: 1 }]])
+      .mockResolvedValueOnce([cols]);
+    const r = await svc.readWorkdayForDate(50, '2026-01-05');
+    expect(r.schema_state).toBe('incomplete');
+    expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
+  });
+
+  test('incomplete: 075 PARCIAL (faltan metadatos phaseC) → incomplete controlado, NO error+reintento', async () => {
+    // Base 072/073 completa pero sin las columnas de 075 → detección EXPLÍCITA,
+    // no vía el error+reintento silencioso de loadScheduleHistory.
+    const cols = FULL_COLS.filter((c) => !c.includes('policy_version') && !c.includes('policy_config')
+      && c !== 'snapshot_version' && c !== 'snapshot_source' && c !== 'schedule_name_snapshot' && c !== 'change_reason')
       .map((name) => ({ name }));
+    sequelize.query
+      .mockResolvedValueOnce([[{ ok: 1 }]])
+      .mockResolvedValueOnce([cols]);
+    const r = await svc.readWorkdayForDate(50, '2026-01-05');
+    expect(r.schema_state).toBe('incomplete');
+    expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
+  });
+
+  test('complete: TODAS las columnas (072+073+075) → delega en workdayConfig (read-only)', async () => {
+    const cols = FULL_COLS.map((name) => ({ name }));
     sequelize.query
       .mockResolvedValueOnce([[{ ok: 1 }]]) // TABLES
       .mockResolvedValueOnce([cols]);       // COLUMNS completas
@@ -115,6 +150,11 @@ describe('lectura de jornada — 3 estados de esquema', () => {
     const r = await svc.readWorkdayForDate(50, '2026-01-05');
     expect(r.schema_state).toBe('complete');
     expect(r.workday.source).toBe('employee_schedule_history');
+  });
+
+  test('fecha civil imposible (2026-02-30) → 400 INVALID_DATE sin tocar el esquema', async () => {
+    await expect(svc.readWorkdayForDate(50, '2026-02-30')).rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+    expect(sequelize.query).not.toHaveBeenCalled();
   });
 });
 

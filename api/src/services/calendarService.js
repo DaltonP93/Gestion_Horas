@@ -142,7 +142,9 @@ async function createCalendar(data, userId) {
       data.valid_from, data.valid_to ?? null, userId ?? null,
     ] },
   );
-  return result.insertId;
+  // sequelize.query(INSERT) devuelve [insertId, affectedRows] contra MySQL real,
+  // pero {insertId} con mocks: soportamos ambos (patrón de F2/syncJobs.js).
+  return result?.insertId ?? result;
 }
 
 // ─── Excepciones ────────────────────────────────────────────────────────────
@@ -292,30 +294,39 @@ async function resolveEffectiveByScope(scope, from, to) {
 // ─── Integración READ-ONLY con snapshots de jornada ─────────────────────────
 
 /**
- * Columnas de 073 que `workdayConfig.loadScheduleHistory` LEE del snapshot
- * histórico. Si falta CUALQUIERA, la consulta de jornada fallaría con un error
- * SQL crudo; por eso el estado del esquema exige TODAS, no sólo un centinela.
+ * Conjunto COMPLETO de columnas que `workdayConfig.loadScheduleHistory` lee de
+ * `employee_schedule_history` en el CAMINO NORMAL (`withPhaseCMetadata = true`).
+ * `workdaySchemaState` exige TODAS: si falta cualquiera, la lectura de jornada
+ * fallaría (o caería al reintento silencioso), así que el estado es 'incomplete'
+ * y NUNCA se llama al SQL lector. Incluye:
+ *   - base 072/073 (check_in/out, tolerancias, breaks, targets, work_regime,
+ *     políticas, night_*, work_days, schedule_id, vigencia);
+ *   - metadatos FASE C / 075 (schedule_name_snapshot, snapshot_*, change_reason,
+ *     overtime/rounding_policy_version/config) — su ausencia hoy dispara el
+ *     error+reintento interno; acá se declara explícitamente como 'incomplete'
+ *     en vez de detectarse de forma silenciosa.
  */
-const WORKDAY_073_COLUMNS = [
-  'daily_target_minutes',
-  'work_regime',
-  'overtime_policy',
-  'rounding_policy',
-  'night_start',
-  'night_end',
-  'work_days',
+const WORKDAY_REQUIRED_COLUMNS = [
+  // Base 072 + 073 (siempre leídas):
+  'schedule_id', 'valid_from', 'valid_to',
+  'check_in', 'check_out', 'tolerance_in', 'tolerance_out',
+  'break_mode', 'break_minutes', 'break_after_minutes',
+  'weekly_target_minutes', 'daily_target_minutes',
+  'work_regime', 'overtime_policy', 'rounding_policy',
+  'night_start', 'night_end', 'work_days',
+  // Metadatos FASE C / 075 (leídas en el camino normal):
+  'schedule_name_snapshot', 'snapshot_version', 'snapshot_source', 'change_reason',
+  'overtime_policy_version', 'overtime_policy_config',
+  'rounding_policy_version', 'rounding_policy_config',
 ];
 
 /**
  * Estado del esquema de jornada histórica (072/073/075):
- *   - 'missing'    : la tabla employee_schedule_history no existe (072 sin aplicar).
- *   - 'incomplete' : la tabla existe pero falta ALGUNA columna de 073 (parcial).
- *   - 'complete'   : tabla y TODAS las columnas de 073 presentes.
- *
- * Se comprueba el conjunto COMPLETO de columnas que usa loadScheduleHistory
- * (no un único centinela `work_regime`): un esquema con 072 pero 073 a medias
- * —p.ej. sin `daily_target_minutes` o `night_start`— también es 'incomplete' y
- * NUNCA llega a `loadWorkdayConfig` (evita el error SQL por columna ausente).
+ *   - 'missing'    : la tabla `employee_schedule_history` no existe (072 sin aplicar).
+ *   - 'incomplete' : la tabla existe pero falta ALGUNA columna del camino normal
+ *                    (base 072/073 **o** metadatos 075). Respuesta controlada:
+ *                    NUNCA se llega al SQL lector ni al error+reintento silencioso.
+ *   - 'complete'   : tabla + TODAS las columnas presentes.
  */
 async function workdaySchemaState() {
   const [tbl] = await sequelize.query(
@@ -328,16 +339,21 @@ async function workdaySchemaState() {
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_schedule_history'`,
   );
   const present = new Set(cols.map((c) => String(c.name).toLowerCase()));
-  const missing = WORKDAY_073_COLUMNS.filter((c) => !present.has(c));
+  const missing = WORKDAY_REQUIRED_COLUMNS.filter((c) => !present.has(c));
   return missing.length ? 'incomplete' : 'complete';
 }
 
 /**
  * Jornada vigente de un empleado en una fecha, SÓLO LECTURA, distinguiendo
  * explícitamente los tres estados del esquema. Nunca devuelve un error SQL crudo
- * ni un fallback silencioso ante esquema parcial.
+ * ni un fallback silencioso ante esquema parcial. Valida `date` como fecha civil
+ * REAL antes de tocar el esquema (2026-02-30 → 400, sin SQL lector).
  */
 async function readWorkdayForDate(employeeId, date) {
+  const { parseCivilDate } = require('../utils/civilDate');
+  if (!parseCivilDate(date)) {
+    throw httpError(400, 'INVALID_DATE', 'date no es una fecha civil válida');
+  }
   const schema = await workdaySchemaState();
   if (schema === 'missing') {
     return { schema_state: 'missing', workday: { source: 'historical_fallback', config: null } };
@@ -346,7 +362,7 @@ async function readWorkdayForDate(employeeId, date) {
     return {
       schema_state: 'incomplete',
       workday: null,
-      message: 'Esquema de jornada parcialmente migrado (072 sin 073/075). No se resuelve jornada configurada hasta completar la migración.',
+      message: 'Esquema de jornada parcialmente migrado (falta alguna columna de 072/073/075). No se resuelve jornada configurada hasta completar la migración.',
     };
   }
   const cfg = await workdayConfig.loadWorkdayConfig([employeeId], { from: date, to: date });

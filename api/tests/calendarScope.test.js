@@ -40,18 +40,23 @@ const MANAGER = { id: 11, role: 'manager', employee_id: 500 };
 
 beforeEach(() => jest.clearAllMocks());
 
-describe('orgScope — visibilidad de calendarios', () => {
+describe('orgScope — visibilidad JERÁRQUICA de calendarios (P1-A)', () => {
   const S = { unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [4] };
-  test('global visible; empresa propia visible; otra empresa no', () => {
+  test('global visible; sucursal propia visible; sucursal ajena de MISMA empresa NO', () => {
     expect(orgScope.canSeeCalendar(S, { company_id: null, branch_id: null })).toBe(true); // global
-    expect(orgScope.canSeeCalendar(S, { company_id: 9, branch_id: null })).toBe(true);
-    expect(orgScope.canSeeCalendar(S, { company_id: 1, branch_id: null })).toBe(false);
-    expect(orgScope.canSeeCalendar({ unrestricted: true }, { company_id: 1 })).toBe(true);
+    expect(orgScope.canSeeCalendar(S, { company_id: 9, branch_id: 2 })).toBe(true);        // su sucursal
+    // FUGA cerrada: sucursal 3 (ajena) de la MISMA empresa 9 → NO visible (sin fallback a empresa).
+    expect(orgScope.canSeeCalendar(S, { company_id: 9, branch_id: 3 })).toBe(false);
+    expect(orgScope.canSeeCalendar(S, { company_id: 9, branch_id: null })).toBe(true);      // sólo-empresa propia
+    expect(orgScope.canSeeCalendar(S, { company_id: 1, branch_id: null })).toBe(false);     // otra empresa
+    expect(orgScope.canSeeCalendar({ unrestricted: true }, { company_id: 1, branch_id: 3 })).toBe(true);
   });
-  test('calendarScopeFilter incluye globales (company/branch NULL)', () => {
+  test('calendarScopeFilter: global + sucursal en scope + sólo-empresa (sin fallback branch)', () => {
     const f = orgScope.calendarScopeFilter(S);
-    expect(f.clause).toMatch(/company_id IS NULL AND branch_id IS NULL/);
-    expect(f.clause).toMatch(/branch_id IN/);
+    expect(f.clause).toMatch(/company_id IS NULL AND branch_id IS NULL/);      // global
+    expect(f.clause).toMatch(/branch_id IN/);                                  // sucursal en scope
+    expect(f.clause).toMatch(/branch_id IS NULL AND company_id IN/);           // sólo-empresa (branch NULL)
+    expect(f.params).toEqual([2, 9]);
   });
 });
 

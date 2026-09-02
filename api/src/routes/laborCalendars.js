@@ -23,6 +23,7 @@ const calendar = require('../services/calendarService');
 const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
+const { parseCivilDate } = require('../utils/civilDate');
 
 router.use(authenticate);
 
@@ -180,6 +181,11 @@ router.post('/', requirePermission('calendario', 'create'), validate(createSchem
 router.post('/:id/exceptions', requirePermission('calendario', 'create'), validate(exceptionSchema), asyncHandler(async (req, res) => {
   calendar.assertWriteEnabled();
   const id = idParam(req, res); if (id == null) return;
+  // Fecha civil REAL (no sólo formato): 2026-02-30 → 400 ANTES de tocar la base
+  // (sin upsert ni auditoría).
+  if (!parseCivilDate(req.body.day)) {
+    return res.status(400).json({ error: 'day no es una fecha civil válida', code: 'INVALID_DATE' });
+  }
   const cal = await calendar.getCalendar(id);
   const scope = await orgScope.getOrgScope(req.user);
   // Sólo se pueden agregar excepciones a un calendario dentro del alcance (los
