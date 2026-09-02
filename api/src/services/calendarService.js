@@ -103,6 +103,13 @@ async function validateCalendarRefs(scope, data) {
   const orgScope = require('./orgScope');
   const companyId = data.company_id ?? null;
   const branchId = data.branch_id ?? null;
+  // Un calendario GLOBAL (sin empresa ni sucursal) aplica a TODA la organización
+  // (pickCalendarForDate lo matchea para cualquier alcance). Un writer con
+  // alcance restringido no puede crearlo: sería escribir fuera de su alcance.
+  // Simétrico a la guarda de POST /:id/exceptions sobre calendarios globales.
+  if (scope && !scope.unrestricted && companyId == null && branchId == null) {
+    throw httpError(403, 'OUT_OF_SCOPE', 'No podés crear un calendario global');
+  }
   if (branchId != null) {
     const [b] = await sequelize.query('SELECT id, company_id FROM branches WHERE id = ? LIMIT 1', { replacements: [branchId] });
     if (!b.length) throw httpError(400, 'BRANCH_NOT_FOUND', 'La sucursal referenciada no existe');

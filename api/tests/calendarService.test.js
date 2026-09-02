@@ -168,3 +168,18 @@ describe('createCalendar — fechas civiles reales', () => {
       .rejects.toMatchObject({ status: 400, code: 'INVALID_VALIDITY' });
   });
 });
+
+describe('validateCalendarRefs — alcance (no crear calendario global con scope)', () => {
+  const SCOPED = { unrestricted: false, companyIds: [9], branchIds: [2] };
+
+  test('★ rol con alcance + global (company_id null, branch_id null) → 403 OUT_OF_SCOPE', async () => {
+    await expect(svc.validateCalendarRefs(SCOPED, {}))
+      .rejects.toMatchObject({ status: 403, code: 'OUT_OF_SCOPE' });
+    // La guarda es previa a cualquier consulta.
+    expect(sequelize.query).not.toHaveBeenCalled();
+  });
+
+  test('rol global (unrestricted) SÍ puede crear un calendario global', async () => {
+    await expect(svc.validateCalendarRefs({ unrestricted: true }, {})).resolves.toBeUndefined();
+  });
+});
