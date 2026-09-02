@@ -625,7 +625,7 @@ async function backupDeviceDirect(device, opts = {}) {
 }
 
 async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
-  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1, cooldownMs = 0 } = opts;
+  const { from = null, to = null, recalc = true, pushAtt2000 = false, readTimeoutMs = 45000, dryRun = false, debugRaw = false, attempts = 1, cooldownMs = 0, _readOnce = null } = opts;
   const t0 = Date.now();
   const report = {
     device_id: device.id, device: device.name, ip: device.ip_address, dry_run: !!dryRun,
@@ -650,7 +650,9 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
 
   // Lectura estable (varios intentos con cooldown, mejor lectura por
   // completa/en-rango/fecha/válidos; detecta buffers truncados del GT200).
-  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to, cooldownMs, ctx });
+  // `_readOnce` (seam de PRUEBA): inyecta la lectura física sin tocar el
+  // transporte real (node-zklib). En producción es null → camino real por reloj.
+  const stable = await readAttendancesStable(device, { readTimeoutMs, attempts, from, to, cooldownMs, ctx, _readOnce });
   let rawLogs = stable.logs;
   report.total_read = rawLogs.length;
   report.read_unstable = stable.unstable;
@@ -1029,4 +1031,5 @@ module.exports = {
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
   normalizeRecord, resolveTypes, explicitType, detectFields, memSnapshot,
+  recordSyncRun, recommendationFor,
 };
