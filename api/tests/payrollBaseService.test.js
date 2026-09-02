@@ -30,6 +30,31 @@ describe('kill switch fail-closed', () => {
   });
 });
 
+describe('getSnapshot (evidencia de cierre, read-only)', () => {
+  test('parsea el snapshot_json persistido y devuelve created_at', async () => {
+    const snap = { period: { id: 1, code: '2026-01' }, headcount: { active: 42 }, active_concepts: { earnings: 3, deductions: 2 }, official: false };
+    sequelize.query.mockResolvedValueOnce([[{ snapshot_json: JSON.stringify(snap), created_at: '2026-02-01T10:00:00Z' }]]);
+    const out = await payroll.getSnapshot(1);
+    expect(out.snapshot).toEqual(snap);
+    expect(out.created_at).toBe('2026-02-01T10:00:00Z');
+    // Es una sola lectura, sin escrituras.
+    expect(sequelize.query).toHaveBeenCalledTimes(1);
+    expect(sequelize.query.mock.calls[0][0]).toMatch(/SELECT snapshot_json/i);
+  });
+
+  test('sin snapshot → null (período no cerrado / sin evidencia)', async () => {
+    sequelize.query.mockResolvedValueOnce([[]]);
+    expect(await payroll.getSnapshot(99)).toBeNull();
+  });
+
+  test('snapshot_json ya objeto (driver que deserializa JSON) también funciona', async () => {
+    const snap = { headcount: { active: 7 }, official: false };
+    sequelize.query.mockResolvedValueOnce([[{ snapshot_json: snap, created_at: 'x' }]]);
+    const out = await payroll.getSnapshot(2);
+    expect(out.snapshot).toEqual(snap);
+  });
+});
+
 describe('máquina de estados', () => {
   test('transiciones permitidas', () => {
     expect(payroll.canTransition('draft', 'preview')).toBe(true);
