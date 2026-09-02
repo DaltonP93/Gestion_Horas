@@ -197,7 +197,9 @@ router.post('/egreso', authorize('admin', 'super_admin', 'gth', 'hr'), requirePe
       { replacements: [termination_date, employee_id], transaction: t }
     );
     await t.commit();
-    audit.log({ req, user: req.user, action: 'employee_egreso', entity: 'employees', entity_id: employee_id, details: { termination_date, reason } });
+    // La auditoría no serializa el motivo (texto libre): sólo deja constancia de
+    // que se dio uno. El motivo queda en la columna employees.termination_reason.
+    audit.log({ req, user: req.user, action: 'employee_egreso', entity: 'employees', entity_id: employee_id, details: { termination_date, reason_provided: !!reason } });
     res.json({ ok: true });
   } catch (e) { await t.rollback(); next(e); }
 });
