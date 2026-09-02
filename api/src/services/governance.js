@@ -76,7 +76,9 @@ async function createCompany(data, userId) {
       data.active ? 1 : 0, userId ?? null,
     ] },
   );
-  return result.insertId;
+  // sequelize.query(INSERT) devuelve [insertId, affectedRows] contra MySQL real,
+  // pero un objeto {insertId} con mocks: soportamos ambos (patrón de people.js).
+  return result?.insertId ?? result;
 }
 
 async function updateCompany(id, fields) {
@@ -140,7 +142,8 @@ async function createCostCenter(data, userId) {
       data.company_id ?? null, data.code, data.name, data.active ? 1 : 0, userId ?? null,
     ] },
   );
-  return result.insertId;
+  // [insertId, affectedRows] contra MySQL real; {insertId} con mocks.
+  return result?.insertId ?? result;
 }
 
 async function updateCostCenter(id, fields) {

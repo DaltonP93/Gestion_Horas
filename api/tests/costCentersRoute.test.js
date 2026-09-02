@@ -70,7 +70,7 @@ test('POST con company_id inexistente → 400', async () => {
 
 test('POST válido inserta, 201 y audita', async () => {
   process.env.GOVERNANCE_WRITE_ENABLED = 'true';
-  sequelize.query.mockResolvedValueOnce([{ insertId: 3 }]); // createCostCenter (company_id null → sin lookup)
+  sequelize.query.mockResolvedValueOnce([3, 1]); // createCostCenter, forma REAL [insertId, affectedRows] (company_id null → sin lookup)
   const res = mkRes();
   await handlerFor('post', '/')(
     { user: USER, body: { company_id: null, code: 'CC1', name: 'Admin', active: true }, correlationId: 'c3', headers: {} },

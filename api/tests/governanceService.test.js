@@ -52,7 +52,7 @@ describe('acceso a datos de companies', () => {
   });
 
   test('createCompany inserta y devuelve insertId', async () => {
-    sequelize.query.mockResolvedValueOnce([{ insertId: 42 }]);
+    sequelize.query.mockResolvedValueOnce([42, 1]); // forma REAL del INSERT crudo: [insertId, affectedRows]
     const id = await governance.createCompany(
       { code: 'A', legal_name: 'ACME', trade_name: null, tax_id: null, active: true }, 7,
     );
@@ -84,7 +84,7 @@ describe('acceso a datos de cost_centers', () => {
   });
 
   test('createCostCenter inserta con company_id opcional', async () => {
-    sequelize.query.mockResolvedValueOnce([{ insertId: 9 }]);
+    sequelize.query.mockResolvedValueOnce([9, 1]); // forma REAL: [insertId, affectedRows]
     const id = await governance.createCostCenter({ company_id: null, code: 'CC1', name: 'Admin', active: true }, 1);
     expect(id).toBe(9);
     const [sql, opts] = sequelize.query.mock.calls[0];

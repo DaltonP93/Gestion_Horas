@@ -64,7 +64,7 @@ describe('POST /api/companies — writer fail-closed', () => {
 
   test('con el flag encendido inserta, responde 201 y audita', async () => {
     process.env.GOVERNANCE_WRITE_ENABLED = 'true';
-    sequelize.query.mockResolvedValueOnce([{ insertId: 55 }]);
+    sequelize.query.mockResolvedValueOnce([55, 1]); // forma REAL: [insertId, affectedRows]
     const res = mkRes();
     await handlerFor('post', '/')(
       { user: USER, body: { code: 'A', legal_name: 'ACME', tax_id: '80012345-6', active: true, reason: 'alta' }, correlationId: 'c2', headers: {} },
