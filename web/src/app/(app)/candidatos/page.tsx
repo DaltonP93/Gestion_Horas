@@ -7,7 +7,7 @@
  * un empleado existente (por id). La lectura funciona siempre; el 503 de sólo
  * lectura se muestra sin romper la pantalla.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { UserPlus, Plus, Save, X, ArrowRightLeft } from 'lucide-react'
 import { api } from '@/lib/api'
 
@@ -20,8 +20,11 @@ interface Candidate {
   phone: string | null
   position_applied: string | null
   status: Status
+  company_id: number | null
+  branch_id: number | null
   converted_employee_id: number | null
 }
+interface Ref { id: number; name: string }
 
 const STATUS_LABEL: Record<Status, string> = {
   new: 'Nuevo', screening: 'Preselección', interview: 'Entrevista',
@@ -36,6 +39,13 @@ export default function CandidatosPage() {
   const [creating, setCreating] = useState(false)
   const [converting, setConverting] = useState<Candidate | null>(null)
 
+  const [companies, setCompanies] = useState<Ref[]>([])
+  const [branches, setBranches] = useState<Ref[]>([])
+  const [scopeFilter, setScopeFilter] = useState<string>('') // '', 'global', 'company:<id>', 'branch:<id>'
+
+  const companyName = (id: number | null) => companies.find(c => c.id === id)?.name || (id != null ? `#${id}` : null)
+  const branchName = (id: number | null) => branches.find(b => b.id === id)?.name || (id != null ? `#${id}` : null)
+
   async function load() {
     setLoading(true); setError('')
     try {
@@ -46,6 +56,18 @@ export default function CandidatosPage() {
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    api.get('/api/companies').then(r => setCompanies(r.data?.data ?? [])).catch(() => setCompanies([]))
+    api.get('/api/branches').then(r => setBranches(r.data ?? [])).catch(() => setBranches([]))
+  }, [])
+
+  const filtered = useMemo(() => {
+    if (!scopeFilter) return rows
+    if (scopeFilter === 'global') return rows.filter(c => c.company_id == null && c.branch_id == null)
+    const [kind, idStr] = scopeFilter.split(':')
+    const id = Number(idStr)
+    return rows.filter(c => kind === 'branch' ? c.branch_id === id : c.company_id === id)
+  }, [rows, scopeFilter])
 
   return (
     <div className="p-6 space-y-6">
@@ -67,25 +89,41 @@ export default function CandidatosPage() {
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">{error}</div>}
 
+      <div className="flex items-center gap-2">
+        <label className="text-xs text-slate-500 dark:text-white/50">Alcance</label>
+        <select value={scopeFilter} onChange={e => setScopeFilter(e.target.value)}
+          className="border border-slate-200 rounded-xl px-3 py-1.5 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
+          <option value="">Todos</option>
+          <option value="global">Sin alcance (global)</option>
+          {companies.map(c => <option key={`c${c.id}`} value={`company:${c.id}`}>Empresa: {c.name}</option>)}
+          {branches.map(b => <option key={`b${b.id}`} value={`branch:${b.id}`}>Sucursal: {b.name}</option>)}
+        </select>
+        {scopeFilter && <span className="text-xs text-slate-400 dark:text-white/30">{filtered.length} resultado(s)</span>}
+      </div>
+
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide dark:bg-white/[0.03] dark:text-white/40">
             <tr>
               <th className="px-4 py-3">Nombre</th>
               <th className="px-4 py-3">Puesto</th>
+              <th className="px-4 py-3">Alcance</th>
               <th className="px-4 py-3">Estado</th>
               <th className="px-4 py-3 w-40"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
-            {loading && <tr><td colSpan={4} className="p-8 text-center text-slate-400 dark:text-white/30">Cargando...</td></tr>}
-            {!loading && rows.length === 0 && !error && (
-              <tr><td colSpan={4} className="p-8 text-center text-slate-400 dark:text-white/30">Sin candidatos cargados</td></tr>
+            {loading && <tr><td colSpan={5} className="p-8 text-center text-slate-400 dark:text-white/30">Cargando...</td></tr>}
+            {!loading && filtered.length === 0 && !error && (
+              <tr><td colSpan={5} className="p-8 text-center text-slate-400 dark:text-white/30">Sin candidatos cargados</td></tr>
             )}
-            {rows.map(c => (
+            {filtered.map(c => (
               <tr key={c.id}>
                 <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{c.first_name} {c.last_name}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-white/60">{c.position_applied || '—'}</td>
+                <td className="px-4 py-3 text-slate-500 dark:text-white/50">
+                  {c.branch_id != null ? `Suc.: ${branchName(c.branch_id)}` : c.company_id != null ? `Emp.: ${companyName(c.company_id)}` : <span className="text-slate-400 dark:text-white/30">Global</span>}
+                </td>
                 <td className="px-4 py-3">
                   <span className="text-xs font-medium text-slate-700 dark:text-white/70">{STATUS_LABEL[c.status]}</span>
                   {c.converted_employee_id && <span className="ml-2 text-xs text-emerald-600">→ emp. #{c.converted_employee_id}</span>}
@@ -106,6 +144,7 @@ export default function CandidatosPage() {
 
       {(editing || creating) && (
         <CandidateFormModal candidate={editing} creating={creating}
+          companies={companies} branches={branches}
           onClose={() => { setEditing(null); setCreating(false) }}
           onSaved={() => { setEditing(null); setCreating(false); load() }} />
       )}
@@ -118,8 +157,8 @@ export default function CandidatosPage() {
   )
 }
 
-function CandidateFormModal({ candidate, creating, onClose, onSaved }: {
-  candidate: Candidate | null; creating: boolean; onClose: () => void; onSaved: () => void
+function CandidateFormModal({ candidate, creating, companies, branches, onClose, onSaved }: {
+  candidate: Candidate | null; creating: boolean; companies: Ref[]; branches: Ref[]; onClose: () => void; onSaved: () => void
 }) {
   const [firstName, setFirstName] = useState(candidate?.first_name || '')
   const [lastName, setLastName] = useState(candidate?.last_name || '')
@@ -127,6 +166,8 @@ function CandidateFormModal({ candidate, creating, onClose, onSaved }: {
   const [phone, setPhone] = useState(candidate?.phone || '')
   const [position, setPosition] = useState(candidate?.position_applied || '')
   const [status, setStatus] = useState<Status>(candidate?.status || 'new')
+  const [companyId, setCompanyId] = useState(candidate?.company_id != null ? String(candidate.company_id) : '')
+  const [branchId, setBranchId] = useState(candidate?.branch_id != null ? String(candidate.branch_id) : '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -137,6 +178,8 @@ function CandidateFormModal({ candidate, creating, onClose, onSaved }: {
         first_name: firstName, last_name: lastName,
         email: email || null, phone: phone || null,
         position_applied: position || null, status,
+        company_id: companyId ? Number(companyId) : null,
+        branch_id: branchId ? Number(branchId) : null,
       }
       if (creating) await api.post('/api/candidates', payload)
       else          await api.patch(`/api/candidates/${candidate!.id}`, payload)
@@ -164,7 +207,23 @@ function CandidateFormModal({ candidate, creating, onClose, onSaved }: {
               {(Object.keys(STATUS_LABEL) as Status[]).map(s => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
             </select>
           </Field>
+          <Field label="Empresa (alcance)">
+            <select value={companyId} onChange={e => setCompanyId(e.target.value)} className={inputCls}>
+              <option value="">Sin alcance (global)</option>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Sucursal (alcance)">
+            <select value={branchId} onChange={e => setBranchId(e.target.value)} className={inputCls}>
+              <option value="">—</option>
+              {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
         </div>
+        <p className="text-[11px] text-slate-400 dark:text-white/30">
+          El alcance debe ser coherente (la sucursal debe pertenecer a la empresa) y estar dentro de tu alcance;
+          la API rechaza combinaciones inválidas.
+        </p>
         {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">{error}</div>}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm text-slate-600 hover:bg-slate-100 dark:text-white/60 dark:hover:bg-white/[0.06]">Cancelar</button>
