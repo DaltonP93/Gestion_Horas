@@ -54,6 +54,12 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
           `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES (?,?,?,?, 'zkteco_direct')`,
           { replacements: [p.empId, p.device_id, p.ts, p.type] }
         );
+        // OJO — NO cambiar `ins?.insertId` por el patrón de INSERT crudo
+        // `[insertId, affectedRows]`. Sequelize sólo trata como INSERT las
+        // sentencias que EMPIEZAN con "insert into" (AbstractQuery.isInsertQuery);
+        // "INSERT IGNORE INTO ..." NO matchea y se resuelve como RAW, devolviendo
+        // el OkPacket de mysql2 en `ins`. Por eso `ins.insertId` (id real, 0 si se
+        // ignoró por duplicado) y `ins.affectedRows` sí existen acá. Verificado.
         if (ins?.insertId) { logId = ins.insertId; result.mapped++; } else { result.duplicate++; }
       }
       await sequelize.query(
