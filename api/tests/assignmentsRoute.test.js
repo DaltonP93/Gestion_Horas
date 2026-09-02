@@ -62,12 +62,13 @@ test('POST válido: valida ref, crea vigencia (201) y audita con salario redacta
     .mockResolvedValueOnce([{ insertId: 3 }]); // INSERT
   const res = mkRes();
   await handlerFor('post', '/employee/:id')(
-    { user: USER, params: { id: '50' }, body: { valid_from: '2026-01-01', reference_salary: 5000000, branch_id: 2 }, correlationId: 'c2', headers: {} },
+    { user: USER, params: { id: '50' }, body: { valid_from: '2026-01-01', reference_salary: 5000000, branch_id: 2, change_reason: 'traslado confidencial a Encarnación' }, correlationId: 'c2', headers: {} },
     res, jest.fn(),
   );
   expect(res.status).toHaveBeenCalledWith(201);
   expect(audit.log).toHaveBeenCalledTimes(1);
   const details = JSON.stringify(audit.log.mock.calls[0][0].details);
   expect(details).toContain('[REDACTED]');
-  expect(details).not.toContain('5000000');
+  expect(details).not.toContain('5000000');           // salario redactado
+  expect(details).not.toContain('confidencial');       // change_reason (texto libre) redactado
 });
