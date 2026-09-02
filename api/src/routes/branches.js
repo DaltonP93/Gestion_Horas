@@ -2,6 +2,7 @@
  * branches.js — CRUD de sedes (multi-sede).
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
@@ -45,7 +46,7 @@ router.post('/', authorize('admin', 'super_admin'), async (req, res) => {
       { replacements: [code, name, address || null, city || null, phone || null, timezone || 'America/Asuncion',
         num(geo_lat), num(geo_lng), geo_radius_m != null ? (parseInt(geo_radius_m, 10) || null) : null] }
     );
-    res.status(201).json({ id: r.insertId, message: 'Sede creada' });
+    res.status(201).json({ id: insertId(r), message: 'Sede creada' });
   } catch (err) {
     if (err.original?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'Ya existe una sede con ese código' });

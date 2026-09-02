@@ -18,6 +18,7 @@
  * RRHH/admin.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
@@ -159,8 +160,8 @@ router.post('/', requirePermission('lactancia', 'create'), async (req, res, next
        VALUES (?,?,?,?,?,?,?,?)`,
       { replacements: [p.employee_id, p.child_birth_date, p.start_date, p.end_date, p.reduction_minutes, p.status, p.note, req.user?.id || null] }
     );
-    audit.log({ req, user: req.user, action: 'lactancia_create', entity: 'lactancia_periods', entity_id: r.insertId, details: { employee_id: p.employee_id } });
-    res.status(201).json({ id: r.insertId });
+    audit.log({ req, user: req.user, action: 'lactancia_create', entity: 'lactancia_periods', entity_id: insertId(r), details: { employee_id: p.employee_id } });
+    res.status(201).json({ id: insertId(r) });
   } catch (e) { next(e); }
 });
 

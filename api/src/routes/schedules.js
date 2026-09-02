@@ -4,6 +4,7 @@
  * Escritura: admin / hr / gth.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
@@ -52,7 +53,7 @@ router.post('/', authorize('admin', 'hr', 'gth'), async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       { replacements: [name, check_in, check_out, tolerance_in, tolerance_out, +break_minutes || 0, work_days] }
     );
-    res.status(201).json({ id: r.insertId });
+    res.status(201).json({ id: insertId(r) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

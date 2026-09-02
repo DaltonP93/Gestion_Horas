@@ -18,6 +18,7 @@
  *   GET    /api/appraisals/employee/:empId    → historial de un empleado
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
@@ -70,7 +71,7 @@ router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
        VALUES (?, ?, ?, ?, ?)`,
       { replacements: [name, description || null, scale_min, scale_max, req.user.id], transaction: t }
     );
-    const templateId = r.insertId;
+    const templateId = insertId(r);
     for (let i = 0; i < criteria.length; i++) {
       const { name: cn, description: cd, weight = 1 } = criteria[i];
       if (!cn) continue;
@@ -219,7 +220,7 @@ router.post('/', authorize(...MGR_ROLES), async (req, res) => {
        VALUES (?, ?, ?, ?, ?, 'self_pending', ?)`,
       { replacements: [template_id, employee_id, reviewer_id || null, period_label, due_date || null, req.user.id] }
     );
-    res.status(201).json({ ok: true, id: r.insertId });
+    res.status(201).json({ ok: true, id: insertId(r) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

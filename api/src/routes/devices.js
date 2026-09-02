@@ -3,6 +3,7 @@
  * CRUD de relojes biométricos ZKTeco + operaciones directas.
  */
 const router  = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const net     = require('net');
 const { authenticate, authorize, requireSuperAdmin } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
@@ -387,7 +388,7 @@ router.post('/', requireSuperAdmin, async (req, res) => {
         ],
       }
     );
-    res.status(201).json({ id: result.insertId, message: 'Reloj agregado' });
+    res.status(201).json({ id: insertId(result), message: 'Reloj agregado' });
   } catch (err) { res.status(500).json({ error: fmtErr(err) }); }
 });
 

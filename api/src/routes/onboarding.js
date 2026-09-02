@@ -19,6 +19,7 @@
  *   PATCH  /api/onboarding/tasks/:taskId        → actualizar estado/assignee/notas
  */
 const router  = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const { sendMail } = require('../services/emailService');
@@ -71,7 +72,7 @@ router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
       `INSERT INTO onboarding_templates (name, type, description, created_by) VALUES (?, ?, ?, ?)`,
       { replacements: [name, type, description || null, req.user.id], transaction: t }
     );
-    const templateId = r.insertId;
+    const templateId = insertId(r);
     for (let i = 0; i < tasks.length; i++) {
       const { title, description: td, default_assignee_role, due_days = 3 } = tasks[i];
       if (!title) continue;
@@ -197,7 +198,7 @@ router.post('/', authorize(...ADMIN_ROLES), async (req, res) => {
          VALUES (?, ?, ?, ?, ?)`,
         { replacements: [template_id, employee_id, tmpl.type, start_date, req.user.id], transaction: t }
       );
-      const processId = r.insertId;
+      const processId = insertId(r);
       const startDt = new Date(start_date);
 
       for (let i = 0; i < templateTasks.length; i++) {

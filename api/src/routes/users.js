@@ -5,6 +5,7 @@
  */
 
 const router  = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const bcrypt  = require('bcrypt');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
@@ -113,7 +114,7 @@ router.post('/', authorize('admin'), requirePermission('usuarios', 'create'), as
       { replacements: [username, email, hash, full_name || username, role, employee_id || null] }
     );
     logger.info(`Usuario creado: ${username} (${role})`);
-    res.status(201).json({ id: result.insertId, message: 'Usuario creado' });
+    res.status(201).json({ id: insertId(result), message: 'Usuario creado' });
   } catch (err) {
     if (err.original?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'El username o email ya existe' });

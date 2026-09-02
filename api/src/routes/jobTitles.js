@@ -22,6 +22,7 @@
  */
 
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const Joi = require('joi');
 const { authenticate, authorize } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
@@ -68,11 +69,11 @@ router.post('/', canManage, validate(createSchema), asyncHandler(async (req, res
     audit.log({
       req, user: req.user,
       action: 'job_title.create',
-      entity: 'job_title', entity_id: result.insertId,
+      entity: 'job_title', entity_id: insertId(result),
       details: { name, active: !!active, sort_order },
     });
     res.status(201).json({
-      id: result.insertId, name, description: description || null,
+      id: insertId(result), name, description: description || null,
       active: !!active, sort_order: Number(sort_order) || 0,
     });
   } catch (err) {
