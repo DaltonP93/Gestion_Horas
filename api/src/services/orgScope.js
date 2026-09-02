@@ -163,25 +163,34 @@ function canSeeEmployeeRefs(scope, refs) {
 // ─── Alcance por CANDIDATO (empresa o sucursal) ──────────────────────────────
 
 /**
- * ¿El actor puede ver este candidato? Unrestricted → sí. Si no, es visible
- * cuando su sucursal O su empresa están en el alcance del actor. Un candidato
- * SIN alcance (ambos NULL) sólo lo ve un rol global de RR.HH.
+ * ¿El actor puede ver este candidato? Regla JERÁRQUICA y fail-closed (P1-A):
+ *   - Unrestricted (RR.HH. global) → sí siempre.
+ *   - Candidato CON `branch_id` → visible sólo si esa sucursal está entre las
+ *     sucursales visibles del actor. NO hay fallback a empresa: un manager de la
+ *     sucursal A NO ve un candidato de la sucursal B aunque ambas sean de la
+ *     misma empresa (evita fuga de PII entre sucursales).
+ *   - Candidato SIN `branch_id` pero CON `company_id` → visible si esa empresa
+ *     está entre las empresas visibles del actor.
+ *   - Candidato SIN alcance (ambos NULL) → sólo un rol global de RR.HH.
  */
 function canSeeCandidateRefs(scope, refs) {
   if (!scope || scope.unrestricted) return true;
   if (!refs) return false;
-  const company = refs.company_id ?? null;
   const branch = refs.branch_id ?? null;
-  if (branch != null && (scope.branchIds || []).includes(branch)) return true;
-  if (company != null && (scope.companyIds || []).includes(company)) return true;
-  return false;
+  const company = refs.company_id ?? null;
+  if (branch != null) return (scope.branchIds || []).includes(branch);
+  if (company != null) return (scope.companyIds || []).includes(company);
+  return false; // sin alcance → sólo global
 }
 
 /**
- * Fragmento SQL (`{clause, params}`) para filtrar candidatos por alcance. Los
- * candidatos sin alcance (company_id/branch_id NULL) quedan fuera para roles con
- * alcance —sólo los ve un rol global—. Unrestricted → sin filtro.
- * `companyCol`/`branchCol` permiten prefijos de tabla (p.ej. `c.company_id`).
+ * Fragmento SQL (`{clause, params}`) para filtrar candidatos por alcance con la
+ * MISMA regla jerárquica que `canSeeCandidateRefs`:
+ *   (branch_id IS NOT NULL AND branch_id IN <sucursales>)
+ *   OR (branch_id IS NULL AND company_id IN <empresas>)
+ * Un candidato con `branch_id` de otra sucursal queda fuera aunque su empresa
+ * coincida; los de alcance NULL quedan fuera para roles con alcance (sólo los ve
+ * un rol global). Unrestricted → sin filtro.
  */
 function candidateScopeFilter(scope, { companyCol = 'company_id', branchCol = 'branch_id' } = {}) {
   if (!scope || scope.unrestricted) return { clause: '', params: [] };
@@ -189,8 +198,14 @@ function candidateScopeFilter(scope, { companyCol = 'company_id', branchCol = 'b
   const bids = scope.branchIds || [];
   const ors = [];
   const params = [];
-  if (bids.length) { ors.push(`${branchCol} IN (${bids.map(() => '?').join(',')})`); params.push(...bids); }
-  if (cids.length) { ors.push(`${companyCol} IN (${cids.map(() => '?').join(',')})`); params.push(...cids); }
+  if (bids.length) {
+    ors.push(`(${branchCol} IS NOT NULL AND ${branchCol} IN (${bids.map(() => '?').join(',')}))`);
+    params.push(...bids);
+  }
+  if (cids.length) {
+    ors.push(`(${branchCol} IS NULL AND ${companyCol} IN (${cids.map(() => '?').join(',')}))`);
+    params.push(...cids);
+  }
   if (!ors.length) return { clause: 'AND 1=0', params: [] };
   return { clause: `AND (${ors.join(' OR ')})`, params };
 }

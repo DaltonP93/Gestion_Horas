@@ -71,10 +71,10 @@ router.post('/employee/:id', requirePermission('asignaciones', 'create'), valida
       return res.status(403).json({ error: 'El empleado está fuera de tu alcance', code: 'OUT_OF_SCOPE' });
     }
   }
-  // Validar existencia y ALCANCE de las referencias organizativas (403 si están
-  // fuera del alcance del usuario) ANTES de tocar el historial.
-  await people.validateAssignmentRefs(scope, req.body);
-  const result = await people.createAssignment(id, req.body, req.user?.id || null);
+  // La validación de referencias (existencia + alcance + coherencia mutua de
+  // empresa) se hace DENTRO de la transacción de createAssignment, tras el lock
+  // del empleado (anti-TOCTOU). Ver services/people.js.
+  const result = await people.createAssignment(id, req.body, req.user?.id || null, scope);
   audit.log({
     req, user: req.user,
     action: 'assignment.create', entity: 'employee_assignment', entity_id: result.id,

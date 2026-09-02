@@ -112,18 +112,23 @@ Encadena sobre F1. Reutiliza `employee_contracts` (051), `employee_documents`
   un empleado **existente** (`converted_employee_id`), nunca crea ni fabrica
   empleados. **Auditoría sin PII**: sólo id, acción y nombres de campos (nunca
   nombre/email/teléfono/notas ni texto libre).
-- **AISLAMIENTO por alcance (P1-A)** — `candidates` gana alcance opcional
-  `company_id`/`branch_id` (nuleable, aditivo, sin backfill, FKs `SET NULL`). Las
-  lecturas de candidatos filtran por alcance en SQL (`orgScope.candidateScopeFilter`):
-  un rol con alcance sólo ve candidatos de **su** empresa/sucursal; un candidato
-  **sin alcance** (ambos NULL) sólo lo ve un rol global de RR.HH. `GET
-  /api/candidates/:id` fuera de alcance → **404** (no filtra existencia). Al
-  escribir, `validateCandidateRefs` valida existencia, alcance (403
-  `OUT_OF_SCOPE`) y **coherencia sucursal → empresa** (400 `INCOHERENT_SCOPE`;
-  un rol global tampoco puede mezclar referencias de empresas distintas). La
-  **conversión** verifica el alcance del candidato (404 si es de otra empresa) y
-  del **empleado destino** (403 `OUT_OF_SCOPE`), manteniendo transacción/`FOR
-  UPDATE`/anti-doble-conversión.
+- **AISLAMIENTO por alcance JERÁRQUICO (P1-A)** — `candidates` gana alcance
+  opcional `company_id`/`branch_id` (nuleable, aditivo, sin backfill, FKs
+  `SET NULL`). Regla **jerárquica y fail-closed**, idéntica en
+  `canSeeCandidateRefs`, `candidateScopeFilter`, GET lista/detalle, PATCH,
+  `convertCandidate` y POST/PATCH:
+  - candidato **con `branch_id`** → visible sólo si esa **sucursal** está en el
+    alcance del actor; **NO** hay fallback a empresa (un manager de la sucursal A
+    **no** ve un candidato de la sucursal B aunque compartan empresa — cierra la
+    fuga de PII entre sucursales que Codex marcó);
+  - candidato **sin `branch_id` pero con `company_id`** → visible por empresa;
+  - candidato **sin alcance** (ambos NULL) → sólo un rol global de RR.HH.
+  `GET /:id` y `convert` fuera de alcance → **404** (no filtra existencia). Un
+  actor con alcance **no puede crear ni convertir** un candidato **sin alcance**
+  (→ 403). `validateCandidateRefs` valida existencia (400), alcance (403
+  `OUT_OF_SCOPE`) y **coherencia sucursal → empresa** (400 `INCOHERENT_SCOPE`).
+  La **conversión** verifica el alcance del candidato (404) y del **empleado
+  destino** (403), manteniendo transacción/`FOR UPDATE`/anti-doble-conversión.
 - **`employee_assignments`** — historial **temporal** de asignación organizativa
   con vigencia efectiva `valid_from`/`valid_to`. **Append-only y atómico**: se
   abre transacción y se **bloquea la fila del empleado** (`FOR UPDATE`) antes de
@@ -131,12 +136,20 @@ Encadena sobre F1. Reutiliza `employee_contracts` (051), `employee_documents`
   **nunca** quedan dos vigencias abiertas; inserciones fuera de orden → 409.
   Antes de listar/leer/crear, la ruta verifica el **empleado objetivo** contra el
   alcance departamental/sucursal del actor: `GET` fuera de alcance → **404** (no
-  filtra existencia), writer fuera de alcance → **403 `OUT_OF_SCOPE`**. Además
-  valida existencia y **alcance** de sucursal/departamento/centro de costo (403
-  fuera de alcance). FK `employee_id` con **`ON DELETE RESTRICT`** (no CASCADE):
-  el historial auditable no se borra al eliminar un empleado. Aislamiento y
+  filtra existencia), writer fuera de alcance → **403 `OUT_OF_SCOPE`**.
+  **Coherencia mutua de referencias (P1-B)**: `validateAssignmentRefs` corre
+  **dentro de la transacción**, tras el lock del empleado (anti-TOCTOU), y exige
+  que **todas** las referencias conocidas pertenezcan a la **misma empresa** —
+  sucursal (`branches.company_id`), centro de costo (`cost_centers.company_id`) y
+  departamento (pertenencia vía el modelo existente
+  `departments.cost_center_id → cost_centers.company_id`, sin inventar relación
+  nueva). Sucursal de empresa A + centro de costo de empresa B → **400
+  `INCOHERENT_SCOPE`** (ni siquiera un rol global puede mezclar empresas). FK
+  `employee_id` con **`ON DELETE RESTRICT`** (no CASCADE): el historial auditable
+  no se borra al eliminar un empleado. Aislamiento jerárquico, coherencia mutua y
   concurrencia probados en integración contra MySQL real
-  (`tests/it/people.it.test.js`) y con la DB mockeada (`tests/peopleScope.test.js`).
+  (`tests/it/people.it.test.js`) y con la DB mockeada
+  (`tests/peopleScope.test.js`, `tests/peopleService.test.js`).
 - **`employee_documents.access_level`** — metadato de acceso aditivo (sin tocar
   los archivos reales; sin firma).
 - Rutas `/api/candidates` y `/api/assignments/employee/:id` con permisos

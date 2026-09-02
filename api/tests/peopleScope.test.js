@@ -26,12 +26,17 @@ const SCOPED = { unrestricted: false, companyIds: [9], branchIds: [2], departmen
 
 afterEach(() => jest.clearAllMocks());
 
-describe('orgScope — visibilidad por alcance (puro)', () => {
-  test('candidato: visible por sucursal o empresa; sin alcance sólo global', () => {
+describe('orgScope — visibilidad JERÁRQUICA de candidatos (P1-A v2)', () => {
+  test('branch_id manda: NO hay fallback a empresa (anti-fuga entre sucursales)', () => {
+    // Candidato de sucursal 3 (empresa 9, MISMA empresa que el actor) → NO visible:
+    // el actor sólo tiene la sucursal 2. Antes se filtraba por empresa y fugaba.
+    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: 9, branch_id: 3 })).toBe(false);
+    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: 9, branch_id: 2 })).toBe(true);  // su sucursal
+    // Sin sucursal: cae a empresa.
     expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: 9, branch_id: null })).toBe(true);
-    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: null, branch_id: 2 })).toBe(true);
-    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: 1, branch_id: 3 })).toBe(false); // otra empresa/sucursal
-    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: null, branch_id: null })).toBe(false); // sin alcance
+    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: 1, branch_id: null })).toBe(false); // otra empresa
+    // Sin alcance → sólo global.
+    expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: null, branch_id: null })).toBe(false);
     expect(orgScope.canSeeCandidateRefs({ unrestricted: true }, { company_id: null, branch_id: null })).toBe(true);
   });
 
@@ -42,10 +47,11 @@ describe('orgScope — visibilidad por alcance (puro)', () => {
     expect(orgScope.canSeeEmployeeRefs(SCOPED, null)).toBe(false);
   });
 
-  test('candidateScopeFilter: excluye sin-alcance para roles con alcance', () => {
+  test('candidateScopeFilter: mismo criterio jerárquico en SQL', () => {
     const f = orgScope.candidateScopeFilter(SCOPED, { companyCol: 'c.company_id', branchCol: 'c.branch_id' });
-    expect(f.clause).toMatch(/c\.branch_id IN/);
-    expect(f.clause).toMatch(/c\.company_id IN/);
+    // (branch NOT NULL AND branch IN (…)) OR (branch NULL AND company IN (…))
+    expect(f.clause).toMatch(/c\.branch_id IS NOT NULL AND c\.branch_id IN/);
+    expect(f.clause).toMatch(/c\.branch_id IS NULL AND c\.company_id IN/);
     expect(f.params).toEqual([2, 9]);
     // unrestricted → sin filtro
     expect(orgScope.candidateScopeFilter({ unrestricted: true }).clause).toBe('');
@@ -117,6 +123,17 @@ describe('validateCandidateRefs — existencia, alcance y coherencia', () => {
       .mockResolvedValueOnce([[{ id: 2, company_id: 9 }]]) // branch en alcance, coherente
       .mockResolvedValueOnce([[{ id: 9 }]]);               // company existe/en alcance
     await expect(people.validateCandidateRefs(SCOPED, { branch_id: 2, company_id: 9 })).resolves.toBeUndefined();
+  });
+
+  test('actor con alcance NO puede crear candidato SIN alcance (ambos NULL) → 403', async () => {
+    await expect(people.validateCandidateRefs(SCOPED, { company_id: null, branch_id: null }))
+      .rejects.toMatchObject({ status: 403, code: 'OUT_OF_SCOPE' });
+    expect(sequelize.query).not.toHaveBeenCalled();
+  });
+
+  test('rol global SÍ puede crear candidato sin alcance', async () => {
+    await expect(people.validateCandidateRefs({ unrestricted: true }, { company_id: null, branch_id: null }))
+      .resolves.toBeUndefined();
   });
 });
 

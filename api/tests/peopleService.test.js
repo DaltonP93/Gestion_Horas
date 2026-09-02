@@ -104,8 +104,9 @@ describe('createAssignment — atómica con lock del empleado', () => {
   });
 });
 
-describe('validateAssignmentRefs — existencia + alcance', () => {
+describe('validateAssignmentRefs — existencia + alcance + coherencia mutua (P1-B)', () => {
   const scope = { unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [4] };
+  // Orden de consultas en el servicio: branch, cost_center, department.
 
   test('sucursal inexistente → 400', async () => {
     sequelize.query.mockResolvedValueOnce([[]]);
@@ -113,7 +114,7 @@ describe('validateAssignmentRefs — existencia + alcance', () => {
   });
 
   test('sucursal fuera de alcance → 403', async () => {
-    sequelize.query.mockResolvedValueOnce([[{ id: 3 }]]);
+    sequelize.query.mockResolvedValueOnce([[{ id: 3, company_id: 9 }]]);
     await expect(people.validateAssignmentRefs(scope, { branch_id: 3 })).rejects.toMatchObject({ status: 403, code: 'OUT_OF_SCOPE' });
   });
 
@@ -122,16 +123,41 @@ describe('validateAssignmentRefs — existencia + alcance', () => {
     await expect(people.validateAssignmentRefs(scope, { cost_center_id: 5 })).rejects.toMatchObject({ status: 403 });
   });
 
-  test('refs válidas y en alcance → ok', async () => {
+  test('INCOHERENTE: sucursal empresa A + centro de costo empresa B → 400 INCOHERENT_SCOPE', async () => {
+    // RR.HH. global (unrestricted) tampoco puede mezclar empresas por error.
     sequelize.query
-      .mockResolvedValueOnce([[{ id: 2 }]])            // branch existe
-      .mockResolvedValueOnce([[{ id: 4 }]])            // dept existe
-      .mockResolvedValueOnce([[{ id: 5, company_id: 9 }]]); // cc empresa en alcance
-    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, department_id: 4, cost_center_id: 5 })).resolves.toBeUndefined();
+      .mockResolvedValueOnce([[{ id: 2, company_id: 1 }]])  // branch → empresa 1
+      .mockResolvedValueOnce([[{ id: 5, company_id: 2 }]]); // cost_center → empresa 2
+    await expect(people.validateAssignmentRefs({ unrestricted: true }, { branch_id: 2, cost_center_id: 5 }))
+      .rejects.toMatchObject({ status: 400, code: 'INCOHERENT_SCOPE' });
+  });
+
+  test('INCOHERENTE: departamento (vía su centro de costo) de otra empresa → 400', async () => {
+    const global = { unrestricted: true };
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 2, company_id: 1 }]])  // branch → empresa 1
+      .mockResolvedValueOnce([[{ id: 4, company_id: 2 }]]); // department → cc.company_id 2
+    await expect(people.validateAssignmentRefs(global, { branch_id: 2, department_id: 4 }))
+      .rejects.toMatchObject({ status: 400, code: 'INCOHERENT_SCOPE' });
+  });
+
+  test('COHERENTE: todas de la misma empresa → ok', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 2, company_id: 9 }]])  // branch → 9
+      .mockResolvedValueOnce([[{ id: 5, company_id: 9 }]])  // cost_center → 9
+      .mockResolvedValueOnce([[{ id: 4, company_id: 9 }]]); // department → 9
+    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, cost_center_id: 5, department_id: 4 })).resolves.toBeUndefined();
+  });
+
+  test('departamento sin centro de costo (company NULL) no bloquea', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 2, company_id: 9 }]])  // branch → 9
+      .mockResolvedValueOnce([[{ id: 4, company_id: null }]]); // department sin cc → NULL
+    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, department_id: 4 })).resolves.toBeUndefined();
   });
 
   test('unrestricted: valida existencia pero no alcance', async () => {
-    sequelize.query.mockResolvedValueOnce([[{ id: 3 }]]);
+    sequelize.query.mockResolvedValueOnce([[{ id: 3, company_id: 1 }]]);
     await expect(people.validateAssignmentRefs({ unrestricted: true }, { branch_id: 3 })).resolves.toBeUndefined();
   });
 });

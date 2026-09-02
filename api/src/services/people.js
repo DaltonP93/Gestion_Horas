@@ -79,11 +79,17 @@ async function getCandidate(id) {
  * Valida existencia, ALCANCE y COHERENCIA sucursal → empresa de las referencias
  * de alcance de un candidato. Existencia inválida → 400; fuera de alcance → 403;
  * sucursal que no pertenece a la empresa indicada → 400.
+ *
+ * Fail-closed (P1-A): un actor con alcance NO puede crear/convertir un candidato
+ * SIN alcance (company_id y branch_id ambos NULL) — sólo un rol global puede.
  */
 async function validateCandidateRefs(scope, data) {
   const orgScope = require('./orgScope');
   const companyId = data.company_id ?? null;
   const branchId = data.branch_id ?? null;
+  if (scope && !scope.unrestricted && companyId == null && branchId == null) {
+    throw httpError(403, 'OUT_OF_SCOPE', 'Un rol con alcance no puede crear un candidato sin empresa/sucursal');
+  }
   if (branchId != null) {
     const [b] = await sequelize.query('SELECT id, company_id FROM branches WHERE id = ? LIMIT 1', { replacements: [branchId] });
     if (!b.length) throw httpError(400, 'BRANCH_NOT_FOUND', 'La sucursal referenciada no existe');
@@ -110,7 +116,9 @@ async function createCandidate(data, userId) {
       data.notes ?? null, data.company_id ?? null, data.branch_id ?? null, userId ?? null,
     ] },
   );
-  return result.insertId;
+  // sequelize.query(INSERT) devuelve [insertId, affectedRows] contra MySQL real,
+  // pero un objeto {insertId} con mocks: soportamos ambos (patrón de syncJobs.js).
+  return result?.insertId ?? result;
 }
 
 async function updateCandidate(id, fields) {
@@ -210,27 +218,56 @@ async function openAssignment(employeeId) {
 }
 
 /**
- * Valida existencia y ALCANCE de las referencias organizativas de una
- * asignación (sucursal/departamento/centro de costo). Existencia inválida → 400;
- * fuera de alcance → 403. El alcance del centro de costo se evalúa por su
- * empresa.
+ * Valida existencia, ALCANCE y COHERENCIA MUTUA de las referencias
+ * organizativas de una asignación (sucursal/departamento/centro de costo).
+ *
+ * (P1-B) Coherencia fail-closed: se resuelve la EMPRESA implicada por cada
+ * referencia conocida y todas deben coincidir:
+ *   - sucursal      → `branches.company_id`
+ *   - centro de costo → `cost_centers.company_id`
+ *   - departamento  → pertenencia vía el modelo existente
+ *                     `departments.cost_center_id → cost_centers.company_id`
+ *     (no se inventa una relación nueva: se usa la que ya existe en 076). Un
+ *     departamento sin centro de costo no aporta empresa y no bloquea.
+ * Si dos referencias conocidas pertenecen a empresas distintas → 400
+ * `INCOHERENT_SCOPE` (p.ej. sucursal de empresa A + centro de costo de empresa B).
+ * Existencia inválida → 400; fuera de alcance → 403.
+ *
+ * Se ejecuta DENTRO de la transacción de `createAssignment` (recibe `transaction`)
+ * para evitar TOCTOU entre la validación y el INSERT.
  */
-async function validateAssignmentRefs(scope, data) {
+async function validateAssignmentRefs(scope, data, transaction) {
   const orgScope = require('./orgScope');
+  const q = (sql, repl) => sequelize.query(sql, { replacements: repl, transaction });
+  const companies = []; // empresas implicadas (no nulas) para chequear coherencia
+
   if (data.branch_id != null) {
-    const [b] = await sequelize.query('SELECT id FROM branches WHERE id = ? LIMIT 1', { replacements: [data.branch_id] });
+    const [b] = await q('SELECT id, company_id FROM branches WHERE id = ? LIMIT 1', [data.branch_id]);
     if (!b.length) throw httpError(400, 'BRANCH_NOT_FOUND', 'La sucursal referenciada no existe');
     orgScope.assertBranchInScope(scope, data.branch_id);
-  }
-  if (data.department_id != null) {
-    const [d] = await sequelize.query('SELECT id FROM departments WHERE id = ? LIMIT 1', { replacements: [data.department_id] });
-    if (!d.length) throw httpError(400, 'DEPARTMENT_NOT_FOUND', 'El departamento referenciado no existe');
-    orgScope.assertDepartmentInScope(scope, data.department_id);
+    if (b[0].company_id != null) companies.push(Number(b[0].company_id));
   }
   if (data.cost_center_id != null) {
-    const [c] = await sequelize.query('SELECT id, company_id FROM cost_centers WHERE id = ? LIMIT 1', { replacements: [data.cost_center_id] });
+    const [c] = await q('SELECT id, company_id FROM cost_centers WHERE id = ? LIMIT 1', [data.cost_center_id]);
     if (!c.length) throw httpError(400, 'COST_CENTER_NOT_FOUND', 'El centro de costo referenciado no existe');
     orgScope.assertCompanyInScope(scope, c[0].company_id);
+    if (c[0].company_id != null) companies.push(Number(c[0].company_id));
+  }
+  if (data.department_id != null) {
+    const [d] = await q(
+      `SELECT d.id, cc.company_id AS company_id
+         FROM departments d
+         LEFT JOIN cost_centers cc ON cc.id = d.cost_center_id
+        WHERE d.id = ? LIMIT 1`, [data.department_id]);
+    if (!d.length) throw httpError(400, 'DEPARTMENT_NOT_FOUND', 'El departamento referenciado no existe');
+    orgScope.assertDepartmentInScope(scope, data.department_id);
+    if (d[0].company_id != null) companies.push(Number(d[0].company_id));
+  }
+
+  const distinct = [...new Set(companies)];
+  if (distinct.length > 1) {
+    throw httpError(400, 'INCOHERENT_SCOPE',
+      'Las referencias (sucursal/departamento/centro de costo) pertenecen a empresas distintas');
   }
 }
 
@@ -245,7 +282,7 @@ async function validateAssignmentRefs(scope, data) {
  * partiendo de cero vigencias (el lock es sobre el empleado, no sobre filas que
  * todavía no existen).
  */
-async function createAssignment(employeeId, data, userId) {
+async function createAssignment(employeeId, data, userId, scope) {
   let committed = false;
   const tx = await sequelize.transaction();
   try {
@@ -254,6 +291,10 @@ async function createAssignment(employeeId, data, userId) {
       { replacements: [employeeId], transaction: tx },
     );
     if (!emp.length) throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
+
+    // Validación de referencias DENTRO de la transacción, tras el lock del
+    // empleado (anti-TOCTOU): existencia + alcance + coherencia mutua de empresa.
+    await validateAssignmentRefs(scope, data, tx);
 
     const [openRows] = await sequelize.query(
       `SELECT id, valid_from FROM employee_assignments
@@ -289,7 +330,8 @@ async function createAssignment(employeeId, data, userId) {
     );
     await tx.commit();
     committed = true;
-    return { id: result.insertId, closed_previous: open ? open.id : null };
+    // [insertId, affectedRows] contra MySQL real; {insertId} con mocks.
+    return { id: result?.insertId ?? result, closed_previous: open ? open.id : null };
   } catch (err) {
     if (!committed) { try { await tx.rollback(); } catch { /* noop */ } }
     throw err;
