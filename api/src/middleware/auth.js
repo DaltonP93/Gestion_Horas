@@ -53,6 +53,19 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
+// Guarda de ROL GLOBAL DE RR.HH.: sólo super_admin, admin, gth y hr.
+// Es una guarda ADICIONAL (no reemplaza requirePermission) para módulos que hoy
+// sólo tienen sentido a nivel global —p.ej. la base de nómina SANDBOX de F4, que
+// expone conteos/preview globales sin dimensión por empresa—. A diferencia de
+// requirePermission, se decide por ROL y NO consulta user_permissions: así un
+// override no puede habilitarle nómina global a un manager/coordinator/etc.
+const GLOBAL_HR_ROLES = new Set(['super_admin', 'admin', 'gth', 'hr']);
+function requireGlobalHR(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'No autenticado' });
+  if (GLOBAL_HR_ROLES.has(req.user.role)) return next();
+  return res.status(403).json({ error: 'Requiere un rol global de RR.HH.', code: 'GLOBAL_HR_ONLY' });
+}
+
 // Clave interna entre servicios (Bridge → API)
 function authenticateServiceKey(req, res, next) {
   const key = req.headers['x-api-key'];
@@ -105,4 +118,4 @@ function requirePermission(moduleKey, action) {
   };
 }
 
-module.exports = { authenticate, authorize, requireSuperAdmin, authenticateServiceKey, requirePermission };
+module.exports = { authenticate, authorize, requireSuperAdmin, requireGlobalHR, authenticateServiceKey, requirePermission };
