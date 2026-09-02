@@ -414,9 +414,11 @@ async function deactivate(req, res) {
       await sequelize.query('UPDATE employees SET status = ? WHERE id = ?', { replacements: ['inactive', id] });
     }
 
+    // La auditoría no serializa PII ni texto libre: sin nombre ni el motivo en
+    // claro (el motivo queda en employees.deactivation_reason). Sólo ids/acciones.
     audit.log({ req, user: req.user, action: 'employee.deactivate', entity: 'employee', entity_id: id,
-      details: { code: emp.code, name: `${emp.first_name} ${emp.last_name}`, reason, was: emp.status } });
-    logger.info(`Empleado dado de baja: ${emp.code} (${emp.first_name} ${emp.last_name})`);
+      details: { code: emp.code, was: emp.status, reason_provided: !!reason } });
+    logger.info(`Empleado dado de baja: ${emp.code}`);
     res.json({
       message: 'Empleado dado de baja. El histórico se conserva.',
       device_disable_pending: true,
