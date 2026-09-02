@@ -47,7 +47,7 @@ test('POST fail-closed → 503, sin DB ni auditoría', async () => {
 
 test('GET /:id/effective resuelve el calendario efectivo (read-only)', async () => {
   sequelize.query
-    .mockResolvedValueOnce([[{ id: 1, code: 'CAL' }]]) // getCalendar
+    .mockResolvedValueOnce([[{ id: 1, code: 'CAL', work_days: null, timezone: 'America/Asuncion' }]]) // getCalendar
     .mockResolvedValueOnce([[]])                        // holidaysInRange
     .mockResolvedValueOnce([[{ d: '2026-01-05', kind: 'nonworking' }]]); // exceptionsInRange
   const res = mkRes();
@@ -57,16 +57,40 @@ test('GET /:id/effective resuelve el calendario efectivo (read-only)', async () 
   );
   const payload = res.json.mock.calls[0][0];
   expect(payload.calendar_id).toBe(1);
-  expect(payload.days[0]).toEqual({ date: '2026-01-05', working: false, reason: 'exception_nonworking' });
+  expect(payload.days[0]).toMatchObject({ date: '2026-01-05', working: false, reason: 'exception_nonworking' });
 });
 
-test('GET /workday/:empId es read-only y delega en workdayConfig', async () => {
-  workdayConfig.loadWorkdayConfig.mockResolvedValueOnce({ forDate: () => ({ source: 'historical_fallback', config: null }) });
+test('GET /:id/effective 404 si el calendario no existe', async () => {
+  sequelize.query.mockResolvedValueOnce([[]]); // getCalendar → null
+  const res = mkRes();
+  await handlerFor('get', '/:id/effective')(
+    { user: USER, params: { id: '99' }, query: { from: '2026-01-05', to: '2026-01-05' } }, res, jest.fn(),
+  );
+  expect(res.status).toHaveBeenCalledWith(404);
+});
+
+test('GET /effective por alcance elige la versión por fecha', async () => {
+  sequelize.query
+    .mockResolvedValueOnce([[]])                                  // holidaysInRange
+    .mockResolvedValueOnce([[{ id: 7, work_days: '2,3,4,5,6' }]]) // pickCalendarForDate
+    .mockResolvedValueOnce([[]]);                                 // exceptionsInRange
+  const res = mkRes();
+  await handlerFor('get', '/effective')(
+    { user: USER, query: { company_id: '9', from: '2026-01-05', to: '2026-01-05' } }, res, jest.fn(),
+  );
+  const payload = res.json.mock.calls[0][0];
+  expect(payload.days[0]).toMatchObject({ calendar_id: 7, working: true });
+});
+
+test('GET /workday/:empId distingue esquema faltante (read-only)', async () => {
+  sequelize.query.mockResolvedValueOnce([[]]); // information_schema.TABLES → no existe
   const res = mkRes();
   await handlerFor('get', '/workday/:empId')(
     { user: USER, params: { empId: '50' }, query: { date: '2026-01-05' } },
     res, jest.fn(),
   );
-  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ employee_id: 50, date: '2026-01-05' }));
-  expect(sequelize.query).not.toHaveBeenCalled();
+  const payload = res.json.mock.calls[0][0];
+  expect(payload).toMatchObject({ employee_id: 50, date: '2026-01-05', schema_state: 'missing' });
+  expect(payload.workday).toEqual({ source: 'historical_fallback', config: null });
+  expect(workdayConfig.loadWorkdayConfig).not.toHaveBeenCalled();
 });

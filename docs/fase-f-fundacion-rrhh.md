@@ -165,25 +165,33 @@ Flag nuevo: **`PEOPLE_WRITE_ENABLED`** — default `false` (fail-closed), sólo
 Encadena sobre F2. Complementa —sin duplicar— la tabla `holidays` (feriados) y
 el motor de jornada. Agrega (migración `079`):
 
-- **`labor_calendars`** — calendarios **versionados** (vigencia `valid_from`/
-  `valid_to`), con alcance opcional por empresa/sucursal, `timezone`
-  (default `America/Asuncion`) y `week_start` (0=domingo).
+- **`labor_calendars` — versionado REAL**: `UNIQUE(code, valid_from)` (no por
+  `code`), así un mismo calendario puede tener **varias versiones** con vigencia
+  distinta. Persiste `work_days` (1..7), alcance opcional por empresa/sucursal,
+  `timezone` (default `America/Asuncion`) y `week_start`. `createCalendar` valida
+  `valid_from <= valid_to` (400).
 - **`calendar_exceptions`** — días puntuales: `nonworking` / `working`
   (habilita un día de descanso) / `special`.
-- **Lógica pura `laborCalendar.js`** — clasifica cada fecha como laborable o no
-  componiendo excepciones + feriados + modelo de semana (descanso dominical por
-  defecto o `work_days` 1..7). **Invariante a la TZ del proceso**: opera sobre
-  fechas civiles con helpers UTC de `civilDate` → mismo resultado en UTC,
-  Asunción y Tokyo (probado en las tres).
-- **Resolutor efectivo read-only** `GET /api/labor-calendars/:id/effective` y
-  **lectura de jornada read-only** `GET /api/labor-calendars/workday/:empId`
-  que **delega** en `workdayConfig.loadWorkdayConfig` (que ya degrada a
-  `historical_fallback` si faltan 072/073/075). **No** recalcula ni modifica
-  `attendance_logs`/`daily_summary`/att2000.
-- **Degradación**: si faltan las tablas de calendario o de feriados (migración
-  ausente/parcial), el servicio devuelve vacío y el resolutor cae al modelo de
-  semana, en vez de romper (se distingue "tabla no existe" 42S02 de una caída
-  real). UI mínima: `/configuracion/calendario-laboral` (consulta de rango).
+- **Lógica pura `laborCalendar.js`** — clasifica cada fecha (laborable/no)
+  componiendo excepciones + feriados + `work_days`. **Invariante a la TZ del
+  proceso** (mismo resultado en UTC/Asunción/Tokyo).
+- **Resolución por ALCANCE + FECHA**: `pickCalendarForDate({company_id,
+  branch_id}, date)` con **precedencia determinista** (sucursal > empresa >
+  global; a igual especificidad, `valid_from` más reciente). `GET
+  /api/labor-calendars/effective?company_id&branch_id&from&to` resuelve la
+  versión aplicable **por cada día**; `GET /:id/effective` inspecciona una
+  versión puntual usando sus `work_days` persistidos.
+- **Jornada read-only con TRES estados explícitos** `GET
+  /api/labor-calendars/workday/:empId`:
+  - tabla `employee_schedule_history` ausente → `schema_state:'missing'` +
+    `historical_fallback`;
+  - esquema parcial (072 sin 073) → `schema_state:'incomplete'` con mensaje
+    controlado (**nunca** un error SQL crudo ni un fallback silencioso);
+  - esquema completo → delega en `workdayConfig` (`schema_state:'complete'`).
+  **No** recalcula ni modifica `attendance_logs`/`daily_summary`/att2000.
+- **Degradación** de lectura de calendario/feriados ante tabla ausente (42S02).
+  UI mínima: `/configuracion/calendario-laboral` (consulta de rango). Versionado
+  y los tres estados probados en integración (`tests/it/calendar.it.test.js`).
 
 Flag nuevo: **`CALENDAR_WRITE_ENABLED`** — default `false` (fail-closed).
 

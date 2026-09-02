@@ -54,33 +54,53 @@ async function optionalQuery(sql, replacements = []) {
 
 // ─── Calendarios ────────────────────────────────────────────────────────────
 
+/** Normaliza work_days a string '1..7' ordenado, o null. Acepta array o string. */
+function normalizeWorkDays(value) {
+  if (value == null || value === '') return null;
+  const raw = Array.isArray(value) ? value : String(value).split(',');
+  const days = raw.map((v) => Number(String(v).trim())).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7);
+  if (!days.length) return null;
+  return [...new Set(days)].sort((a, b) => a - b).join(',');
+}
+
+/** Parsea work_days string → number[] (1..7) o null. */
+function parseWorkDays(value) {
+  const s = normalizeWorkDays(value);
+  return s ? s.split(',').map(Number) : null;
+}
+
+const CALENDAR_COLS = `id, code, name, company_id, branch_id, timezone, week_start,
+            work_days, active, valid_from, valid_to`;
+
 async function listCalendars() {
   return optionalQuery(
-    `SELECT id, code, name, company_id, branch_id, timezone, week_start, active,
-            valid_from, valid_to, created_at, updated_at
-       FROM labor_calendars ORDER BY active DESC, code`,
+    `SELECT ${CALENDAR_COLS}, created_at, updated_at
+       FROM labor_calendars ORDER BY code, valid_from DESC`,
   );
 }
 
 async function getCalendar(id) {
   const rows = await optionalQuery(
-    `SELECT id, code, name, company_id, branch_id, timezone, week_start, active,
-            valid_from, valid_to
-       FROM labor_calendars WHERE id = ? LIMIT 1`,
+    `SELECT ${CALENDAR_COLS} FROM labor_calendars WHERE id = ? LIMIT 1`,
     [id],
   );
   return rows[0] || null;
 }
 
 async function createCalendar(data, userId) {
+  // Versionado válido: la vigencia debe ser coherente.
+  if (data.valid_to != null && String(data.valid_to) < String(data.valid_from)) {
+    throw httpError(400, 'INVALID_VALIDITY', 'valid_to no puede ser anterior a valid_from');
+  }
   const [result] = await sequelize.query(
     `INSERT INTO labor_calendars
-       (code, name, company_id, branch_id, timezone, week_start, active, valid_from, valid_to, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (code, name, company_id, branch_id, timezone, week_start, work_days, active, valid_from, valid_to, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     { replacements: [
       data.code, data.name, data.company_id ?? null, data.branch_id ?? null,
       data.timezone || 'America/Asuncion', data.week_start ?? 0,
-      data.active ? 1 : 0, data.valid_from, data.valid_to ?? null, userId ?? null,
+      normalizeWorkDays(data.work_days), data.active ? 1 : 0,
+      data.valid_from, data.valid_to ?? null, userId ?? null,
     ] },
   );
   return result.insertId;
@@ -129,34 +149,143 @@ async function exceptionsInRange(calendarId, from, to) {
 }
 
 /**
- * Calendario efectivo del rango. `workDays` opcional (1..7, 1=domingo); si no
- * se pasa, el modelo de semana usa descanso dominical.
+ * Calendario efectivo del rango POR ID. Usa los `work_days` PERSISTIDOS del
+ * calendario salvo que se pase un override explícito.
  */
-async function resolveEffective(calendarId, from, to, { workDays = null } = {}) {
+async function resolveEffective(calendarId, from, to, { workDays } = {}) {
+  const cal = await getCalendar(calendarId);
+  if (!cal) return null; // calendario inexistente → el caller responde 404
+  const effectiveWorkDays = workDays !== undefined ? workDays : parseWorkDays(cal.work_days);
   const [holidaySet, exceptionMap] = await Promise.all([
     holidaysInRange(from, to),
     exceptionsInRange(calendarId, from, to),
   ]);
-  const days = laborCalendar.composeRange(from, to, { workDays, holidaySet, exceptionMap });
+  const days = laborCalendar.composeRange(from, to, { workDays: effectiveWorkDays, holidaySet, exceptionMap });
   return {
     from, to,
+    timezone: cal.timezone || laborCalendar.COMPANY_TZ,
+    work_days: effectiveWorkDays,
     working_days: laborCalendar.countWorking(days),
     total_days: days.length,
     days,
   };
 }
 
+/**
+ * Elige la versión de calendario aplicable para un ALCANCE y una FECHA, con
+ * precedencia DETERMINISTA:
+ *   1. especificidad de alcance: sucursal > empresa > global;
+ *   2. entre las que cubren la fecha con igual especificidad, la de `valid_from`
+ *      más reciente (la versión más nueva).
+ * Un calendario cubre la fecha si `valid_from <= date` y (`valid_to` es NULL o
+ * `>= date`). Sólo activos.
+ */
+async function pickCalendarForDate({ company_id = null, branch_id = null } = {}, date) {
+  const rows = await optionalQuery(
+    `SELECT ${CALENDAR_COLS} FROM labor_calendars
+      WHERE active = 1
+        AND valid_from <= ?
+        AND (valid_to IS NULL OR valid_to >= ?)
+        AND (
+              (branch_id = ? AND ? IS NOT NULL)
+           OR (branch_id IS NULL AND company_id = ? AND ? IS NOT NULL)
+           OR (branch_id IS NULL AND company_id IS NULL)
+        )
+      ORDER BY
+        (branch_id IS NOT NULL) DESC,   -- sucursal primero
+        (company_id IS NOT NULL) DESC,  -- luego empresa
+        valid_from DESC                 -- versión más reciente
+      LIMIT 1`,
+    [date, date, branch_id, branch_id, company_id, company_id],
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Resuelve el calendario efectivo por ALCANCE + rango de fechas. Elige la
+ * versión aplicable por CADA fecha (una versión puede cambiar dentro del rango),
+ * componiendo work_days de esa versión + sus excepciones + feriados.
+ */
+async function resolveEffectiveByScope(scope, from, to) {
+  const holidaySet = await holidaysInRange(from, to);
+  // Precarga de versiones candidatas y sus excepciones para el rango.
+  const start = from;
+  const out = [];
+  const calCache = new Map();     // date → calendar
+  const excCache = new Map();     // calendarId → Map(date→kind)
+  const { parseCivilDate, civilDateISO, addDaysUTC } = require('../utils/civilDate');
+  let cur = parseCivilDate(from);
+  const end = parseCivilDate(to);
+  if (!cur || !end) throw httpError(400, 'INVALID_RANGE', 'Rango de fechas inválido');
+  if (end.getTime() < cur.getTime()) throw httpError(400, 'INVALID_RANGE', '`to` es anterior a `from`');
+  const totalDays = Math.round((end.getTime() - cur.getTime()) / 86400000) + 1;
+  if (totalDays > laborCalendar.MAX_RANGE_DAYS) throw httpError(400, 'RANGE_TOO_WIDE', 'Rango demasiado amplio');
+
+  for (let i = 0; i < totalDays; i++) {
+    const iso = civilDateISO(cur);
+    const cal = await pickCalendarForDate(scope, iso);
+    let exceptionMap = new Map();
+    let workDays = null;
+    if (cal) {
+      workDays = parseWorkDays(cal.work_days);
+      if (!excCache.has(cal.id)) excCache.set(cal.id, await exceptionsInRange(cal.id, start, to));
+      exceptionMap = excCache.get(cal.id);
+    }
+    const classified = laborCalendar.classifyDay(iso, { workDays, holidaySet, exceptionMap });
+    out.push({ ...classified, calendar_id: cal ? cal.id : null });
+    calCache.set(iso, cal);
+    cur = addDaysUTC(cur, 1);
+  }
+  return {
+    from, to, scope,
+    working_days: out.filter((d) => d.working).length,
+    total_days: out.length,
+    days: out,
+  };
+}
+
 // ─── Integración READ-ONLY con snapshots de jornada ─────────────────────────
 
 /**
- * Devuelve la configuración de jornada vigente para un empleado en una fecha,
- * SÓLO LECTURA, delegando en workdayConfig (que degrada a historical_fallback
- * si faltan 072/073/075). No escribe nada.
+ * Estado del esquema de jornada histórica (072/073/075):
+ *   - 'missing'    : la tabla employee_schedule_history no existe (072 sin aplicar).
+ *   - 'incomplete' : la tabla existe pero faltan columnas de 073 (esquema parcial).
+ *   - 'complete'   : tabla y columnas de 073 presentes (075 lo maneja workdayConfig).
+ */
+async function workdaySchemaState() {
+  const [tbl] = await sequelize.query(
+    `SELECT 1 AS ok FROM information_schema.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_schedule_history' LIMIT 1`,
+  );
+  if (!tbl.length) return 'missing';
+  const [col] = await sequelize.query(
+    `SELECT 1 AS ok FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_schedule_history'
+        AND COLUMN_NAME = 'work_regime' LIMIT 1`,
+  );
+  return col.length ? 'complete' : 'incomplete';
+}
+
+/**
+ * Jornada vigente de un empleado en una fecha, SÓLO LECTURA, distinguiendo
+ * explícitamente los tres estados del esquema. Nunca devuelve un error SQL crudo
+ * ni un fallback silencioso ante esquema parcial.
  */
 async function readWorkdayForDate(employeeId, date) {
+  const schema = await workdaySchemaState();
+  if (schema === 'missing') {
+    return { schema_state: 'missing', workday: { source: 'historical_fallback', config: null } };
+  }
+  if (schema === 'incomplete') {
+    return {
+      schema_state: 'incomplete',
+      workday: null,
+      message: 'Esquema de jornada parcialmente migrado (072 sin 073/075). No se resuelve jornada configurada hasta completar la migración.',
+    };
+  }
   const cfg = await workdayConfig.loadWorkdayConfig([employeeId], { from: date, to: date });
   const forDate = cfg.forDate(employeeId, date);
-  return forDate || { source: 'historical_fallback', config: null };
+  return { schema_state: 'complete', workday: forDate || { source: 'historical_fallback', config: null } };
 }
 
 module.exports = {
@@ -171,5 +300,10 @@ module.exports = {
   holidaysInRange,
   exceptionsInRange,
   resolveEffective,
+  resolveEffectiveByScope,
+  pickCalendarForDate,
   readWorkdayForDate,
+  workdaySchemaState,
+  normalizeWorkDays,
+  parseWorkDays,
 };

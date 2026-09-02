@@ -20,6 +20,13 @@ describe('migración 079 (calendarios laborales)', () => {
     expect(sql).toMatch(/timezone\s+VARCHAR\(64\)\s+NOT NULL DEFAULT 'America\/Asuncion'/i);
   });
 
+  test('versionado real: UNIQUE por (code, valid_from), no por code, y persiste work_days', () => {
+    expect(sql).toMatch(/UNIQUE KEY uq_labor_calendars_code_from \(code, valid_from\)/i);
+    // No debe existir una UNIQUE sólo por code (impediría versiones).
+    expect(sql).not.toMatch(/UNIQUE KEY uq_labor_calendars_code \(code\)/i);
+    expect(sql).toMatch(/work_days\s+VARCHAR\(20\)\s+NULL/i);
+  });
+
   test('FKs de alcance con ON DELETE SET NULL y excepciones CASCADE', () => {
     expect(sql).toMatch(/FOREIGN KEY \(company_id\) REFERENCES companies\(id\) ON DELETE SET NULL/i);
     expect(sql).toMatch(/FOREIGN KEY \(branch_id\)  REFERENCES branches\(id\)  ON DELETE SET NULL/i);

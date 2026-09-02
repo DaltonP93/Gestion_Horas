@@ -81,4 +81,27 @@ describeIT('migraciones FASE F (integración)', () => {
     expect(await fkRule('candidates', 'fk_candidates_company')).toBe('SET NULL');
     expect(await fkRule('candidates', 'fk_candidates_branch')).toBe('SET NULL');
   });
+
+  // ── 079 calendarios ──
+  test('079: labor_calendars versionado (UNIQUE por alcance+code+valid_from) con work_days', async () => {
+    expect(await hasTable('labor_calendars')).toBe(true);
+    expect(await hasColumn('labor_calendars', 'work_days')).toBe(true);
+    const [rows] = await conn.query(
+      `SELECT index_name AS iname, GROUP_CONCAT(column_name ORDER BY seq_in_index) AS cols
+         FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'labor_calendars' AND non_unique = 0
+        GROUP BY index_name`,
+    );
+    const uniques = Object.fromEntries(rows.map((r) => [r.iname, r.cols]));
+    // Unicidad por ALCANCE: dos empresas/sucursales pueden repetir el mismo code.
+    // scope_key (columna generada) + code + valid_from.
+    expect(uniques.uq_labor_calendars_scope_code_from).toBe('scope_key,code,valid_from');
+    // No debe haber una UNIQUE sólo por code (impediría versiones/otras empresas).
+    expect(Object.values(uniques)).not.toContain('code');
+  });
+
+  test('079: calendar_exceptions CASCADE al calendario; FKs de alcance SET NULL', async () => {
+    expect(await fkRule('calendar_exceptions', 'fk_cal_exc_calendar')).toBe('CASCADE');
+    expect(await fkRule('labor_calendars', 'fk_labor_cal_company')).toBe('SET NULL');
+  });
 });

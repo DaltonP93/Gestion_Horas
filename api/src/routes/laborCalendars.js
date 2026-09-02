@@ -34,10 +34,21 @@ const createSchema = Joi.object({
   branch_id:  Joi.number().integer().positive().allow(null),
   timezone:   Joi.string().trim().max(64).default('America/Asuncion'),
   week_start: Joi.number().integer().min(0).max(6).default(0),
+  work_days:  Joi.alternatives(
+                Joi.string().pattern(/^[1-7](,[1-7]){0,6}$/),
+                Joi.array().items(Joi.number().integer().min(1).max(7)),
+              ).allow(null, ''),
   active:     Joi.boolean().default(true),
   valid_from: DATE.required(),
   valid_to:   DATE.allow(null),
   reason:     Joi.string().trim().max(500).allow(null, ''),
+});
+
+const effectiveScopeSchema = Joi.object({
+  company_id: Joi.number().integer().positive().allow(null, ''),
+  branch_id:  Joi.number().integer().positive().allow(null, ''),
+  from:       DATE.required(),
+  to:         DATE.required(),
 });
 
 const exceptionSchema = Joi.object({
@@ -69,7 +80,21 @@ router.get('/workday/:empId', requirePermission('calendario', 'view'), asyncHand
   if (!Number.isFinite(empId) || empId <= 0) return res.status(400).json({ error: 'empId inválido' });
   const date = typeof req.query.date === 'string' ? req.query.date : null;
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date (YYYY-MM-DD) requerido' });
-  res.json({ employee_id: empId, date, workday: await calendar.readWorkdayForDate(empId, date) });
+  res.json({ employee_id: empId, date, ...(await calendar.readWorkdayForDate(empId, date)) });
+}));
+
+// Resolutor efectivo POR ALCANCE + fecha (elige la versión aplicable por día).
+router.get('/effective', requirePermission('calendario', 'view'), validate(effectiveScopeSchema, 'query'), asyncHandler(async (req, res) => {
+  const scope = {
+    company_id: req.query.company_id ? Number(req.query.company_id) : null,
+    branch_id: req.query.branch_id ? Number(req.query.branch_id) : null,
+  };
+  try {
+    res.json(await calendar.resolveEffectiveByScope(scope, req.query.from, req.query.to));
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    throw err;
+  }
 }));
 
 router.get('/:id', requirePermission('calendario', 'view'), asyncHandler(async (req, res) => {
@@ -86,13 +111,15 @@ router.get('/:id/exceptions', requirePermission('calendario', 'view'), asyncHand
 
 router.get('/:id/effective', requirePermission('calendario', 'view'), validate(effectiveSchema, 'query'), asyncHandler(async (req, res) => {
   const id = idParam(req, res); if (id == null) return;
-  const cal = await calendar.getCalendar(id);
-  if (!cal) return res.status(404).json({ error: 'Calendario no encontrado' });
+  // `undefined` (no override) → el servicio usa los work_days PERSISTIDOS del
+  // calendario; un query param los sobreescribe explícitamente.
   const workDays = req.query.work_days
     ? String(req.query.work_days).split(',').map(Number)
-    : null;
+    : undefined;
   try {
-    res.json({ calendar_id: id, ...(await calendar.resolveEffective(id, req.query.from, req.query.to, { workDays })) });
+    const eff = await calendar.resolveEffective(id, req.query.from, req.query.to, { workDays });
+    if (!eff) return res.status(404).json({ error: 'Calendario no encontrado' });
+    res.json({ calendar_id: id, ...eff });
   } catch (err) {
     if (/Rango|inválid|anterior/i.test(err.message)) return res.status(400).json({ error: err.message });
     throw err;
