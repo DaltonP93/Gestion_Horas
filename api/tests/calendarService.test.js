@@ -61,14 +61,67 @@ describe('resolveEffective (read-only) usa work_days del calendario', () => {
 
 describe('resolveEffectiveByScope elige versión por fecha (precedencia determinista)', () => {
   test('cada día resuelve su calendario por alcance + vigencia', async () => {
-    // 1 día → pickCalendarForDate (1 query) + exceptionsInRange (1 query). holidays 1 query al inicio.
+    // Ahora: holidaysInRange (1) + loadScopeCalendars UNA vez (1) + exceptionsInRange
+    // por calendario (1). Sin branch_id no se deriva empresa (no hay query extra).
     sequelize.query
-      .mockResolvedValueOnce([[]])                                  // holidaysInRange
-      .mockResolvedValueOnce([[{ id: 7, work_days: '2,3,4,5,6' }]]) // pickCalendarForDate
-      .mockResolvedValueOnce([[]]);                                 // exceptionsInRange(cal 7)
+      .mockResolvedValueOnce([[]])                                                                 // holidaysInRange
+      .mockResolvedValueOnce([[{ id: 7, work_days: '2,3,4,5,6', valid_from: '2026-01-01', valid_to: null }]]) // loadScopeCalendars
+      .mockResolvedValueOnce([[]]);                                                                // exceptionsInRange(cal 7)
     const r = await svc.resolveEffectiveByScope({ company_id: 9, branch_id: null }, '2026-01-05', '2026-01-05');
     expect(r.total_days).toBe(1);
     expect(r.days[0]).toMatchObject({ date: '2026-01-05', working: true, calendar_id: 7 });
+  });
+
+  test('★ pedido SÓLO por sucursal deriva su empresa → aplica el calendario de EMPRESA (fallback)', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[]])                        // holidaysInRange
+      .mockResolvedValueOnce([[{ company_id: 9 }]])       // companyIdOfBranch(5) → empresa 9
+      .mockResolvedValueOnce([[{ id: 20, work_days: '2,3,4,5,6', valid_from: '2026-01-01', valid_to: null, company_id: 9, branch_id: null }]]) // loadScopeCalendars (nivel empresa)
+      .mockResolvedValueOnce([[]]);                       // exceptionsInRange(cal 20)
+    const r = await svc.resolveEffectiveByScope({ company_id: null, branch_id: 5 }, '2026-01-05', '2026-01-05');
+    // Antes: sin company derivada, el nivel empresa nunca matcheaba → global/ninguno.
+    expect(r.days[0].calendar_id).toBe(20);
+    // La consulta de calendarios recibió la empresa derivada (9) en el filtro.
+    const loadCall = sequelize.query.mock.calls.find(([sql]) => /FROM labor_calendars/i.test(String(sql)) && /branch_id IS NULL AND company_id/i.test(String(sql)));
+    expect(loadCall[1].replacements).toEqual(['2026-01-05', '2026-01-05', 5, 5, 9, 9]);
+  });
+});
+
+describe('pickFromCandidates — precedencia y vigencia en memoria (equivale a pickCalendarForDate)', () => {
+  // Filas YA ordenadas por el SQL (sucursal > empresa > global; valid_from DESC).
+  const cands = [
+    { id: 30, _vf: '2026-01-01', _vt: null },        // sucursal (gana si cubre)
+    { id: 20, _vf: '2026-01-01', _vt: null },        // empresa
+    { id: 10, _vf: '2026-01-01', _vt: null },        // global
+  ];
+  test('elige la de mayor especificidad que cubre la fecha', () => {
+    expect(svc.pickFromCandidates(cands, '2026-06-10').id).toBe(30);
+  });
+  test('si la más específica no cubre la fecha, cae a la siguiente', () => {
+    const c = [
+      { id: 30, _vf: '2026-07-01', _vt: null },      // sucursal: empieza después
+      { id: 20, _vf: '2026-01-01', _vt: null },      // empresa: cubre
+      { id: 10, _vf: '2026-01-01', _vt: null },      // global
+    ];
+    expect(svc.pickFromCandidates(c, '2026-06-10').id).toBe(20);
+  });
+  test('respeta valid_to (versión vencida no aplica)', () => {
+    const c = [
+      { id: 30, _vf: '2026-01-01', _vt: '2026-05-31' }, // sucursal: vence antes
+      { id: 20, _vf: '2026-06-01', _vt: null },         // empresa: vigente
+    ];
+    expect(svc.pickFromCandidates(c, '2026-06-10').id).toBe(20);
+  });
+  test('a igual especificidad, gana la de valid_from más reciente (orden del SQL)', () => {
+    const c = [
+      { id: 31, _vf: '2026-06-01', _vt: null }, // más nueva primero (DESC)
+      { id: 30, _vf: '2026-01-01', _vt: null },
+    ];
+    expect(svc.pickFromCandidates(c, '2026-06-10').id).toBe(31);
+  });
+  test('ninguna cubre → null', () => {
+    expect(svc.pickFromCandidates([{ id: 1, _vf: '2027-01-01', _vt: null }], '2026-06-10')).toBeNull();
+    expect(svc.pickFromCandidates([], '2026-06-10')).toBeNull();
   });
 });
 

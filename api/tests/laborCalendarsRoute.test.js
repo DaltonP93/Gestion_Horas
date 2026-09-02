@@ -71,9 +71,9 @@ test('GET /:id/effective 404 si el calendario no existe', async () => {
 
 test('GET /effective por alcance elige la versión por fecha', async () => {
   sequelize.query
-    .mockResolvedValueOnce([[]])                                  // holidaysInRange
-    .mockResolvedValueOnce([[{ id: 7, work_days: '2,3,4,5,6' }]]) // pickCalendarForDate
-    .mockResolvedValueOnce([[]]);                                 // exceptionsInRange
+    .mockResolvedValueOnce([[]])                                                                 // holidaysInRange
+    .mockResolvedValueOnce([[{ id: 7, work_days: '2,3,4,5,6', valid_from: '2026-01-01', valid_to: null }]]) // loadScopeCalendars (una sola query)
+    .mockResolvedValueOnce([[]]);                                                                // exceptionsInRange
   const res = mkRes();
   await handlerFor('get', '/effective')(
     { user: USER, query: { company_id: '9', from: '2026-01-05', to: '2026-01-05' } }, res, jest.fn(),

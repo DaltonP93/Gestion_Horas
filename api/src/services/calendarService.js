@@ -260,12 +260,68 @@ async function pickCalendarForDate({ company_id = null, branch_id = null } = {},
  * versión aplicable por CADA fecha (una versión puede cambiar dentro del rango),
  * componiendo work_days de esa versión + sus excepciones + feriados.
  */
+/** company_id de una sucursal (o null si no existe / no tiene empresa). */
+async function companyIdOfBranch(branchId) {
+  if (branchId == null) return null;
+  const [rows] = await sequelize.query(
+    'SELECT company_id FROM branches WHERE id = ? LIMIT 1',
+    { replacements: [branchId] },
+  );
+  return rows[0] ? (rows[0].company_id ?? null) : null;
+}
+
+/**
+ * Precarga, en UNA sola consulta, todas las versiones de calendario del alcance
+ * que solapan [from, to], con la MISMA precedencia que pickCalendarForDate
+ * (sucursal > empresa > global; a igual especificidad, valid_from más reciente).
+ * Cada fila lleva sus límites de vigencia normalizados a fecha civil ISO para
+ * poder resolver la versión aplicable por fecha en memoria (evita el N+1 de una
+ * consulta por día).
+ */
+async function loadScopeCalendars({ company_id = null, branch_id = null } = {}, from, to) {
+  const { parseCivilDate, civilDateISO } = require('../utils/civilDate');
+  const rows = await optionalQuery(
+    `SELECT ${CALENDAR_COLS} FROM labor_calendars
+      WHERE active = 1
+        AND valid_from <= ?
+        AND (valid_to IS NULL OR valid_to >= ?)
+        AND (
+              (branch_id = ? AND ? IS NOT NULL)
+           OR (branch_id IS NULL AND company_id = ? AND ? IS NOT NULL)
+           OR (branch_id IS NULL AND company_id IS NULL)
+        )
+      ORDER BY
+        (branch_id IS NOT NULL) DESC,
+        (company_id IS NOT NULL) DESC,
+        valid_from DESC`,
+    [to, from, branch_id, branch_id, company_id, company_id],
+  );
+  // Se preserva el orden del SQL (la precedencia); sólo se anexan los límites
+  // en ISO para el filtro por fecha.
+  return rows.map((r) => ({
+    ...r,
+    _vf: civilDateISO(parseCivilDate(r.valid_from)),
+    _vt: r.valid_to == null ? null : civilDateISO(parseCivilDate(r.valid_to)),
+  }));
+}
+
+/**
+ * Elige, de la lista YA ORDENADA por precedencia, la primera versión que cubre
+ * la fecha (valid_from <= date <= valid_to|∞). Equivale exactamente a
+ * pickCalendarForDate (mismo WHERE de vigencia + mismo ORDER BY + LIMIT 1),
+ * resuelto en memoria. Función pura para poder testearla.
+ */
+function pickFromCandidates(sorted, dateISO) {
+  for (const c of sorted) {
+    if (c._vf != null && c._vf <= dateISO && (c._vt == null || c._vt >= dateISO)) return c;
+  }
+  return null;
+}
+
 async function resolveEffectiveByScope(scope, from, to) {
   const holidaySet = await holidaysInRange(from, to);
-  // Precarga de versiones candidatas y sus excepciones para el rango.
   const start = from;
   const out = [];
-  const calCache = new Map();     // date → calendar
   const excCache = new Map();     // calendarId → Map(date→kind)
   const { parseCivilDate, civilDateISO, addDaysUTC } = require('../utils/civilDate');
   let cur = parseCivilDate(from);
@@ -275,9 +331,21 @@ async function resolveEffectiveByScope(scope, from, to) {
   const totalDays = Math.round((end.getTime() - cur.getTime()) / 86400000) + 1;
   if (totalDays > laborCalendar.MAX_RANGE_DAYS) throw httpError(400, 'RANGE_TOO_WIDE', 'Rango demasiado amplio');
 
+  // Precedencia sucursal > empresa > global: si el caller pide sólo por
+  // sucursal, se deriva su empresa para que el nivel intermedio pueda aplicar
+  // como fallback (antes se saltaba a global). No amplía el alcance: la empresa
+  // de una sucursal en alcance está implícitamente en alcance.
+  const effScope = { company_id: scope.company_id ?? null, branch_id: scope.branch_id ?? null };
+  if (effScope.branch_id != null && effScope.company_id == null) {
+    effScope.company_id = await companyIdOfBranch(effScope.branch_id);
+  }
+
+  // UNA sola consulta de calendarios candidatos para todo el rango (vs N+1).
+  const candidates = await loadScopeCalendars(effScope, from, to);
+
   for (let i = 0; i < totalDays; i++) {
     const iso = civilDateISO(cur);
-    const cal = await pickCalendarForDate(scope, iso);
+    const cal = pickFromCandidates(candidates, iso);
     let exceptionMap = new Map();
     let workDays = null;
     if (cal) {
@@ -287,7 +355,6 @@ async function resolveEffectiveByScope(scope, from, to) {
     }
     const classified = laborCalendar.classifyDay(iso, { workDays, holidaySet, exceptionMap });
     out.push({ ...classified, calendar_id: cal ? cal.id : null });
-    calCache.set(iso, cal);
     cur = addDaysUTC(cur, 1);
   }
   return {
@@ -392,6 +459,8 @@ module.exports = {
   resolveEffective,
   resolveEffectiveByScope,
   pickCalendarForDate,
+  loadScopeCalendars,
+  pickFromCandidates,
   readWorkdayForDate,
   workdaySchemaState,
   normalizeWorkDays,

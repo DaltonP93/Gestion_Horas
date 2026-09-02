@@ -54,11 +54,15 @@ describeIT('calendario (integración) — versionado y jornada', () => {
       [ids.code, ids.company],
     );
     ids.v2 = v2.insertId;
+    // Sucursal de esa empresa (sin calendario propio de sucursal).
+    const [br] = await conn.query('INSERT INTO branches (code, name, company_id) VALUES (?, ?, ?)', [`${uniq}BR`, 'Suc IT', ids.company]);
+    ids.branch = br.insertId;
   });
 
   afterAll(async () => {
     if (conn) {
       await conn.query('DELETE FROM labor_calendars WHERE code = ?', [ids.code]);
+      await conn.query('DELETE FROM branches WHERE id = ?', [ids.branch]);
       await conn.query('DELETE FROM companies WHERE id = ?', [ids.company]);
       await conn.end();
     }
@@ -84,6 +88,14 @@ describeIT('calendario (integración) — versionado y jornada', () => {
     expect(byDate['2026-01-03'].working).toBe(false); // sábado (v2 lun-vie)
     expect(byDate['2026-01-05'].working).toBe(true);  // lunes
     expect(byDate['2026-01-05'].calendar_id).toBe(ids.v2);
+  });
+
+  test('★ pedido SÓLO por sucursal (sin company_id) cae al calendario de EMPRESA', async () => {
+    // La sucursal no tiene calendario propio; antes esto degradaba a global y
+    // no aplicaba el de la empresa. Ahora deriva la empresa de la sucursal.
+    const r = await svc.resolveEffectiveByScope({ branch_id: ids.branch, company_id: null }, '2026-01-05', '2026-01-05');
+    expect(r.days[0].calendar_id).toBe(ids.v2);   // calendario de la empresa (v2)
+    expect(r.days[0].working).toBe(true);         // lunes, v2 lun-vie
   });
 
   test('createCalendar rechaza vigencia invertida (valid_to < valid_from)', async () => {
