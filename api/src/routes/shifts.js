@@ -21,6 +21,7 @@
  *   GET    /schedules/:id/export?format=xlsx   exporta la grilla a Excel
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const ExcelJS = require('exceljs');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
@@ -120,7 +121,7 @@ router.post('/templates', requirePermission(MODULE, 'create'), async (req, res, 
       'INSERT INTO shift_templates (name, start_time, end_time, break_minutes, color) VALUES (?,?,?,?,?)',
       { replacements: [name, start_time || null, end_time || null, +(break_minutes || 0), color || '#0ea5e9'] }
     );
-    res.status(201).json({ id: r.insertId });
+    res.status(201).json({ id: insertId(r) });
   } catch (e) { next(e); }
 });
 
@@ -176,7 +177,7 @@ router.post('/schedules', requirePermission(MODULE, 'create'), async (req, res, 
        VALUES (?,?,?,?,?,?,?,?)`,
       { replacements: [finalName, branch_id || null, department_id || null, year, month, weekly, notes || null, req.user?.id || null] }
     );
-    res.status(201).json({ id: r.insertId });
+    res.status(201).json({ id: insertId(r) });
   } catch (e) { next(e); }
 });
 

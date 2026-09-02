@@ -14,6 +14,7 @@
  * requieren RRHH/admin.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
@@ -143,8 +144,8 @@ router.post('/', requirePermission('ingresos', 'create'), async (req, res, next)
        VALUES (?,?,?,?,?,?,?,?,?)`,
       { replacements: [c.employee_id, c.type, c.start_date, c.end_date, c.probation_end_date, c.salary, c.status, c.note, req.user?.id || null] }
     );
-    audit.log({ req, user: req.user, action: 'contract_create', entity: 'employee_contracts', entity_id: r.insertId, details: { employee_id: c.employee_id, type: c.type } });
-    res.status(201).json({ id: r.insertId });
+    audit.log({ req, user: req.user, action: 'contract_create', entity: 'employee_contracts', entity_id: insertId(r), details: { employee_id: c.employee_id, type: c.type } });
+    res.status(201).json({ id: insertId(r) });
   } catch (e) { next(e); }
 });
 

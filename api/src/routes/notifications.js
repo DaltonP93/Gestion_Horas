@@ -4,6 +4,7 @@
  */
 
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const { sendMail, resetTransporter, buildAlertHtml } = require('../services/emailService');
@@ -129,11 +130,11 @@ router.post('/schedules', async (req, res) => {
     // Activar inmediatamente
     const [rows] = await sequelize.query(
       'SELECT * FROM report_schedules WHERE id = ?',
-      { replacements: [result.insertId] }
+      { replacements: [insertId(result)] }
     );
     registerJob(rows[0]);
 
-    res.status(201).json({ id: result.insertId, message: 'Reporte programado creado' });
+    res.status(201).json({ id: insertId(result), message: 'Reporte programado creado' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

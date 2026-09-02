@@ -26,6 +26,7 @@
  */
 
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const Joi = require('joi');
 const { authenticate, authorize } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
@@ -77,10 +78,10 @@ router.post('/', canManage, validate(createSchema), asyncHandler(async (req, res
     audit.log({
       req, user: req.user,
       action: 'payment_type.create',
-      entity: 'payment_type', entity_id: result.insertId,
+      entity: 'payment_type', entity_id: insertId(result),
       details: { code, name, active: !!active, sort_order },
     });
-    res.status(201).json({ id: result.insertId, code, name, description: description || null, active: !!active, sort_order });
+    res.status(201).json({ id: insertId(result), code, name, description: description || null, active: !!active, sort_order });
   } catch (err) {
     if (String(err.original?.code || err.parent?.code || '').startsWith('ER_DUP')) {
       return res.status(409).json({ error: 'Código o nombre ya en uso' });

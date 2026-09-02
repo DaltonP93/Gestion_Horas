@@ -13,6 +13,7 @@
  */
 
 const router  = require('express').Router({ mergeParams: true });
+const { insertId } = require('../utils/insertId');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
@@ -102,10 +103,10 @@ router.post('/',
     audit.log({
       req, user: req.user, action: 'employee.document.upload',
       entity: 'employee', entity_id: employeeId,
-      details: { id: r.insertId, category, period, size: req.file.size },
+      details: { id: insertId(r), category, period, size: req.file.size },
     });
 
-    res.status(201).json({ id: r.insertId, title, category, period, visible_to_employee: !!visible });
+    res.status(201).json({ id: insertId(r), title, category, period, visible_to_employee: !!visible });
   })
 );
 

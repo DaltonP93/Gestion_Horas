@@ -14,6 +14,7 @@
  */
 
 const { sequelize } = require('../config/database');
+const { insertId } = require('../utils/insertId');
 const { withDeadlockRetry } = require('../utils/mysqlRetry');
 const { loadWorkdayConfig, vigenteEn } = require('./workdayConfig');
 
@@ -428,7 +429,9 @@ async function createHistory(employeeId, body, actorId) {
       replacements: valuesForInsert(employeeId, validFrom, validTo, snapshot, actorId, reason),
       transaction: t,
     });
-    return rowToPublic(await readHistoryRow(result.insertId, t));
+    // INSERT crudo de Sequelize devuelve [insertId, affectedRows] (número)
+    // contra MySQL real: leer el id con el helper, no `.insertId` de un número.
+    return rowToPublic(await readHistoryRow(insertId(result), t));
   });
 }
 
