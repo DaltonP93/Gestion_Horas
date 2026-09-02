@@ -237,6 +237,30 @@ el motor de jornada. Agrega (migración `079`):
 
 Flag nuevo: **`CALENDAR_WRITE_ENABLED`** — default `false` (fail-closed).
 
+## PR F4 — Base de nómina (SANDBOX NO OFICIAL), reportes y extensibilidad
+
+Encadena sobre F3. Construye **sólo la base segura**; **no** calcula liquidación
+oficial, no evalúa fórmulas, no paga ni integra con IPS/MTESS/bancos. Migración
+`080` (aditiva, idempotente, no destructiva, sin backfill):
+
+- **`payroll_concepts`** — catálogo **versionado** de ingresos/descuentos
+  (`UNIQUE(code, version)`, vigencia). `formula_hint` es texto descriptivo,
+  **nunca se evalúa**.
+- **`payroll_periods`** — máquina de estados `draft→preview→locked→closed`. Todo
+  período nace `is_official = 0`. Un período **cerrado es inmutable** (terminal).
+- **`payroll_period_snapshots`** — snapshot **agregado** al cerrar, para impedir
+  que un período cerrado cambie por modificaciones posteriores (trazabilidad).
+- **Previsualización sandbox** `GET /periods/:id/preview` — devuelve un resumen
+  AGREGADO marcado `official:false` + disclaimer; **sin montos ni PII** (no hay
+  cálculo legal sin fuente normativa y aprobación).
+- **Analytics agregado** `GET /analytics/headcount` — conteos, sin PII.
+- **Adaptadores apagados** `GET /integrations` — IPS, MTESS/REOP, firma, bancos,
+  notificaciones y pagos, **todos `enabled:false`** por defecto (fail-closed).
+- UI mínima `/configuracion/nomina-base` con banner **NO OFICIAL**.
+
+Flag nuevo: **`PAYROLL_WRITE_ENABLED`** — default `false` (fail-closed). Los
+flags de integración (`IPS_INTEGRATION_ENABLED`, etc.) también nacen apagados.
+
 ## Próximas etapas (planificadas, no implementadas)
 
 - **F2** — personas, candidatos y contratos con vigencia efectiva e historial.
