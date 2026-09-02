@@ -80,8 +80,11 @@ const rulesRoutes           = require('./routes/rules');
 const contractsRoutes       = require('./routes/contracts');
 const lactanciaRoutes       = require('./routes/lactancia');
 const workdayConfigurationRoutes = require('./routes/workdayConfiguration');
+const companiesRoutes       = require('./routes/companies');
+const costCentersRoutes     = require('./routes/costCenters');
 const swaggerUi    = require('swagger-ui-express');
 const swaggerSpec  = require('./config/swagger');
+const { requestId } = require('./middleware/requestId');
 
 const app = express();
 const server = http.createServer(app);
@@ -89,6 +92,10 @@ const server = http.createServer(app);
 // ─── Middleware ─────────────────────────────────────────────────
 app.set('trust proxy', 1); // Nginx reverse proxy
 app.use(helmet());
+// Correlation id por request (FASE F1): etiqueta la request y expone
+// X-Correlation-Id para trazar auditoría/logs. Va temprano para que todo,
+// incluida la auditoría de login, quede correlacionado.
+app.use(requestId);
 app.use(cors({
   origin: (origin, callback) => {
     const allowed = [
@@ -168,6 +175,8 @@ app.use('/api/me',             meRoutes);
 app.use('/api/audit',          auditRoutes);
 app.use('/api/holidays',       holidayRoutes);
 app.use('/api/branches',       branchRoutes);
+app.use('/api/companies',      companiesRoutes);
+app.use('/api/cost-centers',   costCentersRoutes);
 app.use('/api/justifications', justificationsBulk);
 app.use('/api/executive',      executiveRoutes);
 app.use('/api/self-checkin',   selfCheckinRoutes);

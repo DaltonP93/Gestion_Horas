@@ -1,10 +1,13 @@
 name: CI
 
+# Corre en main y en las ramas de trabajo encadenadas (claude/**), aunque el PR
+# tenga como base otra rama interna y no main. Así cada PR encadenado obtiene CI
+# real sobre su HEAD exacto, sin secretos ni acceso a producción.
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'claude/**']
 
 jobs:
   bridge-tests:
@@ -86,3 +89,86 @@ jobs:
       - run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: '1'
+
+  migrations-mysql:
+    name: Migraciones + integración (MySQL efímero)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: asistencia
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: asistencia
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci || npm install
+      - name: Asegurar cliente mysql
+        run: |
+          if mysql --version >/dev/null 2>&1; then
+            echo "cliente mysql presente"
+          else
+            sudo apt-get update
+            sudo apt-get install -y mysql-client-core-8.0 || sudo apt-get install -y default-mysql-client
+          fi
+      - name: Esperar a MySQL
+        env:
+          MYSQL_PWD: root
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot --silent; then echo "MySQL listo"; break; fi
+            sleep 2
+          done
+      # El replay completo 002→ no es viable por un eslabón preexistente ajeno a
+      # FASE F (020 referencia una tabla `webhooks` que ningún script crea). El
+      # harness prepara el esquema previo real (init.sql + prerequisitos) y luego
+      # el runner REAL aplica y verifica exclusivamente 076→080.
+      - name: Preparar esquema previo (baseline real)
+        env:
+          MYSQL_PWD: root
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/init.sql
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/012_audit_events.sql
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/015_branches.sql
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/067_employee_documents.sql
+      - name: Baseline a 075 con el runner real
+        run: node scripts/migrate.js --baseline=075_workday_configuration_phase_c.sql
+      - name: Aplicar migraciones (runner real)
+        run: node scripts/migrate.js
+      - name: Reaplicar (idempotente, sin cambios)
+        run: |
+          OUT=$(node scripts/migrate.js)
+          echo "$OUT"
+          echo "$OUT" | grep -q "Nada por aplicar"
+      - name: migrate --status es estrictamente read-only
+        env:
+          MYSQL_PWD: root
+        run: |
+          B=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM schema_migrations")
+          T1=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='asistencia'")
+          node scripts/migrate.js --status
+          A=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM schema_migrations")
+          T2=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='asistencia'")
+          test "$B" = "$A" && test "$T1" = "$T2" && echo "READ-ONLY OK"
+      - name: Tests de integración (IT_DB) contra MySQL real
+        run: IT_DB=1 npm test
