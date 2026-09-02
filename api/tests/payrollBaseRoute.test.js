@@ -6,6 +6,7 @@ jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn(), tran
 jest.mock('../src/middleware/auth', () => ({
   authenticate: (_r, _s, n) => n(),
   requirePermission: () => (_r, _s, n) => n(),
+  requireGlobalHR: (_r, _s, n) => n(),
 }));
 jest.mock('../src/middleware/validate', () => ({ validate: () => (_r, _s, n) => n() }));
 jest.mock('../src/services/audit', () => ({ log: jest.fn() }));

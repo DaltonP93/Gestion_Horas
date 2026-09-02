@@ -17,7 +17,7 @@
 
 const router = require('express').Router();
 const Joi = require('joi');
-const { authenticate, requirePermission } = require('../middleware/auth');
+const { authenticate, requirePermission, requireGlobalHR } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const payroll = require('../services/payrollBase');
@@ -25,6 +25,13 @@ const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
 
 router.use(authenticate);
+// F4 es una base de nómina SANDBOX GLOBAL (no segmentada por empresa): expone
+// conteos, preview y períodos a nivel global. Por eso, ADEMÁS del permiso de
+// módulo, exige un rol GLOBAL de RR.HH. (super_admin/admin/gth/hr). Un manager,
+// coordinator, supervisor, gestor o employee NO accede —ni con override—: la
+// guarda decide por rol, no por user_permissions. Hasta que exista un modelo y
+// aprobación explícita para nómina por empresa, no se habilita acceso segmentado.
+router.use(requireGlobalHR);
 
 const DATE = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
 

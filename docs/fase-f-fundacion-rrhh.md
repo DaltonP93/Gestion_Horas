@@ -243,6 +243,17 @@ Encadena sobre F3. Construye **sólo la base segura**; **no** calcula liquidaci�
 oficial, no evalúa fórmulas, no paga ni integra con IPS/MTESS/bancos. Migración
 `080` (aditiva, idempotente, no destructiva, sin backfill):
 
+- **SANDBOX GLOBAL — sólo RR.HH. global (P1-C)**: F4 es una base de nómina
+  **sandbox global**, no segmentada por empresa (expone conteos, preview y
+  períodos a nivel global). Por eso, **además** del permiso de módulo `nomina`,
+  todo `/api/payroll-base/*` exige un **rol global de RR.HH.**
+  (`super_admin`/`admin`/`gth`/`hr`) vía `requireGlobalHR` a nivel de router. Un
+  `manager`/`coordinator`/`supervisor`/`gestor`/`employee` recibe **403
+  `GLOBAL_HR_ONLY`** aunque tenga `view` por defecto en la sección `gestion`: la
+  guarda decide por **rol** y **no** consulta `user_permissions`, así un override
+  no puede habilitar nómina global a un manager. Nómina **segmentada por empresa**
+  queda fuera de alcance hasta que exista un modelo y aprobación explícita.
+
 - **`payroll_concepts`** — catálogo **versionado** de ingresos/descuentos
   (`UNIQUE(code, version)`, vigencia; `createConcept` valida `valid_from <=
   valid_to`). `formula_hint` es texto descriptivo, **nunca se evalúa**.
@@ -265,7 +276,8 @@ oficial, no evalúa fórmulas, no paga ni integra con IPS/MTESS/bancos. Migraci�
   real, así que un flag de entorno **no** puede presentarla como habilitada.
 - UI mínima `/configuracion/nomina-base` con banner **NO OFICIAL**.
 - Concurrencia y unicidad de snapshot probadas en integración
-  (`tests/it/payroll.it.test.js`).
+  (`tests/it/payroll.it.test.js`). La guarda global de RR.HH. se prueba por rol
+  y por cableado del router (`tests/payrollGlobalHr.test.js`).
 
 Flag nuevo: **`PAYROLL_WRITE_ENABLED`** — default `false` (fail-closed). Los
 nombres de flags de integración se documentan como referencia futura, pero
