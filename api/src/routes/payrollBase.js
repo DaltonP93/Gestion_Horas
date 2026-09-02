@@ -107,6 +107,15 @@ router.get('/periods/:id/preview', requirePermission('nomina', 'view'), asyncHan
   res.json(await payroll.computePreview(id));
 }));
 
+// Evidencia de cierre (sólo lectura): snapshot AGREGADO persistido al cerrar
+// (sin PII). 404 si el período no tiene snapshot (no cerrado / no generado).
+router.get('/periods/:id/snapshot', requirePermission('nomina', 'view'), asyncHandler(async (req, res) => {
+  const id = idParam(req, res); if (id == null) return;
+  const snap = await payroll.getSnapshot(id);
+  if (!snap) return res.status(404).json({ error: 'Snapshot no encontrado' });
+  res.json({ official: false, ...snap });
+}));
+
 router.post('/periods', requirePermission('nomina', 'create'), validate(periodSchema), asyncHandler(async (req, res) => {
   payroll.assertWriteEnabled();
   let id;
