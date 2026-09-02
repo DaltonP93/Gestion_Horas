@@ -21,6 +21,7 @@ describeIT('nómina base (integración) — cierre atómico', () => {
     if (conn) {
       await conn.query('DELETE FROM payroll_period_snapshots WHERE period_id IN (SELECT id FROM payroll_periods WHERE code LIKE ?)', [`${ids.uniq}%`]);
       await conn.query('DELETE FROM payroll_periods WHERE code LIKE ?', [`${ids.uniq}%`]);
+      await conn.query('DELETE FROM payroll_concepts WHERE code LIKE ?', [`${ids.uniq}%`]);
       await conn.end();
     }
     await closeAppDb();
@@ -63,5 +64,22 @@ describeIT('nómina base (integración) — cierre atómico', () => {
     const id = await seedPeriod('CL', 'locked');
     await payroll.transition(id, 'closed', 1);
     await expect(payroll.transition(id, 'preview', 1)).rejects.toMatchObject({ status: 409, code: 'PERIOD_CLOSED' });
+  });
+
+  // ── P2: createPeriod / createConcept devuelven ID numérico real ──────────────
+  test('createPeriod devuelve insertId numérico real (no undefined)', async () => {
+    const id = await payroll.createPeriod(
+      { code: `${ids.uniq}NUM`, label: 'num', period_start: '2026-01-01', period_end: '2026-01-31' }, 1,
+    );
+    expect(typeof id).toBe('number');
+    expect(id).toBeGreaterThan(0);
+  });
+
+  test('createConcept devuelve insertId numérico real (no undefined)', async () => {
+    const id = await payroll.createConcept(
+      { code: `${ids.uniq}C`, name: 'c', kind: 'earning', version: 1, valid_from: '2026-01-01' }, 1,
+    );
+    expect(typeof id).toBe('number');
+    expect(id).toBeGreaterThan(0);
   });
 });

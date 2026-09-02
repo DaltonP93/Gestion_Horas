@@ -89,7 +89,8 @@ async function createConcept(data, userId) {
       data.version ?? 1, data.active ? 1 : 0, data.valid_from, data.valid_to ?? null, userId ?? null,
     ] },
   );
-  return result.insertId;
+  // sequelize.query(INSERT) → [insertId, affectedRows] contra MySQL; {insertId} con mocks.
+  return result?.insertId ?? result;
 }
 
 // ─── Períodos ───────────────────────────────────────────────────────────────
@@ -120,7 +121,8 @@ async function createPeriod(data, userId) {
      VALUES (?, ?, ?, ?, 'draft', 0, ?)`,
     { replacements: [data.code, data.label, data.period_start, data.period_end, userId ?? null] },
   );
-  return result.insertId;
+  // sequelize.query(INSERT) → [insertId, affectedRows] contra MySQL; {insertId} con mocks.
+  return result?.insertId ?? result;
 }
 
 /** Cuenta agregada de empleados activos (sin PII) para el snapshot/preview. */
