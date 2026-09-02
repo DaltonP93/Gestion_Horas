@@ -133,6 +133,68 @@ function assertDepartmentInScope(scope, departmentId) {
   }
 }
 
+// ─── Alcance por EMPLEADO (departamento o sucursal del actor) ────────────────
+
+/** Lee las referencias de alcance de un empleado. `null` si no existe. */
+async function loadEmployeeOrgRefs(employeeId) {
+  const [[row]] = await sequelize.query(
+    'SELECT id, department_id, branch_id FROM employees WHERE id = ? LIMIT 1',
+    { replacements: [employeeId] },
+  );
+  return row || null;
+}
+
+/**
+ * ¿El actor puede ver a este empleado? Unrestricted → sí. Si no, el empleado es
+ * visible cuando su departamento está en el alcance departamental O su sucursal
+ * está en el alcance de sucursales del actor. Un empleado sin depto NI sucursal
+ * sólo lo ve un rol global.
+ */
+function canSeeEmployeeRefs(scope, refs) {
+  if (!scope || scope.unrestricted) return true;
+  if (!refs) return false;
+  const dept = refs.department_id ?? null;
+  const branch = refs.branch_id ?? null;
+  if (dept != null && (scope.departmentIds || []).includes(dept)) return true;
+  if (branch != null && (scope.branchIds || []).includes(branch)) return true;
+  return false;
+}
+
+// ─── Alcance por CANDIDATO (empresa o sucursal) ──────────────────────────────
+
+/**
+ * ¿El actor puede ver este candidato? Unrestricted → sí. Si no, es visible
+ * cuando su sucursal O su empresa están en el alcance del actor. Un candidato
+ * SIN alcance (ambos NULL) sólo lo ve un rol global de RR.HH.
+ */
+function canSeeCandidateRefs(scope, refs) {
+  if (!scope || scope.unrestricted) return true;
+  if (!refs) return false;
+  const company = refs.company_id ?? null;
+  const branch = refs.branch_id ?? null;
+  if (branch != null && (scope.branchIds || []).includes(branch)) return true;
+  if (company != null && (scope.companyIds || []).includes(company)) return true;
+  return false;
+}
+
+/**
+ * Fragmento SQL (`{clause, params}`) para filtrar candidatos por alcance. Los
+ * candidatos sin alcance (company_id/branch_id NULL) quedan fuera para roles con
+ * alcance —sólo los ve un rol global—. Unrestricted → sin filtro.
+ * `companyCol`/`branchCol` permiten prefijos de tabla (p.ej. `c.company_id`).
+ */
+function candidateScopeFilter(scope, { companyCol = 'company_id', branchCol = 'branch_id' } = {}) {
+  if (!scope || scope.unrestricted) return { clause: '', params: [] };
+  const cids = scope.companyIds || [];
+  const bids = scope.branchIds || [];
+  const ors = [];
+  const params = [];
+  if (bids.length) { ors.push(`${branchCol} IN (${bids.map(() => '?').join(',')})`); params.push(...bids); }
+  if (cids.length) { ors.push(`${companyCol} IN (${cids.map(() => '?').join(',')})`); params.push(...cids); }
+  if (!ors.length) return { clause: 'AND 1=0', params: [] };
+  return { clause: `AND (${ors.join(' OR ')})`, params };
+}
+
 module.exports = {
   getOrgScope,
   scopeFilter,
@@ -142,4 +204,8 @@ module.exports = {
   assertCompanyInScope,
   assertBranchInScope,
   assertDepartmentInScope,
+  loadEmployeeOrgRefs,
+  canSeeEmployeeRefs,
+  canSeeCandidateRefs,
+  candidateScopeFilter,
 };

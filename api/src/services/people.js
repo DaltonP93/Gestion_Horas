@@ -39,14 +39,23 @@ async function employeeExists(id) {
 
 // ─── Candidatos ─────────────────────────────────────────────────────────────
 
-async function listCandidates({ status } = {}) {
+/**
+ * Lista candidatos aplicando ALCANCE organizacional. Roles con alcance sólo ven
+ * candidatos de su empresa/sucursal; un candidato sin alcance (company/branch
+ * NULL) sólo lo ve un rol global. `scope` proviene de orgScope.getOrgScope.
+ */
+async function listCandidates({ status } = {}, scope) {
+  const orgScope = require('./orgScope');
   const where = [];
   const repl = [];
   if (status) { where.push('c.status = ?'); repl.push(status); }
+  const scopeFrag = orgScope.candidateScopeFilter(scope, { companyCol: 'c.company_id', branchCol: 'c.branch_id' });
+  // candidateScopeFilter devuelve una cláusula 'AND …'; la integramos como where.
+  if (scopeFrag.clause) { where.push(scopeFrag.clause.replace(/^AND\s+/, '')); repl.push(...scopeFrag.params); }
   const [rows] = await sequelize.query(
     `SELECT c.id, c.first_name, c.last_name, c.email, c.phone, c.source,
-            c.position_applied, c.status, c.converted_employee_id,
-            c.created_at, c.updated_at
+            c.position_applied, c.status, c.company_id, c.branch_id,
+            c.converted_employee_id, c.created_at, c.updated_at
        FROM candidates c
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY c.created_at DESC`,
@@ -58,22 +67,47 @@ async function listCandidates({ status } = {}) {
 async function getCandidate(id) {
   const [rows] = await sequelize.query(
     `SELECT id, first_name, last_name, email, phone, source, position_applied,
-            status, notes, converted_employee_id, created_at, updated_at
+            status, notes, company_id, branch_id, converted_employee_id,
+            created_at, updated_at
        FROM candidates WHERE id = ? LIMIT 1`,
     { replacements: [id] },
   );
   return rows[0] || null;
 }
 
+/**
+ * Valida existencia, ALCANCE y COHERENCIA sucursal → empresa de las referencias
+ * de alcance de un candidato. Existencia inválida → 400; fuera de alcance → 403;
+ * sucursal que no pertenece a la empresa indicada → 400.
+ */
+async function validateCandidateRefs(scope, data) {
+  const orgScope = require('./orgScope');
+  const companyId = data.company_id ?? null;
+  const branchId = data.branch_id ?? null;
+  if (branchId != null) {
+    const [b] = await sequelize.query('SELECT id, company_id FROM branches WHERE id = ? LIMIT 1', { replacements: [branchId] });
+    if (!b.length) throw httpError(400, 'BRANCH_NOT_FOUND', 'La sucursal referenciada no existe');
+    orgScope.assertBranchInScope(scope, branchId);
+    if (companyId != null && b[0].company_id != null && Number(b[0].company_id) !== Number(companyId)) {
+      throw httpError(400, 'INCOHERENT_SCOPE', 'La sucursal no pertenece a la empresa indicada');
+    }
+  }
+  if (companyId != null) {
+    const [c] = await sequelize.query('SELECT id FROM companies WHERE id = ? LIMIT 1', { replacements: [companyId] });
+    if (!c.length) throw httpError(400, 'COMPANY_NOT_FOUND', 'La empresa referenciada no existe');
+    orgScope.assertCompanyInScope(scope, companyId);
+  }
+}
+
 async function createCandidate(data, userId) {
   const [result] = await sequelize.query(
     `INSERT INTO candidates
-       (first_name, last_name, email, phone, source, position_applied, status, notes, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (first_name, last_name, email, phone, source, position_applied, status, notes, company_id, branch_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     { replacements: [
       data.first_name, data.last_name, data.email ?? null, data.phone ?? null,
       data.source ?? null, data.position_applied ?? null, data.status || 'new',
-      data.notes ?? null, userId ?? null,
+      data.notes ?? null, data.company_id ?? null, data.branch_id ?? null, userId ?? null,
     ] },
   );
   return result.insertId;
@@ -101,19 +135,32 @@ async function updateCandidate(id, fields) {
  *      de `affectedRows`: aunque dos requests corran a la vez, sólo una gana; la
  *      otra ve 0 filas afectadas y recibe 409.
  */
-async function convertCandidate(id, employeeId) {
+async function convertCandidate(id, employeeId, scope) {
+  const orgScope = require('./orgScope');
   if (!(await employeeExists(employeeId))) {
     throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
+  }
+  // El EMPLEADO destino debe estar dentro del alcance del actor (403 si no).
+  if (scope && !scope.unrestricted) {
+    const empRefs = await orgScope.loadEmployeeOrgRefs(employeeId);
+    if (!orgScope.canSeeEmployeeRefs(scope, empRefs)) {
+      throw httpError(403, 'OUT_OF_SCOPE', 'El empleado destino está fuera de tu alcance');
+    }
   }
   let committed = false;
   const tx = await sequelize.transaction();
   try {
     const [rows] = await sequelize.query(
-      'SELECT id, status, converted_employee_id FROM candidates WHERE id = ? FOR UPDATE',
+      'SELECT id, status, company_id, branch_id, converted_employee_id FROM candidates WHERE id = ? FOR UPDATE',
       { replacements: [id], transaction: tx },
     );
     const cand = rows[0];
     if (!cand) throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
+    // El CANDIDATO debe estar dentro del alcance del actor. Si no, se responde
+    // 404 (no se filtra existencia de candidatos de otra empresa/sucursal).
+    if (scope && !scope.unrestricted && !orgScope.canSeeCandidateRefs(scope, cand)) {
+      throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
+    }
     if (cand.converted_employee_id) {
       throw httpError(409, 'CANDIDATE_ALREADY_CONVERTED', 'El candidato ya fue convertido');
     }
@@ -255,6 +302,7 @@ module.exports = {
   employeeExists,
   listCandidates,
   getCandidate,
+  validateCandidateRefs,
   createCandidate,
   updateCandidate,
   convertCandidate,

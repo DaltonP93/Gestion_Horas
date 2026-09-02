@@ -18,6 +18,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const people = require('../services/people');
+const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 
 router.use(authenticate);
@@ -33,6 +34,8 @@ const createSchema = Joi.object({
   position_applied: Joi.string().trim().max(100).allow(null, ''),
   status:           Joi.string().valid(...STATUSES).default('new'),
   notes:            Joi.string().trim().max(1000).allow(null, ''),
+  company_id:       Joi.number().integer().positive().allow(null),
+  branch_id:        Joi.number().integer().positive().allow(null),
 });
 
 const updateSchema = Joi.object({
@@ -44,6 +47,8 @@ const updateSchema = Joi.object({
   position_applied: Joi.string().trim().max(100).allow(null, ''),
   status:           Joi.string().valid(...STATUSES),
   notes:            Joi.string().trim().max(1000).allow(null, ''),
+  company_id:       Joi.number().integer().positive().allow(null),
+  branch_id:        Joi.number().integer().positive().allow(null),
 }).min(1);
 
 const convertSchema = Joi.object({
@@ -51,24 +56,33 @@ const convertSchema = Joi.object({
   reason:      Joi.string().trim().max(500).allow(null, ''),
 });
 
-const EDITABLE = ['first_name', 'last_name', 'email', 'phone', 'source', 'position_applied', 'status', 'notes'];
+const EDITABLE = ['first_name', 'last_name', 'email', 'phone', 'source', 'position_applied', 'status', 'notes', 'company_id', 'branch_id'];
 
 router.get('/', requirePermission('candidatos', 'view'), asyncHandler(async (req, res) => {
   const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-  res.json({ data: await people.listCandidates({ status }) });
+  const scope = await orgScope.getOrgScope(req.user);
+  res.json({ data: await people.listCandidates({ status }, scope) });
 }));
 
 router.get('/:id', requirePermission('candidatos', 'view'), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
   const row = await people.getCandidate(id);
-  if (!row) return res.status(404).json({ error: 'Candidato no encontrado' });
+  // Fuera de alcance → 404 (no se filtra existencia entre empresas/sucursales).
+  const scope = await orgScope.getOrgScope(req.user);
+  if (!row || !orgScope.canSeeCandidateRefs(scope, row)) {
+    return res.status(404).json({ error: 'Candidato no encontrado' });
+  }
   res.json({ data: row });
 }));
 
 router.post('/', requirePermission('candidatos', 'create'), validate(createSchema), asyncHandler(async (req, res) => {
   people.assertWriteEnabled();
   const data = req.body;
+  // Validar existencia, ALCANCE y coherencia sucursal → empresa de las
+  // referencias de alcance ANTES de crear (403 fuera de alcance, 400 incoherente).
+  const scope = await orgScope.getOrgScope(req.user);
+  await people.validateCandidateRefs(scope, data);
   const id = await people.createCandidate(data, req.user?.id || null);
   audit.log({
     req, user: req.user,
@@ -85,7 +99,11 @@ router.patch('/:id', requirePermission('candidatos', 'update'), validate(updateS
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
   const prev = await people.getCandidate(id);
-  if (!prev) return res.status(404).json({ error: 'Candidato no encontrado' });
+  // Fuera de alcance → 404 (no se filtra existencia).
+  const scope = await orgScope.getOrgScope(req.user);
+  if (!prev || !orgScope.canSeeCandidateRefs(scope, prev)) {
+    return res.status(404).json({ error: 'Candidato no encontrado' });
+  }
 
   const fields = {};
   for (const k of EDITABLE) {
@@ -95,6 +113,14 @@ router.patch('/:id', requirePermission('candidatos', 'update'), validate(updateS
     fields[k] = newVal;
   }
   if (!Object.keys(fields).length) return res.json({ ok: true, changed: false });
+  // Si se cambia el alcance, validar existencia/alcance/coherencia del NUEVO
+  // alcance (403 fuera de alcance, 400 incoherente). Se evalúa el valor efectivo.
+  if ('company_id' in fields || 'branch_id' in fields) {
+    await people.validateCandidateRefs(scope, {
+      company_id: 'company_id' in fields ? fields.company_id : prev.company_id,
+      branch_id: 'branch_id' in fields ? fields.branch_id : prev.branch_id,
+    });
+  }
   await people.updateCandidate(id, fields);
   audit.log({
     req, user: req.user,
@@ -109,7 +135,10 @@ router.post('/:id/convert', requirePermission('candidatos', 'create'), validate(
   people.assertWriteEnabled();
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
-  const result = await people.convertCandidate(id, req.body.employee_id);
+  // Alcance: el candidato (404 si fuera de alcance) y el empleado destino
+  // (403 OUT_OF_SCOPE) se verifican dentro de convertCandidate.
+  const scope = await orgScope.getOrgScope(req.user);
+  const result = await people.convertCandidate(id, req.body.employee_id, scope);
   audit.log({
     req, user: req.user,
     action: 'candidate.convert', entity: 'candidate', entity_id: id,

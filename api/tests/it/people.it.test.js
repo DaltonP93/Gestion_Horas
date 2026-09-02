@@ -36,7 +36,8 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
       await conn.query('DELETE FROM employees WHERE id IN (?, ?)', [ids.emp, ids.emp2]);
       await conn.end();
     }
-    await closeAppDb();
+    // El pool de la app (sequelize) lo cierra el ÚLTIMO describe del archivo,
+    // para no dejar sin conexión a los bloques posteriores.
   });
 
   test('doble conversión concurrente → exactamente una gana, la otra 409', async () => {
@@ -82,5 +83,88 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
     await expect(
       people.createAssignment(ids.emp2, { valid_from: '2026-02-01' }, 1),
     ).rejects.toMatchObject({ status: 409, code: 'ASSIGNMENT_OUT_OF_ORDER' });
+  });
+});
+
+// ── P1-A: aislamiento por alcance organizacional (cross-scope) ───────────────
+describeIT('personas (integración) — aislamiento por alcance', () => {
+  let conn;
+  let people;
+  const s = {};
+
+  beforeAll(async () => {
+    conn = await makeConn();
+    people = require('../../src/services/people');
+    const uniq = `ITS${Date.now() % 100000}`;
+    s.uniq = uniq;
+
+    const [coA] = await conn.query('INSERT INTO companies (code, legal_name, active) VALUES (?, ?, 1)', [`${uniq}CA`, 'A']);
+    const [coB] = await conn.query('INSERT INTO companies (code, legal_name, active) VALUES (?, ?, 1)', [`${uniq}CB`, 'B']);
+    s.coA = coA.insertId; s.coB = coB.insertId;
+    const [brA] = await conn.query('INSERT INTO branches (name, code, company_id) VALUES (?, ?, ?)', [`${uniq}BA`, `${uniq}BA`, s.coA]);
+    const [brB] = await conn.query('INSERT INTO branches (name, code, company_id) VALUES (?, ?, ?)', [`${uniq}BB`, `${uniq}BB`, s.coB]);
+    s.brA = brA.insertId; s.brB = brB.insertId;
+    const [dpA] = await conn.query('INSERT INTO departments (name) VALUES (?)', [`${uniq}DA`]);
+    const [dpB] = await conn.query('INSERT INTO departments (name) VALUES (?)', [`${uniq}DB`]);
+    s.dpA = dpA.insertId; s.dpB = dpB.insertId;
+
+    const [eA] = await conn.query(
+      'INSERT INTO employees (code, employee_number, first_name, last_name, status, branch_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [`${uniq}EA`, `${uniq}NA`, 'EmpA', 'IT', 'active', s.brA, s.dpA],
+    );
+    const [eB] = await conn.query(
+      'INSERT INTO employees (code, employee_number, first_name, last_name, status, branch_id, department_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [`${uniq}EB`, `${uniq}NB`, 'EmpB', 'IT', 'active', s.brB, s.dpB],
+    );
+    s.empA = eA.insertId; s.empB = eB.insertId;
+
+    const [cA] = await conn.query('INSERT INTO candidates (first_name, last_name, status, company_id, branch_id) VALUES (?, ?, ?, ?, ?)', ['ScopeIT', 'A', 'offer', s.coA, s.brA]);
+    const [cB] = await conn.query('INSERT INTO candidates (first_name, last_name, status, company_id, branch_id) VALUES (?, ?, ?, ?, ?)', ['ScopeIT', 'B', 'offer', s.coB, s.brB]);
+    const [cN] = await conn.query('INSERT INTO candidates (first_name, last_name, status) VALUES (?, ?, ?)', ['ScopeIT', 'NULLscope', 'offer']);
+    s.candA = cA.insertId; s.candB = cB.insertId; s.candN = cN.insertId;
+
+    // Alcance del actor: sólo empresa A / sucursal A / depto A.
+    s.scope = { unrestricted: false, companyIds: [s.coA], branchIds: [s.brA], departmentIds: [s.dpA] };
+  });
+
+  afterAll(async () => {
+    if (conn) {
+      await conn.query('DELETE FROM candidates WHERE first_name = ?', ['ScopeIT']);
+      await conn.query('DELETE FROM employees WHERE id IN (?, ?)', [s.empA, s.empB]);
+      await conn.query('DELETE FROM departments WHERE id IN (?, ?)', [s.dpA, s.dpB]);
+      await conn.query('DELETE FROM branches WHERE id IN (?, ?)', [s.brA, s.brB]);
+      await conn.query('DELETE FROM companies WHERE id IN (?, ?)', [s.coA, s.coB]);
+      await conn.end();
+    }
+    await closeAppDb();
+  });
+
+  test('listCandidates: rol con alcance ve sólo los de SU empresa/sucursal', async () => {
+    const rows = await people.listCandidates({}, s.scope);
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(s.candA);
+    expect(ids).not.toContain(s.candB);   // otra empresa/sucursal
+    expect(ids).not.toContain(s.candN);   // sin alcance → sólo global
+  });
+
+  test('listCandidates: rol global ve todos (incluido sin alcance)', async () => {
+    const rows = await people.listCandidates({ status: 'offer' }, { unrestricted: true });
+    const ids = rows.map((r) => r.id);
+    expect(ids).toEqual(expect.arrayContaining([s.candA, s.candB, s.candN]));
+  });
+
+  test('convertCandidate: candidato de otra empresa → 404 (no filtra existencia)', async () => {
+    await expect(people.convertCandidate(s.candB, s.empA, s.scope))
+      .rejects.toMatchObject({ status: 404, code: 'CANDIDATE_NOT_FOUND' });
+  });
+
+  test('convertCandidate: empleado destino fuera de alcance → 403', async () => {
+    await expect(people.convertCandidate(s.candA, s.empB, s.scope))
+      .rejects.toMatchObject({ status: 403, code: 'OUT_OF_SCOPE' });
+  });
+
+  test('convertCandidate: candidato y empleado en alcance → convierte', async () => {
+    const r = await people.convertCandidate(s.candA, s.empA, s.scope);
+    expect(r).toMatchObject({ candidate_id: s.candA, converted_employee_id: s.empA });
   });
 });

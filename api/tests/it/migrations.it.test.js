@@ -74,4 +74,11 @@ describeIT('migraciones FASE F (integración)', () => {
     expect(await fkRule('candidates', 'fk_candidates_employee')).toBe('SET NULL');
     expect(await hasColumn('employee_documents', 'access_level')).toBe(true);
   });
+
+  test('078: candidates con alcance (company_id/branch_id) y FKs SET NULL', async () => {
+    expect(await hasColumn('candidates', 'company_id')).toBe(true);
+    expect(await hasColumn('candidates', 'branch_id')).toBe(true);
+    expect(await fkRule('candidates', 'fk_candidates_company')).toBe('SET NULL');
+    expect(await fkRule('candidates', 'fk_candidates_branch')).toBe('SET NULL');
+  });
 });

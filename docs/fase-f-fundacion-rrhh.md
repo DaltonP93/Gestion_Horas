@@ -112,15 +112,31 @@ Encadena sobre F1. Reutiliza `employee_contracts` (051), `employee_documents`
   un empleado **existente** (`converted_employee_id`), nunca crea ni fabrica
   empleados. **Auditoría sin PII**: sólo id, acción y nombres de campos (nunca
   nombre/email/teléfono/notas ni texto libre).
+- **AISLAMIENTO por alcance (P1-A)** — `candidates` gana alcance opcional
+  `company_id`/`branch_id` (nuleable, aditivo, sin backfill, FKs `SET NULL`). Las
+  lecturas de candidatos filtran por alcance en SQL (`orgScope.candidateScopeFilter`):
+  un rol con alcance sólo ve candidatos de **su** empresa/sucursal; un candidato
+  **sin alcance** (ambos NULL) sólo lo ve un rol global de RR.HH. `GET
+  /api/candidates/:id` fuera de alcance → **404** (no filtra existencia). Al
+  escribir, `validateCandidateRefs` valida existencia, alcance (403
+  `OUT_OF_SCOPE`) y **coherencia sucursal → empresa** (400 `INCOHERENT_SCOPE`;
+  un rol global tampoco puede mezclar referencias de empresas distintas). La
+  **conversión** verifica el alcance del candidato (404 si es de otra empresa) y
+  del **empleado destino** (403 `OUT_OF_SCOPE`), manteniendo transacción/`FOR
+  UPDATE`/anti-doble-conversión.
 - **`employee_assignments`** — historial **temporal** de asignación organizativa
   con vigencia efectiva `valid_from`/`valid_to`. **Append-only y atómico**: se
   abre transacción y se **bloquea la fila del empleado** (`FOR UPDATE`) antes de
   leer la vigencia abierta, así **dos creaciones concurrentes** se serializan y
-  **nunca** quedan dos vigencias abiertas; inserciones fuera de orden → 409. La
-  ruta valida existencia y **alcance** de sucursal/departamento/centro de costo
-  (403 fuera de alcance). FK `employee_id` con **`ON DELETE RESTRICT`** (no
-  CASCADE): el historial auditable no se borra al eliminar un empleado.
-  Concurrencia probada en integración (`tests/it/people.it.test.js`).
+  **nunca** quedan dos vigencias abiertas; inserciones fuera de orden → 409.
+  Antes de listar/leer/crear, la ruta verifica el **empleado objetivo** contra el
+  alcance departamental/sucursal del actor: `GET` fuera de alcance → **404** (no
+  filtra existencia), writer fuera de alcance → **403 `OUT_OF_SCOPE`**. Además
+  valida existencia y **alcance** de sucursal/departamento/centro de costo (403
+  fuera de alcance). FK `employee_id` con **`ON DELETE RESTRICT`** (no CASCADE):
+  el historial auditable no se borra al eliminar un empleado. Aislamiento y
+  concurrencia probados en integración contra MySQL real
+  (`tests/it/people.it.test.js`) y con la DB mockeada (`tests/peopleScope.test.js`).
 - **`employee_documents.access_level`** — metadato de acceso aditivo (sin tocar
   los archivos reales; sin firma).
 - Rutas `/api/candidates` y `/api/assignments/employee/:id` con permisos

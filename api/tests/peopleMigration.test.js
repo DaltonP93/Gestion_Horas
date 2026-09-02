@@ -29,6 +29,14 @@ describe('migración 078 (candidatos + asignaciones)', () => {
     expect(sql).not.toMatch(/FOREIGN KEY \(employee_id\)\s+REFERENCES employees\(id\)\s+ON DELETE CASCADE/i);
   });
 
+  test('candidates: alcance aditivo (company_id/branch_id) con FKs SET NULL', () => {
+    expect(sql).toMatch(/company_id\s+INT NULL/i);
+    expect(sql).toMatch(/branch_id\s+INT NULL/i);
+    expect(sql).toMatch(/KEY ix_candidates_scope \(company_id, branch_id\)/i);
+    expect(sql).toMatch(/FOREIGN KEY \(company_id\) REFERENCES companies\(id\) ON DELETE SET NULL/i);
+    expect(sql).toMatch(/FOREIGN KEY \(branch_id\)\s+REFERENCES branches\(id\)\s+ON DELETE SET NULL/i);
+  });
+
   test('access_level aditivo e idempotente en employee_documents', () => {
     expect(sql).toMatch(/ADD COLUMN access_level VARCHAR\(20\)/i);
     expect(sql).toMatch(/IF NOT EXISTS/i);

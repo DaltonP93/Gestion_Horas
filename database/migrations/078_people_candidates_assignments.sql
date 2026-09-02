@@ -7,6 +7,13 @@
 --   * `candidates` — postulantes básicos, con conversión TRAZABLE a empleado
 --     (`converted_employee_id`). La conversión NO fabrica un empleado: enlaza a
 --     un empleado existente (creado por el flujo normal), y queda auditada.
+--     ALCANCE ORGANIZACIONAL opcional y explícito (`company_id`/`branch_id`,
+--     nuleables, sin backfill): un postulante puede pertenecer a una empresa o
+--     sucursal. Los roles con alcance (manager/coordinator/supervisor/gestor)
+--     sólo ven candidatos de SU empresa/sucursal; un candidato SIN alcance
+--     (ambos NULL) sólo es visible por roles globales de RR.HH. El API impone
+--     coherencia sucursal → empresa al escribir. Sin alcance ⇒ sin visibilidad
+--     cruzada entre empresas/sucursales.
 --
 --   * `employee_assignments` — historial TEMPORAL de asignación organizativa
 --     (sucursal, departamento, centro de costo, cargo, remuneración de
@@ -34,14 +41,22 @@ CREATE TABLE IF NOT EXISTS candidates (
   status                ENUM('new','screening','interview','offer','hired','rejected')
                           NOT NULL DEFAULT 'new',
   notes                 VARCHAR(1000) NULL,
+  company_id            INT NULL,                    -- alcance opcional (F1): empresa
+  branch_id             INT NULL,                    -- alcance opcional (F1): sucursal
   converted_employee_id INT NULL,
   created_by            INT NULL,
   created_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY ix_candidates_status (status),
   KEY ix_candidates_converted (converted_employee_id),
+  KEY ix_candidates_scope (company_id, branch_id),
   CONSTRAINT fk_candidates_employee
-    FOREIGN KEY (converted_employee_id) REFERENCES employees(id) ON DELETE SET NULL
+    FOREIGN KEY (converted_employee_id) REFERENCES employees(id) ON DELETE SET NULL,
+  -- Alcance aditivo, nuleable, sin backfill. SET NULL: quitar una empresa o
+  -- sucursal no borra el postulante (pasa a "sin alcance", visible sólo por RR.HH.
+  -- global), coherente con F1.
+  CONSTRAINT fk_candidates_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE SET NULL,
+  CONSTRAINT fk_candidates_branch  FOREIGN KEY (branch_id)  REFERENCES branches(id)  ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS employee_assignments (
@@ -92,4 +107,4 @@ DELIMITER ;
 CALL mig_078_apply();
 DROP PROCEDURE IF EXISTS mig_078_apply;
 
-SELECT 'Migración 078 aplicada: candidates + employee_assignments; employee_documents.access_level' AS info;
+SELECT 'Migración 078 aplicada: candidates (con alcance company/branch) + employee_assignments; employee_documents.access_level' AS info;
