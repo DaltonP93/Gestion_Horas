@@ -18,6 +18,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const governance = require('../services/governance');
+const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
 
@@ -41,14 +42,16 @@ const updateSchema = Joi.object({
 
 const EDITABLE = ['company_id', 'code', 'name', 'active'];
 
-router.get('/', requirePermission('centros_costo', 'view'), asyncHandler(async (_req, res) => {
-  res.json({ data: await governance.listCostCenters() });
+router.get('/', requirePermission('centros_costo', 'view'), asyncHandler(async (req, res) => {
+  const scope = await orgScope.getOrgScope(req.user);
+  res.json({ data: await governance.listCostCenters(scope) });
 }));
 
 router.get('/:id', requirePermission('centros_costo', 'view'), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
-  const row = await governance.getCostCenter(id);
+  const scope = await orgScope.getOrgScope(req.user);
+  const row = await governance.getCostCenter(id, scope);
   if (!row) return res.status(404).json({ error: 'Centro de costo no encontrado' });
   res.json({ data: row });
 }));
@@ -56,6 +59,8 @@ router.get('/:id', requirePermission('centros_costo', 'view'), asyncHandler(asyn
 router.post('/', requirePermission('centros_costo', 'create'), validate(createSchema), asyncHandler(async (req, res) => {
   governance.assertWriteEnabled();
   const { reason, ...data } = req.body;
+  // Alcance: rechaza referenciar una empresa fuera del alcance del usuario.
+  orgScope.assertCompanyInScope(await orgScope.getOrgScope(req.user), data.company_id ?? null);
   if (data.company_id != null && !(await governance.companyExists(data.company_id))) {
     return res.status(400).json({ error: 'company_id no corresponde a una empresa existente' });
   }
@@ -79,14 +84,17 @@ router.patch('/:id', requirePermission('centros_costo', 'update'), validate(upda
   governance.assertWriteEnabled();
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
-  const prev = await governance.getCostCenter(id);
+  const scope = await orgScope.getOrgScope(req.user);
+  const prev = await governance.getCostCenter(id, scope);
   if (!prev) return res.status(404).json({ error: 'Centro de costo no encontrado' });
 
   const { reason } = req.body;
-  if (Object.prototype.hasOwnProperty.call(req.body, 'company_id')
-      && req.body.company_id != null
-      && !(await governance.companyExists(req.body.company_id))) {
-    return res.status(400).json({ error: 'company_id no corresponde a una empresa existente' });
+  if (Object.prototype.hasOwnProperty.call(req.body, 'company_id')) {
+    // Alcance: no permitir reasignar a una empresa fuera del alcance.
+    orgScope.assertCompanyInScope(scope, req.body.company_id ?? null);
+    if (req.body.company_id != null && !(await governance.companyExists(req.body.company_id))) {
+      return res.status(400).json({ error: 'company_id no corresponde a una empresa existente' });
+    }
   }
 
   const diff = {};

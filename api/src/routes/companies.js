@@ -25,6 +25,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const governance = require('../services/governance');
+const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
 
@@ -50,14 +51,16 @@ const updateSchema = Joi.object({
 
 const EDITABLE = ['code', 'legal_name', 'trade_name', 'tax_id', 'active'];
 
-router.get('/', requirePermission('empresas', 'view'), asyncHandler(async (_req, res) => {
-  res.json({ data: await governance.listCompanies() });
+router.get('/', requirePermission('empresas', 'view'), asyncHandler(async (req, res) => {
+  const scope = await orgScope.getOrgScope(req.user);
+  res.json({ data: await governance.listCompanies(scope) });
 }));
 
 router.get('/:id', requirePermission('empresas', 'view'), asyncHandler(async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
-  const row = await governance.getCompany(id);
+  const scope = await orgScope.getOrgScope(req.user);
+  const row = await governance.getCompany(id, scope);
   if (!row) return res.status(404).json({ error: 'Empresa no encontrada' });
   res.json({ data: row });
 }));
@@ -85,7 +88,8 @@ router.patch('/:id', requirePermission('empresas', 'update'), validate(updateSch
   governance.assertWriteEnabled();
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
-  const prev = await governance.getCompany(id);
+  const scope = await orgScope.getOrgScope(req.user);
+  const prev = await governance.getCompany(id, scope);
   if (!prev) return res.status(404).json({ error: 'Empresa no encontrada' });
 
   const { reason } = req.body;

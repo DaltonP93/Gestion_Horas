@@ -18,6 +18,7 @@
  */
 
 const { sequelize } = require('../config/database');
+const orgScope = require('./orgScope');
 
 function isWriteEnabled() {
   return process.env.GOVERNANCE_WRITE_ENABLED === 'true';
@@ -45,21 +46,25 @@ function isDupError(err) {
 
 // ─── Companies ────────────────────────────────────────────────────────────
 
-async function listCompanies() {
+async function listCompanies(scope = { unrestricted: true }) {
+  const f = orgScope.companyFilter(scope, 'id');
   const [rows] = await sequelize.query(
     `SELECT id, code, legal_name, trade_name, tax_id, active, created_at, updated_at
-       FROM companies ORDER BY active DESC, legal_name`,
+       FROM companies WHERE 1=1 ${f.clause} ORDER BY active DESC, legal_name`,
+    { replacements: f.params },
   );
   return rows;
 }
 
-async function getCompany(id) {
+async function getCompany(id, scope = { unrestricted: true }) {
   const [rows] = await sequelize.query(
     `SELECT id, code, legal_name, trade_name, tax_id, active, created_at, updated_at
        FROM companies WHERE id = ? LIMIT 1`,
     { replacements: [id] },
   );
-  return rows[0] || null;
+  const row = rows[0] || null;
+  if (row && !orgScope.canSeeCompany(scope, row)) return null; // fuera de alcance → 404
+  return row;
 }
 
 async function createCompany(data, userId) {
@@ -91,24 +96,32 @@ async function updateCompany(id, fields) {
 
 // ─── Cost centers ───────────────────────────────────────────────────────────
 
-async function listCostCenters() {
+async function listCostCenters(scope = { unrestricted: true }) {
+  // Alcance por la empresa del centro de costo. Un rol con alcance ve sólo los
+  // centros de su(s) empresa(s); los centros sin empresa quedan para roles
+  // globales (no se filtran con includeNull para no filtrar centros ajenos).
+  const f = orgScope.companyFilter(scope, 'cc.company_id');
   const [rows] = await sequelize.query(
     `SELECT cc.id, cc.company_id, c.legal_name AS company_name, cc.code, cc.name,
             cc.active, cc.created_at, cc.updated_at
        FROM cost_centers cc
        LEFT JOIN companies c ON c.id = cc.company_id
+      WHERE 1=1 ${f.clause}
       ORDER BY cc.active DESC, cc.name`,
+    { replacements: f.params },
   );
   return rows;
 }
 
-async function getCostCenter(id) {
+async function getCostCenter(id, scope = { unrestricted: true }) {
   const [rows] = await sequelize.query(
     `SELECT id, company_id, code, name, active, created_at, updated_at
        FROM cost_centers WHERE id = ? LIMIT 1`,
     { replacements: [id] },
   );
-  return rows[0] || null;
+  const row = rows[0] || null;
+  if (row && !orgScope.canSeeCostCenter(scope, row)) return null; // fuera de alcance → 404
+  return row;
 }
 
 async function companyExists(id) {

@@ -55,7 +55,16 @@
 3. **Permisos granulares en API**: módulos `empresas` y `centros_costo` en la
    matriz; rutas `/api/companies` y `/api/cost-centers` con
    `requirePermission(...)` en lectura y escritura.
-4. **Writers fail-closed**: `services/governance.js` expone
+4. **Autorización de ALCANCE en API** (`services/orgScope.js`): además de
+   módulo/acción, se aplica alcance por **empresa / sucursal / departamento**.
+   Roles no restringidos (super_admin/admin/gth/hr) son globales — bypass
+   **explícito y probado**; roles con alcance ven sólo su empresa/sucursal/
+   departamento (+descendientes). Las lecturas se filtran (`listCompanies`/
+   `listCostCenters` por empresa del alcance; `getCompany`/`getCostCenter`
+   fuera de alcance → 404) y los writers **rechazan referencias fuera de
+   alcance** (`assert*InScope` → 403 `OUT_OF_SCOPE`). Degrada si
+   `branches.company_id` (076) aún no existe.
+5. **Writers fail-closed**: `services/governance.js` expone
    `assertWriteEnabled()` sobre `GOVERNANCE_WRITE_ENABLED` (default `false`,
    sólo `"true"` habilita). Con el flag apagado, POST/PATCH responden 503
    `GOVERNANCE_WRITES_DISABLED`; los GET funcionan siempre.
@@ -75,9 +84,15 @@
   `IF NOT EXISTS`, procedimiento para columnas/índices/FKs). Instalación limpia
   y upgrade desde el esquema previo se comportan igual. No tocan
   `employees`, `attendance_logs`, `daily_summary` ni att2000.
-- Sin MySQL en CI: las migraciones se validan por **form-test**
-  (`governanceMigration.test.js`) que asegura idempotencia, ausencia de
-  operaciones destructivas y de backfill, y FKs `SET NULL`.
+- **Prueba de migración en MySQL real** (no sólo form-test): el job de CI
+  `migrations-mysql` levanta un MySQL 8 efímero, prepara el esquema previo real
+  (init.sql + prerequisitos) y ejecuta el **runner real** `api/scripts/migrate.js`
+  verificando primera aplicación, **reaplicación idempotente**, `--status`
+  estrictamente read-only, y FKs/columnas (tests de integración `tests/it/`).
+  El form-test (`governanceMigration.test.js`) se conserva como chequeo rápido.
+- **CI en PRs encadenados**: `ci.yml` dispara en `main` y en `claude/**`, así
+  cada PR de la cadena obtiene CI real sobre su HEAD aunque su base no sea main.
+  Sin secretos ni acceso a producción.
 
 ### Límites de F1
 
