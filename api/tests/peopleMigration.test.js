@@ -23,7 +23,10 @@ describe('migración 078 (candidatos + asignaciones)', () => {
   test('asignaciones con vigencia efectiva (valid_from/valid_to)', () => {
     expect(sql).toMatch(/valid_from\s+DATE NOT NULL/i);
     expect(sql).toMatch(/valid_to\s+DATE NULL/i);
-    expect(sql).toMatch(/FOREIGN KEY \(employee_id\)\s+REFERENCES employees\(id\)\s+ON DELETE CASCADE/i);
+    // Historial auditable: RESTRICT (no CASCADE) para no borrar el historial al
+    // eliminar un empleado.
+    expect(sql).toMatch(/FOREIGN KEY \(employee_id\)\s+REFERENCES employees\(id\)\s+ON DELETE RESTRICT/i);
+    expect(sql).not.toMatch(/FOREIGN KEY \(employee_id\)\s+REFERENCES employees\(id\)\s+ON DELETE CASCADE/i);
   });
 
   test('access_level aditivo e idempotente en employee_documents', () => {

@@ -16,6 +16,7 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const people = require('../services/people');
+const orgScope = require('../services/orgScope');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
 
@@ -50,6 +51,10 @@ router.post('/employee/:id', requirePermission('asignaciones', 'create'), valida
   people.assertWriteEnabled();
   const id = employeeIdParam(req, res);
   if (id == null) return;
+  // Validar existencia y ALCANCE de las referencias organizativas (403 si están
+  // fuera del alcance del usuario) ANTES de tocar el historial.
+  const scope = await orgScope.getOrgScope(req.user);
+  await people.validateAssignmentRefs(scope, req.body);
   const result = await people.createAssignment(id, req.body, req.user?.id || null);
   audit.log({
     req, user: req.user,

@@ -19,7 +19,6 @@ const { validate } = require('../middleware/validate');
 const { asyncHandler } = require('../utils/asyncHandler');
 const people = require('../services/people');
 const audit = require('../services/audit');
-const { redactDetails } = require('../utils/redact');
 
 router.use(authenticate);
 
@@ -74,7 +73,9 @@ router.post('/', requirePermission('candidatos', 'create'), validate(createSchem
   audit.log({
     req, user: req.user,
     action: 'candidate.create', entity: 'candidate', entity_id: id,
-    details: redactDetails({ after: { first_name: data.first_name, last_name: data.last_name, status: data.status || 'new' } }),
+    // Sin PII: sólo qué campos se cargaron y el estado (una etiqueta, no un dato
+    // personal). Nombre/email/teléfono/notas NO se serializan en la auditoría.
+    details: { fields: Object.keys(data), status: data.status || 'new' },
   });
   res.status(201).json({ id });
 }));
@@ -86,21 +87,20 @@ router.patch('/:id', requirePermission('candidatos', 'update'), validate(updateS
   const prev = await people.getCandidate(id);
   if (!prev) return res.status(404).json({ error: 'Candidato no encontrado' });
 
-  const diff = {};
   const fields = {};
   for (const k of EDITABLE) {
     if (!Object.prototype.hasOwnProperty.call(req.body, k)) continue;
     const newVal = req.body[k];
     if (String(prev[k] ?? '') === String(newVal ?? '')) continue;
     fields[k] = newVal;
-    diff[k] = { from: prev[k], to: newVal };
   }
   if (!Object.keys(fields).length) return res.json({ ok: true, changed: false });
   await people.updateCandidate(id, fields);
   audit.log({
     req, user: req.user,
     action: 'candidate.update', entity: 'candidate', entity_id: id,
-    details: redactDetails({ diff }),
+    // Sin PII: sólo los NOMBRES de los campos cambiados, nunca sus valores.
+    details: { fields: Object.keys(fields) },
   });
   res.json({ ok: true, changed: true });
 }));
@@ -113,7 +113,8 @@ router.post('/:id/convert', requirePermission('candidatos', 'create'), validate(
   audit.log({
     req, user: req.user,
     action: 'candidate.convert', entity: 'candidate', entity_id: id,
-    details: redactDetails({ ...result, reason: req.body.reason || null }),
+    // Sin PII ni texto libre: sólo ids y el estado de origen.
+    details: { from_status: result.from_status, converted_employee_id: result.converted_employee_id },
   });
   res.json({ ok: true, ...result });
 }));

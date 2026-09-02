@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS employee_assignments (
   updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY ix_ea_emp (employee_id, valid_from),
   KEY ix_ea_open (employee_id, valid_to),
-  CONSTRAINT fk_ea_emp   FOREIGN KEY (employee_id)    REFERENCES employees(id)    ON DELETE CASCADE,
+  -- RESTRICT (no CASCADE): el historial de asignaciones es auditable y no debe
+  -- borrarse silenciosamente al eliminar un empleado. El sistema da de baja por
+  -- estado (inactivo), no por DELETE; si se intentara borrar un empleado con
+  -- historial, la base lo bloquea en vez de perder la trazabilidad.
+  CONSTRAINT fk_ea_emp   FOREIGN KEY (employee_id)    REFERENCES employees(id)    ON DELETE RESTRICT,
   CONSTRAINT fk_ea_branch FOREIGN KEY (branch_id)     REFERENCES branches(id)     ON DELETE SET NULL,
   CONSTRAINT fk_ea_dept  FOREIGN KEY (department_id)  REFERENCES departments(id)  ON DELETE SET NULL,
   CONSTRAINT fk_ea_cc    FOREIGN KEY (cost_center_id) REFERENCES cost_centers(id) ON DELETE SET NULL

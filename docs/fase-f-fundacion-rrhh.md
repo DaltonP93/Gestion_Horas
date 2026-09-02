@@ -105,15 +105,22 @@ Encadena sobre F1. Reutiliza `employee_contracts` (051), `employee_documents`
 (067) y `job_titles` (069); **no** los duplica. Agrega (migración `078`):
 
 - **`candidates`** — postulantes con estado (`new`…`hired`/`rejected`) y
-  **conversión trazable**: `POST /api/candidates/:id/convert` enlaza a un
-  empleado **existente** (`converted_employee_id`), nunca crea ni fabrica
-  empleados; queda auditada.
+  **conversión trazable y ATÓMICA**: `POST /api/candidates/:id/convert` abre
+  transacción, bloquea la fila (`SELECT … FOR UPDATE`) y hace `UPDATE …
+  WHERE converted_employee_id IS NULL` con chequeo de `affectedRows`, de modo que
+  **dos conversiones concurrentes** no compiten (una gana, la otra 409). Enlaza a
+  un empleado **existente** (`converted_employee_id`), nunca crea ni fabrica
+  empleados. **Auditoría sin PII**: sólo id, acción y nombres de campos (nunca
+  nombre/email/teléfono/notas ni texto libre).
 - **`employee_assignments`** — historial **temporal** de asignación organizativa
-  (sucursal, departamento, centro de costo, cargo, remuneración de referencia)
-  con vigencia efectiva `valid_from`/`valid_to`. **Append-only**: crear una
-  vigencia cierra la anterior (`valid_to` = nuevo `valid_from` − 1 día) en una
-  transacción; nunca borra el contexto anterior. Inserciones fuera de orden se
-  rechazan (409).
+  con vigencia efectiva `valid_from`/`valid_to`. **Append-only y atómico**: se
+  abre transacción y se **bloquea la fila del empleado** (`FOR UPDATE`) antes de
+  leer la vigencia abierta, así **dos creaciones concurrentes** se serializan y
+  **nunca** quedan dos vigencias abiertas; inserciones fuera de orden → 409. La
+  ruta valida existencia y **alcance** de sucursal/departamento/centro de costo
+  (403 fuera de alcance). FK `employee_id` con **`ON DELETE RESTRICT`** (no
+  CASCADE): el historial auditable no se borra al eliminar un empleado.
+  Concurrencia probada en integración (`tests/it/people.it.test.js`).
 - **`employee_documents.access_level`** — metadato de acceso aditivo (sin tocar
   los archivos reales; sin firma).
 - Rutas `/api/candidates` y `/api/assignments/employee/:id` con permisos

@@ -1,12 +1,12 @@
 /**
- * assignmentsRoute.test.js — fail-closed y auditoría con remuneración redactada.
+ * assignmentsRoute.test.js — fail-closed, validación de refs/alcance,
+ * atomicidad (mock) y auditoría con remuneración redactada.
  */
 jest.mock('../src/config/database', () => {
   const query = jest.fn();
-  const commit = jest.fn().mockResolvedValue();
-  const rollback = jest.fn().mockResolvedValue();
-  const transaction = jest.fn().mockResolvedValue({ commit, rollback });
-  return { sequelize: { query, transaction } };
+  const tx = { commit: jest.fn().mockResolvedValue(), rollback: jest.fn().mockResolvedValue() };
+  const transaction = jest.fn().mockResolvedValue(tx);
+  return { sequelize: { query, transaction, __tx: tx } };
 });
 jest.mock('../src/middleware/auth', () => ({
   authenticate: (_r, _s, n) => n(),
@@ -43,20 +43,22 @@ test('GET historial del empleado', async () => {
   expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ employee_id: 50 }));
 });
 
-test('POST fail-closed → 503', async () => {
+test('POST fail-closed → 503 (sin DB)', async () => {
   delete process.env.PEOPLE_WRITE_ENABLED;
   const res = mkRes(); const next = jest.fn();
   await handlerFor('post', '/employee/:id')(
     { user: USER, params: { id: '50' }, body: { valid_from: '2026-01-01' }, correlationId: 'c1', headers: {} }, res, next,
   );
   expect(next.mock.calls[0][0].status).toBe(503);
+  expect(sequelize.query).not.toHaveBeenCalled();
 });
 
-test('POST válido crea vigencia, 201 y audita con remuneración redactada', async () => {
+test('POST válido: valida ref, crea vigencia (201) y audita con salario redactado', async () => {
   process.env.PEOPLE_WRITE_ENABLED = 'true';
   sequelize.query
-    .mockResolvedValueOnce([[{ ok: 1 }]])   // employeeExists
-    .mockResolvedValueOnce([[]])            // openAssignment → ninguna
+    .mockResolvedValueOnce([[{ id: 2 }]])   // validateAssignmentRefs: branch existe (admin→sin chequeo de alcance)
+    .mockResolvedValueOnce([[{ id: 50 }]])  // createAssignment: employees FOR UPDATE
+    .mockResolvedValueOnce([[]])            // SELECT open → ninguna
     .mockResolvedValueOnce([{ insertId: 3 }]); // INSERT
   const res = mkRes();
   await handlerFor('post', '/employee/:id')(

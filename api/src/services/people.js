@@ -92,24 +92,45 @@ async function updateCandidate(id, fields) {
 }
 
 /**
- * Conversión trazable: marca el candidato como 'hired' y lo enlaza a un
- * empleado EXISTENTE. No crea empleados ni fabrica datos. Idempotencia suave:
- * si ya está convertido, se rechaza (409) para no pisar el enlace.
+ * Conversión trazable y ATÓMICA: marca el candidato como 'hired' y lo enlaza a
+ * un empleado EXISTENTE. No crea empleados ni fabrica datos.
+ *
+ * Atomicidad contra doble conversión concurrente:
+ *   1. Transacción + `SELECT ... FOR UPDATE` que bloquea la fila del candidato.
+ *   2. `UPDATE ... WHERE converted_employee_id IS NULL` (condicional) + chequeo
+ *      de `affectedRows`: aunque dos requests corran a la vez, sólo una gana; la
+ *      otra ve 0 filas afectadas y recibe 409.
  */
 async function convertCandidate(id, employeeId) {
-  const cand = await getCandidate(id);
-  if (!cand) throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
-  if (cand.converted_employee_id) {
-    throw httpError(409, 'CANDIDATE_ALREADY_CONVERTED', 'El candidato ya fue convertido');
-  }
   if (!(await employeeExists(employeeId))) {
     throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
   }
-  await sequelize.query(
-    "UPDATE candidates SET status = 'hired', converted_employee_id = ? WHERE id = ?",
-    { replacements: [employeeId, id] },
-  );
-  return { candidate_id: id, converted_employee_id: employeeId, from_status: cand.status };
+  let committed = false;
+  const tx = await sequelize.transaction();
+  try {
+    const [rows] = await sequelize.query(
+      'SELECT id, status, converted_employee_id FROM candidates WHERE id = ? FOR UPDATE',
+      { replacements: [id], transaction: tx },
+    );
+    const cand = rows[0];
+    if (!cand) throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
+    if (cand.converted_employee_id) {
+      throw httpError(409, 'CANDIDATE_ALREADY_CONVERTED', 'El candidato ya fue convertido');
+    }
+    const [result] = await sequelize.query(
+      "UPDATE candidates SET status = 'hired', converted_employee_id = ? WHERE id = ? AND converted_employee_id IS NULL",
+      { replacements: [employeeId, id], transaction: tx },
+    );
+    if (Number(result?.affectedRows ?? 0) !== 1) {
+      throw httpError(409, 'CANDIDATE_ALREADY_CONVERTED', 'El candidato ya fue convertido');
+    }
+    await tx.commit();
+    committed = true;
+    return { candidate_id: id, converted_employee_id: employeeId, from_status: cand.status };
+  } catch (err) {
+    if (!committed) { try { await tx.rollback(); } catch { /* noop */ } }
+    throw err;
+  }
 }
 
 // ─── Asignaciones (vigencia efectiva, append-only) ──────────────────────────
@@ -142,22 +163,63 @@ async function openAssignment(employeeId) {
 }
 
 /**
- * Crea una nueva vigencia. Append-only: cierra la vigencia abierta previa en la
- * misma transacción. Rechaza inserciones fuera de orden (una vigencia abierta
- * que empiece en/después del nuevo valid_from) para no solapar el historial.
+ * Valida existencia y ALCANCE de las referencias organizativas de una
+ * asignación (sucursal/departamento/centro de costo). Existencia inválida → 400;
+ * fuera de alcance → 403. El alcance del centro de costo se evalúa por su
+ * empresa.
+ */
+async function validateAssignmentRefs(scope, data) {
+  const orgScope = require('./orgScope');
+  if (data.branch_id != null) {
+    const [b] = await sequelize.query('SELECT id FROM branches WHERE id = ? LIMIT 1', { replacements: [data.branch_id] });
+    if (!b.length) throw httpError(400, 'BRANCH_NOT_FOUND', 'La sucursal referenciada no existe');
+    orgScope.assertBranchInScope(scope, data.branch_id);
+  }
+  if (data.department_id != null) {
+    const [d] = await sequelize.query('SELECT id FROM departments WHERE id = ? LIMIT 1', { replacements: [data.department_id] });
+    if (!d.length) throw httpError(400, 'DEPARTMENT_NOT_FOUND', 'El departamento referenciado no existe');
+    orgScope.assertDepartmentInScope(scope, data.department_id);
+  }
+  if (data.cost_center_id != null) {
+    const [c] = await sequelize.query('SELECT id, company_id FROM cost_centers WHERE id = ? LIMIT 1', { replacements: [data.cost_center_id] });
+    if (!c.length) throw httpError(400, 'COST_CENTER_NOT_FOUND', 'El centro de costo referenciado no existe');
+    orgScope.assertCompanyInScope(scope, c[0].company_id);
+  }
+}
+
+/**
+ * Crea una nueva vigencia de forma ATÓMICA y append-only.
+ *
+ * Concurrencia: se abre la transacción y se BLOQUEA la fila del empleado
+ * (`SELECT ... FOR UPDATE`) ANTES de leer la vigencia abierta. Así dos requests
+ * simultáneas para el mismo empleado se serializan: la segunda ve la vigencia
+ * que abrió la primera y, si su `valid_from` no es posterior, recibe 409. Esto
+ * impide dos vigencias abiertas y las inserciones retroactivas inválidas incluso
+ * partiendo de cero vigencias (el lock es sobre el empleado, no sobre filas que
+ * todavía no existen).
  */
 async function createAssignment(employeeId, data, userId) {
-  if (!(await employeeExists(employeeId))) {
-    throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
-  }
-  const open = await openAssignment(employeeId);
-  if (open && String(open.valid_from) >= String(data.valid_from)) {
-    throw httpError(409, 'ASSIGNMENT_OUT_OF_ORDER',
-      'Ya existe una vigencia abierta con fecha igual o posterior; corregí las fechas');
-  }
-
+  let committed = false;
   const tx = await sequelize.transaction();
   try {
+    const [emp] = await sequelize.query(
+      'SELECT id FROM employees WHERE id = ? FOR UPDATE',
+      { replacements: [employeeId], transaction: tx },
+    );
+    if (!emp.length) throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
+
+    const [openRows] = await sequelize.query(
+      `SELECT id, valid_from FROM employee_assignments
+        WHERE employee_id = ? AND valid_to IS NULL
+        ORDER BY valid_from DESC LIMIT 1`,
+      { replacements: [employeeId], transaction: tx },
+    );
+    const open = openRows[0] || null;
+    if (open && String(open.valid_from) >= String(data.valid_from)) {
+      throw httpError(409, 'ASSIGNMENT_OUT_OF_ORDER',
+        'Ya existe una vigencia abierta con fecha igual o posterior; corregí las fechas');
+    }
+
     if (open) {
       await sequelize.query(
         `UPDATE employee_assignments
@@ -179,9 +241,10 @@ async function createAssignment(employeeId, data, userId) {
       ], transaction: tx },
     );
     await tx.commit();
+    committed = true;
     return { id: result.insertId, closed_previous: open ? open.id : null };
   } catch (err) {
-    await tx.rollback();
+    if (!committed) { try { await tx.rollback(); } catch { /* noop */ } }
     throw err;
   }
 }
@@ -198,4 +261,5 @@ module.exports = {
   listAssignments,
   openAssignment,
   createAssignment,
+  validateAssignmentRefs,
 };
