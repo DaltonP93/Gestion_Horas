@@ -210,6 +210,55 @@ function candidateScopeFilter(scope, { companyCol = 'company_id', branchCol = 'b
   return { clause: `AND (${ors.join(' OR ')})`, params };
 }
 
+// ─── Alcance de CALENDARIOS (global visible + empresa/sucursal) ──────────────
+
+/**
+ * ¿El actor puede ver este calendario? Regla JERÁRQUICA y fail-closed (P1-A),
+ * análoga a los candidatos pero con el GLOBAL visible para todos:
+ *   - Unrestricted (RR.HH. global) → sí siempre.
+ *   - Calendario GLOBAL (company_id y branch_id NULL) → visible (aplica a todos).
+ *   - Calendario CON `branch_id` → visible sólo si esa sucursal está en
+ *     `scope.branchIds`. **NUNCA** hay fallback por empresa: un actor de la
+ *     sucursal A1 NO ve (ni edita excepciones de) un calendario de la sucursal A2
+ *     aunque compartan empresa.
+ *   - Calendario SIN `branch_id` pero CON `company_id` → visible por `companyIds`.
+ */
+function canSeeCalendar(scope, cal) {
+  if (!scope || scope.unrestricted) return true;
+  if (!cal) return false;
+  const branch = cal.branch_id ?? null;
+  const company = cal.company_id ?? null;
+  if (branch == null && company == null) return true;     // global aplica a todos
+  if (branch != null) return (scope.branchIds || []).includes(branch); // sin fallback a empresa
+  return (scope.companyIds || []).includes(company);      // branch NULL, company no NULL
+}
+
+/**
+ * Fragmento SQL para filtrar calendarios por alcance con la MISMA regla
+ * jerárquica que `canSeeCalendar` (INCLUYE los globales):
+ *   (company_id IS NULL AND branch_id IS NULL)             -- global
+ *   OR (branch_id IN <sucursales>)                          -- sucursal en alcance
+ *   OR (branch_id IS NULL AND company_id IN <empresas>)     -- sólo-empresa
+ * Un calendario con `branch_id` de otra sucursal queda fuera aunque su empresa
+ * coincida. Unrestricted → sin filtro.
+ */
+function calendarScopeFilter(scope, { companyCol = 'company_id', branchCol = 'branch_id' } = {}) {
+  if (!scope || scope.unrestricted) return { clause: '', params: [] };
+  const cids = scope.companyIds || [];
+  const bids = scope.branchIds || [];
+  const ors = [`(${companyCol} IS NULL AND ${branchCol} IS NULL)`]; // global siempre visible
+  const params = [];
+  if (bids.length) {
+    ors.push(`${branchCol} IN (${bids.map(() => '?').join(',')})`);
+    params.push(...bids);
+  }
+  if (cids.length) {
+    ors.push(`(${branchCol} IS NULL AND ${companyCol} IN (${cids.map(() => '?').join(',')}))`);
+    params.push(...cids);
+  }
+  return { clause: `AND (${ors.join(' OR ')})`, params };
+}
+
 module.exports = {
   getOrgScope,
   scopeFilter,
@@ -223,4 +272,6 @@ module.exports = {
   canSeeEmployeeRefs,
   canSeeCandidateRefs,
   candidateScopeFilter,
+  canSeeCalendar,
+  calendarScopeFilter,
 };
