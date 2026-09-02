@@ -12,8 +12,11 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 // ── Mocks de infraestructura ─────────────────────────────────────────────────
+// Un reloj en la lista, para que los controles POR DISPOSITIVO (editar/borrar,
+// gateados por super_admin) se rendericen y el RBAC quede realmente ejercitado.
 const apiGet = jest.fn((url: string) => {
   if (typeof url === 'string' && url.includes('sync-status')) return Promise.resolve({ data: { items: [] } })
+  if (url === '/api/devices') return Promise.resolve({ data: [{ id: 1, name: 'R1', ip_address: '10.0.0.1', port: 4370 }] })
   return Promise.resolve({ data: [] })
 })
 jest.mock('@/lib/api', () => ({
@@ -65,11 +68,17 @@ describe('Configuración → Relojes ZKTeco (RBAC de UI)', () => {
     const tab = await screen.findByText(/⌚ Relojes ZKTeco/)
     await userEvent.click(tab)
     expect(await screen.findByText('Relojes Biométricos ZKTeco')).toBeInTheDocument()
+    // El reloj de la lista se renderiza (para poder ejercitar sus controles):
+    expect(await screen.findByText('R1')).toBeInTheDocument()
     // Operar/diagnosticar sí:
     expect(screen.getByText('Verificar estado')).toBeInTheDocument()
+    expect(screen.getByTitle('Diagnosticar conectividad')).toBeInTheDocument()
     // Gestión sensible y autopolling NO:
     expect(screen.queryByText('Agregar reloj')).not.toBeInTheDocument()
     expect(screen.queryByTestId('sync-wizard')).not.toBeInTheDocument()
+    // Controles POR DISPOSITIVO (editar/borrar) NO para admin:
+    expect(screen.queryByTitle('Editar reloj')).not.toBeInTheDocument()
+    expect(screen.queryByTitle('Eliminar reloj')).not.toBeInTheDocument()
   })
 
   test('super_admin ve gestión completa y el asistente de sincronización', async () => {
@@ -78,7 +87,11 @@ describe('Configuración → Relojes ZKTeco (RBAC de UI)', () => {
     const tab = await screen.findByText(/⌚ Relojes ZKTeco/)
     await userEvent.click(tab)
     expect(await screen.findByText('Relojes Biométricos ZKTeco')).toBeInTheDocument()
+    expect(await screen.findByText('R1')).toBeInTheDocument()
     expect(screen.getByText('Agregar reloj')).toBeInTheDocument()
     expect(screen.getByTestId('sync-wizard')).toBeInTheDocument()
+    // Controles POR DISPOSITIVO (editar/borrar) SÍ para super_admin:
+    expect(screen.getByTitle('Editar reloj')).toBeInTheDocument()
+    expect(screen.getByTitle('Eliminar reloj')).toBeInTheDocument()
   })
 })

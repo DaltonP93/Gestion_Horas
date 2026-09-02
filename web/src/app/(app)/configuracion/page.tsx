@@ -723,8 +723,8 @@ function RelojesTab({ canManageDevices }: { canManageDevices: boolean }) {
                     </button>
                     {canManageDevices && (
                       <>
-                        <button onClick={() => openEdit(d)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg dark:text-white/30"><Edit2 size={15}/></button>
-                        <button onClick={() => deleteDevice(d.id, d.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg dark:text-white/30"><Trash2 size={15}/></button>
+                        <button title="Editar reloj" aria-label="Editar reloj" onClick={() => openEdit(d)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg dark:text-white/30"><Edit2 size={15}/></button>
+                        <button title="Eliminar reloj" aria-label="Eliminar reloj" onClick={() => deleteDevice(d.id, d.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg dark:text-white/30"><Trash2 size={15}/></button>
                       </>
                     )}
                     <button onClick={() => toggleExpand(d.id)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg dark:text-white/30 dark:hover:bg-white/[0.06]">
