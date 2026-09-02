@@ -60,8 +60,12 @@ CREATE TABLE IF NOT EXISTS payroll_period_snapshots (
   snapshot_json LONGTEXT     NOT NULL,           -- resumen AGREGADO, sin PII innecesaria
   created_by    INT          NULL,
   created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  KEY ix_pps_period (period_id),
-  CONSTRAINT fk_pps_period FOREIGN KEY (period_id) REFERENCES payroll_periods(id) ON DELETE CASCADE
+  -- Exactamente UN snapshot por período (garantía en base, no sólo en código).
+  UNIQUE KEY uq_pps_period (period_id),
+  -- RESTRICT (no CASCADE): el snapshot de cierre es trazabilidad y no debe
+  -- borrarse en cascada al eliminar un período. Un período con snapshot (cerrado)
+  -- no se borra: se conserva la evidencia.
+  CONSTRAINT fk_pps_period FOREIGN KEY (period_id) REFERENCES payroll_periods(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SELECT 'Migración 080 aplicada: payroll_concepts + payroll_periods + payroll_period_snapshots (sandbox no oficial)' AS info;

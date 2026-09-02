@@ -25,8 +25,10 @@ describe('migración 080 (base de nómina — sandbox)', () => {
     expect(sql).toMatch(/is_official\s+TINYINT\(1\)\s+NOT NULL DEFAULT 0/i);
   });
 
-  test('snapshot con FK CASCADE al período', () => {
-    expect(sql).toMatch(/FOREIGN KEY \(period_id\) REFERENCES payroll_periods\(id\) ON DELETE CASCADE/i);
+  test('snapshot: exactamente uno por período (UNIQUE) y sin CASCADE (RESTRICT)', () => {
+    expect(sql).toMatch(/UNIQUE KEY uq_pps_period \(period_id\)/i);
+    expect(sql).toMatch(/FOREIGN KEY \(period_id\) REFERENCES payroll_periods\(id\) ON DELETE RESTRICT/i);
+    expect(sql).not.toMatch(/FOREIGN KEY \(period_id\) REFERENCES payroll_periods\(id\) ON DELETE CASCADE/i);
   });
 
   test('no destructiva, sin backfill, no toca asistencia/att2000', () => {

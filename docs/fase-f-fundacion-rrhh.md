@@ -244,22 +244,32 @@ oficial, no evalúa fórmulas, no paga ni integra con IPS/MTESS/bancos. Migraci�
 `080` (aditiva, idempotente, no destructiva, sin backfill):
 
 - **`payroll_concepts`** — catálogo **versionado** de ingresos/descuentos
-  (`UNIQUE(code, version)`, vigencia). `formula_hint` es texto descriptivo,
-  **nunca se evalúa**.
-- **`payroll_periods`** — máquina de estados `draft→preview→locked→closed`. Todo
-  período nace `is_official = 0`. Un período **cerrado es inmutable** (terminal).
-- **`payroll_period_snapshots`** — snapshot **agregado** al cerrar, para impedir
-  que un período cerrado cambie por modificaciones posteriores (trazabilidad).
-- **Previsualización sandbox** `GET /periods/:id/preview` — devuelve un resumen
-  AGREGADO marcado `official:false` + disclaimer; **sin montos ni PII** (no hay
-  cálculo legal sin fuente normativa y aprobación).
+  (`UNIQUE(code, version)`, vigencia; `createConcept` valida `valid_from <=
+  valid_to`). `formula_hint` es texto descriptivo, **nunca se evalúa**.
+- **`payroll_periods`** — máquina de estados **atómica** `draft→preview→locked→
+  closed`. `createPeriod` valida `period_start <= period_end`. `transition` abre
+  transacción y **bloquea la fila** (`SELECT … FOR UPDATE`), valida dentro de la
+  transacción y hace `UPDATE … WHERE status = <esperado>` con chequeo de
+  `affectedRows` → **cierre concurrente**: uno cierra, el otro recibe 409
+  (`PERIOD_CLOSED`/`STALE_TRANSITION`). Todo período nace `is_official = 0`; un
+  período **cerrado es terminal**.
+- **`payroll_period_snapshots`** — snapshot **agregado** al cerrar.
+  **`UNIQUE(period_id)`**: exactamente uno por período (garantía en base, no sólo
+  en código). FK **`ON DELETE RESTRICT`** (no CASCADE): la evidencia de cierre no
+  se borra en cascada.
+- **Previsualización sandbox** `GET /periods/:id/preview` — resumen AGREGADO
+  `official:false` + disclaimer; **sin montos ni PII**.
 - **Analytics agregado** `GET /analytics/headcount` — conteos, sin PII.
-- **Adaptadores apagados** `GET /integrations` — IPS, MTESS/REOP, firma, bancos,
-  notificaciones y pagos, **todos `enabled:false`** por defecto (fail-closed).
+- **Adaptadores** `GET /integrations` — IPS, MTESS/REOP, firma, bancos,
+  notificaciones y pagos: **SIEMPRE `enabled:false`**. No existe integración
+  real, así que un flag de entorno **no** puede presentarla como habilitada.
 - UI mínima `/configuracion/nomina-base` con banner **NO OFICIAL**.
+- Concurrencia y unicidad de snapshot probadas en integración
+  (`tests/it/payroll.it.test.js`).
 
 Flag nuevo: **`PAYROLL_WRITE_ENABLED`** — default `false` (fail-closed). Los
-flags de integración (`IPS_INTEGRATION_ENABLED`, etc.) también nacen apagados.
+nombres de flags de integración se documentan como referencia futura, pero
+`/integrations` los reporta `enabled:false` sin excepción.
 
 ## Próximas etapas (planificadas, no implementadas)
 

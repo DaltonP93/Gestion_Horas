@@ -57,9 +57,12 @@ function canTransition(from, to) {
 }
 
 function integrationsStatus() {
+  // SIEMPRE deshabilitadas: no existe ninguna integración real todavía, así que
+  // un flag de entorno NO puede presentar una integración inexistente como
+  // habilitada. El nombre del flag se informa sólo como referencia futura.
   return INTEGRATION_ADAPTERS.map((a) => ({
     key: a.key, label: a.label,
-    enabled: process.env[a.flag] === 'true', // en F4: siempre false por defecto
+    enabled: false,
     flag: a.flag,
   }));
 }
@@ -75,6 +78,9 @@ async function listConcepts() {
 }
 
 async function createConcept(data, userId) {
+  if (data.valid_to != null && String(data.valid_to) < String(data.valid_from)) {
+    throw httpError(400, 'INVALID_VALIDITY', 'valid_to no puede ser anterior a valid_from');
+  }
   const [result] = await sequelize.query(
     `INSERT INTO payroll_concepts (code, name, kind, formula_hint, version, active, valid_from, valid_to, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -106,6 +112,9 @@ async function getPeriod(id) {
 }
 
 async function createPeriod(data, userId) {
+  if (String(data.period_end) < String(data.period_start)) {
+    throw httpError(400, 'INVALID_RANGE', 'period_end no puede ser anterior a period_start');
+  }
   const [result] = await sequelize.query(
     `INSERT INTO payroll_periods (code, label, period_start, period_end, status, is_official, created_by)
      VALUES (?, ?, ?, ?, 'draft', 0, ?)`,
@@ -115,17 +124,19 @@ async function createPeriod(data, userId) {
 }
 
 /** Cuenta agregada de empleados activos (sin PII) para el snapshot/preview. */
-async function headcount() {
+async function headcount(transaction = undefined) {
   const [rows] = await sequelize.query(
     "SELECT status, COUNT(*) AS n FROM employees GROUP BY status",
+    { transaction },
   );
   const byStatus = Object.fromEntries(rows.map((r) => [r.status, Number(r.n)]));
   return { by_status: byStatus, active: byStatus.active || 0 };
 }
 
-async function conceptCounts() {
+async function conceptCounts(transaction = undefined) {
   const [rows] = await sequelize.query(
     "SELECT kind, COUNT(*) AS n FROM payroll_concepts WHERE active = 1 GROUP BY kind",
+    { transaction },
   );
   const m = Object.fromEntries(rows.map((r) => [r.kind, Number(r.n)]));
   return { earnings: m.earning || 0, deductions: m.deduction || 0 };
@@ -150,51 +161,74 @@ async function computePreview(periodId) {
 }
 
 /**
- * Cambia el estado del período respetando la máquina de estados. Al cerrar,
- * persiste un snapshot agregado. Un período cerrado es inmutable.
+ * Cambia el estado del período de forma ATÓMICA, respetando la máquina de
+ * estados. Un período cerrado es terminal (inmutable).
+ *
+ * Atomicidad y concurrencia:
+ *   1. Transacción + `SELECT ... FOR UPDATE` bloquea la fila del período; dos
+ *      transiciones concurrentes se serializan (la segunda ve el estado que dejó
+ *      la primera → 409 si ya cerró, o 409 de estado obsoleto).
+ *   2. `UPDATE ... WHERE status = <estado esperado>` + chequeo de `affectedRows`:
+ *      si el estado cambió entre la lectura y el update, no se aplica (409).
+ *   3. Al cerrar, se inserta EXACTAMENTE un snapshot; la `UNIQUE(period_id)` en
+ *      base impide dos snapshots aunque la lógica fallara.
  */
 async function transition(periodId, to, userId) {
-  const period = await getPeriod(periodId);
-  if (!period) throw httpError(404, 'PERIOD_NOT_FOUND', 'Período no encontrado');
-  if (period.status === 'closed') {
-    throw httpError(409, 'PERIOD_CLOSED', 'El período está cerrado y no puede modificarse');
-  }
-  if (!canTransition(period.status, to)) {
-    throw httpError(400, 'INVALID_TRANSITION', `Transición no permitida: ${period.status} → ${to}`);
-  }
+  let committed = false;
+  const tx = await sequelize.transaction();
+  try {
+    const [rows] = await sequelize.query(
+      'SELECT id, status, code, period_start, period_end FROM payroll_periods WHERE id = ? FOR UPDATE',
+      { replacements: [periodId], transaction: tx },
+    );
+    const period = rows[0];
+    if (!period) throw httpError(404, 'PERIOD_NOT_FOUND', 'Período no encontrado');
+    if (period.status === 'closed') {
+      throw httpError(409, 'PERIOD_CLOSED', 'El período está cerrado y no puede modificarse');
+    }
+    if (!canTransition(period.status, to)) {
+      throw httpError(400, 'INVALID_TRANSITION', `Transición no permitida: ${period.status} → ${to}`);
+    }
 
-  if (to === 'closed') {
-    const [hc, cc] = await Promise.all([headcount(), conceptCounts()]);
-    const snapshot = {
-      closed_from: period.status,
-      period: { id: period.id, code: period.code, period_start: period.period_start, period_end: period.period_end },
-      headcount: hc,
-      active_concepts: cc,
-      official: false,
-    };
-    const tx = await sequelize.transaction();
-    try {
-      await sequelize.query(
-        "UPDATE payroll_periods SET status = 'closed', closed_at = NOW(), closed_by = ? WHERE id = ? AND status <> 'closed'",
-        { replacements: [userId ?? null, periodId], transaction: tx },
+    if (to === 'closed') {
+      const [hc, cc] = [await headcount(tx), await conceptCounts(tx)];
+      const snapshot = {
+        closed_from: period.status,
+        period: { id: period.id, code: period.code, period_start: period.period_start, period_end: period.period_end },
+        headcount: hc,
+        active_concepts: cc,
+        official: false,
+      };
+      const [upd] = await sequelize.query(
+        "UPDATE payroll_periods SET status = 'closed', closed_at = NOW(), closed_by = ? WHERE id = ? AND status = ?",
+        { replacements: [userId ?? null, periodId, period.status], transaction: tx },
       );
+      if (Number(upd?.affectedRows ?? 0) !== 1) {
+        throw httpError(409, 'STALE_TRANSITION', 'El período cambió de estado; reintentá');
+      }
       await sequelize.query(
         'INSERT INTO payroll_period_snapshots (period_id, snapshot_json, created_by) VALUES (?, ?, ?)',
         { replacements: [periodId, JSON.stringify(snapshot), userId ?? null], transaction: tx },
       );
       await tx.commit();
-    } catch (err) {
-      await tx.rollback();
-      throw err;
+      committed = true;
+      return { id: periodId, status: 'closed', snapshot_created: true };
     }
-    return { id: periodId, status: 'closed', snapshot_created: true };
-  }
 
-  await sequelize.query(
-    'UPDATE payroll_periods SET status = ? WHERE id = ?',
-    { replacements: [to, periodId] },
-  );
-  return { id: periodId, status: to };
+    const [upd] = await sequelize.query(
+      'UPDATE payroll_periods SET status = ? WHERE id = ? AND status = ?',
+      { replacements: [to, periodId, period.status], transaction: tx },
+    );
+    if (Number(upd?.affectedRows ?? 0) !== 1) {
+      throw httpError(409, 'STALE_TRANSITION', 'El período cambió de estado; reintentá');
+    }
+    await tx.commit();
+    committed = true;
+    return { id: periodId, status: to };
+  } catch (err) {
+    if (!committed) { try { await tx.rollback(); } catch { /* noop */ } }
+    throw err;
+  }
 }
 
 module.exports = {

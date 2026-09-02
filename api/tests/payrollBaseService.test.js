@@ -39,28 +39,51 @@ describe('máquina de estados', () => {
     expect(payroll.canTransition('closed', 'draft')).toBe(false);
   });
 
-  test('transición inválida → 400', async () => {
-    sequelize.query.mockResolvedValueOnce([[{ id: 1, status: 'draft' }]]); // getPeriod
+  test('transición inválida → 400 (bajo lock FOR UPDATE)', async () => {
+    sequelize.query.mockResolvedValueOnce([[{ id: 1, status: 'draft' }]]); // SELECT ... FOR UPDATE
     await expect(payroll.transition(1, 'closed', 9)).rejects.toMatchObject({ status: 400, code: 'INVALID_TRANSITION' });
+    expect(sequelize.query.mock.calls[0][0]).toMatch(/FOR UPDATE/);
   });
 
   test('período cerrado es inmutable → 409', async () => {
     sequelize.query.mockResolvedValueOnce([[{ id: 1, status: 'closed' }]]);
     await expect(payroll.transition(1, 'preview', 9)).rejects.toMatchObject({ status: 409, code: 'PERIOD_CLOSED' });
+    expect(sequelize._handles.rollback).toHaveBeenCalled();
   });
 
-  test('cerrar persiste snapshot agregado en transacción', async () => {
+  test('cerrar: UPDATE condicional (affectedRows=1) + un snapshot, commit', async () => {
     sequelize.query
-      .mockResolvedValueOnce([[{ id: 1, status: 'locked', code: 'P1', period_start: '2026-01-01', period_end: '2026-01-31' }]]) // getPeriod
+      .mockResolvedValueOnce([[{ id: 1, status: 'locked', code: 'P1', period_start: '2026-01-01', period_end: '2026-01-31' }]]) // FOR UPDATE
       .mockResolvedValueOnce([[{ status: 'active', n: 10 }]]) // headcount
       .mockResolvedValueOnce([[{ kind: 'earning', n: 3 }]])   // conceptCounts
-      .mockResolvedValueOnce([{}])  // UPDATE close
-      .mockResolvedValueOnce([{}]); // INSERT snapshot
+      .mockResolvedValueOnce([{ affectedRows: 1 }])           // UPDATE close condicional
+      .mockResolvedValueOnce([{}]);                           // INSERT snapshot
     const r = await payroll.transition(1, 'closed', 9);
     expect(r).toEqual({ id: 1, status: 'closed', snapshot_created: true });
-    const insert = sequelize.query.mock.calls.find(([sql]) => /INSERT INTO payroll_period_snapshots/.test(sql));
-    expect(insert).toBeTruthy();
+    const upd = sequelize.query.mock.calls.find(([sql]) => /UPDATE payroll_periods SET status = 'closed'/.test(sql));
+    expect(upd[0]).toMatch(/WHERE id = \? AND status = \?/);
     expect(sequelize._handles.commit).toHaveBeenCalled();
+  });
+
+  test('cierre obsoleto (affectedRows=0) → 409 STALE y rollback', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 1, status: 'locked', code: 'P1', period_start: '2026-01-01', period_end: '2026-01-31' }]])
+      .mockResolvedValueOnce([[{ status: 'active', n: 1 }]])
+      .mockResolvedValueOnce([[{ kind: 'earning', n: 1 }]])
+      .mockResolvedValueOnce([{ affectedRows: 0 }]); // otra tx cambió el estado
+    await expect(payroll.transition(1, 'closed', 9)).rejects.toMatchObject({ status: 409, code: 'STALE_TRANSITION' });
+    expect(sequelize._handles.rollback).toHaveBeenCalled();
+  });
+});
+
+describe('validaciones', () => {
+  test('createPeriod rechaza rango invertido → 400', async () => {
+    await expect(payroll.createPeriod({ code: 'P', label: 'x', period_start: '2026-02-01', period_end: '2026-01-01' }, 1))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_RANGE' });
+  });
+  test('createConcept rechaza vigencia invertida → 400', async () => {
+    await expect(payroll.createConcept({ code: 'C', name: 'x', kind: 'earning', valid_from: '2026-05-01', valid_to: '2026-01-01' }, 1))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_VALIDITY' });
   });
 });
 
@@ -81,10 +104,10 @@ describe('preview NO OFICIAL', () => {
 });
 
 describe('integraciones', () => {
-  test('todas apagadas por defecto', () => {
-    delete process.env.IPS_INTEGRATION_ENABLED;
+  test('SIEMPRE apagadas: un flag no habilita una integración inexistente', () => {
+    process.env.IPS_INTEGRATION_ENABLED = 'true'; // aunque alguien lo prenda…
     const st = payroll.integrationsStatus();
-    expect(st.every((a) => a.enabled === false)).toBe(true);
+    expect(st.every((a) => a.enabled === false)).toBe(true); // …sigue apagada
     expect(st.map((a) => a.key)).toEqual(expect.arrayContaining(['ips', 'mtess_reop', 'firma', 'bancos', 'notificaciones', 'pagos']));
   });
 });
