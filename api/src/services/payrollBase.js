@@ -15,6 +15,14 @@
  */
 
 const { sequelize } = require('../config/database');
+const { parseCivilDate } = require('../utils/civilDate');
+
+// Fecha civil REAL (no sólo formato): rechaza 2025-02-29, 2026-02-30, 2026-13-01.
+function assertCivilDate(value, label) {
+  if (value != null && !parseCivilDate(value)) {
+    throw httpError(400, 'INVALID_DATE', `${label} no es una fecha civil válida`);
+  }
+}
 
 // Transiciones permitidas de la máquina de estados.
 const TRANSITIONS = {
@@ -78,6 +86,8 @@ async function listConcepts() {
 }
 
 async function createConcept(data, userId) {
+  assertCivilDate(data.valid_from, 'valid_from');
+  assertCivilDate(data.valid_to, 'valid_to');
   if (data.valid_to != null && String(data.valid_to) < String(data.valid_from)) {
     throw httpError(400, 'INVALID_VALIDITY', 'valid_to no puede ser anterior a valid_from');
   }
@@ -113,6 +123,8 @@ async function getPeriod(id) {
 }
 
 async function createPeriod(data, userId) {
+  assertCivilDate(data.period_start, 'period_start');
+  assertCivilDate(data.period_end, 'period_end');
   if (String(data.period_end) < String(data.period_start)) {
     throw httpError(400, 'INVALID_RANGE', 'period_end no puede ser anterior a period_start');
   }

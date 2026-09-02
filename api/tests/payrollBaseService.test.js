@@ -85,6 +85,20 @@ describe('validaciones', () => {
     await expect(payroll.createConcept({ code: 'C', name: 'x', kind: 'earning', valid_from: '2026-05-01', valid_to: '2026-01-01' }, 1))
       .rejects.toMatchObject({ status: 400, code: 'INVALID_VALIDITY' });
   });
+
+  test('★ createPeriod rechaza fecha civil imposible (2025-02-29 / 2026-13-01) → 400 sin tocar BD', async () => {
+    await expect(payroll.createPeriod({ code: 'P', label: 'x', period_start: '2025-02-29', period_end: '2026-01-31' }, 1))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+    await expect(payroll.createPeriod({ code: 'P', label: 'x', period_start: '2026-01-01', period_end: '2026-13-01' }, 1))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+    expect(sequelize.query).not.toHaveBeenCalled();
+  });
+
+  test('★ createConcept rechaza fecha civil imposible (2026-02-30) → 400 sin tocar BD', async () => {
+    await expect(payroll.createConcept({ code: 'C', name: 'x', kind: 'earning', valid_from: '2026-02-30' }, 1))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_DATE' });
+    expect(sequelize.query).not.toHaveBeenCalled();
+  });
 });
 
 describe('preview NO OFICIAL', () => {

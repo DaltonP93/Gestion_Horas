@@ -23,6 +23,7 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const payroll = require('../services/payrollBase');
 const audit = require('../services/audit');
 const { redactDetails } = require('../utils/redact');
+const { parseCivilDate } = require('../utils/civilDate');
 
 router.use(authenticate);
 // F4 es una base de nómina SANDBOX GLOBAL (no segmentada por empresa): expone
@@ -33,7 +34,10 @@ router.use(authenticate);
 // aprobación explícita para nómina por empresa, no se habilita acceso segmentado.
 router.use(requireGlobalHR);
 
-const DATE = Joi.string().pattern(/^\d{4}-\d{2}-\d{2}$/);
+// Fecha civil REAL (no sólo formato): rechaza 2025-02-29, 2026-13-01, etc.
+const DATE = Joi.string()
+  .pattern(/^\d{4}-\d{2}-\d{2}$/)
+  .custom((v, helpers) => (parseCivilDate(v) ? v : helpers.error('any.invalid')));
 
 const conceptSchema = Joi.object({
   code:         Joi.string().trim().min(1).max(40).required(),
