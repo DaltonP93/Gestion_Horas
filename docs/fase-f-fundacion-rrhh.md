@@ -99,7 +99,68 @@
 - No hay DELETE de empresas/centros (se desactivan con `active=0`).
 - No se asignan empleados a centros de costo todavía (eso es F2/asignaciones).
 
-## Próximas etapas (planificadas, no implementadas en F1)
+## PR F2 — Personas: candidatos y asignaciones con vigencia
+
+Encadena sobre F1. Reutiliza `employee_contracts` (051), `employee_documents`
+(067) y `job_titles` (069); **no** los duplica. Agrega (migración `078`):
+
+- **`candidates`** — postulantes con estado (`new`…`hired`/`rejected`) y
+  **conversión trazable y ATÓMICA**: `POST /api/candidates/:id/convert` abre
+  transacción, bloquea la fila (`SELECT … FOR UPDATE`) y hace `UPDATE …
+  WHERE converted_employee_id IS NULL` con chequeo de `affectedRows`, de modo que
+  **dos conversiones concurrentes** no compiten (una gana, la otra 409). Enlaza a
+  un empleado **existente** (`converted_employee_id`), nunca crea ni fabrica
+  empleados. **Auditoría sin PII**: sólo id, acción y nombres de campos (nunca
+  nombre/email/teléfono/notas ni texto libre).
+- **AISLAMIENTO por alcance JERÁRQUICO (P1-A)** — `candidates` gana alcance
+  opcional `company_id`/`branch_id` (nuleable, aditivo, sin backfill, FKs
+  `SET NULL`). Regla **jerárquica y fail-closed**, idéntica en
+  `canSeeCandidateRefs`, `candidateScopeFilter`, GET lista/detalle, PATCH,
+  `convertCandidate` y POST/PATCH:
+  - candidato **con `branch_id`** → visible sólo si esa **sucursal** está en el
+    alcance del actor; **NO** hay fallback a empresa (un manager de la sucursal A
+    **no** ve un candidato de la sucursal B aunque compartan empresa — cierra la
+    fuga de PII entre sucursales que Codex marcó);
+  - candidato **sin `branch_id` pero con `company_id`** → visible por empresa;
+  - candidato **sin alcance** (ambos NULL) → sólo un rol global de RR.HH.
+  `GET /:id` y `convert` fuera de alcance → **404** (no filtra existencia). Un
+  actor con alcance **no puede crear ni convertir** un candidato **sin alcance**
+  (→ 403). `validateCandidateRefs` valida existencia (400), alcance (403
+  `OUT_OF_SCOPE`) y **coherencia sucursal → empresa** (400 `INCOHERENT_SCOPE`).
+  La **conversión** verifica el alcance del candidato (404) y del **empleado
+  destino** (403), manteniendo transacción/`FOR UPDATE`/anti-doble-conversión.
+- **`employee_assignments`** — historial **temporal** de asignación organizativa
+  con vigencia efectiva `valid_from`/`valid_to`. **Append-only y atómico**: se
+  abre transacción y se **bloquea la fila del empleado** (`FOR UPDATE`) antes de
+  leer la vigencia abierta, así **dos creaciones concurrentes** se serializan y
+  **nunca** quedan dos vigencias abiertas; inserciones fuera de orden → 409.
+  Antes de listar/leer/crear, la ruta verifica el **empleado objetivo** contra el
+  alcance departamental/sucursal del actor: `GET` fuera de alcance → **404** (no
+  filtra existencia), writer fuera de alcance → **403 `OUT_OF_SCOPE`**.
+  **Coherencia mutua de referencias (P1-B)**: `validateAssignmentRefs` corre
+  **dentro de la transacción**, tras el lock del empleado (anti-TOCTOU), y exige
+  que **todas** las referencias conocidas pertenezcan a la **misma empresa** —
+  sucursal (`branches.company_id`), centro de costo (`cost_centers.company_id`) y
+  departamento (pertenencia vía el modelo existente
+  `departments.cost_center_id → cost_centers.company_id`, sin inventar relación
+  nueva). Sucursal de empresa A + centro de costo de empresa B → **400
+  `INCOHERENT_SCOPE`** (ni siquiera un rol global puede mezclar empresas). FK
+  `employee_id` con **`ON DELETE RESTRICT`** (no CASCADE): el historial auditable
+  no se borra al eliminar un empleado. Aislamiento jerárquico, coherencia mutua y
+  concurrencia probados en integración contra MySQL real
+  (`tests/it/people.it.test.js`) y con la DB mockeada
+  (`tests/peopleScope.test.js`, `tests/peopleService.test.js`).
+- **`employee_documents.access_level`** — metadato de acceso aditivo (sin tocar
+  los archivos reales; sin firma).
+- Rutas `/api/candidates` y `/api/assignments/employee/:id` con permisos
+  granulares (`candidatos`, `asignaciones`), validación Joi y auditoría con
+  correlation id (remuneración redactada). UI mínima: `/candidatos` (con
+  conversión).
+
+Flag nuevo: **`PEOPLE_WRITE_ENABLED`** — default `false` (fail-closed), sólo
+`"true"` habilita crear/editar/convertir. Reads y autorización siempre activos.
+
+## Próximas etapas (planificadas, no implementadas)
 
 - **F2** — personas, candidatos y contratos con vigencia efectiva e historial.
 - **F3** — calendario/jornada/cumplimiento (timezone America/Asuncion),
