@@ -21,6 +21,7 @@ import { useCurrentUser } from '@/lib/useCurrentUser'
 
 interface Period { id: number; code: string; label: string; period_start: string; period_end: string; status: string; is_official: number; closed_at?: string | null }
 interface Integration { key: string; label: string; enabled: boolean }
+interface Concept { id: number; code: string; name: string; kind: 'earning' | 'deduction'; formula_hint: string | null; version: number; active: number; valid_from: string; valid_to: string | null }
 interface Preview {
   official: boolean
   disclaimer: string
@@ -47,6 +48,7 @@ const TRANSITIONS: Record<string, string[]> = {
 const WRITE_ROLES = ['super_admin', 'admin', 'gth', 'hr']
 
 const emptyForm = { code: '', label: '', period_start: '', period_end: '' }
+const emptyConcept = { code: '', name: '', kind: 'earning' as 'earning' | 'deduction', formula_hint: '', version: '1', valid_from: '', valid_to: '' }
 
 export default function NominaBasePage() {
   const user = useCurrentUser()
@@ -66,14 +68,20 @@ export default function NominaBasePage() {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewBusy, setPreviewBusy] = useState(false)
 
+  const [concepts, setConcepts] = useState<Concept[]>([])
+  const [showConceptForm, setShowConceptForm] = useState(false)
+  const [concept, setConcept] = useState({ ...emptyConcept })
+  const [conceptErr, setConceptErr] = useState<string | null>(null)
+
   async function load() {
     setLoading(true); setError('')
     try {
-      const [p, i] = await Promise.all([
+      const [p, i, c] = await Promise.all([
         api.get('/api/payroll-base/periods').then(r => (r.data?.data ?? []) as Period[]),
         api.get('/api/payroll-base/integrations').then(r => (r.data?.data ?? []) as Integration[]).catch(() => [] as Integration[]),
+        api.get('/api/payroll-base/concepts').then(r => (r.data?.data ?? []) as Concept[]).catch(() => [] as Concept[]),
       ])
-      setPeriods(p); setIntegrations(i)
+      setPeriods(p); setIntegrations(i); setConcepts(c)
     } catch (e: any) {
       setError(e?.response?.data?.error || e?.message || 'Error al cargar')
     } finally { setLoading(false) }
@@ -114,6 +122,30 @@ export default function NominaBasePage() {
       await load()
     } catch (e: any) {
       setFormErr(writerError(e))
+    } finally { setBusy(false) }
+  }
+
+  async function createConcept() {
+    setConceptErr(null)
+    if (!concept.code.trim() || !concept.name.trim() || !concept.valid_from) {
+      setConceptErr('Completá código, nombre y vigencia desde.'); return
+    }
+    if (concept.valid_to && concept.valid_to < concept.valid_from) {
+      setConceptErr('La vigencia hasta no puede ser anterior a desde.'); return
+    }
+    setBusy(true)
+    try {
+      await api.post('/api/payroll-base/concepts', {
+        code: concept.code.trim(), name: concept.name.trim(), kind: concept.kind,
+        formula_hint: concept.formula_hint.trim() || null,
+        version: Number(concept.version) || 1,
+        valid_from: concept.valid_from, valid_to: concept.valid_to || null,
+      })
+      setShowConceptForm(false); setConcept({ ...emptyConcept })
+      setFeedback('Concepto creado.')
+      await load()
+    } catch (e: any) {
+      setConceptErr(writerError(e))
     } finally { setBusy(false) }
   }
 
@@ -305,6 +337,116 @@ export default function NominaBasePage() {
           </div>
         </div>
       )}
+
+      {/* Catálogo de conceptos (versionados). formula_hint es SÓLO DESCRIPTIVO:
+          nunca se evalúa; el backend jamás lo interpreta como fórmula. */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between dark:border-white/[0.06]">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-700 dark:text-white/70">Conceptos (versionados)</h2>
+            <p className="text-xs text-slate-400 dark:text-white/30">La “pista de fórmula” es sólo descriptiva; nunca se evalúa ni calcula.</p>
+          </div>
+          {canWrite && (
+            <button onClick={() => { setShowConceptForm(s => !s); setConceptErr(null) }}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+              <Plus size={13} /> Nuevo concepto
+            </button>
+          )}
+        </div>
+
+        {showConceptForm && (
+          <div className="p-5 space-y-3 border-b border-slate-100 bg-slate-50/60 dark:border-white/[0.06] dark:bg-white/[0.02]">
+            {conceptErr && (
+              <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/[0.06] dark:text-red-200">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0" /> <span>{conceptErr}</span>
+              </div>
+            )}
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 dark:text-white/60">Código *</span>
+                <input value={concept.code} maxLength={40} onChange={e => setConcept(c => ({ ...c, code: e.target.value }))}
+                  placeholder="ej: BASICO"
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 dark:text-white/60">Nombre *</span>
+                <input value={concept.name} maxLength={200} onChange={e => setConcept(c => ({ ...c, name: e.target.value }))}
+                  placeholder="ej: Salario básico"
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 dark:text-white/60">Tipo *</span>
+                <select value={concept.kind} onChange={e => setConcept(c => ({ ...c, kind: e.target.value as 'earning' | 'deduction' }))}
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
+                  <option value="earning">Ingreso</option>
+                  <option value="deduction">Deducción</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 dark:text-white/60">Versión</span>
+                <input type="number" min="1" step="1" value={concept.version}
+                  onChange={e => setConcept(c => ({ ...c, version: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 dark:text-white/60">Vigente desde *</span>
+                <input type="date" value={concept.valid_from} onChange={e => setConcept(c => ({ ...c, valid_from: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 dark:text-white/60">Vigente hasta</span>
+                <input type="date" value={concept.valid_to} min={concept.valid_from || undefined}
+                  onChange={e => setConcept(c => ({ ...c, valid_to: e.target.value }))}
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+              </label>
+            </div>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-600 dark:text-white/60">Pista de fórmula (sólo descriptiva, no se evalúa)</span>
+              <input value={concept.formula_hint} maxLength={500}
+                onChange={e => setConcept(c => ({ ...c, formula_hint: e.target.value }))}
+                placeholder="ej: salario_base (referencia informativa)"
+                className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] dark:bg-white/[0.03]" />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => { setShowConceptForm(false); setConcept({ ...emptyConcept }); setConceptErr(null) }}
+                className="border border-slate-200 hover:bg-slate-50 px-3 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
+              <button onClick={createConcept} disabled={busy}
+                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-60">
+                <CheckCircle size={14} /> {busy ? 'Guardando…' : 'Crear concepto'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase tracking-wide dark:bg-white/[0.03] dark:text-white/40">
+              <tr>
+                <th className="px-4 py-3">Código</th><th className="px-4 py-3">Nombre</th>
+                <th className="px-4 py-3">Tipo</th><th className="px-4 py-3">Ver.</th>
+                <th className="px-4 py-3">Vigencia</th><th className="px-4 py-3">Estado</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-white/[0.06]">
+              {!loading && concepts.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-slate-400 dark:text-white/30">Sin conceptos</td></tr>}
+              {concepts.map(c => (
+                <tr key={c.id}>
+                  <td className="px-4 py-2 font-medium text-slate-800 dark:text-white/80">{c.code}</td>
+                  <td className="px-4 py-2 text-slate-600 dark:text-white/60">{c.name}</td>
+                  <td className="px-4 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.kind === 'earning' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300'}`}>
+                      {c.kind === 'earning' ? 'Ingreso' : 'Deducción'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 font-mono text-slate-500 dark:text-white/50">v{c.version}</td>
+                  <td className="px-4 py-2 text-slate-500 dark:text-white/50">{c.valid_from}{c.valid_to ? ` → ${c.valid_to}` : ' →'}</td>
+                  <td className="px-4 py-2 text-xs">{Number(c.active) ? 'Activo' : 'Inactivo'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
         <h2 className="text-sm font-semibold text-slate-700 mb-3 dark:text-white/70">Integraciones (planificadas — apagadas)</h2>
