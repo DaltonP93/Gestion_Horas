@@ -2,7 +2,7 @@
 import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCurrentUser, isSuperAdmin } from '@/lib/useCurrentUser'
+import { useCurrentUser, isSuperAdmin, hasRole } from '@/lib/useCurrentUser'
 import {
   Wifi, WifiOff, RefreshCw, Plus, Trash2, Globe,
   Zap, CheckCircle, XCircle, AlertCircle, Database,
@@ -43,7 +43,16 @@ function ConfiguracionPageInner() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const user = useCurrentUser()
-  const canTech = isSuperAdmin(user)
+  // El módulo Relojes ZKTeco es visible para admin y super_admin. `admin`
+  // OPERA y DIAGNOSTICA (ver relojes, conectar, diagnosticar, descargar/leer,
+  // vincular usuarios) — todo eso ya está autorizado en la API para 'admin'.
+  // La GESTIÓN sensible (alta/edición/borrado de relojes, habilitar/deshabilitar/
+  // limpiar y el asistente de sincronización/autopolling) queda SÓLO para
+  // super_admin: son comandos a relojes reales e infraestructura, y la API los
+  // sigue exigiendo con requireSuperAdmin (esta guarda de UI sólo evita mostrar
+  // botones que devolverían 403).
+  const canTech = hasRole(user, 'admin')       // admin + super_admin ven el tab
+  const canManageDevices = isSuperAdmin(user)  // sólo super_admin gestiona/limpia/autopolling
 
   // Compatibilidad: /configuracion?tab=sync (integración att2000) se movió a su
   // ubicación canónica. Redirige a /sistema/legado-att2000 (esa página gatea
@@ -53,8 +62,8 @@ function ConfiguracionPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Tabs técnicos (relojes) solo para super_admin.
-  // Resto de roles ven únicamente Sistema / Webhooks / API.
+  // El tab Relojes ZKTeco lo ven admin y super_admin (canTech). El resto de
+  // roles ven únicamente Sistema / Webhooks / API.
   const allTabs = [
     { id: 'sistema',   label: '🖥️ Sistema',              show: true },
     { id: 'relojes',   label: '⌚ Relojes ZKTeco',         show: canTech },
@@ -132,7 +141,7 @@ function ConfiguracionPageInner() {
       </div>
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 dark:bg-white/[0.04] dark:border-white/[0.06]">
         {tab === 'sistema'  && <SistemaTab />}
-        {tab === 'relojes'  && <RelojesTab />}
+        {tab === 'relojes'  && <RelojesTab canManageDevices={canManageDevices} />}
         {tab === 'webhooks' && <WebhooksTab />}
         {tab === 'api'      && <ApiTab />}
       </div>
@@ -318,7 +327,12 @@ function SistemaTab() {
 }
 
 // ─── Tab: Relojes ZKTeco ─────────────────────────────────────
-function RelojesTab() {
+// `canManageDevices` (sólo super_admin) habilita las acciones sensibles:
+// alta/edición/borrado de relojes, habilitar/deshabilitar/limpiar y el
+// asistente de sincronización (autopolling). Un admin ve el módulo y puede
+// operar/diagnosticar/descargar/vincular, pero no ve esos controles (la API
+// además los sigue exigiendo con requireSuperAdmin).
+function RelojesTab({ canManageDevices }: { canManageDevices: boolean }) {
   const [devices, setDevices]       = useState<Device[]>([])
   const [loading, setLoading]       = useState(true)
   const [pinging, setPinging]       = useState(false)
@@ -543,18 +557,20 @@ function RelojesTab() {
             <Activity size={14} className={pinging ? 'animate-pulse text-blue-500' : ''} />
             {pinging ? 'Verificando...' : 'Verificar estado'}
           </button>
-          <button onClick={openAdd}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors">
-            <Plus size={14} /> Agregar reloj
-          </button>
+          {canManageDevices && (
+            <button onClick={openAdd}
+              className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-colors">
+              <Plus size={14} /> Agregar reloj
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Sincronización automática (worker PM2) */}
-      <SyncWizard />
+      {/* Sincronización automática (worker PM2) — sólo super_admin (autopolling). */}
+      {canManageDevices && <SyncWizard />}
 
-      {/* Formulario add/edit */}
-      {showForm && (
+      {/* Formulario add/edit — sólo super_admin. */}
+      {canManageDevices && showForm && (
         <div className="border border-blue-100 bg-blue-50 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="font-medium text-slate-800 dark:text-white/90">{editDevice ? 'Editar reloj' : 'Agregar nuevo reloj'}</h3>
@@ -633,7 +649,9 @@ function RelojesTab() {
         <div className="py-8 text-center text-slate-400 dark:text-white/30">
           <Clock size={32} className="mx-auto mb-2 opacity-30" />
           <p>No hay relojes registrados.</p>
-          <button onClick={openAdd} className="mt-3 text-blue-600 text-sm hover:underline">+ Agregar el primer reloj</button>
+          {canManageDevices
+            ? <button onClick={openAdd} className="mt-3 text-blue-600 text-sm hover:underline">+ Agregar el primer reloj</button>
+            : <p className="mt-2 text-xs">Un super administrador debe registrar los relojes.</p>}
         </div>
       ) : (
         <div className="space-y-3">
@@ -703,8 +721,12 @@ function RelojesTab() {
                       className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg disabled:opacity-50 dark:text-white/30">
                       <Activity size={15}/>
                     </button>
-                    <button onClick={() => openEdit(d)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg dark:text-white/30"><Edit2 size={15}/></button>
-                    <button onClick={() => deleteDevice(d.id, d.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg dark:text-white/30"><Trash2 size={15}/></button>
+                    {canManageDevices && (
+                      <>
+                        <button title="Editar reloj" aria-label="Editar reloj" onClick={() => openEdit(d)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg dark:text-white/30"><Edit2 size={15}/></button>
+                        <button title="Eliminar reloj" aria-label="Eliminar reloj" onClick={() => deleteDevice(d.id, d.name)} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg dark:text-white/30"><Trash2 size={15}/></button>
+                      </>
+                    )}
                     <button onClick={() => toggleExpand(d.id)} className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg dark:text-white/30 dark:hover:bg-white/[0.06]">
                       {isOpen ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
                     </button>
@@ -1034,24 +1056,26 @@ function RelojesTab() {
                                 </button>
                               </div>
 
-                              {/* Acciones secundarias */}
-                              <div className="grid grid-cols-3 gap-2">
-                                <button onClick={() => doClear(d)} disabled={!!busy}
-                                  className="flex flex-col items-center gap-1 p-3 border border-red-200 text-red-600 rounded-xl hover:bg-red-50 disabled:opacity-50 text-xs">
-                                  <Eraser size={16}/>
-                                  {busy === 'clear' ? 'Limpiando...' : 'Limpiar reloj'}
-                                </button>
-                                <button onClick={() => doEnable(d)} disabled={!!busy}
-                                  className="flex flex-col items-center gap-1 p-3 border border-green-200 text-green-700 rounded-xl hover:bg-green-50 disabled:opacity-50 text-xs">
-                                  <Power size={16}/>
-                                  {busy === 'enable' ? 'Habilitando...' : 'Habilitar'}
-                                </button>
-                                <button onClick={() => doDisable(d)} disabled={!!busy}
-                                  className="flex flex-col items-center gap-1 p-3 border border-amber-200 text-amber-700 rounded-xl hover:bg-amber-50 disabled:opacity-50 text-xs">
-                                  <PowerOff size={16}/>
-                                  {busy === 'disable' ? 'Deshabilitando...' : 'Deshabilitar'}
-                                </button>
-                              </div>
+                              {/* Acciones secundarias (comandos al reloj real) — sólo super_admin. */}
+                              {canManageDevices && (
+                                <div className="grid grid-cols-3 gap-2">
+                                  <button onClick={() => doClear(d)} disabled={!!busy}
+                                    className="flex flex-col items-center gap-1 p-3 border border-red-200 text-red-600 rounded-xl hover:bg-red-50 disabled:opacity-50 text-xs">
+                                    <Eraser size={16}/>
+                                    {busy === 'clear' ? 'Limpiando...' : 'Limpiar reloj'}
+                                  </button>
+                                  <button onClick={() => doEnable(d)} disabled={!!busy}
+                                    className="flex flex-col items-center gap-1 p-3 border border-green-200 text-green-700 rounded-xl hover:bg-green-50 disabled:opacity-50 text-xs">
+                                    <Power size={16}/>
+                                    {busy === 'enable' ? 'Habilitando...' : 'Habilitar'}
+                                  </button>
+                                  <button onClick={() => doDisable(d)} disabled={!!busy}
+                                    className="flex flex-col items-center gap-1 p-3 border border-amber-200 text-amber-700 rounded-xl hover:bg-amber-50 disabled:opacity-50 text-xs">
+                                    <PowerOff size={16}/>
+                                    {busy === 'disable' ? 'Deshabilitando...' : 'Deshabilitar'}
+                                  </button>
+                                </div>
+                              )}
 
                               {log.length > 0 && (
                                 <div className="bg-slate-900 rounded-xl p-3 font-mono text-xs text-green-400 space-y-0.5 max-h-40 overflow-y-auto">
