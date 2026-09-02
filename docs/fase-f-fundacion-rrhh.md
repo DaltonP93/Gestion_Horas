@@ -99,7 +99,32 @@
 - No hay DELETE de empresas/centros (se desactivan con `active=0`).
 - No se asignan empleados a centros de costo todavía (eso es F2/asignaciones).
 
-## Próximas etapas (planificadas, no implementadas en F1)
+## PR F2 — Personas: candidatos y asignaciones con vigencia
+
+Encadena sobre F1. Reutiliza `employee_contracts` (051), `employee_documents`
+(067) y `job_titles` (069); **no** los duplica. Agrega (migración `078`):
+
+- **`candidates`** — postulantes con estado (`new`…`hired`/`rejected`) y
+  **conversión trazable**: `POST /api/candidates/:id/convert` enlaza a un
+  empleado **existente** (`converted_employee_id`), nunca crea ni fabrica
+  empleados; queda auditada.
+- **`employee_assignments`** — historial **temporal** de asignación organizativa
+  (sucursal, departamento, centro de costo, cargo, remuneración de referencia)
+  con vigencia efectiva `valid_from`/`valid_to`. **Append-only**: crear una
+  vigencia cierra la anterior (`valid_to` = nuevo `valid_from` − 1 día) en una
+  transacción; nunca borra el contexto anterior. Inserciones fuera de orden se
+  rechazan (409).
+- **`employee_documents.access_level`** — metadato de acceso aditivo (sin tocar
+  los archivos reales; sin firma).
+- Rutas `/api/candidates` y `/api/assignments/employee/:id` con permisos
+  granulares (`candidatos`, `asignaciones`), validación Joi y auditoría con
+  correlation id (remuneración redactada). UI mínima: `/candidatos` (con
+  conversión).
+
+Flag nuevo: **`PEOPLE_WRITE_ENABLED`** — default `false` (fail-closed), sólo
+`"true"` habilita crear/editar/convertir. Reads y autorización siempre activos.
+
+## Próximas etapas (planificadas, no implementadas)
 
 - **F2** — personas, candidatos y contratos con vigencia efectiva e historial.
 - **F3** — calendario/jornada/cumplimiento (timezone America/Asuncion),
