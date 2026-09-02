@@ -67,7 +67,7 @@ describe('POST /api/companies — writer fail-closed', () => {
     sequelize.query.mockResolvedValueOnce([55, 1]); // forma REAL: [insertId, affectedRows]
     const res = mkRes();
     await handlerFor('post', '/')(
-      { user: USER, body: { code: 'A', legal_name: 'ACME', tax_id: '80012345-6', active: true, reason: 'alta' }, correlationId: 'c2', headers: {} },
+      { user: USER, body: { code: 'A', legal_name: 'ACME', tax_id: '80012345-6', active: true, reason: 'motivo confidencial de alta' }, correlationId: 'c2', headers: {} },
       res, jest.fn(),
     );
     expect(res.status).toHaveBeenCalledWith(201);
@@ -75,9 +75,10 @@ describe('POST /api/companies — writer fail-closed', () => {
     const call = audit.log.mock.calls[0][0];
     expect(call.action).toBe('company.create');
     expect(call.entity_id).toBe(55);
-    // tax_id redactado en la auditoría
-    expect(JSON.stringify(call.details)).toContain('[REDACTED]');
+    // tax_id y el texto libre `reason` redactados en la auditoría
+    expect(call.details.reason).toBe('[REDACTED]');
     expect(JSON.stringify(call.details)).not.toContain('80012345-6');
+    expect(JSON.stringify(call.details)).not.toContain('confidencial');
   });
 
   test('duplicado → 409', async () => {

@@ -36,4 +36,28 @@ describe('redactDetails', () => {
   test('es case-insensitive', () => {
     expect(redactDetails({ TaxId: '1', Password: 'p' })).toEqual({ TaxId: REDACTED, Password: REDACTED });
   });
+
+  test('★ texto libre de auditoría: reason y change_reason quedan enmascarados', () => {
+    const out = redactDetails({
+      to: 'closed',
+      reason: 'el empleado pidió licencia por motivos personales de salud',
+      change_reason: 'traslado a la sucursal de Encarnación',
+      snapshot_created: true,
+    });
+    // La clave se conserva como marcador, pero NUNCA el contenido libre.
+    expect(out.reason).toBe(REDACTED);
+    expect(out.change_reason).toBe(REDACTED); // cubierto por inclusión de 'reason'
+    expect(out.to).toBe('closed');
+    expect(out.snapshot_created).toBe(true);
+    // Ni un fragmento del texto libre sobrevive.
+    expect(JSON.stringify(out)).not.toMatch(/licencia|Encarnaci/i);
+  });
+
+  test('otras notas de texto libre (note/notes/observacion) también se enmascaran', () => {
+    const out = redactDetails({ note: 'x', notes: 'y', observacion: 'z', id: 5 });
+    expect(out.note).toBe(REDACTED);
+    expect(out.notes).toBe(REDACTED);
+    expect(out.observacion).toBe(REDACTED);
+    expect(out.id).toBe(5);
+  });
 });

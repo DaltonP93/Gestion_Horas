@@ -22,6 +22,11 @@ const DEFAULT_SENSITIVE_KEYS = [
   'tax_id', 'taxid', 'ruc', 'document_number', 'documento', 'ci', 'cedula',
   'ips_number', 'ips',
   'biometric', 'biometria', 'fingerprint', 'face', 'template',
+  // Texto libre provisto por el usuario: la auditoría nunca lo serializa en
+  // claro (invariante). Por inclusión, 'reason' cubre también 'change_reason'.
+  // Se conserva la clave como marcador (equivale a "hubo un motivo") sin el
+  // contenido. Aplica uniforme a todas las rutas que auditan vía redactDetails.
+  'reason', 'note', 'notes', 'comentario', 'observacion', 'observaciones',
 ];
 
 const REDACTED = '[REDACTED]';
