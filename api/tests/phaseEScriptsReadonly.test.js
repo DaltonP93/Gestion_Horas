@@ -26,6 +26,7 @@ const SCRIPTS = [
   'daily-summary-dryrun.js',
   'workday-engine-audit.js',
   'check-schema-drift.js',
+  'phase-e-preflight.js',
 ];
 
 // Quita comentarios de línea y de bloque para no marcar menciones descriptivas
