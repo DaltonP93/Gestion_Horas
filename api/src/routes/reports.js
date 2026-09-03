@@ -67,11 +67,12 @@ router.get('/monthly', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/reports/weekly?week=&year=
-router.get('/weekly', asyncHandler(async (req, res) => {
+// Datos del reporte semanal (read-only). Compartido por la vista JSON y por el
+// export CSV para no divergir el cálculo de la semana ni el RBAC.
+async function loadWeeklyReport(req) {
   const now = new Date();
   const { year = now.getFullYear(), week } = req.query;
 
-  // Calcular inicio y fin de la semana
   const jan1 = new Date(year, 0, 1);
   const weekNum = week || Math.ceil(((now - jan1) / 86400000 + jan1.getDay() + 1) / 7);
   const from = new Date(jan1.getTime() + (weekNum - 1) * 7 * 86400000);
@@ -92,7 +93,38 @@ router.get('/weekly', asyncHandler(async (req, res) => {
     ORDER BY ds.date, e.last_name
   `, { replacements: [from.toISOString().split('T')[0], to.toISOString().split('T')[0], ...sc.params] });
 
+  return { rows, weekNum, from, to };
+}
+
+// Escapa una celda CSV (RFC 4180): comillas, comas y saltos de línea.
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+router.get('/weekly', asyncHandler(async (req, res) => {
+  const { rows, weekNum, from, to } = await loadWeeklyReport(req);
   res.json({ data: rows, week: weekNum, from, to });
+}));
+
+// ─── GET /api/reports/weekly/export?year=&week=  (CSV) ──────────────
+// Paridad con /monthly/export: descarga imprimible del reporte semanal.
+// Sólo lectura de daily_summary; mismo RBAC que /weekly.
+router.get('/weekly/export', asyncHandler(async (req, res) => {
+  const { rows, weekNum, from, to } = await loadWeeklyReport(req);
+  const iso = (d) => new Date(d).toISOString().split('T')[0];
+  const headers = ['Fecha', 'Empleado', 'Departamento', 'Estado', 'Entrada', 'Salida', 'Min trabajados', 'Min tarde'];
+  const lines = [headers.map(csvCell).join(',')];
+  for (const r of rows) {
+    lines.push([
+      iso(r.date), r.employee_name, r.department || '', r.status || '',
+      r.first_in || '', r.last_out || '', r.worked_minutes ?? 0, r.late_minutes ?? 0,
+    ].map(csvCell).join(','));
+  }
+  const csv = '﻿' + lines.join('\r\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="reporte-semanal_${iso(from)}_${iso(to)}_S${weekNum}.csv"`);
+  res.send(csv);
 }));
 
 // ─── GET /api/reports/marcadas ─────────────────────────────────────
