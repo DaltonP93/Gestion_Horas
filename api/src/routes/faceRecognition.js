@@ -13,6 +13,7 @@
  */
 const router = require('express').Router();
 const { authenticate, authorize } = require('../middleware/auth');
+const enforceEmployeeScope        = require('../middleware/enforceEmployeeScope');
 const { asyncHandler }           = require('../utils/asyncHandler');
 const { sequelize }               = require('../config/database');
 const audit                       = require('../services/audit');
@@ -26,9 +27,12 @@ function euclidean(a, b) {
 }
 
 // GET /api/face/:employeeId/descriptor
-// Devuelve descriptor de referencia (solo admin/gth o el propio usuario)
+// Devuelve descriptor de referencia. Los roles scoped (manager/gestor) sólo
+// pueden leerlo dentro de su ámbito organizacional; fuera de alcance → 404
+// (H-1: IDOR biométrico).
 router.get('/:employeeId/descriptor',
   authorize('admin', 'gth', 'hr', 'super_admin', 'manager', 'gestor'),
+  enforceEmployeeScope('employeeId'),
   asyncHandler(async (req, res) => {
     const [rows] = await sequelize.query(
       'SELECT face_descriptor, face_photo_url, face_enrolled_at FROM employees WHERE id = ?',
@@ -70,15 +74,22 @@ router.put('/:employeeId/enroll',
        WHERE id = ?`,
       { replacements: [JSON.stringify(face_descriptor), face_photo_url || null, req.user.id, req.params.employeeId] }
     );
-    await audit.log({ req, user: req.user, action: 'face_enroll', entity: 'employee', entity_id: req.params.employeeId, details: { name: emp[0].full_name } });
+    // Auditoría sin PII: el nombre del empleado NO viaja a la auditoría; el
+    // empleado ya queda identificado por entity_id (M-3).
+    await audit.log({ req, user: req.user, action: 'face_enroll', entity: 'employee', entity_id: req.params.employeeId, details: { employee_id: parseInt(req.params.employeeId, 10) } });
     res.json({ ok: true, message: 'Descriptor facial guardado' });
   })
 );
 
 // POST /api/face/verify
-// Compara descriptor enviado vs. el de referencia del empleado
+// Compara descriptor enviado vs. el de referencia del empleado.
 // Body: { employee_id, descriptor: [128 floats], selfie_url?, attendance_log_id? }
-router.post('/verify', asyncHandler(async (req, res) => {
+// Los roles scoped sólo pueden verificar (y escribir en face_verifications)
+// contra empleados de su ámbito; un employee_id fuera de alcance → 404, sin
+// revelar si existe y sin escribir fila alguna (H-2: verify abierto / IDOR).
+router.post('/verify',
+  enforceEmployeeScope({ from: 'body', key: 'employee_id' }),
+  asyncHandler(async (req, res) => {
   const { employee_id, descriptor, selfie_url, attendance_log_id } = req.body;
   if (!employee_id || !Array.isArray(descriptor) || descriptor.length !== 128) {
     return res.status(400).json({ error: 'employee_id y descriptor[128] son requeridos' });
