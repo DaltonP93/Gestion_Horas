@@ -15,6 +15,7 @@ const router   = require('express').Router();
 const { sequelize } = require('../config/database');
 const logger   = require('../config/logger');
 const { pyDateStr } = require('../services/scheduler');
+const { buildPayrollDataset, toCsv, buildWorkbook } = require('../services/payrollExport');
 
 // Middleware: autenticación por API Key
 function apiKeyAuth(req, res, next) {
@@ -284,6 +285,91 @@ router.post('/checkin', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * @swagger
+ * /api/integration/payroll/export.json:
+ *   get:
+ *     tags: [Integration]
+ *     summary: Planilla mensual de horas/asistencia — dataset canónico para nómina
+ *     description: |
+ *       Dataset canónico y versionado (`schema_version`) por empleado del período,
+ *       pensado para integrar con CUALQUIER sistema de nómina externo. Las horas
+ *       trabajadas se calculan con el MOTOR de jornada (los turnos nocturnos que
+ *       cruzan medianoche cuentan como UN jornal), no con la suma cruda por fecha
+ *       civil.
+ *
+ *       Auth: header `X-API-Key`. Disponible también como `.csv` y `.xlsx`.
+ *
+ *       **Unidades:** `minutos_*`/`atrasos_min` en minutos; `horas_*` en horas
+ *       (= minutos/60, 2 decimales); `dias_trabajados`/`ausencias` en días.
+ *
+ *       **Sin montos:** esta vía (API Key compartida) NUNCA incluye salarios;
+ *       expone sólo identificadores + horas/asistencia. Para montos usar la vía
+ *       JWT (`/api/payroll/export.*`) con un rol autorizado.
+ *
+ *       Documentación completa: `docs/nomina-export-integracion.md`.
+ *     security:
+ *       - apiKeyAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: year
+ *         schema: { type: integer }
+ *         example: 2026
+ *       - in: query
+ *         name: month
+ *         schema: { type: integer }
+ *         example: 4
+ *       - in: query
+ *         name: department_id
+ *         schema: { type: integer }
+ */
+function payrollExportParams(req) {
+  const now = new Date();
+  const year = +(req.query.year || now.getFullYear());
+  const month = +(req.query.month || (now.getMonth() + 1));
+  const departmentId = req.query.department_id ? +req.query.department_id : null;
+  // La vía API Key NUNCA exporta montos (includeAmounts: false).
+  return { year, month, departmentId, includeAmounts: false };
+}
+
+router.get('/payroll/export.json', async (req, res) => {
+  try {
+    const dataset = await buildPayrollDataset(payrollExportParams(req));
+    res.setHeader('X-Schema-Version', dataset.schema_version);
+    res.json(dataset);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/payroll/export.csv', async (req, res) => {
+  try {
+    const p = payrollExportParams(req);
+    const dataset = await buildPayrollDataset(p);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="nomina_export_${p.year}-${String(p.month).padStart(2, '0')}.csv"`);
+    res.setHeader('X-Schema-Version', dataset.schema_version);
+    res.send(toCsv(dataset));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+router.get('/payroll/export.xlsx', async (req, res) => {
+  try {
+    const p = payrollExportParams(req);
+    const dataset = await buildPayrollDataset(p);
+    const wb = buildWorkbook(dataset);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="nomina_export_${p.year}-${String(p.month).padStart(2, '0')}.xlsx"`);
+    res.setHeader('X-Schema-Version', dataset.schema_version);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
