@@ -1,8 +1,9 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { Clock, Check, X, ShieldCheck } from 'lucide-react'
+import { Clock, Check, X, ShieldCheck, Download } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
+import { downloadCsv } from '@/lib/csvExport'
 
 interface Row {
   employee_id: number; code: string; name: string; department: string
@@ -49,6 +50,36 @@ export default function HorasExtraPage() {
       await api.put('/api/overtime/decide', { employee_id: r.employee_id, date: r.date, status })
       load()
     } catch { setMsg('Error al registrar la decisión.') }
+  }
+
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const pendingRows = rows.filter(r => !r.status)
+
+  async function decideBulk(status: 'approved' | 'rejected') {
+    if (!pendingRows.length) return
+    const verbo = status === 'approved' ? 'aprobar' : 'rechazar'
+    if (!confirm(`¿${verbo[0].toUpperCase() + verbo.slice(1)} las ${pendingRows.length} horas extra pendientes del período/filtro? Se puede revertir fila por fila.`)) return
+    setBulkBusy(true)
+    try {
+      const r = await api.put('/api/overtime/decide-batch', {
+        status,
+        items: pendingRows.map(p => ({ employee_id: p.employee_id, date: p.date })),
+      })
+      setMsg(`${r.data?.applied ?? pendingRows.length} decisión(es) registrada(s).`)
+      load()
+    } catch (e: any) {
+      setMsg(e?.response?.data?.error || 'Error al registrar las decisiones por lote.')
+    } finally { setBulkBusy(false) }
+  }
+
+  function exportCsv() {
+    if (!rows.length) return
+    const estado = (s: Row['status']) => s === 'approved' ? 'Aprobada' : s === 'rejected' ? 'Rechazada' : 'Pendiente'
+    downloadCsv(
+      `horas-extra_${from}_${to}.csv`,
+      ['Fecha', 'Código', 'Empleado', 'Departamento', 'Minutos extra', 'Horas extra', 'Estado', 'Nota'],
+      rows.map(r => [r.date, r.code, r.name, r.department, r.overtime_minutes, hhmm(r.overtime_minutes), estado(r.status), r.note || '']),
+    )
   }
 
   return (
@@ -104,6 +135,22 @@ export default function HorasExtraPage() {
               <option value="all">Todas</option>
             </select>
           </div>
+          <button onClick={exportCsv} disabled={!rows.length}
+            className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm flex items-center gap-2 disabled:opacity-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+            <Download size={15} /> Exportar CSV
+          </button>
+          {pendingRows.length > 0 && (
+            <div className="flex items-end gap-2 ml-auto">
+              <button onClick={() => decideBulk('approved')} disabled={bulkBusy}
+                className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm flex items-center gap-1.5 disabled:opacity-50">
+                <Check size={15} /> Aprobar {pendingRows.length}
+              </button>
+              <button onClick={() => decideBulk('rejected')} disabled={bulkBusy}
+                className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm flex items-center gap-1.5 disabled:opacity-50">
+                <X size={15} /> Rechazar {pendingRows.length}
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

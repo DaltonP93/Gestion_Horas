@@ -98,4 +98,46 @@ router.put('/decide', requirePermission('aprobaciones', 'update'), async (req, r
   } catch (e) { next(e); }
 });
 
+// PUT /decide-batch — decisión por LOTE (misma semántica que /decide por fila,
+// aplicada atómicamente sobre un conjunto). Escribe SÓLO overtime_approvals;
+// misma autorización (aprobaciones:update). Idempotente por fila (upsert).
+router.put('/decide-batch', requirePermission('aprobaciones', 'update'), async (req, res, next) => {
+  try {
+    const { items, status, note } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0 || !['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'items[] y status (approved|rejected) requeridos' });
+    }
+    if (items.length > 500) {
+      return res.status(400).json({ error: 'Demasiados ítems en un lote (máx 500)' });
+    }
+    const valid = items.filter((it) => it && it.employee_id && it.date);
+    if (!valid.length) return res.status(400).json({ error: 'Ningún ítem válido (employee_id y date requeridos)' });
+
+    const tx = await sequelize.transaction();
+    try {
+      let applied = 0;
+      for (const it of valid) {
+        const [[ds]] = await sequelize.query(
+          'SELECT overtime_minutes FROM daily_summary WHERE employee_id = ? AND date = ? LIMIT 1',
+          { replacements: [it.employee_id, it.date], transaction: tx },
+        );
+        const minutes = ds?.overtime_minutes || 0;
+        await sequelize.query(
+          `INSERT INTO overtime_approvals (employee_id, date, status, minutes, decided_by, note)
+           VALUES (?,?,?,?,?,?)
+           ON DUPLICATE KEY UPDATE status=VALUES(status), minutes=VALUES(minutes),
+             decided_by=VALUES(decided_by), note=VALUES(note)`,
+          { replacements: [it.employee_id, it.date, status, minutes, req.user?.id || null, note || null], transaction: tx },
+        );
+        applied++;
+      }
+      await tx.commit();
+      res.json({ ok: true, applied });
+    } catch (e) {
+      await tx.rollback();
+      throw e;
+    }
+  } catch (e) { next(e); }
+});
+
 module.exports = router;
