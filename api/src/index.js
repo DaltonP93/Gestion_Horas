@@ -62,6 +62,7 @@ const reportsBuilderRoutes  = require('./routes/reportsBuilder');
 const kpiGoalsRoutes        = require('./routes/kpiGoals');
 const employeeNotesRoutes   = require('./routes/employeeNotes');
 const catalogsRoutes        = require('./routes/catalogs');
+const monthlyApprovalsRoutes = require('./routes/monthlyApprovals');
 const paymentTypesRoutes    = require('./routes/paymentTypes');
 const jobTitlesRoutes       = require('./routes/jobTitles');
 const approvalsSlaRoutes    = require('./routes/approvalsSla');
@@ -149,6 +150,9 @@ app.use('/api/devices',     deviceRoutes);
 app.use('/api/schedules',   scheduleRoutes);
 app.use('/api/shifts',      shiftRoutes);
 app.use('/api/overtime',    overtimeRoutes);
+// Se monta ANTES de /api/reports para que /monthly/approvals no dependa del
+// orden de rutas dentro de reports.js (evita solapamiento con el PR #196).
+app.use('/api/reports/monthly/approvals', monthlyApprovalsRoutes);
 app.use('/api/reports',     reportRoutes);
 app.use('/api/legal',       legalRoutes);
 app.use('/api/legal-data',  legalDataRoutes);
