@@ -86,7 +86,15 @@ export default function AprobacionReportesPage() {
   // ── Bandeja de pendientes ────────────────────────────────────────
   const inboxQ = useQuery<InboxItem[]>({
     queryKey: ['monthly-approvals-inbox'],
-    queryFn: () => api.get('/api/reports/monthly/approvals/inbox').then(r => r.data),
+    queryFn: () => api.get('/api/reports/monthly/approvals/inbox').then(r => {
+      // La API envuelve la lista en { data: [...] }; toleramos ambas formas.
+      const body = r.data
+      const rows = (body && typeof body === 'object' && 'data' in body) ? body.data : body
+      return (Array.isArray(rows) ? rows : []).map((it: Record<string, unknown>) => ({
+        ...it,
+        approval_state: (it.approval_state ?? it.status) as ApprovalState,
+      })) as InboxItem[]
+    }),
   })
 
   // ── Estado del período seleccionado ──────────────────────────────
@@ -95,7 +103,14 @@ export default function AprobacionReportesPage() {
     queryFn: () =>
       api.get('/api/reports/monthly/approvals/status', {
         params: { year, month, ...(deptId ? { department_id: deptId } : {}) },
-      }).then(r => r.data),
+      }).then(r => {
+        // La API envuelve el objeto en { data: {...} } (o { data: null }).
+        const body = r.data
+        const row = (body && typeof body === 'object' && 'data' in body) ? body.data : body
+        return row
+          ? { ...row, approval_state: (row.approval_state ?? row.status) as ApprovalState } as PeriodStatus
+          : null
+      }),
   })
 
   // ── Departamentos (para el selector, si el rol lo permite) ───────
