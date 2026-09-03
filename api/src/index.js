@@ -80,6 +80,7 @@ const rulesRoutes           = require('./routes/rules');
 const contractsRoutes       = require('./routes/contracts');
 const lactanciaRoutes       = require('./routes/lactancia');
 const workdayConfigurationRoutes = require('./routes/workdayConfiguration');
+const faseERoutes = require('./routes/faseE');
 const swaggerUi    = require('swagger-ui-express');
 const swaggerSpec  = require('./config/swagger');
 
@@ -201,6 +202,7 @@ app.use('/api/rules',        rulesRoutes);
 app.use('/api/contracts',    contractsRoutes);
 app.use('/api/lactancia',    lactanciaRoutes);
 app.use('/api/workday-config', workdayConfigurationRoutes);
+app.use('/api/fase-e',         faseERoutes);
 
 // Documentación Swagger UI — http://localhost:4000/api/docs
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {

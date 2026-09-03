@@ -221,7 +221,10 @@ async function resolveMarkType(employeeId, wallClockTs) {
  * exclusivamente en el motor/materializador, no duplicada acá.
  */
 async function recalcDailySummary(employeeId, timestamp) {
-  if (workdaySummary.isEngineSummaryWriteEnabled()) {
+  // El escritor hacia adelante del motor exige AMBOS cerrojos (env kill-switch
+  // Y setting de BD fase_e_forward_enabled). Con cualquiera en OFF se conserva
+  // el camino LEGACY — fail-closed y comportamiento actual intacto.
+  if (await workdaySummary.isEngineForwardWriteEnabled()) {
     await workdaySummary.resolveSummary(employeeId, timestamp, { apply: true });
     return;
   }
