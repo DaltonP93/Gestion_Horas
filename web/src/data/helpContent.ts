@@ -1174,6 +1174,147 @@ const help: Record<string, HelpContent> = {
       },
     ],
   },
+
+  // ─── Fundación RR.HH. (FASE F) — módulos nuevos ───────────────────────
+  '/candidatos': {
+    title: 'Candidatos',
+    intro: 'Postulantes y su conversión trazable a un empleado existente. La conversión NO crea empleados: enlaza a uno ya cargado.',
+    sections: [
+      {
+        heading: 'Alta y edición',
+        items: [
+          'Cargá nombre, contacto, puesto y estado del proceso (nuevo, preselección, entrevista, oferta, contratado, rechazado).',
+          'Empresa/Sucursal definen el ALCANCE del candidato. Un rol con alcance sólo ve y crea candidatos de su empresa/sucursal; la API rechaza combinaciones incoherentes (la sucursal debe pertenecer a la empresa) y las que están fuera de tu alcance.',
+        ],
+      },
+      {
+        heading: 'Conversión a empleado',
+        items: [
+          '"Convertir" enlaza el candidato a un empleado EXISTENTE (por id). No fabrica empleados ni datos.',
+          'La operación es atómica y trazable: no se puede convertir dos veces el mismo candidato.',
+        ],
+      },
+      {
+        heading: 'Modo sólo lectura (rollout)',
+        items: [
+          'La escritura de personas está detrás de un flag (fail-closed). Si está en modo sólo lectura, las acciones muestran un aviso y no registran cambios.',
+        ],
+      },
+    ],
+  },
+
+  '/configuracion/empresas': {
+    title: 'Empresas',
+    intro: 'Alta de empresas del grupo. Base de la organización para el alcance por empresa/sucursal y para la nómina.',
+    sections: [
+      {
+        heading: 'Qué hace',
+        items: [
+          'CRUD de empresas con autorización por permiso (empresas).',
+          'Las sucursales pueden vincularse a una empresa; ese vínculo define el alcance organizativo.',
+        ],
+      },
+      {
+        heading: 'Límites',
+        items: [
+          'La escritura es fail-closed (flag de gobierno): en modo sólo lectura no se registran cambios.',
+          'Un rol con alcance no puede operar empresas fuera de su alcance.',
+        ],
+      },
+    ],
+  },
+
+  '/configuracion/centros-costo': {
+    title: 'Centros de costo',
+    intro: 'Catálogo de centros de costo por empresa, para clasificación organizativa y de nómina.',
+    sections: [
+      {
+        heading: 'Qué hace',
+        items: [
+          'CRUD de centros de costo con autorización por permiso (centros_costo) y por alcance de empresa.',
+          'Los departamentos pueden asociarse a un centro de costo; esa relación aporta la empresa a la coherencia de asignaciones.',
+        ],
+      },
+      {
+        heading: 'Límites',
+        items: [
+          'Escritura fail-closed (flag de gobierno): en modo sólo lectura no se registran cambios; fuera de alcance responde 403.',
+        ],
+      },
+    ],
+  },
+
+  '/empleados/': {
+    title: 'Historial organizativo del empleado',
+    intro: 'En la ficha del empleado: la línea de tiempo de asignaciones (sucursal/departamento/centro de costo/cargo/remuneración de referencia) con vigencia efectiva, y el visor de jornada.',
+    sections: [
+      {
+        heading: 'Historial organizativo (asignaciones)',
+        items: [
+          'Cada asignación tiene una vigencia (desde → hasta). La abierta se marca "Vigente".',
+          'Registrar una nueva vigencia es APPEND-ONLY: cierra automáticamente la anterior el día previo a la nueva fecha. Nunca borra historial.',
+          'La nueva fecha debe ser posterior a la vigencia abierta; si no, la API responde 409.',
+          'Escritura fail-closed (flag de personas): en modo sólo lectura muestra un aviso y no registra cambios.',
+        ],
+      },
+      {
+        heading: 'Jornada efectiva (sólo lectura)',
+        items: [
+          'Consultá por fecha la jornada vigente. Muestra el estado de esquema: histórico (fallback), migración parcial (mensaje controlado) o configurada.',
+          'Es sólo lectura: no recalcula ni modifica asistencia.',
+        ],
+      },
+    ],
+  },
+
+  '/configuracion/calendario-laboral': {
+    title: 'Calendario laboral',
+    intro: 'Calendarios laborales versionados por alcance (global/empresa/sucursal), sus excepciones y un resolutor de días efectivos (sólo lectura).',
+    sections: [
+      {
+        heading: 'Autoría',
+        items: [
+          'Creá un calendario con código, alcance, zona horaria, días laborables (1–7) y vigencia. El código es único dentro de un alcance.',
+          'Agregá excepciones por fecha: no laborable, laborable o especial.',
+          'La API rechaza fechas imposibles (INVALID_DATE), vigencias inválidas y referencias incoherentes o fuera de alcance.',
+        ],
+      },
+      {
+        heading: 'Resolutor y límites',
+        items: [
+          'El resolutor muestra, para un rango, qué días son laborables y por qué (feriado, descanso, excepción). Es sólo lectura.',
+          'Escritura fail-closed (flag de calendario). Un writer con alcance no puede modificar un calendario global.',
+        ],
+      },
+    ],
+  },
+
+  '/configuracion/nomina-base': {
+    title: 'Nómina — base (sandbox)',
+    intro: 'Base de nómina SANDBOX NO OFICIAL: estructura períodos y conceptos con trazabilidad. No calcula liquidación ni haberes, no paga y no integra con IPS/MTESS/bancos.',
+    sections: [
+      {
+        heading: 'Períodos (máquina de estados)',
+        items: [
+          'Cada período nace en borrador y transiciona draft → previsualización → bloqueado → cerrado. El cierre es irreversible y persiste una evidencia (snapshot) agregada, sin PII.',
+          'La previsualización y la evidencia son agregados NO OFICIALES (headcount y conteo de conceptos); nunca montos ni datos personales.',
+        ],
+      },
+      {
+        heading: 'Conceptos (versionados)',
+        items: [
+          'Catálogo por código/versión (ingreso o deducción) con vigencia. La "pista de fórmula" es SÓLO DESCRIPTIVA: nunca se evalúa ni calcula.',
+        ],
+      },
+      {
+        heading: 'Límites',
+        items: [
+          'Sólo roles globales de RR.HH. (super_admin/admin/gth/hr) operan la nómina sandbox global.',
+          'Escritura fail-closed (flag de nómina). Las integraciones (IPS/MTESS/firma/bancos) están siempre apagadas en esta etapa.',
+        ],
+      },
+    ],
+  },
 }
 
 /**
