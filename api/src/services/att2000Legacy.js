@@ -14,7 +14,10 @@
  */
 
 function autoPullEnabled() {
-  return String(process.env.ATT2000_AUTO_PULL_ENABLED || '').toLowerCase() === 'true';
+  // Contrato exacto de kill switch (fail-closed): sólo el string literal
+  // "true" habilita, igual que ZKTECO_AUTO_POLL, WORKDAY_CONFIG_WRITE_ENABLED
+  // y el resto de flags fail-closed del proyecto. No se acepta "TRUE"/"True".
+  return process.env.ATT2000_AUTO_PULL_ENABLED === 'true';
 }
 
 function available() {

@@ -47,9 +47,9 @@ El parser heredado además aceptaba basura en silencio:
 |---|---|---|
 | *(ausente)* | 1 reloj inventado | 0 relojes, `degraded` |
 | `999.1.1.1:4370` | 1 reloj con IP imposible | rechazado, `host_invalid` |
-| `10.0.0.11:abcd` | 1 reloj con `port: NaN` | rechazado, `port_invalid` |
+| `10.x.x.11:abcd` | 1 reloj con `port: NaN` | rechazado, `port_invalid` |
 | `,,` | **3 relojes** con IP vacía | rechazado, `entry_empty` ×3 |
-| `10.0.0.11:4370;10.0.0.12:4370` | 1 reloj, el segundo desaparecía | rechazado, `delimiter_invalid` |
+| `10.x.x.11:4370;10.x.x.12:4370` | 1 reloj, el segundo desaparecía | rechazado, `delimiter_invalid` |
 
 ---
 
@@ -62,7 +62,7 @@ El parser heredado además aceptaba basura en silencio:
 Separador entre entradas: **coma**. El formato heredado `ip:port` sigue funcionando igual.
 
 ```bash
-ZKTECO_DEVICES=Gerencia@10.0.0.11:4370,Comedor@10.0.0.12:4370,Lavadero@10.0.0.13:4370
+ZKTECO_DEVICES=reloj-ejemplo-1@10.x.x.11:4370,reloj-ejemplo-2@10.x.x.12:4370,reloj-ejemplo-3@10.x.x.13:4370
 ```
 
 El nombre existe porque los relojes reales tienen nombre propio y el `Reloj 1` que generaba el parser viejo no sirve para operar ni para leer un log.
@@ -70,7 +70,7 @@ El nombre existe porque los relojes reales tienen nombre propio y el `Reloj 1` q
 También se acepta JSON, útil si la configuración se genera:
 
 ```bash
-ZKTECO_DEVICES=[{"name":"Gerencia","ip":"10.0.0.11","port":4370,"serial":"SN-A1"}]
+ZKTECO_DEVICES=[{"name":"reloj-ejemplo-1","ip":"10.x.x.11","port":4370,"serial":"SN-A1"}]
 ```
 
 ### Validación
