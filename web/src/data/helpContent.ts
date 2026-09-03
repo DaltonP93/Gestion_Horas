@@ -1174,6 +1174,35 @@ const help: Record<string, HelpContent> = {
       },
     ],
   },
+
+  '/aprobacion-reportes': {
+    title: 'Aprobación de reportes',
+    intro: 'Circuito de aprobación y firma del reporte mensual de marcadas. Recorre tres niveles: coordinador → gerente de área → RR.HH. Cada nivel aprueba o rechaza; cuando RR.HH. firma, el período queda "aprobado" y se puede descargar el PDF firmado.',
+    sections: [
+      {
+        heading: 'Enviar a aprobación',
+        items: [
+          'Elegí mes, año y (si tu rol lo permite) departamento, y presioná "Enviar a aprobación" para iniciar el circuito de ese período.',
+          'El recuadro de estado muestra en qué nivel está el período seleccionado, o si aún no tiene circuito iniciado.',
+        ],
+      },
+      {
+        heading: 'Bandeja de pendientes',
+        items: [
+          'Muestra sólo los reportes que te toca aprobar según tu rol y nivel; si no hay nada, estás al día.',
+          'Aprobar avanza el reporte al siguiente nivel; Rechazar lo detiene y pide un motivo.',
+          'El chip de estado indica el nivel actual: Coordinador (Nivel 1), Gerente de área (Nivel 2) o RR.HH. (firma final).',
+        ],
+      },
+      {
+        heading: 'Reporte firmado',
+        items: [
+          'Cuando el período queda "Aprobado y firmado", aparece el botón "Descargar reporte firmado" y, si el estado lo trae, quién y cuándo lo firmó.',
+          'El PDF firmado sólo está disponible una vez que RR.HH. completó la firma final.',
+        ],
+      },
+    ],
+  },
 }
 
 /**
