@@ -20,10 +20,12 @@ describe('sanitizeDetails: descarta PII y texto libre', () => {
       .toBe(JSON.stringify({ found: false }));
   });
 
-  test('nombre / full_name / username nunca sobreviven', () => {
+  test('nombre / full_name nunca sobreviven', () => {
     expect(sanitizeDetails({ name: 'Ana Páez' })).toBeNull();
     expect(sanitizeDetails({ full_name: 'Ana Páez' })).toBeNull();
-    expect(sanitizeDetails({ username: 'apaez' })).toBeNull();
+    // `username` como email (PII) tampoco: la clave es allowlisted pero el
+    // guardián de valores descarta cualquier valor con `@`.
+    expect(sanitizeDetails({ username: 'apaez@empresa.com' })).toBeNull();
   });
 
   test('texto libre (reason con espacios) se descarta; enum se conserva', () => {
@@ -78,6 +80,28 @@ describe('sanitizeDetails: conserva datos estructurales no-PII', () => {
   test('array de ids numéricos', () => {
     const out = JSON.parse(sanitizeDetails({ devices: [1, 2, 3] }));
     expect(out).toEqual({ devices: [1, 2, 3] });
+  });
+
+  test('claves estructurales ampliadas: username (handle), code, from/to token', () => {
+    const out = JSON.parse(sanitizeDetails({
+      username: 'jperez', code: 'EMP-0042', from: 'active', to: 'inactive',
+    }));
+    expect(out).toEqual({ username: 'jperez', code: 'EMP-0042', from: 'active', to: 'inactive' });
+  });
+
+  test('el guardián de valores PODA PII aun bajo claves allowlisted', () => {
+    // username como email (@), from/to con nombre completo (espacio/acento):
+    // la clave está permitida pero el valor NO pasa SAFE_STRING_RE.
+    const out = JSON.parse(sanitizeDetails({
+      username: 'juan.perez@empresa.com',
+      from: 'Juan Pérez',
+      to: 'María Gómez',
+      code: 'EMP-0042',
+    }));
+    expect(out).toEqual({ code: 'EMP-0042' });
+    expect(out.username).toBeUndefined();
+    expect(out.from).toBeUndefined();
+    expect(out.to).toBeUndefined();
   });
 });
 

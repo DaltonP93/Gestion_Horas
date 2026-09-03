@@ -37,6 +37,12 @@ const ALLOWED_DETAIL_KEYS = new Set([
   'date', 'period', 'termination_date', 'window',
   // Listas de NOMBRES de campo/clave que cambiaron — no sus valores.
   'field', 'fields', 'keys',
+  // Trazabilidad estructural NO-PII (decisión del dueño: ampliar allowlist).
+  // El guardián de valores (SAFE_STRING_RE) sigue podando cualquier valor con
+  // espacios/`@`/acentos, así que un `username` que sea email, o un `from`/`to`
+  // que contenga un nombre completo, se descartan igual: sólo pasan tokens
+  // seguros (handles de login, códigos técnicos, enums, ids, fechas, números).
+  'username', 'code', 'from', 'to',
 ]);
 
 // "Token" seguro: sin espacios, sin `@`, sin acentos; hasta 64 chars. Cubre
