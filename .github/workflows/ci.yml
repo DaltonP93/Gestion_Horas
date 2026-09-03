@@ -161,6 +161,13 @@ jobs:
       - name: Esquema base (database/init.sql)
         run: mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/init.sql
 
+      # La migración 073 crea una función/trigger. Con binary logging activo
+      # (default de MySQL 8), crear rutinas exige SUPER o este flag. El runner
+      # de migraciones corre como asistencia_ci (sin SUPER), así que lo
+      # habilitamos aquí como root. No afecta att2000 (BD efímera descartable).
+      - name: Permitir creación de rutinas con binlog activo
+        run: mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -e "SET GLOBAL log_bin_trust_function_creators = 1;"
+
       - name: migrate --status ANTES de aplicar — debe ser read-only
         run: |
           set -e
