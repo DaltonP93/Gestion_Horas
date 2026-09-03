@@ -11,6 +11,12 @@ const router = require('express').Router();
 const ExcelJS = require('exceljs');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const {
+  buildPayrollDataset,
+  canSeeAmounts,
+  toCsv,
+  buildWorkbook,
+} = require('../services/payrollExport');
 
 router.use(authenticate);
 router.use(authorize('admin', 'hr', 'gth', 'super_admin'));
@@ -241,6 +247,71 @@ router.get('/ips-aportes', async (req, res) => {
     res.json({ period: { year, month }, rates, total: data.length, data, totals });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Export canónico para nómina externa (CSV / XLSX / JSON) ─────────
+//
+// Dataset canónico y VERSIONADO por empleado (schema_version), pensado para
+// integrar con CUALQUIER sistema de nómina externo. Las HORAS TRABAJADAS salen
+// del MOTOR (nocturno correcto), NO de SUM(daily_summary.worked_minutes).
+//
+// Es SÓLO LECTURA. RBAC igual que el resto del router: rol admin/hr/gth
+// (+ super_admin) y permiso `nomina.view`. Los MONTOS (salario_base) se acotan
+// aún más y sólo se incluyen para roles autorizados (ver `canSeeAmounts`), así
+// un rol autorizado a horas/asistencia pero no a montos recibe el dataset SIN
+// salarios.
+//
+// Documentación de campos, tipos y UNIDADES (minutos vs horas):
+//   docs/nomina-export-integracion.md
+async function resolveExport(req) {
+  const now = new Date();
+  const year = +(req.query.year || now.getFullYear());
+  const month = +(req.query.month || (now.getMonth() + 1));
+  const departmentId = req.query.department_id ? +req.query.department_id : null;
+  const includeAmounts = canSeeAmounts(req.user);
+  const dataset = await buildPayrollDataset({ year, month, departmentId, includeAmounts });
+  const fname = `nomina_export_${year}-${String(month).padStart(2, '0')}${departmentId ? `_d${departmentId}` : ''}`;
+  return { dataset, fname };
+}
+
+function handleExportError(res, err) {
+  return res.status(err.status || 500).json({ error: err.message });
+}
+
+router.get('/export.csv', async (req, res) => {
+  try {
+    const { dataset, fname } = await resolveExport(req);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}.csv"`);
+    res.setHeader('X-Schema-Version', dataset.schema_version);
+    return res.send(toCsv(dataset));
+  } catch (err) {
+    return handleExportError(res, err);
+  }
+});
+
+router.get('/export.xlsx', async (req, res) => {
+  try {
+    const { dataset, fname } = await resolveExport(req);
+    const wb = buildWorkbook(dataset);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fname}.xlsx"`);
+    res.setHeader('X-Schema-Version', dataset.schema_version);
+    await wb.xlsx.write(res);
+    return res.end();
+  } catch (err) {
+    return handleExportError(res, err);
+  }
+});
+
+router.get('/export.json', async (req, res) => {
+  try {
+    const { dataset } = await resolveExport(req);
+    res.setHeader('X-Schema-Version', dataset.schema_version);
+    return res.json(dataset);
+  } catch (err) {
+    return handleExportError(res, err);
   }
 });
 
