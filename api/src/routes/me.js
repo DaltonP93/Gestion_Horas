@@ -647,6 +647,39 @@ router.get('/documents/:id/download', asyncHandler(async (req, res) => {
   fs.createReadStream(full).pipe(res);
 }));
 
+// ─── GET /api/me/payslip/pdf?year=&month= ───────────────────────
+// Recibo de sueldo del empleado logueado (atajo self-service del endpoint
+// /api/employees/:id/payslip/pdf, siempre restringido a SU propio
+// employee_id). Documento INFORMATIVO — ver disclaimer en el PDF; no es una
+// liquidación legal certificada, no calcula IRP ni todos los descuentos.
+router.get('/payslip/pdf', asyncHandler(async (req, res) => {
+  const employeeId = await getEmployeeId(req);
+  if (!employeeId) return res.status(400).json({ error: 'Tu usuario no está vinculado a un empleado' });
+
+  const now = new Date();
+  const year = parseInt(req.query.year, 10) || now.getFullYear();
+  const month = parseInt(req.query.month, 10) || (now.getMonth() + 1);
+  if (month < 1 || month > 12) return res.status(400).json({ error: 'Mes inválido' });
+
+  const { computePayslip, buildPayslipPdf } = require('../services/payslip');
+  const data = await computePayslip(sequelize, { employeeId, year, month });
+  if (!data) return res.status(404).json({ error: 'Recibo no disponible' });
+
+  audit.log({
+    req, user: req.user, action: 'me.payslip.pdf',
+    entity: 'employee', entity_id: employeeId, details: { year, month },
+  });
+
+  const PDFDocument = require('pdfkit');
+  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="recibo_sueldo_${year}_${String(month).padStart(2, '0')}.pdf"`);
+  doc.pipe(res);
+  buildPayslipPdf(doc, data);
+  doc.end();
+}));
+
 // ─── GET /api/me/data-export ─────────────────────────────────────
 // "Portabilidad de datos personales" (Ley Nº 6534/2020 de PY): entrega
 // al titular, en formato estructurado, todos sus datos personales
