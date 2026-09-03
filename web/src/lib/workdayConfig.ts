@@ -331,10 +331,17 @@ export function workdayConfigPayload(form: WorkdayConfigForm) {
   }
 }
 
+// El payload de guardado omite `schedule_id` cuando el schedule no cambió
+// (señal para updateHistory de NO re-snapshotear el catálogo vivo). El tipo lo
+// refleja como opcional, sin alterar ese comportamiento en tiempo de ejecución.
+// Necesario porque next 16.3.x typechea también los __tests__ en `next build`.
+type WorkdayConfigSavePayload =
+  Omit<ReturnType<typeof workdayConfigPayload>, 'schedule_id'> & { schedule_id?: number | null }
+
 export function workdayConfigPayloadForSave(
   form: WorkdayConfigForm,
   original?: WorkdayHistoryRow | null,
-) {
+): WorkdayConfigSavePayload {
   const payload = workdayConfigPayload(form)
   if (!original) return payload
 

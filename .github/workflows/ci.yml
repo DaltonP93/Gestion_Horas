@@ -6,13 +6,29 @@ on:
   pull_request:
     branches: [main]
 
+# Cancela runs redundantes del mismo branch/PR cuando llega un push nuevo,
+# para no acumular ejecuciones obsoletas en la cola.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   bridge-tests:
-    name: Bridge — tests
+    name: Bridge — tests (TZ=${{ matrix.tz }})
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: bridge
+    strategy:
+      # Tres zonas, no una. El Bridge convierte hora de pared del reloj a
+      # instantes, así que la zona del proceso es una entrada real: un runner
+      # en UTC no ejerce el caso de producción (America/Asuncion, UTC-4/-3) ni
+      # el del otro lado del meridiano, donde la fecha local ya cambió.
+      # fail-fast:false para que un fallo en una zona no oculte el resultado
+      # de las otras dos.
+      fail-fast: false
+      matrix:
+        tz: [UTC, America/Asuncion, Asia/Tokyo]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -21,29 +37,23 @@ jobs:
           cache: 'npm'
           cache-dependency-path: bridge/package-lock.json
       - run: npm ci || npm install
-      # Tres zonas, no una. El Bridge convierte hora de pared del reloj a
-      # instantes, así que la zona del proceso es una entrada real: un runner
-      # en UTC no ejerce el caso de producción (America/Asuncion, UTC-4/-3) ni
-      # el del otro lado del meridiano, donde la fecha local ya cambió.
-      - name: Unit tests (TZ=UTC)
+      - name: npm audit (nivel alto)
+        run: npm audit --audit-level=high
+      - name: Unit tests
         run: npm test
         env:
-          TZ: UTC
-      - name: Unit tests (TZ=America/Asuncion)
-        run: npm test
-        env:
-          TZ: America/Asuncion
-      - name: Unit tests (TZ=Asia/Tokyo)
-        run: npm test
-        env:
-          TZ: Asia/Tokyo
+          TZ: ${{ matrix.tz }}
 
   api-build:
-    name: API — install + syntax
+    name: API — install + syntax (TZ=${{ matrix.tz }})
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: api
+    strategy:
+      fail-fast: false
+      matrix:
+        tz: [UTC, America/Asuncion, Asia/Tokyo]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -52,20 +62,14 @@ jobs:
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - run: npm ci || npm install
+      - name: npm audit (nivel alto)
+        run: npm audit --audit-level=high
       - name: Syntax check
         run: node --check src/index.js
-      - name: Unit tests (TZ=UTC)
+      - name: Unit tests
         run: npm test
         env:
-          TZ: UTC
-      - name: Unit tests (TZ=America/Asuncion)
-        run: npm test
-        env:
-          TZ: America/Asuncion
-      - name: Unit tests (TZ=Asia/Tokyo)
-        run: npm test
-        env:
-          TZ: Asia/Tokyo
+          TZ: ${{ matrix.tz }}
 
   web-build:
     name: Web — build Next.js
@@ -81,8 +85,131 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
       - run: npm ci || npm install
+      - name: npm audit (nivel alto)
+        run: npm audit --audit-level=high
       - name: Unit tests
         run: npm test
       - run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: '1'
+
+  analytics-build:
+    name: Analytics — install + syntax
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: analytics
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Instalar dependencias
+        run: pip install --no-cache-dir -r requirements.txt
+      - name: Sintaxis (py_compile)
+        run: python -m py_compile main.py
+      - name: Import de la app (sin conectar a datos reales)
+        # create_engine() es perezoso: no abre conexión hasta el primer query,
+        # así que importar el módulo valida que la app arma sin tocar MySQL ni
+        # att2000. No se ejecuta uvicorn ni se llama a ningún endpoint.
+        run: python -c "import main; assert main.app"
+
+  migrations:
+    name: DB — migraciones (MySQL 8 efímero)
+    runs-on: ubuntu-latest
+    # Servicio MySQL descartable del propio job de CI — vive y muere con el
+    # job. NUNCA es att2000 (SQL Server, fuente real read-only) ni la MySQL
+    # de un entorno real: no hay credenciales ni datos reales acá.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pass
+          MYSQL_DATABASE: asistencia
+          MYSQL_USER: asistencia_ci
+          MYSQL_PASSWORD: ci_pass
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    defaults:
+      run:
+        working-directory: api
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_NAME: asistencia
+      DB_USER: asistencia_ci
+      DB_PASSWORD: ci_pass
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci || npm install
+      - name: Cliente mysql disponible
+        # ubuntu-latest ya lo trae; se instala sólo si faltara, para no
+        # depender silenciosamente de que la imagen del runner no cambie.
+        run: mysql --version || (sudo apt-get update && sudo apt-get install -y mysql-client)
+
+      - name: Esquema base (database/init.sql)
+        run: mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/init.sql
+
+      # La migración 073 crea una función/trigger. Con binary logging activo
+      # (default de MySQL 8), crear rutinas exige SUPER o este flag. El runner
+      # de migraciones corre como asistencia_ci (sin SUPER), así que lo
+      # habilitamos aquí como root. No afecta att2000 (BD efímera descartable).
+      - name: Permitir creación de rutinas con binlog activo
+        run: mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -e "SET GLOBAL log_bin_trust_function_creators = 1;"
+
+      - name: migrate --status ANTES de aplicar — debe ser read-only
+        run: |
+          set -e
+          OUT=$(node scripts/migrate.js --status)
+          echo "$OUT"
+          # Sobre una BD recién creada (sólo init.sql), la tabla de control
+          # schema_migrations todavía no existe. --status no debe crearla.
+          echo "$OUT" | grep -q "schema_migrations no existe" || (echo "❌ --status no reportó el caso read-only esperado" && exit 1)
+          COUNT=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='schema_migrations'")
+          if [ "$COUNT" != "0" ]; then
+            echo "❌ --status creó schema_migrations (dejó de ser read-only)"; exit 1
+          fi
+
+      - name: Aplicar migraciones pendientes (incluye la 020 corregida)
+        run: node scripts/migrate.js
+
+      - name: Migración 020 es idempotente si se reaplica directo con mysql
+        # Prueba puntual del fix del hallazgo #1: reejecutar el archivo tal
+        # cual (fuera del runner, como en una recuperación manual) no debe
+        # fallar sobre un esquema donde la tabla y las columnas ya existen.
+        run: mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/migrations/020_webhooks_format.sql
+
+      - name: webhooks quedó con la forma esperada
+        run: |
+          mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='webhooks' ORDER BY COLUMN_NAME" \
+            | tee /tmp/webhooks_cols.txt
+          for col in format channel events url; do
+            grep -qx "$col" /tmp/webhooks_cols.txt || (echo "❌ falta columna $col en webhooks" && exit 1)
+          done
+
+      - name: Reaplicar migrate = no-op (idempotencia del runner completo)
+        run: |
+          set -e
+          OUT=$(node scripts/migrate.js)
+          echo "$OUT"
+          echo "$OUT" | grep -q "Nada por aplicar" || (echo "❌ la segunda corrida no fue no-op" && exit 1)
+
+      - name: migrate --status DESPUÉS de aplicar — sigue siendo read-only
+        run: |
+          set -e
+          OUT=$(node scripts/migrate.js --status)
+          echo "$OUT"
+          echo "$OUT" | grep -qE '0 pendientes' || (echo "❌ quedaron migraciones pendientes" && exit 1)
