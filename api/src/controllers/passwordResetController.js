@@ -70,7 +70,10 @@ async function forgotPassword(req, res) {
       { replacements: [email] }
     );
     if (!user) {
-      audit.log({ req, user: null, action: 'password_forgot', details: { email, found: false } });
+      // Auditoría sin PII: el email solicitado NO viaja a la auditoría; sólo
+      // el resultado del intento (M-3). El email vive en el request, no en el
+      // registro de auditoría.
+      audit.log({ req, user: null, action: 'password_forgot', details: { found: false } });
       return res.json(okResponse);
     }
 
