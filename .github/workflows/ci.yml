@@ -172,3 +172,98 @@ jobs:
           test "$B" = "$A" && test "$T1" = "$T2" && echo "READ-ONLY OK"
       - name: Tests de integración (IT_DB) contra MySQL real
         run: IT_DB=1 npm test
+
+  # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
+  # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el
+  # runner aplica 072→ de verdad; luego se reaplica y se compara el esquema
+  # columna por columna para probar que una segunda pasada es un no-op exacto.
+  migrations-072-075-idempotency:
+    name: Idempotencia migraciones 072→075 (MySQL efímero)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: asistencia
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: asistencia
+      MYSQL_PWD: root
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci || npm install
+      - name: Asegurar cliente mysql
+        run: |
+          if mysql --version >/dev/null 2>&1; then
+            echo "cliente mysql presente"
+          else
+            sudo apt-get update
+            sudo apt-get install -y mysql-client-core-8.0 || sudo apt-get install -y default-mysql-client
+          fi
+      - name: Esperar a MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot --silent; then echo "MySQL listo"; break; fi
+            sleep 2
+          done
+      - name: Preparar esquema previo (init + prerequisitos)
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/init.sql
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/012_audit_events.sql
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/015_branches.sql
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/067_employee_documents.sql
+      - name: Baseline SÓLO hasta 071 (072→ se aplican de verdad)
+        run: node scripts/migrate.js --baseline=071_repair_external_hr_sources.sql
+      - name: Aplicar (el runner corre 072→ realmente)
+        run: node scripts/migrate.js
+      - name: 072→075 realmente aplicadas (no baselinadas)
+        run: |
+          set -e
+          for m in \
+            072_employee_schedule_history.sql \
+            073_workday_profile_and_overlap_guard.sql \
+            074_daily_summary_status_unknown.sql \
+            075_workday_configuration_phase_c.sql; do
+            mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia \
+              -e "SELECT COUNT(*) FROM schema_migrations WHERE filename='$m'" | grep -q '^1$'
+          done
+          # 072 creó la tabla y 073/075 sus columnas de perfil.
+          mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia \
+            -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='asistencia' AND table_name='employee_schedule_history' AND column_name='work_regime'" | grep -q '^1$'
+          # 074 amplió el ENUM de daily_summary.status.
+          mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia \
+            -e "SELECT column_type FROM information_schema.columns WHERE table_schema='asistencia' AND table_name='daily_summary' AND column_name='status'" | grep -q "unconfigured"
+          echo "072→075 aplicadas y presentes en el esquema"
+      - name: Reaplicar es idempotente y NO cambia el esquema
+        run: |
+          set -e
+          SEL="SELECT table_name,column_name,column_type,is_nullable,column_default,ordinal_position \
+               FROM information_schema.columns WHERE table_schema='asistencia' \
+               ORDER BY table_name,ordinal_position"
+          mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "$SEL" > /tmp/schema_before.txt
+          M1=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM schema_migrations")
+          OUT=$(node scripts/migrate.js); echo "$OUT"
+          echo "$OUT" | grep -q "Nada por aplicar"
+          mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "$SEL" > /tmp/schema_after.txt
+          M2=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM schema_migrations")
+          diff /tmp/schema_before.txt /tmp/schema_after.txt && echo "ESQUEMA IDÉNTICO tras reaplicar"
+          test "$M1" = "$M2" && echo "schema_migrations sin cambios ($M1)"
