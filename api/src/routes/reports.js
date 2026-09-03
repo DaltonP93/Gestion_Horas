@@ -4,6 +4,7 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { dbTimeHHmm } = require('../utils/dbTime');
 const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM, maxPairsOf } = require('../services/scheduler');
+const { monthlyWorkedByEmployee } = require('../services/monthlyWorkedFromEngine');
 const { renderMarcadasPdf } = require('../services/marcadasPdf');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
 const {
@@ -45,6 +46,12 @@ router.get('/monthly', asyncHandler(async (req, res) => {
   deptFilter += ` ${sc.clause}`;
   params.push(...sc.params);
 
+  // `total_worked_minutes` NO se toma de `SUM(daily_summary.worked_minutes)`:
+  // esa columna la escribe el motor LEGACY por fecha civil y parte en dos los
+  // turnos nocturnos que cruzan medianoche, así que el mensual no cerraba con
+  // Marcadas. Se calcula abajo con el MISMO motor que Marcadas (sólo lectura).
+  // Los conteos de estado (presente/tarde/ausente) y el atraso/extra siguen
+  // viniendo de daily_summary; migrarlos al motor es un follow-up de esta fase.
   const [rows] = await sequelize.query(`
     SELECT
       e.id, e.code, CONCAT(e.first_name,' ',e.last_name) AS employee_name,
@@ -52,7 +59,6 @@ router.get('/monthly', asyncHandler(async (req, res) => {
       COUNT(CASE WHEN ds.status IN ('present','late') THEN 1 END)  AS days_present,
       COUNT(CASE WHEN ds.status = 'late'              THEN 1 END)  AS days_late,
       COUNT(CASE WHEN ds.status = 'absent'            THEN 1 END)  AS days_absent,
-      SUM(ds.worked_minutes)                                        AS total_worked_minutes,
       SUM(ds.late_minutes)                                          AS total_late_minutes,
       SUM(ds.overtime_minutes)                                      AS total_overtime_minutes
     FROM employees e
@@ -62,6 +68,18 @@ router.get('/monthly', asyncHandler(async (req, res) => {
     GROUP BY e.id
     ORDER BY d.name, e.last_name
   `, { replacements: params });
+
+  // Total trabajado del mes por el motor de jornada (SÓLO LECTURA).
+  let engineWorked;
+  try {
+    engineWorked = await monthlyWorkedByEmployee(rows.map((r) => r.id), { from: dateFrom, to: dateTo });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+  for (const r of rows) {
+    const agg = engineWorked.get(Number(r.id));
+    r.total_worked_minutes = agg ? agg.workedMinutes : 0;
+  }
 
   res.json({ data: rows, period: { year, month, from: dateFrom, to: dateTo } });
 }));
@@ -413,6 +431,37 @@ router.get('/monthly/export', async (req, res) => {
     );
     const sig = Object.fromEntries(sigRows.map(r => [r.setting_key, r.setting_value]));
 
+    // ── Trabajado por el MOTOR (SÓLO LECTURA) ──────────────────────
+    //
+    // La grilla y los conteos de estado siguen saliendo de daily_summary, pero
+    // el TRABAJADO (columna "Trab." y total) se reemplaza por el del motor de
+    // jornada, el mismo que Marcadas: así un turno nocturno que cruza medianoche
+    // se cuenta como UN jornal del día que empezó, y el total del mes cierra con
+    // Marcadas. Se consolida por `work_date`, de modo que el total de la planilla
+    // es la suma exacta de la columna "Trab." día por día.
+    const engineWorked = await monthlyWorkedByEmployee(
+      employees.map((e) => e.id), { from: dateFrom, to: dateTo });
+    for (const emp of employees) {
+      const agg = engineWorked.get(Number(emp.id));
+      emp.totals.worked = agg ? agg.workedMinutes : 0;
+      // `work_date` ('YYYY-MM-DD', dentro del mes) → día del mes, la misma clave
+      // que usa `emp.days`.
+      const porDia = new Map();
+      if (agg) for (const [wd, mins] of agg.byDate) porDia.set(String(Number(wd.slice(8, 10))), mins);
+      // La fila legacy conserva estado/entrada/salida/atraso; sólo se pisa su
+      // trabajado con el del motor (0 si el motor no ve jornada ese día).
+      for (const [dayKey, rec] of Object.entries(emp.days)) {
+        rec.worked_minutes = porDia.get(dayKey) || 0;
+        porDia.delete(dayKey);
+      }
+      // Jornada que el motor fecha en un día sin fila legacy (raro: el día de la
+      // primera entrada siempre tiene marcas): se materializa una celda mínima
+      // para que la columna "Trab." sume el total y no se pierdan horas.
+      for (const [dayKey, mins] of porDia) {
+        emp.days[dayKey] = { ...(emp.days[dayKey] || {}), worked_minutes: mins };
+      }
+    }
+
     if (format === 'pdf') {
       const PDFDocument = require('pdfkit');
       const path = require('path');
@@ -711,7 +760,9 @@ router.get('/monthly/export', async (req, res) => {
     await wb.xlsx.write(res);
     res.end();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // `err.status` viaja cuando el error es tipado (p. ej. 413 por exceso de
+    // marcajes del motor): así la UI puede distinguir lo no reintentable.
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
