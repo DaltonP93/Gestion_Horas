@@ -118,6 +118,12 @@ function ConfiguracionPageInner() {
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm transition-colors">
             ✉️ Plantillas de email
           </a>
+          {canTech && (
+            <a href="/configuracion/activacion-motor"
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-700 hover:bg-indigo-800 text-white text-sm font-medium shadow-sm transition-colors">
+              🔒 Activación del motor (FASE E)
+            </a>
+          )}
         </div>
       </div>
       <div className="flex gap-1 border-b border-slate-200 flex-wrap dark:border-white/[0.08]">

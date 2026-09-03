@@ -52,9 +52,51 @@ const { loadWorkdayConfig } = require('./workdayConfig');
 const { withDayRecalcLock } = require('./recalcLock');
 const { dbDateISO } = require('../utils/dbTime');
 
-/** ¿Está habilitada la escritura de daily_summary por el motor nuevo? */
+/**
+ * Cerrojo de OPERACIONES (env): kill-switch del escritor hacia adelante del
+ * motor. Sólo el string exacto 'true' habilita. Es la mitad que ops controla
+ * sin tocar la base y que no se puede togglear desde un request.
+ */
 function isEngineSummaryWriteEnabled() {
   return process.env.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED === 'true';
+}
+
+/** Clave del segundo cerrojo (BD) del escritor hacia adelante (migración 083). */
+const FORWARD_SETTING_KEY = 'fase_e_forward_enabled';
+
+/**
+ * Cerrojo de APLICACIÓN (BD): el setting que la consola de FASE E flipea de
+ * forma controlada y reversible con un click, sin reiniciar el proceso.
+ *
+ * Fail-closed: cualquier valor que no sea exactamente 'true' —fila ausente,
+ * NULL, 'false', '1', o un error de lectura— cuenta como DESHABILITADO. La
+ * tabla system_settings puede no existir todavía (083 sin aplicar): ahí también
+ * devuelve false sin propagar el error, porque "aún no migrado" debe ser
+ * fail-closed, no una excepción que rompa el recálculo operativo.
+ */
+async function isForwardSettingEnabled() {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT value FROM system_settings WHERE key_name = ? LIMIT 1`,
+      { replacements: [FORWARD_SETTING_KEY] },
+    );
+    return String(rows[0]?.value ?? '') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compuerta REAL del escritor hacia adelante: exige AMBOS cerrojos.
+ *   env kill-switch === 'true'  AND  setting de BD === 'true'
+ *
+ * Con cualquiera de los dos en false, el recálculo operativo conserva su camino
+ * LEGACY (comportamiento actual intacto). El env sigue siendo el kill-switch de
+ * ops; el setting de BD es el flip controlado de la consola.
+ */
+async function isEngineForwardWriteEnabled() {
+  if (!isEngineSummaryWriteEnabled()) return false; // corto-circuito sin tocar BD
+  return isForwardSettingEnabled();
 }
 
 /** Fecha civil (wall-clock) de la marca ancla, en aritmética sin zona. */
@@ -426,6 +468,9 @@ async function leerMarcajesLote(employeeIds, ventana) {
 
 module.exports = {
   isEngineSummaryWriteEnabled,
+  isForwardSettingEnabled,
+  isEngineForwardWriteEnabled,
+  FORWARD_SETTING_KEY,
   resolveSummary,
   resolveSummaryBatchForDate,
   statusParaDb,
