@@ -127,22 +127,31 @@ Dos opciones según dónde corra el backend:
   - `HTML2PDF_URL=http://127.0.0.1:3002`
   - `PADES_SIGNER_URL=http://127.0.0.1:3001`
 
-### 3. Activar la firma PAdES en SisHoras (variables del backend `api/`)
-En el `.env` de la API (o secretos del servidor), **no** en el repo:
+### 3. Activar la firma en SisHoras (variables del backend `api/`)
+En el `.env` de la API (o secretos del servidor), **no** en el repo. Los dos
+servicios exigen un **shared secret** por header (responden `401` sin él), así
+que hay que pasarles el mismo valor que tienen configurado los contenedores:
 
 ```ini
 SIGNING_MODE=pades_local
-HTML2PDF_URL=...            # según A o B
-PADES_SIGNER_URL=...        # según A o B
+HTML2PDF_URL=...                 # según A o B (sin el /pdf; el adaptador lo agrega)
+PADES_SIGNER_URL=...             # según A o B (sin el /sign; el adaptador lo agrega)
+HTML2PDF_SHARED_SECRET=...       # = SHARED_SECRET del contenedor html2pdf
+PADES_SIGNER_SHARED_SECRET=...   # = SHARED_SECRET del contenedor pades-signer
 SIGNING_TIMEOUT_MS=15000
 SIGNING_PROVIDER_NAME=pades-local
-# Ajustar solo si el contrato real de tus servicios usa otros nombres de campo:
-# HTML2PDF_HTML_FIELD=html
-# PADES_PDF_FIELD=pdf_base64
+# Overrides opcionales (los defaults ya coinciden con el contrato real):
+# HTML2PDF_PATH=/pdf             HTML2PDF_AUTH_HEADER=x-render-key   HTML2PDF_HTML_FIELD=html
+# PADES_SIGNER_PATH=/sign        PADES_SIGNER_AUTH_HEADER=x-sign-key PADES_FILE_FIELD=file
 ```
 
-Con `SIGNING_MODE` ausente o sin ambas URLs, el backend sigue en modo `simple`
-(fail-closed). Recién con todo configurado firma PAdES de verdad.
+Fail-closed: con `SIGNING_MODE` ausente, sin ambas URLs **o sin ambos secretos**,
+el backend queda en modo `simple` (sello + hash de integridad) y **nunca** afirma
+que firmó. Recién con todo configurado aplica la firma real.
+
+> El certificado `.p12` y su passphrase viven **dentro** del contenedor
+> `pades-signer` (variables `P12_PATH` / `P12_PASSWORD` y el volumen `./certs`).
+> El backend de SisHoras **no** los conoce ni los toca.
 
 ### 4. Smoke test (verificación rápida)
 ```bash
@@ -154,26 +163,40 @@ Luego, en la app: aprobá un período de prueba y descargá el **reporte firmado
 (`/api/reports/monthly/approvals/:id/signed-pdf`). El header `X-Signature-Mode`
 debe decir `pades_local` y el PDF debe abrir con firma válida en un lector.
 
-### 5. Confirmar el contrato HTTP (ajuste final del adaptador)
-El adaptador asume un contrato REST común. Si tus servicios difieren, el ajuste
-es de una línea (nombres de campo ya son configurables por env). Contrato asumido:
+### 5. Contrato HTTP (CONFIRMADO contra los `server.js` de los servicios)
+El adaptador `padesSigner.js` ya está pinchado a este contrato real; los
+defaults coinciden, así que normalmente no hay que tocar nada:
 
-- **html2pdf** — `POST {HTML2PDF_URL}`, `application/json`,
-  body `{ "html": "<...>", "filename": "reporte.pdf" }`, respuesta PDF binario o
-  JSON con el PDF en base64 (`pdf_base64|pdf|data|result`).
-- **pades-signer** — `POST {PADES_SIGNER_URL}`, `application/json`,
-  body `{ "pdf_base64": "<...>", "reason": "...", "name": "...", "location": "..." }`,
-  respuesta PDF firmado binario o JSON base64
-  (`signed_pdf_base64|signed_pdf|pdf_base64|pdf|data`).
+- **html2pdf** — `POST {HTML2PDF_URL}/pdf`, `application/json`
+  - Header de auth: `x-render-key: <SHARED_SECRET del contenedor>`
+  - Body: `{ "html": "<...>", "options": { "format": "A4", ... } }`
+  - Respuesta: **PDF binario** (`application/pdf`). Sin el header → `401`.
+- **pades-signer** — `POST {PADES_SIGNER_URL}/sign`, `multipart/form-data`
+  - Header de auth: `x-sign-key: <SHARED_SECRET del contenedor>`
+  - Campos: `file` = el PDF, `reason` = motivo NO-PII.
+  - Respuesta: **PDF firmado binario** (`application/pdf`). Firma PKCS#7
+    embebida con el `.p12` del servicio (`node-signpdf`). Sin el header → `401`.
 
-Si el request real es `multipart/form-data` en vez de JSON base64, avisá: es un
-cambio acotado en `padesSigner.js`.
+Si algún día cambiás rutas, headers o nombres de campo, todo es override-able
+por env (`HTML2PDF_PATH`, `HTML2PDF_AUTH_HEADER`, `HTML2PDF_HTML_FIELD`,
+`PADES_SIGNER_PATH`, `PADES_SIGNER_AUTH_HEADER`, `PADES_FILE_FIELD`) sin tocar
+código.
+
+> **Nota sobre "PAdES":** `node-signpdf` embebe una firma **PKCS#7/CMS** real
+> con tu certificado — es una firma digital criptográfica válida y verificable.
+> No incluye por sí sola sellado de tiempo (TSA) ni datos de revocación (LTV/PAdES-LT).
+> Si necesitás PAdES-LT/LTV pleno, es una mejora del propio servicio
+> `pades-signer` (agregar TSA/OCSP), no del backend de SisHoras.
 
 ---
 
 ## Seguridad
 - Servicios publicados **solo en loopback** (`127.0.0.1`), nunca a Internet;
   el acceso es interno desde el backend.
-- Certificado y passphrase **fuera del repo** (volumen de solo lectura o secreto).
-- El backend nunca afirma "firmado PAdES" si la firma no se aplicó de verdad.
+- **Shared secret obligatorio**: ambos servicios responden `401` sin su header.
+  El backend lo pasa por `HTML2PDF_SHARED_SECRET` / `PADES_SIGNER_SHARED_SECRET`
+  (env/secretos, nunca en el repo). El header de secreto no se loguea.
+- Certificado `.p12` y passphrase **fuera del repo**, dentro del contenedor
+  `pades-signer` (volumen de solo lectura o secreto). El backend no los conoce.
+- El backend nunca afirma "firmado" si la firma no se aplicó de verdad.
 - Sin secretos, hosts ni IPs reales versionados en esta carpeta.
