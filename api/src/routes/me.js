@@ -11,6 +11,7 @@ const crypto  = require('crypto');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
+const { overrideWorkedFromEngine, engineWorkedTotal, ymd } = require('../services/workedReads');
 const wf = require('../services/permissionWorkflow');
 const audit = require('../services/audit');
 const { todayInCompanyTZ } = require('../utils/civilDate');
@@ -327,6 +328,16 @@ router.get('/summary', asyncHandler(async (req, res) => {
     ORDER BY date DESC
     LIMIT 200
   `, { replacements: params });
+
+  // Nocturno: worked_minutes por el motor (jornada atribuida a su día de inicio),
+  // para que el empleado vea sus horas sin turnos partidos por medianoche.
+  if (rows.length) {
+    const dates = rows.map((r) => ymd(r.date)).filter(Boolean).sort();
+    await overrideWorkedFromEngine(rows, {
+      from: dates[0], to: dates[dates.length - 1],
+      route: 'me-summary', idOf: () => employeeId, dateOf: (r) => r.date,
+    });
+  }
   res.json(rows);
 }));
 
@@ -539,6 +550,12 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
       { replacements: [employeeId, weekFrom, weekTo] }
     ).catch(() => [[{ worked_minutes: 0, late_minutes: 0, overtime_minutes: 0, present_days: 0 }]]);
     kpis = { ...rows[0], week_from: weekFrom, week_to: weekTo };
+    // Nocturno: worked_minutes de la semana por el motor (atribuido al día de
+    // inicio de la jornada). late/overtime/present_days siguen de daily_summary.
+    try {
+      kpis.worked_minutes = await engineWorkedTotal(employeeId, weekFrom, weekTo);
+      kpis.worked_source = 'engine';
+    } catch { kpis.worked_source = 'legacy_fallback'; }
 
     const [[lp]] = await sequelize.query(
       `SELECT timestamp, type FROM attendance_logs WHERE employee_id = ? ORDER BY timestamp DESC LIMIT 1`,
