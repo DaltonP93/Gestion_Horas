@@ -153,12 +153,42 @@ que firmó. Recién con todo configurado aplica la firma real.
 > `pades-signer` (variables `P12_PATH` / `P12_PASSWORD` y el volumen `./certs`).
 > El backend de SisHoras **no** los conoce ni los toca.
 
-### 4. Smoke test (verificación rápida)
+### 4. Smoke test (verificación rápida, con el header correcto)
+Usá el script versionado **`deploy/signing/smoke-test.sh`**: prueba `/health`,
+renderiza un PDF por `/pdf` con el header `x-render-key`, lo firma por `/sign`
+(multipart, header `x-sign-key`) y confirma que sin header da `401`. Lee los
+secretos del entorno o de `deploy/signing/.env` (nunca del repo):
+
 ```bash
-# ¿responden?
+cd deploy/signing
+export HTML2PDF_SHARED_SECRET=...        # = SHARED_SECRET del contenedor html2pdf
+export PADES_SIGNER_SHARED_SECRET=...    # = SHARED_SECRET del contenedor pades-signer
+./smoke-test.sh                 # verifica el circuito completo
+./smoke-test.sh /tmp/firmado.pdf   # además guarda el PDF firmado para abrirlo
+```
+
+Equivalente manual (si preferís curl a mano):
+
+```bash
+# 1) ¿responden?
 curl -fsS http://127.0.0.1:3002/health && echo " html2pdf OK"
 curl -fsS http://127.0.0.1:3001/health && echo " pades-signer OK"
+
+# 2) html2pdf: POST /pdf con x-render-key, body JSON { html, options } -> PDF
+curl -fsS -X POST http://127.0.0.1:3002/pdf \
+  -H "Content-Type: application/json" \
+  -H "x-render-key: $HTML2PDF_SHARED_SECRET" \
+  -d '{"html":"<h1>prueba</h1>","options":{"format":"A4"}}' \
+  -o /tmp/rendered.pdf
+
+# 3) pades-signer: POST /sign con x-sign-key, multipart file+reason -> PDF firmado
+curl -fsS -X POST http://127.0.0.1:3001/sign \
+  -H "x-sign-key: $PADES_SIGNER_SHARED_SECRET" \
+  -F "file=@/tmp/rendered.pdf;type=application/pdf" \
+  -F "reason=Smoke test SisHoras" \
+  -o /tmp/signed.pdf
 ```
+
 Luego, en la app: aprobá un período de prueba y descargá el **reporte firmado**
 (`/api/reports/monthly/approvals/:id/signed-pdf`). El header `X-Signature-Mode`
 debe decir `pades_local` y el PDF debe abrir con firma válida en un lector.
