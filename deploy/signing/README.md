@@ -16,16 +16,85 @@ el servidor de SisHoras, igual que ya los tenés corriendo en tu otro servidor.
 
 ## Qué falta de tu lado (lo que solo vos tenés)
 
-- [ ] **La definición real de los dos stacks.** Las imágenes de tu otro servidor
-      (`html2pdf-html2pdf`, `pades-signer-pades-signer`) se construyen localmente
-      y **no** salen de un registry público. En Portainer:
-      **Stacks → html2pdf → "Editor"** (y lo mismo para `pades-signer`) mostrá el
-      `docker-compose.yml`. Copialos acá reemplazando los `image:`/`build:` del
-      `docker-compose.yml` de esta carpeta.
+- [ ] **Las imágenes reales** de los dos servicios. Dos caminos, cualquiera sirve:
+      - **(a) Ya tenés los `.tar`** (`docker save` de tu otro servidor) →
+        `docker load` en el server de SisHoras y apuntá `HTML2PDF_IMAGE` /
+        `PADES_SIGNER_IMAGE` en `.env`. Ver **"Tenés las imágenes exportadas"**.
+      - **(b) El `docker-compose.yml` del Editor de Portainer** (Stacks → html2pdf
+        / pades-signer) → copiá sus `image:`/`build:`/`environment:` acá.
 - [ ] **El certificado de firma** de `pades-signer` (montarlo en `./certs`, o como
       secreto del orquestador). **Nunca** subirlo al repo.
 - [ ] **El contrato HTTP real** de cada servicio (endpoint + request/response),
       para dejar clavado el adaptador (ver más abajo).
+
+---
+
+## Tenés las imágenes exportadas en `.tar` (`docker save`)
+
+Si en tu otro servidor hiciste `docker save` de las imágenes, tenés dos archivos
+(p. ej. `html2pdf.tar` y `pades-signer.tar`, ~870 MB c/u). Son **archivos OCI**
+(adentro se ven `blobs/`, `index.json`, `manifest.json`, `oci-layout`): la imagen
+completa con todas sus capas, lista para cargar en Docker.
+
+> ⚠️ **Estos `.tar` NO van al repositorio Git ni se le pasan al asistente.** Son
+> binarios enormes; el repo solo lleva el `docker-compose.yml` y este runbook.
+> Ya están cubiertos por `deploy/signing/.gitignore` (`*.tar`).
+>
+> ⚠️ **Verificá que sean dos imágenes distintas.** Si los dos `.tar` pesan
+> *exactamente* lo mismo al byte y su carpeta `blobs/` es idéntica, exportaste dos
+> veces la misma imagen. `html2pdf` (trae Chromium) y `pades-signer` (Java/PDFBox
+> u otro) deben tener capas distintas y por lo tanto tamaños distintos.
+
+### Cargar las imágenes en el servidor de SisHoras
+
+```bash
+# En el servidor de SisHoras, con los .tar copiados por scp/rsync:
+docker load -i html2pdf.tar
+docker load -i pades-signer.tar
+
+# Docker imprime el nombre:tag real de cada imagen cargada, p. ej.:
+#   Loaded image: html2pdf:latest
+#   Loaded image: pades-signer-pades-signer:latest
+docker images | grep -Ei 'html2pdf|pades'
+```
+
+Poné esos `nombre:tag` en `deploy/signing/.env`:
+
+```ini
+HTML2PDF_IMAGE=html2pdf:latest            # el que imprimió "docker load"
+PADES_SIGNER_IMAGE=pades-signer:latest    # idem
+```
+
+Con eso el `docker-compose.yml` de esta carpeta ya levanta tus imágenes tal cual,
+sin necesidad de reconstruirlas ni de un registry.
+
+### Cómo obtener el contrato HTTP sin mandar los 872 MB a nadie
+
+Para dejar clavado el adaptador (`api/src/services/signing/padesSigner.js`) hace
+falta saber **endpoint + forma del request/response** de cada servicio. Se saca
+del propio contenedor con comandos cortos cuya **salida de texto** es lo único que
+hay que compartir:
+
+```bash
+# 1) Puerto, variables y comando de arranque (revelan framework y config):
+docker image inspect html2pdf:latest \
+  --format '{{json .Config}}' | python3 -m json.tool
+
+# 2) Levantar y probar los endpoints típicos (la salida dice cuál responde):
+docker run --rm -d --name _h2p -p 3002:3000 html2pdf:latest
+for p in / /health /convert /api/convert /pdf /render; do
+  echo "== POST $p =="; \
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST "http://127.0.0.1:3002$p" \
+    -H 'Content-Type: application/json' -d '{"html":"<h1>ok</h1>"}'
+done
+docker logs _h2p; docker rm -f _h2p
+```
+
+(análogo para `pades-signer` en el puerto `3001`). La combinación de
+`Config` + los códigos de respuesta + los logs identifica el contrato real; con
+eso el ajuste del adaptador es de una línea. **Alternativa más simple:** pegar el
+`docker-compose.yml` del Editor de Portainer (sus `environment:` y `command:`
+suelen nombrar endpoint y variables).
 
 ---
 
