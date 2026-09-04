@@ -1,77 +1,80 @@
 /**
  * padesSigner.js
  *
- * FASE 2 — Adaptador de firma PAdES LOCAL/PROPIA del reporte mensual aprobado.
+ * FASE 2 — Adaptador de firma LOCAL/PROPIA del reporte mensual aprobado.
  *
- * El dueño corre por Docker Compose DOS servicios propios:
- *   - html2pdf      → renderiza HTML → PDF.
- *   - pades-signer  → aplica una firma PAdES a un PDF.
+ * El dueño corre por Docker Compose DOS servicios propios (Node.js):
+ *   - html2pdf      → renderiza HTML → PDF (Playwright/Chromium).
+ *   - pades-signer  → firma el PDF con un certificado .p12 (node-signpdf,
+ *                     PKCS#7 embebido dentro del PDF).
  *
  * Este módulo es un ADAPTADOR config-driven: NO hardcodea URLs ni secretos
  * (todo por variables de entorno) y expone una interfaz limpia e
  * intercambiable para que mañana el proveedor pueda cambiarse tocando sólo
  * este archivo.
  *
+ * ── CONTRATO HTTP REAL (confirmado contra los server.js del dueño) ─────
+ *
+ *   html2pdf:
+ *     REQUEST : POST {HTML2PDF_URL}{HTML2PDF_PATH}      (path por defecto /pdf)
+ *               Header  {HTML2PDF_AUTH_HEADER}: {HTML2PDF_SHARED_SECRET}
+ *                       (por defecto  x-render-key: <secreto>)
+ *               Content-Type: application/json
+ *               body = { "<HTML2PDF_HTML_FIELD>": "<html>",
+ *                        "options": { format, printBackground, margin } }
+ *     RESPONSE: PDF binario (Content-Type application/pdf).
+ *     AUTH    : sin el header correcto el servicio responde 401.
+ *
+ *   pades-signer:
+ *     REQUEST : POST {PADES_SIGNER_URL}{PADES_SIGNER_PATH} (path por defecto /sign)
+ *               Header  {PADES_SIGNER_AUTH_HEADER}: {PADES_SIGNER_SHARED_SECRET}
+ *                       (por defecto  x-sign-key: <secreto>)
+ *               Content-Type: multipart/form-data
+ *               campo file = <PDF>  ({PADES_FILE_FIELD}, por defecto "file")
+ *               campo reason = "<motivo NO-PII>"
+ *     RESPONSE: PDF firmado binario (Content-Type application/pdf).
+ *     AUTH    : sin el header correcto el servicio responde 401.
+ *     CERT    : el certificado .p12 y su passphrase viven DENTRO del servicio
+ *               pades-signer (montados como volumen/secreto). El backend NO los
+ *               conoce ni los toca.
+ *
  * ── VARIABLES DE ENTORNO (documentadas, NUNCA valores en el código) ─────
- *   SIGNING_MODE          'simple' (default, fail-closed) | 'pades_local'.
- *                         Sólo 'pades_local' habilita la firma PAdES.
- *   HTML2PDF_URL          URL del servicio html2pdf del compose.
- *   PADES_SIGNER_URL      URL del servicio pades-signer del compose.
- *   SIGNING_TIMEOUT_MS    Timeout por request HTTP (default 15000).
- *   SIGNING_PROVIDER_NAME Etiqueta NO-PII del proveedor que se guarda como
- *                         signature_provider (default 'pades-local').
- *   HTML2PDF_HTML_FIELD   Campo JSON del HTML en el request a html2pdf
- *                         (default 'html'). Ajuste de una línea si el
- *                         contrato real difiere.
- *   PADES_PDF_FIELD       Campo JSON del PDF (base64) en el request a
- *                         pades-signer (default 'pdf_base64').
+ *   SIGNING_MODE               'simple' (default, fail-closed) | 'pades_local'.
+ *   HTML2PDF_URL               Base del servicio html2pdf (p.ej. http://html2pdf:3000).
+ *   HTML2PDF_PATH              Ruta del endpoint (default '/pdf'). '' si la URL ya la incluye.
+ *   HTML2PDF_SHARED_SECRET     Secreto que html2pdf exige (header de auth).
+ *   HTML2PDF_AUTH_HEADER       Nombre del header de auth (default 'x-render-key').
+ *   HTML2PDF_HTML_FIELD        Campo JSON del HTML (default 'html').
+ *   PADES_SIGNER_URL           Base del servicio pades-signer (p.ej. http://pades-signer:3000).
+ *   PADES_SIGNER_PATH          Ruta del endpoint (default '/sign'). '' si la URL ya la incluye.
+ *   PADES_SIGNER_SHARED_SECRET Secreto que pades-signer exige (header de auth).
+ *   PADES_SIGNER_AUTH_HEADER   Nombre del header de auth (default 'x-sign-key').
+ *   PADES_FILE_FIELD           Nombre del campo multipart del PDF (default 'file').
+ *   SIGNING_TIMEOUT_MS         Timeout por request HTTP (default 15000).
+ *   SIGNING_PROVIDER_NAME      Etiqueta NO-PII que se guarda como
+ *                              signature_provider (default 'pades-local').
  *
  * ── FAIL-CLOSED ────────────────────────────────────────────────────────
  *   - SIGNING_MODE ausente/desconocido  → 'simple'.
- *   - SIGNING_MODE=pades_local pero falta HTML2PDF_URL o PADES_SIGNER_URL
- *     → NO se firma PAdES: cae a 'simple' y lo registra. Nunca se afirma
- *       "firmado PAdES" si no se pudo firmar de verdad.
- *   - Cualquier fallo de red/timeout/formato de los servicios → cae a
- *     'simple' con una nota. El estado 'approved' del período ya está
- *     persistido; esto NO rompe la aprobación.
- *
- * ── CONTRATO HTTP ASUMIDO (marcarlo, es AJUSTABLE) ─────────────────────
- *   El contrato exacto de los servicios del dueño puede requerir un ajuste de
- *   una línea (nombres de campos por env, o el parseo de respuesta acá).
- *
- *   html2pdf:
- *     REQUEST : POST {HTML2PDF_URL}
- *               Content-Type: application/json
- *               body = { "<HTML2PDF_HTML_FIELD>": "<html>", "filename": "..." }
- *               Accept: application/pdf
- *     RESPONSE: binario PDF (Content-Type application/pdf u octet-stream)
- *               O JSON con el PDF en base64 en alguno de:
- *               pdf_base64 | pdf | data | result.
- *
- *   pades-signer:
- *     REQUEST : POST {PADES_SIGNER_URL}
- *               Content-Type: application/json
- *               body = { "<PADES_PDF_FIELD>": "<pdf-base64>",
- *                        "reason": "...", "name": "...", "location": "..." }
- *               Accept: application/pdf
- *     RESPONSE: binario PDF firmado (application/pdf u octet-stream)
- *               O JSON con el PDF firmado en base64 en alguno de:
- *               signed_pdf_base64 | signed_pdf | pdf_base64 | pdf | data,
- *               y opcionalmente info de firma en `signature` | `info`.
- *
- *   Nota: se usa base64-JSON (no multipart) para no depender de `form-data`.
- *   Si los servicios exigen multipart, es un cambio acotado a este archivo.
+ *   - SIGNING_MODE=pades_local pero falta alguna URL   → 'simple' (nota).
+ *   - SIGNING_MODE=pades_local pero falta algún secreto → 'simple' (nota):
+ *     los servicios responden 401 sin el header, así que sin secreto la firma
+ *     no es posible; se degrada ANTES de intentar la red.
+ *   - Cualquier fallo de red/timeout/formato → cae a 'simple' con una nota.
+ *     El estado 'approved' del período ya está persistido; esto NO rompe la
+ *     aprobación. Nunca se afirma "firmado" si no se firmó de verdad.
  *
  * ── PRIVACIDAD ─────────────────────────────────────────────────────────
- *   No se loguean URLs ni secretos ni PII. La info de firma que devuelve el
- *   servicio (que podría traer datos del certificado) NO se persiste: sólo se
- *   guarda una etiqueta de proveedor NO-PII y un timestamp.
+ *   No se loguean URLs, secretos ni PII. Sólo se guarda una etiqueta de
+ *   proveedor NO-PII y un timestamp. El header de secreto nunca se registra.
  */
 
 const axios = require('axios');
+const FormData = require('form-data');
 const logger = require('../../config/logger');
 
 const DEFAULT_TIMEOUT_MS = 15000;
+const MAX_BYTES = 25 * 1024 * 1024;
 
 /** Modos válidos. Cualquier otro valor colapsa a 'simple' (fail-closed). */
 const SIGNING_MODES = Object.freeze({ SIMPLE: 'simple', PADES_LOCAL: 'pades_local' });
@@ -80,9 +83,20 @@ const SIGNING_MODES = Object.freeze({ SIMPLE: 'simple', PADES_LOCAL: 'pades_loca
 const DEGRADE_REASONS = Object.freeze({
   NOT_PADES: 'MODE_SIMPLE',                 // configurado explícitamente en simple
   MISSING_URLS: 'PADES_URLS_MISSING',       // pades_local pero faltan URLs
+  MISSING_SECRETS: 'PADES_SECRETS_MISSING', // pades_local pero faltan secretos
   HTML2PDF_FAILED: 'HTML2PDF_FAILED',       // html2pdf no respondió/erró
   SIGN_FAILED: 'PADES_SIGN_FAILED',         // pades-signer no respondió/erró
   EMPTY_RESULT: 'PADES_EMPTY_RESULT',       // respuesta sin PDF utilizable
+});
+
+/** Defaults del contrato real de los servicios del dueño. */
+const DEFAULTS = Object.freeze({
+  HTML2PDF_PATH: '/pdf',
+  HTML2PDF_AUTH_HEADER: 'x-render-key',
+  HTML2PDF_HTML_FIELD: 'html',
+  PADES_PATH: '/sign',
+  PADES_AUTH_HEADER: 'x-sign-key',
+  PADES_FILE_FIELD: 'file',
 });
 
 function timeoutMs() {
@@ -95,9 +109,24 @@ function providerLabel() {
   return String(process.env.SIGNING_PROVIDER_NAME || 'pades-local').slice(0, 64);
 }
 
-function cleanUrl(v) {
+function cleanBase(v) {
   const s = (v || '').trim();
   return s ? s.replace(/\/+$/, '') : '';
+}
+
+/** Une base + ruta. Ruta vacía => se usa la base tal cual (ya incluye el path). */
+function joinUrl(base, path) {
+  const b = cleanBase(base);
+  const p = (path == null ? '' : String(path)).trim();
+  if (!b) return '';
+  if (!p) return b;
+  return b + (p.startsWith('/') ? p : `/${p}`);
+}
+
+/** Lee una env con default; '' explícito se respeta (no cae al default). */
+function envOr(name, dflt) {
+  const v = process.env[name];
+  return v == null ? dflt : v;
 }
 
 /**
@@ -110,29 +139,32 @@ function resolveSigningConfig(env = process.env) {
     ? SIGNING_MODES.PADES_LOCAL
     : SIGNING_MODES.SIMPLE;
 
+  const simple = (degradedReason) => ({
+    requestedMode: requested,
+    effectiveMode: SIGNING_MODES.SIMPLE,
+    degradedReason,
+    html2pdfUrl: '',
+    padesUrl: '',
+  });
+
   if (requested !== SIGNING_MODES.PADES_LOCAL) {
-    return {
-      requestedMode: requested,
-      effectiveMode: SIGNING_MODES.SIMPLE,
-      degradedReason: requested === SIGNING_MODES.SIMPLE ? null : DEGRADE_REASONS.NOT_PADES,
-      html2pdfUrl: '',
-      padesUrl: '',
-    };
+    return simple(requested === SIGNING_MODES.SIMPLE ? null : DEGRADE_REASONS.NOT_PADES);
   }
 
-  const html2pdfUrl = cleanUrl(env.HTML2PDF_URL);
-  const padesUrl = cleanUrl(env.PADES_SIGNER_URL);
+  // Los paths salen del `env` recibido ('' explícito se respeta: la URL ya lo incluye).
+  const html2pdfPath = env.HTML2PDF_PATH == null ? DEFAULTS.HTML2PDF_PATH : env.HTML2PDF_PATH;
+  const padesPath = env.PADES_SIGNER_PATH == null ? DEFAULTS.PADES_PATH : env.PADES_SIGNER_PATH;
+  const html2pdfUrl = joinUrl(env.HTML2PDF_URL, html2pdfPath);
+  const padesUrl = joinUrl(env.PADES_SIGNER_URL, padesPath);
 
   // Fail-closed: pades_local SIN las dos URLs no puede firmar → 'simple'.
-  if (!html2pdfUrl || !padesUrl) {
-    return {
-      requestedMode: SIGNING_MODES.PADES_LOCAL,
-      effectiveMode: SIGNING_MODES.SIMPLE,
-      degradedReason: DEGRADE_REASONS.MISSING_URLS,
-      html2pdfUrl,
-      padesUrl,
-    };
-  }
+  if (!html2pdfUrl || !padesUrl) return simple(DEGRADE_REASONS.MISSING_URLS);
+
+  // Fail-closed: los servicios exigen su shared secret (401 sin él). Sin ambos
+  // secretos no tiene sentido intentar la red → 'simple'.
+  const html2pdfSecret = (env.HTML2PDF_SHARED_SECRET || '').trim();
+  const padesSecret = (env.PADES_SIGNER_SHARED_SECRET || '').trim();
+  if (!html2pdfSecret || !padesSecret) return simple(DEGRADE_REASONS.MISSING_SECRETS);
 
   return {
     requestedMode: SIGNING_MODES.PADES_LOCAL,
@@ -148,29 +180,28 @@ function isPadesActive(env = process.env) {
   return resolveSigningConfig(env).effectiveMode === SIGNING_MODES.PADES_LOCAL;
 }
 
-/** Extrae un buffer PDF de una respuesta axios (binario o JSON base64). */
+/** Extrae un buffer PDF de una respuesta axios (binario o, tolerante, JSON base64). */
 function pdfFromResponse(resp, base64Fields) {
   const ctype = String(resp.headers?.['content-type'] || '').toLowerCase();
   const data = resp.data;
 
-  // Binario directo (arraybuffer).
+  // Binario directo (arraybuffer) — camino real de ambos servicios.
   if (data && (Buffer.isBuffer(data) || data instanceof ArrayBuffer || ArrayBuffer.isView(data))) {
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    // Si vino como JSON pese al arraybuffer, intentar parsear.
+    // Si vino como JSON pese al arraybuffer, intentar parsear (tolerancia).
     if (ctype.includes('application/json')) {
       try {
         const obj = JSON.parse(buf.toString('utf8'));
-        return { pdf: base64FromObject(obj, base64Fields), info: signatureInfoFromObject(obj) };
+        return { pdf: base64FromObject(obj, base64Fields), info: null };
       } catch (_e) { /* no era JSON legible; se trata como binario abajo */ }
     }
     if (buf.length && buf.slice(0, 4).toString() === '%PDF') return { pdf: buf, info: null };
-    // Sin cabecera %PDF y sin JSON → dato inservible.
     return { pdf: null, info: null };
   }
 
-  // JSON plano (objeto ya parseado por axios).
+  // JSON plano (objeto ya parseado por axios) — sólo tolerancia.
   if (data && typeof data === 'object') {
-    return { pdf: base64FromObject(data, base64Fields), info: signatureInfoFromObject(data) };
+    return { pdf: base64FromObject(data, base64Fields), info: null };
   }
 
   return { pdf: null, info: null };
@@ -188,33 +219,39 @@ function base64FromObject(obj, fields) {
 }
 
 /**
- * Info de firma NO persistible tal cual (puede traer datos de certificado).
- * Se devuelve al llamador sólo para trazas acotadas; NO se guarda en tabla.
- */
-function signatureInfoFromObject(obj) {
-  if (!obj || typeof obj !== 'object') return null;
-  const src = obj.signature || obj.info || null;
-  return src && typeof src === 'object' ? src : null;
-}
-
-/**
  * html2pdf: HTML → PDF. Lanza si no se obtiene un PDF utilizable.
+ * Contrato real: POST /pdf, header x-render-key, body { html, options },
+ * respuesta PDF binario.
  */
 async function renderHtmlToPdf(html, { url, timeout } = {}) {
-  const target = cleanUrl(url || process.env.HTML2PDF_URL);
+  const target = url
+    ? cleanBase(url)
+    : joinUrl(process.env.HTML2PDF_URL, envOr('HTML2PDF_PATH', DEFAULTS.HTML2PDF_PATH));
   if (!target) throw new Error('HTML2PDF_URL no configurada');
-  const htmlField = process.env.HTML2PDF_HTML_FIELD || 'html';
+
+  const htmlField = envOr('HTML2PDF_HTML_FIELD', DEFAULTS.HTML2PDF_HTML_FIELD);
+  const authHeader = envOr('HTML2PDF_AUTH_HEADER', DEFAULTS.HTML2PDF_AUTH_HEADER);
+  const secret = (process.env.HTML2PDF_SHARED_SECRET || '').trim();
+
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/pdf' };
+  if (secret) headers[authHeader] = secret;
 
   const resp = await axios.post(
     target,
-    { [htmlField]: String(html || ''), filename: 'reporte_mensual.pdf' },
+    {
+      [htmlField]: String(html || ''),
+      options: {
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '15mm', right: '15mm', bottom: '15mm', left: '15mm' },
+      },
+    },
     {
       timeout: timeout || timeoutMs(),
       responseType: 'arraybuffer',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/pdf' },
-      // No seguir redirects a hosts inesperados ni inflar memoria sin límite.
-      maxContentLength: 25 * 1024 * 1024,
-      maxBodyLength: 25 * 1024 * 1024,
+      headers,
+      maxContentLength: MAX_BYTES,
+      maxBodyLength: MAX_BYTES,
       validateStatus: (s) => s >= 200 && s < 300,
     }
   );
@@ -226,7 +263,9 @@ async function renderHtmlToPdf(html, { url, timeout } = {}) {
 
 /**
  * INTERFAZ LIMPIA E INTERCAMBIABLE.
- * pades-signer: PDF → PDF firmado PAdES.
+ * pades-signer: PDF → PDF firmado. Contrato real: POST /sign,
+ * header x-sign-key, multipart/form-data campo `file` + `reason`,
+ * respuesta PDF firmado binario.
  *
  * @param {Buffer} pdfBuffer  PDF a firmar.
  * @param {object} opts
@@ -237,24 +276,32 @@ async function signPdf(pdfBuffer, { meta = {}, url, timeout } = {}) {
   if (!Buffer.isBuffer(pdfBuffer) || !pdfBuffer.length) {
     throw new Error('signPdf requiere un Buffer PDF no vacío');
   }
-  const target = cleanUrl(url || process.env.PADES_SIGNER_URL);
+  const target = url
+    ? cleanBase(url)
+    : joinUrl(process.env.PADES_SIGNER_URL, envOr('PADES_SIGNER_PATH', DEFAULTS.PADES_PATH));
   if (!target) throw new Error('PADES_SIGNER_URL no configurada');
-  const pdfField = process.env.PADES_PDF_FIELD || 'pdf_base64';
 
-  const body = {
-    [pdfField]: pdfBuffer.toString('base64'),
-    // Metadatos NO-PII de la firma (motivo/rótulo/ubicación).
-    reason: meta.reason || 'Reporte mensual de asistencia aprobado',
-    name: meta.name || providerLabel(),
-    location: meta.location || undefined,
-  };
+  const fileField = envOr('PADES_FILE_FIELD', DEFAULTS.PADES_FILE_FIELD);
+  const authHeader = envOr('PADES_SIGNER_AUTH_HEADER', DEFAULTS.PADES_AUTH_HEADER);
+  const secret = (process.env.PADES_SIGNER_SHARED_SECRET || '').trim();
 
-  const resp = await axios.post(target, body, {
+  const form = new FormData();
+  form.append(fileField, pdfBuffer, {
+    filename: 'reporte_mensual.pdf',
+    contentType: 'application/pdf',
+  });
+  // Metadato NO-PII: motivo de la firma (el servicio lo lee de req.body.reason).
+  form.append('reason', String(meta.reason || 'Reporte mensual de asistencia aprobado'));
+
+  const headers = { ...form.getHeaders(), Accept: 'application/pdf' };
+  if (secret) headers[authHeader] = secret;
+
+  const resp = await axios.post(target, form, {
     timeout: timeout || timeoutMs(),
     responseType: 'arraybuffer',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/pdf' },
-    maxContentLength: 25 * 1024 * 1024,
-    maxBodyLength: 25 * 1024 * 1024,
+    headers,
+    maxContentLength: MAX_BYTES,
+    maxBodyLength: MAX_BYTES,
     validateStatus: (s) => s >= 200 && s < 300,
   });
 
@@ -288,75 +335,74 @@ async function signReportDocument({ html, fallbackPdf, meta = {} } = {}) {
     return b;
   };
 
+  const degrade = async (note) => ({
+    pdf: await asBuffer(),
+    mode: SIGNING_MODES.SIMPLE,
+    provider: null,
+    signatureInfo: null,
+    note: note || null,
+  });
+
   if (cfg.effectiveMode !== SIGNING_MODES.PADES_LOCAL) {
-    // Fail-closed: no se firma PAdES. Se registra la razón (sin PII/URLs).
+    // Fail-closed: no se firma. Se registra la razón (sin PII/URLs/secretos).
     if (cfg.degradedReason && cfg.degradedReason !== DEGRADE_REASONS.NOT_PADES) {
       logger.warn('Firma PAdES no disponible; se usa firma simple interna', {
         signing_reason: cfg.degradedReason,
         signing_mode: SIGNING_MODES.SIMPLE,
       });
     }
-    return {
-      pdf: await asBuffer(),
-      mode: SIGNING_MODES.SIMPLE,
-      provider: null,
-      signatureInfo: null,
-      note: cfg.degradedReason && cfg.degradedReason !== DEGRADE_REASONS.NOT_PADES
+    return degrade(
+      cfg.degradedReason && cfg.degradedReason !== DEGRADE_REASONS.NOT_PADES
         ? cfg.degradedReason
-        : null,
-    };
+        : null
+    );
   }
 
   // Modo PAdES activo: html2pdf → pades-signer.
+  let rendered;
   try {
-    const rendered = await renderHtmlToPdf(html, { url: cfg.html2pdfUrl });
-    let signed;
-    try {
-      signed = await signPdf(rendered, { meta, url: cfg.padesUrl });
-    } catch (err) {
-      logger.error('pades-signer falló; se cae a firma simple interna', err, {
-        signing_reason: DEGRADE_REASONS.SIGN_FAILED,
-      });
-      return {
-        pdf: await asBuffer(), mode: SIGNING_MODES.SIMPLE, provider: null,
-        signatureInfo: null, note: DEGRADE_REASONS.SIGN_FAILED,
-      };
-    }
-    if (!signed.signedPdf || !signed.signedPdf.length) {
-      logger.error('pades-signer devolvió un resultado vacío; firma simple interna', {
-        signing_reason: DEGRADE_REASONS.EMPTY_RESULT,
-      });
-      return {
-        pdf: await asBuffer(), mode: SIGNING_MODES.SIMPLE, provider: null,
-        signatureInfo: null, note: DEGRADE_REASONS.EMPTY_RESULT,
-      };
-    }
-    logger.info('Reporte mensual firmado con PAdES local', {
-      signing_mode: SIGNING_MODES.PADES_LOCAL,
-      signature_provider: providerLabel(),
-    });
-    return {
-      pdf: signed.signedPdf,
-      mode: SIGNING_MODES.PADES_LOCAL,
-      provider: providerLabel(),
-      signatureInfo: signed.signatureInfo || null,
-      note: null,
-    };
+    rendered = await renderHtmlToPdf(html, { url: cfg.html2pdfUrl });
   } catch (err) {
-    // Falla html2pdf (o algo antes de firmar).
     logger.error('html2pdf falló; se cae a firma simple interna', err, {
       signing_reason: DEGRADE_REASONS.HTML2PDF_FAILED,
     });
-    return {
-      pdf: await asBuffer(), mode: SIGNING_MODES.SIMPLE, provider: null,
-      signatureInfo: null, note: DEGRADE_REASONS.HTML2PDF_FAILED,
-    };
+    return degrade(DEGRADE_REASONS.HTML2PDF_FAILED);
   }
+
+  let signed;
+  try {
+    signed = await signPdf(rendered, { meta, url: cfg.padesUrl });
+  } catch (err) {
+    logger.error('pades-signer falló; se cae a firma simple interna', err, {
+      signing_reason: DEGRADE_REASONS.SIGN_FAILED,
+    });
+    return degrade(DEGRADE_REASONS.SIGN_FAILED);
+  }
+
+  if (!signed.signedPdf || !signed.signedPdf.length) {
+    logger.error('pades-signer devolvió un resultado vacío; firma simple interna', {
+      signing_reason: DEGRADE_REASONS.EMPTY_RESULT,
+    });
+    return degrade(DEGRADE_REASONS.EMPTY_RESULT);
+  }
+
+  logger.info('Reporte mensual firmado con firma local', {
+    signing_mode: SIGNING_MODES.PADES_LOCAL,
+    signature_provider: providerLabel(),
+  });
+  return {
+    pdf: signed.signedPdf,
+    mode: SIGNING_MODES.PADES_LOCAL,
+    provider: providerLabel(),
+    signatureInfo: signed.signatureInfo || null,
+    note: null,
+  };
 }
 
 module.exports = {
   SIGNING_MODES,
   DEGRADE_REASONS,
+  DEFAULTS,
   resolveSigningConfig,
   isPadesActive,
   providerLabel,
