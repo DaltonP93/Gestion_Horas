@@ -16,8 +16,6 @@
  *   - la traza NO recibe texto libre (sólo ids/rol/acción/estado).
  */
 
-const { PassThrough } = require('stream');
-
 jest.mock('../src/config/database', () => {
   const query = jest.fn();
   const commit = jest.fn().mockResolvedValue();
@@ -278,24 +276,23 @@ describe('GET /:id/signed-pdf', () => {
         { code: 'E001', days_present: 20, days_late: 1, days_absent: 0, total_worked_minutes: 9600, total_late_minutes: 15, total_overtime_minutes: 120 },
       ]]);
 
-    const res = new PassThrough();
+    // Modo por defecto (simple): el handler arma el PDF con pdfkit y lo envía
+    // con res.send(buffer). Sin SIGNING_MODE no hay red.
+    let sent = null;
+    const res = mkRes();
     res.setHeader = jest.fn();
-    res.status = jest.fn().mockReturnThis();
-    res.json = jest.fn().mockReturnThis();
-
-    const chunks = [];
-    res.on('data', (c) => chunks.push(c));
-    const done = new Promise((resolve) => res.on('end', resolve));
+    res.send = jest.fn().mockImplementation(function (b) { sent = b; return this; });
 
     await handlerFor('get', '/:id/signed-pdf')(
       { params: { id: '1' }, user: { id: 9, role: 'gth' } }, res, jest.fn()
     );
-    await done;
 
     const ctype = res.setHeader.mock.calls.find(([k]) => k === 'Content-Type');
     expect(ctype[1]).toBe('application/pdf');
-    const buf = Buffer.concat(chunks);
-    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+    const modeHdr = res.setHeader.mock.calls.find(([k]) => k === 'X-Signature-Mode');
+    expect(modeHdr[1]).toBe('simple');
+    expect(Buffer.isBuffer(sent)).toBe(true);
+    expect(sent.slice(0, 4).toString()).toBe('%PDF');
     expect(res.status).not.toHaveBeenCalledWith(409);
   });
 });
