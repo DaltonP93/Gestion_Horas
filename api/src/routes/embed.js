@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
+const { logInternalError } = require('../utils/logInternalError');
 
 // ─── Endpoint público (no auth) ──────────────────────────────────
 // IMPORTANTE: este endpoint debe registrarse ANTES del authenticate
@@ -100,7 +101,7 @@ publicRouter.get('/data/:token', async (req, res) => {
 
     res.json(out);
   } catch (err) {
-    logger.error(`embed GET /data/:token: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'embed GET /data/:token', route: 'embed GET /data/:token', err });
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -122,7 +123,7 @@ router.get('/', async (_req, res) => {
     `);
     res.json({ ok: true, data: rows });
   } catch (err) {
-    logger.error(`embed GET /: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'embed GET /', route: 'embed GET /', err });
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -141,7 +142,7 @@ router.post('/', async (req, res) => {
     );
     res.status(201).json({ ok: true, id: r, token });
   } catch (err) {
-    logger.error(`embed POST /: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'embed POST /', route: 'embed POST /', err });
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -159,7 +160,7 @@ router.put('/:id', async (req, res) => {
       { replacements: [...vals, req.params.id] });
     res.json({ ok: true });
   } catch (err) {
-    logger.error(`embed PUT /:id: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'embed PUT /:id', route: 'embed PUT /:id', err });
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -170,7 +171,7 @@ router.delete('/:id', async (req, res) => {
     await sequelize.query('DELETE FROM embed_tokens WHERE id = ?', { replacements: [req.params.id] });
     res.json({ ok: true });
   } catch (err) {
-    logger.error(`embed DELETE /:id: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'embed DELETE /:id', route: 'embed DELETE /:id', err });
     res.status(500).json({ error: 'Error interno' });
   }
 });

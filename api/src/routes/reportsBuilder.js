@@ -14,6 +14,7 @@ const ExcelJS = require('exceljs');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
+const { logInternalError } = require('../utils/logInternalError');
 
 router.use(authenticate);
 router.use(authorize('admin', 'gth', 'hr', 'manager', 'gestor'));
@@ -222,7 +223,7 @@ router.post('/preview', async (req, res) => {
     const headers = useFields.map(f => def.fields[f].label);
     res.json({ ok: true, count: rows.length, fields: useFields, headers, rows });
   } catch (err) {
-    logger.error(`reports-builder POST /preview: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'reports-builder POST /preview', route: 'reports-builder POST /preview', err });
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -265,8 +266,12 @@ router.post('/export', async (req, res) => {
     await wb.xlsx.write(res);
     res.end();
   } catch (err) {
-    logger.error(`reports-builder POST /export: ${err.message}`, { stack: err.stack });
+    logInternalError(logger, { event: 'reports-builder POST /export', route: 'reports-builder POST /export', err });
+    // Si el fallo ocurre DESPUÉS de enviar headers (streaming del xlsx), no se
+    // puede responder JSON: se destruye la conexión de forma controlada para que
+    // el cliente vea un error de red y no un archivo truncado 'válido'.
     if (!res.headersSent) res.status(500).json({ error: 'Error interno' });
+    else res.destroy();
   }
 });
 
