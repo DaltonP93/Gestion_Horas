@@ -113,7 +113,7 @@ async function refresh(req, res) {
   if (!refreshToken) return res.status(400).json({ error: 'Refresh token requerido' });
 
   try {
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET, { algorithms: ['HS256'] });
     const tokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
 
     const [rows] = await sequelize.query(
