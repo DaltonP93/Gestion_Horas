@@ -264,6 +264,12 @@ async function start() {
     await sequelize.authenticate();
     logger.info('✅ MySQL conectado');
 
+    // Preflight de seguridad (H1): en producción, no arrancar si un admin
+    // conserva la contraseña demo por defecto de init.sql. Fail-closed sólo ante
+    // detección afirmativa; no bloquea por errores transitorios de lectura.
+    const { assertNoDefaultAdminCredential } = require('./config/securityPreflight');
+    await assertNoDefaultAdminCredential({ sequelize });
+
     // Inicializar Socket.io
     initSocket(server);
     logger.info('✅ Socket.io inicializado');
