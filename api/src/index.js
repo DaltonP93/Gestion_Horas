@@ -20,7 +20,6 @@ const { sequelize } = require('./config/database');
 const { initRedis } = require('./config/redis');
 const { initSocket } = require('./socket/socketServer');
 const logger = require('./config/logger');
-const { redactUrl } = require('./utils/redactUrl');
 
 // Rutas
 const authRoutes       = require('./routes/auth');
@@ -111,12 +110,9 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-// Logger de acceso: usa el formato 'combined' pero con la URL saneada, para que
-// un `?access_token=<jwt>` (permitido en descargas) nunca quede en los logs.
-morgan.token('url-redacted', (req) => redactUrl(req.originalUrl || req.url));
-const MORGAN_FORMAT =
-  ':remote-addr - :remote-user [:date[clf]] ":method :url-redacted HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
-app.use(morgan(MORGAN_FORMAT, { stream: { write: msg => logger.info(msg.trim()) } }));
+// Nota: la redacción de `?access_token=` en los logs de acceso la aporta el PR #194
+// (api/src/utils/logRedaction.js). Este PR NO la duplica para evitar solape/merge doble.
+app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
 
 // Rate limiting global
 app.use(rateLimit({
