@@ -9,6 +9,8 @@ const router = require('express').Router();
 const crypto = require('crypto');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const logger = require('../config/logger');
+const { logInternalError } = require('../utils/logInternalError');
 
 router.use(authenticate);
 
@@ -29,7 +31,8 @@ router.post('/qr-token', authorize('admin', 'hr', 'gth', 'super_admin'), async (
     );
     res.json({ branch_id: branchId, token, expires_at: expiresAt, ttl_min: TOKEN_TTL_MIN });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logInternalError(logger, { event: 'self-checkin POST /qr-token', route: 'self-checkin POST /qr-token', err });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
@@ -45,7 +48,8 @@ router.get('/qr-token/:branchId/current', authorize('admin', 'hr', 'gth', 'super
     if (!row) return res.json({ token: null });
     res.json({ branch_id: branchId, token: row.token, expires_at: row.expires_at });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logInternalError(logger, { event: 'self-checkin GET /qr-token/current', route: 'self-checkin GET /qr-token/current', err });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
@@ -144,7 +148,8 @@ router.post('/mark', async (req, res) => {
 
     res.json({ ok: true, source, type, employee_id: emp.id, code: emp.code, selfie_url: selfieUrl });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logInternalError(logger, { event: 'self-checkin POST /mark', route: 'self-checkin POST /mark', err });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
@@ -164,7 +169,8 @@ router.get('/geofence', async (req, res) => {
     const fence = await geofence.getEmployeeFence(emp.id, default_radius_m);
     res.json({ mode, fence });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logInternalError(logger, { event: 'self-checkin GET /geofence', route: 'self-checkin GET /geofence', err });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 

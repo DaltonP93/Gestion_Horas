@@ -32,7 +32,7 @@ function initSocket(server) {
     const token = socket.handshake.auth.token;
     if (!token) return next(new Error('Token requerido'));
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
       socket.user = decoded;
       next();
     } catch {
