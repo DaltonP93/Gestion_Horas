@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
 const logger = require('../config/logger');
+const { isDefaultAdminPassword } = require('../config/securityPreflight');
 const SALT_ROUNDS = 12;
 
 // Intento de enviar mail. Si no hay SMTP configurado, loggea el link.
@@ -105,6 +106,10 @@ async function resetPassword(req, res) {
   if (newPassword.length < 8) return res.status(400).json({ error: 'Mínimo 8 caracteres' });
   if (!/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
     return res.status(400).json({ error: 'Debe contener letras y números' });
+  }
+  // H1: impedir reintroducir una credencial por defecto conocida vía reset.
+  if (isDefaultAdminPassword(newPassword)) {
+    return res.status(400).json({ error: 'La contraseña coincide con una contraseña por defecto no permitida; elegí otra.' });
   }
 
   try {
