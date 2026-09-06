@@ -65,15 +65,16 @@ sin hardware, no destructivo, criterio de aceptación claro y test reproducible.
 | ID | Ítem | SAFE? | Nota |
 |---|---|---|---|
 | P0-1 | H3: `access_token` en URL y en logs morgan | Parcial | Redacción de logs ya en **#194** (no en main); quitar auth-por-query rompe descargas → coordinar (etapa de D3) |
-| P0-2 | H1: credencial demo `admin/Admin1234!` en init.sql | No (operativo) | Rotación en go-live; requiere decisión de bootstrap |
+| P0-2 | H1: credencial demo `admin/Admin1234!` en init.sql | Sí (mitigado en PR) | **#208**: preflight fail-closed en prod (no arranca con la demo ni si no puede verificar) + rechazo de la demo en alta/cambio/reset. Evidencia sobre MySQL 8 descartable. **NO totalmente cerrado a nivel proyecto hasta `main`**; `init.sql` sigue trayendo la demo (decisión de bootstrap) y falta política general de contraseñas débiles |
 
 ### P1 — bloqueador de producción / seguridad
 | ID | Ítem | SAFE? | Nota |
 |---|---|---|---|
-| P1-1 | H7 (5xx genérico) + H10 (fijar `algorithms`) | **SÍ** | #207 (Dev A, revisado por líder). **H3-logs se quita de #207: duplica #194** |
-| P1-2 | H4/H5: revocación de sesión (jti/session + revalidación WS) | Sí (diseño medio) | Requiere tabla de sesiones + denylist Redis |
-| P1-3 | H2: token en `localStorage` → cookie HttpOnly | No | Decisión de estrategia de auth (cookies vs bearer) |
-| P1-4 | Autorizar orden de merge de la deuda de 50 PRs | No | **Decisión del propietario** |
+| P1-1 | H7 (5xx genérico) + H10 (fijar `algorithms`) | **SÍ** | #207 (Dev A, revisado por líder). **RESUELTO el recorte: HEAD de #207 ya NO trae redacción de logs (es de #194)** |
+| P1-1b | H1: preflight fail-closed + prevención de reintroducción de credencial demo | **SÍ** | **#208**. Evidencia sobre MySQL 8 descartable (ESC1 bloquea, ESC2 ok, ESC3 check-unavailable). No cierra H1 a nivel proyecto hasta `main` |
+| P1-2 | H4/H5: revocación de sesión (jti/session + revalidación WS) | Sí (diseño medio) | Requiere tabla de sesiones + denylist Redis. **ADR en #209** |
+| P1-3 | H2: token en `localStorage` → cookie HttpOnly | No | **ADR #209** (dirección HttpOnly aceptada; diseño técnico pendiente de auditoría; implementación NO autorizada) |
+| P1-4 | Autorizar orden de merge de la deuda de **52 PRs** (#158–#209) | No | **Decisión del propietario.** Incluye NO-GO de migraciones 081/082/083 vs FASE F (ver INTEGRATION_PLAN §Orden de migraciones) |
 | P1-5 | Completar CI (merge #194/#190; job Analytics; escaneo deps) | Sí | Varias piezas ya en PRs |
 | P1-6 | Multiempresa (D1=SÍ): auditar/integrar FASE F (`companies` mig 076) | No | Bloqueado por congelamiento FASE F (auditoría Codex) |
 

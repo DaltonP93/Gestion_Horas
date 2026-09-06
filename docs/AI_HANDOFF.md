@@ -41,8 +41,10 @@ horas extra, reportes, nómina y analítica.
 
 - `main` = `078cd67` (merge #157). Última doc previa fijaba `53fee69`/#155: **desactualizada**, corregido aquí.
 - **`main` permanece en #157. Ninguna rama/PR abierto equivale a producción.**
-- **50 PRs Draft abiertos (#158–#207), NINGUNO fusionado** (checkpoint 2026-09-06, `main` `078cd67`).
+- **52 PRs Draft abiertos (#158–#209), NINGUNO fusionado** (checkpoint 2026-09-06, `main` `078cd67`).
   `main` no avanza desde 2026-09-02. Hay **deuda de integración**: casi toda la funcionalidad nueva vive sólo en ramas.
+  Nuevos vs. el checkpoint de 50: **#208** (H1 preflight fail-closed de credencial demo + prevención de
+  reintroducción) y **#209** (ADR: cookies HttpOnly, sólo documento; implementación NO autorizada).
 - Regla vigente del propietario: **no fusionar ni desplegar sin autorización explícita.**
 - **Plan de integración bottom-up:** ver `INTEGRATION_PLAN.md` (grupos, grafo, orden, solapes/duplicados, rebase/test/rollback por lote). Autorizado sólo para *preparar* el plan (D2); cada merge requiere OK expreso, PR por PR.
 - **Convención:** cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
@@ -53,10 +55,21 @@ horas extra, reportes, nómina y analítica.
 - FASE F+ UI: #167→…→#173 (sobre `fase-f4`).
 - FASE E read-only (guards/gates/goldens): #174,#175,#176,#182,#183,#184,#186.
 - Módulos export CSV: #177; #178→#179→#180→#181→#187; #188.
-- Infra/seguridad base: #189, #190 (CI claude/**), #192 (authz+audit), #193 (web build), #194 (ops+CI migraciones), #195.
-- Docs: #191.
+- Infra/seguridad base: #189, #190 (CI claude/**), #192 (authz+audit), #193 (web build), #194 (ops+CI migraciones), #195, **#208 (H1 preflight)**.
+- Docs/ADR: #191, #206 (**canónico** de estado/plan), **#209 (ADR cookies HttpOnly)**.
 - Nocturno/nómina/firma: #196→#200; #196→#204→#205; #197; #198→#199→#201; #202; #203.
 - ZKTeco/impacto: #162, #163, #164, #165, #166.
+
+> **Orden de migraciones (P1-C):** las migraciones **081/082/083** (firma/consola, lotes 3/5) se integrarían
+> **antes** que las **menores 076–080** (FASE F, lote 6). `migrate.js` no tiene guardia de monotonicidad.
+> Simulación sobre MySQL 8 descartable: es **SQL-safe para el conjunto actual** (081–083 no dependen de FASE F;
+> FKs íntegros; idempotente), pero **contingente**. **NO-GO** para 081/082/083 hasta ordenar vs 076–080.
+> Además, `migrate.js` **no es autosuficiente desde `init.sql`** (asume tablas del ORM: `webhooks`,
+> `system_settings`, …): el CI de migraciones efímero debe sembrarlas antes. Detalle en `INTEGRATION_PLAN.md` §Orden de migraciones.
+
+> **CI observada (base `main`):** runs #654–#658 en verde para los HEAD verificados, pero **sólo** cubren
+> los jobs **API / Web / Bridge**; **no** hay job de **MySQL efímero** (vive en #194, sin fusionar) ni de
+> **Analytics/Python**. "CI verde" aquí = esos 3 jobs, no la cadena completa.
 
 ### CI (mecánica "opción B")
 `.github/workflows/ci.yml` en `main` dispara sólo con base `main` (jobs: API, Web, Bridge en 3 TZ UTC/Asunción/Tokyo). Los PR encadenados sobre ramas `claude/*` **no** reciben CI de GitHub hasta que su base se mergee. El job de **migraciones MySQL efímero** y el trigger `claude/**` viven en PRs (#194, #190) **no fusionados**. No hay job de Analytics/Python ni build de imágenes.
