@@ -107,17 +107,20 @@ se aplicarían después. Riesgo: un despliegue con 081–083 ya aplicadas que lu
 - Idempotente: lo ya aplicado nunca se reaplica.
 
 **Simulación (contenedor `mysql:8.0` efímero, runner real, sin base remota):**
-1. **Fase 1** — presentes sólo 081/082/083 (SIN 076–080): 081 y 082 aplican **OK** (083 falla sólo por
-   `system_settings`, tabla del ORM, no por FASE F). → 081/082 **no dependen** de 076–080.
-2. **Fase 2** — se añaden 076–080 (menores): el runner las toma como pendientes y aplica
-   **076→077→078→079→080** en orden, **temporalmente después** de 081/082. **Todas OK.** El FK que cruza
-   el límite (`branches.company_id → companies(id)`) queda **íntegro**.
-3. **Fase 3** — idempotencia: no reaplica nada ya aplicado.
+1. **Fase 1** — presentes sólo 081/082/083 (SIN 076–080): 081 y 082 aplican **OK**; **083 FALLA** por
+   `system_settings` (tabla del ORM, no por FASE F). → 081/082 **no dependen** de 076–080.
+2. **Fase 2** — se añaden 076–080 (menores): el runner las toma como pendientes y las aplica
+   **temporalmente después** de 081/082 (set aplicado = `076,077,078,079,080,081,082`). El FK que cruza
+   el límite (`branches.company_id → companies(id)`) queda **íntegro**. 083 sigue fallando.
+3. **Fase 3** — idempotencia: 076–082 **no** se reaplican (sólo se reintenta 083).
 
-**Conclusión (estática + empírica):** para el conjunto **actual** 076–083 el orden fuera de secuencia
-es **SQL-safe**, porque **no hay dependencia cruzada**: 081–083 no referencian objetos de FASE F
-(`companies`/`cost_centers`/`company_id`/`candidates`/`assignments`/`labor_calendars`/`payroll`) y
-076–080 no referencian 081+. La única acoplación es intra-grupo ascendente (082→081; 076→080).
+Evidencia reproducible y aserciones mecánicas: `docs/evidence/migration-order-sim.{sh,md}`.
+
+**Conclusión (limitada a lo PROBADO):** el orden fuera de secuencia es **SQL-safe sólo para 076–082**
+en el esquema sintético (no hay dependencia cruzada: 081/082 no referencian objetos de FASE F, y
+076–080 no referencian 081+; acoplación intra-grupo 082→081, 076→080). **083 NO se probó SQL-safe**
+(falla por `system_settings`, no por FASE F) → **#202/083 sigue NO-GO** hasta una prueba independiente
+correcta. Los stubs no equivalen a un replay integral de 002–075 (eso lo cubre el job DB de #194).
 
 **Pero la seguridad es CONTINGENTE y frágil** (por eso NO-GO hasta resolver, no "OK"):
 - `migrate.js` no garantiza nada: si cualquier PR de lote temprano introdujera una migración que
