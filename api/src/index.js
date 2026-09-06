@@ -265,8 +265,9 @@ async function start() {
     logger.info('✅ MySQL conectado');
 
     // Preflight de seguridad (H1): en producción, no arrancar si un admin
-    // conserva la contraseña demo por defecto de init.sql. Fail-closed sólo ante
-    // detección afirmativa; no bloquea por errores transitorios de lectura.
+    // conserva la contraseña demo por defecto de init.sql. FAIL-CLOSED: también
+    // bloquea si la verificación no puede completarse (error de consulta/tabla/
+    // permiso → DEFAULT_ADMIN_CHECK_UNAVAILABLE). Un fallo aborta con exit(1).
     const { assertNoDefaultAdminCredential } = require('./config/securityPreflight');
     await assertNoDefaultAdminCredential({ sequelize });
 
