@@ -125,10 +125,13 @@ es **SQL-safe**, porque **no hay dependencia cruzada**: 081–083 no referencian
 - **Colisión de números entre PRs abiertos:** el runner llavea por nombre; dos PRs con el mismo
   `NNN_*.sql` divergente harían que el segundo se considere "ya aplicado" y se **saltee** silenciosamente.
   Con 52 PRs abiertos hay que **garantizar unicidad global de número** antes de integrar.
-- **`migrate.js` no es autosuficiente desde `init.sql`:** varias migraciones (020→`webhooks`,
-  083→`system_settings`, …) asumen tablas creadas por el **sync del ORM (sequelize)**, no por SQL.
-  Cualquier **CI de migraciones sobre MySQL efímero (#194)** y el runbook de deploy deben **sembrar
-  esas tablas del ORM antes** de correr `migrate`, o darán falsos rojos.
+- **`migrate.js` no es autosuficiente desde `init.sql`:** varias migraciones asumen tablas creadas
+  por el **sync del ORM (sequelize)**, no por SQL (p. ej. 020→`webhooks`, 083→`system_settings`).
+  La estrategia del proyecto es **migración autocontenida**: **#194 ya arregla la 020** (le agrega
+  `CREATE TABLE IF NOT EXISTS webhooks`) y su job **DB — migraciones (MySQL 8 efímero)** corre
+  `init.sql`→`migrate` (002–075) **en verde**. Requisito para los lotes siguientes: **cada migración
+  que entre a un lote con el job de BD debe ser autocontenida** (patrón 020) — pendiente verificar
+  **083** (`system_settings`, #202) y extender el job de BD a **076–083** cuando esos lotes se integren.
 
 **Decisión (requiere OK del propietario, PR por PR):**
 - **Preferido:** integrar **076–080 (FASE F) ANTES** de cualquier lote que traiga 081–083 → orden
