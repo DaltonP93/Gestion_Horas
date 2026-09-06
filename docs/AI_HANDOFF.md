@@ -40,9 +40,13 @@ horas extra, reportes, nómina y analítica.
 ## 3. Estado de `main` y de los PRs
 
 - `main` = `078cd67` (merge #157). Última doc previa fijaba `53fee69`/#155: **desactualizada**, corregido aquí.
-- **48 PRs Draft abiertos (#158–#205), NINGUNO fusionado.** `main` no avanza desde 2026-09-02.
-  Hay **deuda de integración**: casi toda la funcionalidad nueva vive sólo en ramas.
+- **`main` permanece en #157. Ninguna rama/PR abierto equivale a producción.**
+- **50 PRs Draft abiertos (#158–#207), NINGUNO fusionado** (checkpoint 2026-09-06, `main` `078cd67`).
+  `main` no avanza desde 2026-09-02. Hay **deuda de integración**: casi toda la funcionalidad nueva vive sólo en ramas.
 - Regla vigente del propietario: **no fusionar ni desplegar sin autorización explícita.**
+- **Plan de integración bottom-up:** ver `INTEGRATION_PLAN.md` (grupos, grafo, orden, solapes/duplicados, rebase/test/rollback por lote). Autorizado sólo para *preparar* el plan (D2); cada merge requiere OK expreso, PR por PR.
+- **Convención:** cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
+- **Vocabulario de estado (canónico):** `MERGED_VERIFIED` · `OPEN_PR_UNAUDITED` · `OPEN_PR_TESTED` (pruebas locales del autor, sin CI remoto ni revisión humana) · `OPEN_PR_BLOCKED` · `SIMULATED_ONLY` · `NOT_PRESENT` · `PRODUCTION_UNVERIFIED`. Nada en un PR abierto está "resuelto en el proyecto" hasta llegar a `main`.
 
 ### Cadenas de PRs (dependencias) — detalle en `IMPLEMENTATION_STATUS.md`
 - FASE F núcleo: #158→#159→#160→#161 (apilada).
@@ -68,6 +72,14 @@ horas extra, reportes, nómina y analítica.
 - att2000 READ-ONLY (sin `writeCheckinOut`, sin flag de escritura).
 - i18n infra (es/en/pt) — adoptada sólo en ~7/72 páginas.
 
+**Multiempresa (requisito confirmado por el propietario, D1 = SÍ):**
+- **NO está en `main`** (no hay `company_id` en el esquema de `main`).
+- **Se está implementando en la cadena FASE F (CONGELADA):** #158 aporta `076_governance_companies_cost_centers.sql`
+  (tablas `companies`/`cost_centers`); #159–#161 construyen encima. Estado: `OPEN_PR_BLOCKED` (pendiente de auditoría
+  Codex y merge). **No** clasificar como `NOT_PRESENT` a nivel proyecto; a nivel `main` es `NOT_PRESENT_ON_MAIN`.
+- La nómina global de F4 (#161) es una **excepción temporal explícita** al aislamiento por empresa; no invalida el requisito.
+- No abrir una segunda épica de multiempresa: auditar y reutilizar la implementación de FASE F.
+
 **Sólo en PR (OPEN_PR — NO en `main`):**
 - Nocturno correcto en mensual/semanal/diario/analítica/self-service → #196, #204, #205.
 - Aprobación multinivel del reporte + firma con hash de integridad → #198/#199; firma PAdES local → #201/#203.
@@ -92,7 +104,9 @@ El driver/auto-polling att2000 y ZKTeco tiene kill-switch OFF por defecto
 P1 abiertos en `main`: credencial demo `admin/Admin1234!` en `init.sql` (H1); `access_token`
 en URL de descargas y logueado por morgan (H3); JWT+refresh en `localStorage` (H2);
 revocación inefectiva (access token stateless 1h no revalida `active`/empresa; WebSocket sin
-re-auth) (H4/H5). La auditoría de PII en logs (H6) ya está resuelta en el PR **#192** (no en main).
+re-auth) (H4/H5). La auditoría de PII en logs (H6) está **mitigada sólo en el PR #192** (aún NO en `main`).
+La redacción de token en logs (H3) está **en dos PRs que se solapan: #194 y #207** (ver `INTEGRATION_PLAN.md`;
+#207 se recorta para no duplicar #194). Ningún hallazgo se considera resuelto en el proyecto hasta llegar a `main`.
 
 ## 7. Estado DevOps (detalle en `DEPLOYMENT.md`, `BACKUP_RESTORE.md`)
 

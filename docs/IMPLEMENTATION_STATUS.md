@@ -5,46 +5,56 @@
 
 ## Vocabulario de estado (obligatorio)
 
-`MERGED_VERIFIED` · `MERGED_UNVERIFIED` · `OPEN_PR_VERIFIED` · `OPEN_PR_UNVERIFIED` ·
-`PARTIAL` · `SIMULATED_ONLY` · `BLOCKED_HARDWARE` · `BLOCKED_SPEC` · `PLANNED` ·
-`SUPERSEDED` · `REJECTED` · `NOT_PRESENT`.
+Canónico (D2/Bloque 1): `MERGED_VERIFIED` · `OPEN_PR_UNAUDITED` · `OPEN_PR_TESTED` (pruebas
+locales del autor, **sin** CI remoto ni revisión humana) · `OPEN_PR_BLOCKED` · `SIMULATED_ONLY` ·
+`NOT_PRESENT` · `PRODUCTION_UNVERIFIED`. Secundarios usados en la matriz de requisitos:
+`PARTIAL`, `SUPERSEDED`, `REJECTED`, `PLANNED`, `NOT_PRESENT_ON_MAIN`.
 
-Nunca decir "completo" sin indicar archivo + evidencia.
+Nunca decir "completo" sin indicar archivo + evidencia. Nada en un PR abierto está "resuelto en el
+proyecto" hasta llegar a `main`. Cada `#NNN` = `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
 
-## Mapa de PRs abiertos (48, todos Draft, ninguno fusionado)
+## Mapa de PRs abiertos (50, todos Draft, ninguno fusionado)
 
-`main` está en #157. Nada de lo de abajo está en `main` salvo lo indicado como fusionado.
+Checkpoint 2026-09-06, `main @ 078cd67` (#157). Nada de lo de abajo está en `main`.
+Plan de integración bottom-up + solapes/duplicados: ver `INTEGRATION_PLAN.md`.
+
+**Multiempresa (D1 = requisito SÍ):** `NOT_PRESENT_ON_MAIN`; en desarrollo en FASE F congelada
+(#158 migración `076_governance_companies_cost_centers.sql`) → `OPEN_PR_BLOCKED`. No es `NOT_PRESENT` de proyecto.
 
 | PR | Tema | Base | Estado funcional |
 |---|---|---|---|
-| #158→#161 | FASE F núcleo (gobierno/personas/calendario/nómina F1-F4) | apilada s/main | OPEN_PR_UNVERIFIED |
-| #162 | Admin ve/opera Relojes ZKTeco (UI) | main | OPEN_PR_UNVERIFIED |
-| #163 | ZKTeco read hardening offline + harness | main | OPEN_PR_UNVERIFIED |
-| #164 | Gate impacto FASE E + tests sintéticos | main | OPEN_PR_UNVERIFIED |
-| #165 | Fix insertId INSERT crudo | main | OPEN_PR_UNVERIFIED |
-| #166 | Auditoría egreso sin PII/texto libre | main | OPEN_PR_UNVERIFIED |
-| #167→#173 | FASE F+ UI (asignaciones, nómina, calendario, jornada, headcount) | s/fase-f4 | OPEN_PR_UNVERIFIED |
-| #174,#175,#176,#182,#183,#184,#186 | FASE E read-only (guards/gates/goldens/drift) | cadenas | OPEN_PR_UNVERIFIED |
-| #177 | Capacitaciones: editar curso | main | OPEN_PR_UNVERIFIED |
-| #178→#181,#187,#188 | Export CSV (marcaciones/vacaciones/encuestas/banco/horas-extra/semanal) | cadenas | OPEN_PR_UNVERIFIED |
-| #189 | Idempotencia migraciones 072-075 (CI) | s/fase-f4 | OPEN_PR_UNVERIFIED |
-| #190 | CI: disparar en ramas/PR claude/** | main | OPEN_PR_UNVERIFIED |
-| #191 | Documentación integral | main | OPEN_PR_UNVERIFIED |
-| #192 | Authz por alcance + auditoría sin PII + fix inyección att2000 | main | OPEN_PR_VERIFIED (tests locales) |
-| #193 | Fix web build (tipo workdayConfig) | main | OPEN_PR_UNVERIFIED |
-| #194 | Ops: migración 020 autocontenida + saneo + CI migraciones MySQL | main | OPEN_PR_VERIFIED (CI verde) |
-| #195 | Saneo de dominio restante | main | OPEN_PR_UNVERIFIED |
-| #196 | Fase 0: total mensual por el motor (nocturno) | main | OPEN_PR_VERIFIED (tests locales) |
-| #197 | Recibo self-service del empleado | main | OPEN_PR_UNVERIFIED |
-| #198→#199 | Aprobación multinivel + firma con hash del reporte | main | OPEN_PR_UNVERIFIED |
-| #200 | Export planilla horas CSV/XLSX/JSON + API | s/#196 | OPEN_PR_UNVERIFIED |
-| #201 | Firma PAdES local (html2pdf+pades-signer) | s/#198 | OPEN_PR_VERIFIED (tests locales) |
-| #202 | Consola de activación FASE E (doble compuerta) | main | OPEN_PR_UNVERIFIED |
-| #203 | Deploy scaffolding firma PAdES + smoke-test + runbook | main | OPEN_PR_UNVERIFIED |
-| #204 | Nocturno en semanal/diario/analítica (motor) | s/#196 | OPEN_PR_VERIFIED (tests locales) |
-| #205 | Nocturno en self-service (me.js) + helper compartido | s/#204 | OPEN_PR_VERIFIED (tests locales) |
+| #158→#161 | FASE F núcleo (gobierno/personas/calendario/nómina F1-F4) | apilada s/main | OPEN_PR_UNAUDITED |
+| #162 | Admin ve/opera Relojes ZKTeco (UI) | main | OPEN_PR_UNAUDITED |
+| #163 | ZKTeco read hardening offline + harness | main | OPEN_PR_UNAUDITED |
+| #164 | Gate impacto FASE E + tests sintéticos | main | OPEN_PR_UNAUDITED |
+| #165 | Fix insertId INSERT crudo | main | OPEN_PR_UNAUDITED |
+| #166 | Auditoría egreso sin PII/texto libre | main | OPEN_PR_UNAUDITED |
+| #167→#173 | FASE F+ UI (asignaciones, nómina, calendario, jornada, headcount) | s/fase-f4 | OPEN_PR_UNAUDITED |
+| #174,#175,#176,#182,#183,#184,#186 | FASE E read-only (guards/gates/goldens/drift) | cadenas | OPEN_PR_UNAUDITED |
+| #177 | Capacitaciones: editar curso | main | OPEN_PR_UNAUDITED |
+| #178→#181,#187,#188 | Export CSV (marcaciones/vacaciones/encuestas/banco/horas-extra/semanal) | cadenas | OPEN_PR_UNAUDITED |
+| #189 | Idempotencia migraciones 072-075 (CI) | s/fase-f4 | OPEN_PR_UNAUDITED |
+| #190 | CI: disparar en ramas/PR claude/** | main | OPEN_PR_UNAUDITED |
+| #191 | Documentación integral | main | OPEN_PR_UNAUDITED |
+| #192 | Authz por alcance + auditoría sin PII + fix inyección att2000 | main | OPEN_PR_TESTED (local) |
+| #193 | Fix web build (tipo workdayConfig) | main | OPEN_PR_UNAUDITED |
+| #194 | Ops: migración 020 autocontenida + saneo + CI migraciones MySQL | main | OPEN_PR_TESTED (CI en rama) |
+| #195 | Saneo de dominio restante | main | OPEN_PR_UNAUDITED |
+| #196 | Fase 0: total mensual por el motor (nocturno) | main | OPEN_PR_TESTED (local) |
+| #197 | Recibo self-service del empleado | main | OPEN_PR_UNAUDITED |
+| #198→#199 | Aprobación multinivel + firma con hash del reporte | main | OPEN_PR_UNAUDITED |
+| #200 | Export planilla horas CSV/XLSX/JSON + API | s/#196 | OPEN_PR_UNAUDITED |
+| #201 | Firma PAdES local (html2pdf+pades-signer) | s/#198 | OPEN_PR_TESTED (local) |
+| #202 | Consola de activación FASE E (doble compuerta) | main | OPEN_PR_UNAUDITED |
+| #203 | Deploy scaffolding firma PAdES + smoke-test + runbook | main | OPEN_PR_UNAUDITED |
+| #204 | Nocturno en semanal/diario/analítica (motor) | s/#196 | OPEN_PR_TESTED (local) |
+| #205 | Nocturno en self-service (me.js) + helper compartido | s/#204 | OPEN_PR_TESTED (local) |
+| #206 | Snapshot documental consolidado (este doc + hermanos + plan) | main | OPEN_PR (docs) |
+| #207 | Higiene seguridad backend (JWT algs + 5xx; logs→recortar, duplica #194) | main | OPEN_PR_TESTED (local) |
 
-> "VERIFIED" aquí = con pruebas locales/CI reales ejecutadas por el autor; **no** implica revisión humana ni merge.
+> `OPEN_PR_TESTED` = pruebas locales del autor ejecutadas; **no** implica CI remoto, revisión humana ni merge.
+> Los OPEN_PR_TESTED previos (#192/#194/#196/#201) mantienen ese estado: sus pruebas fueron locales/CI-en-rama, no sobre `main`.
+> **#207 solapa con #194** en la redacción de token en logs (duplicado) → #207 se recorta a JWT-algs + 5xx (ver `INTEGRATION_PLAN.md`).
 
 ## Backlog priorizado
 
@@ -54,18 +64,18 @@ sin hardware, no destructivo, criterio de aceptación claro y test reproducible.
 ### P0 — vulnerabilidad/pérdida de datos/irreversible
 | ID | Ítem | SAFE? | Nota |
 |---|---|---|---|
-| P0-1 | H3: `access_token` en URL y en logs morgan | Parcial | Redacción de logs = SAFE; quitar auth-por-query rompe descargas → coordinar |
+| P0-1 | H3: `access_token` en URL y en logs morgan | Parcial | Redacción de logs ya en **#194** (no en main); quitar auth-por-query rompe descargas → coordinar (etapa de D3) |
 | P0-2 | H1: credencial demo `admin/Admin1234!` en init.sql | No (operativo) | Rotación en go-live; requiere decisión de bootstrap |
 
 ### P1 — bloqueador de producción / seguridad
 | ID | Ítem | SAFE? | Nota |
 |---|---|---|---|
-| P1-1 | H7 (5xx genérico) + H10 (fijar `algorithms`) + H3-logs | **SÍ** | Higiene de seguridad backend — **asignado Dev A** |
+| P1-1 | H7 (5xx genérico) + H10 (fijar `algorithms`) | **SÍ** | #207 (Dev A, revisado por líder). **H3-logs se quita de #207: duplica #194** |
 | P1-2 | H4/H5: revocación de sesión (jti/session + revalidación WS) | Sí (diseño medio) | Requiere tabla de sesiones + denylist Redis |
 | P1-3 | H2: token en `localStorage` → cookie HttpOnly | No | Decisión de estrategia de auth (cookies vs bearer) |
-| P1-4 | Autorizar orden de merge de la deuda de 48 PRs | No | **Decisión del propietario** |
+| P1-4 | Autorizar orden de merge de la deuda de 50 PRs | No | **Decisión del propietario** |
 | P1-5 | Completar CI (merge #194/#190; job Analytics; escaneo deps) | Sí | Varias piezas ya en PRs |
-| P1-6 | ¿Multiempresa es requisito? (hoy NOT_PRESENT) | No | **Decisión de negocio** |
+| P1-6 | Multiempresa (D1=SÍ): auditar/integrar FASE F (`companies` mig 076) | No | Bloqueado por congelamiento FASE F (auditoría Codex) |
 
 ### P2 — funciones incompletas / asistencia / reportes / i18n
 | ID | Ítem | SAFE? |
