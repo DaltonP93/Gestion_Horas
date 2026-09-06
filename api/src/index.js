@@ -110,8 +110,6 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-// Nota: la redacción de `?access_token=` en los logs de acceso la aporta el PR #194
-// (api/src/utils/logRedaction.js). Este PR NO la duplica para evitar solape/merge doble.
 app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
 
 // Rate limiting global
