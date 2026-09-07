@@ -1,11 +1,54 @@
 # Plan de integración bottom-up — SisHoras
 
-> **Actualizado:** 2026-09-06 · Autor: Agente 0 (líder). Autorizado por el propietario para
+> **Actualizado:** 2026-09-07 · Autor: Agente 0 (líder). Autorizado por el propietario para
 > **preparar** el plan (D2, opción A): **sin fusionar, sin auto-merge, sin Ready-for-review,
 > sin cerrar, sin desplegar, sin rebasar FASE F**. Cada merge requiere autorización expresa posterior, PR por PR.
-> **Snapshot:** `main @ 078cd67` (#157). **52 PRs abiertos** (#158–#209), todos Draft, ninguno fusionado.
+> **Snapshot:** `main @ 078cd67` (#157). PRs Draft abiertos #158–#210 (**#193 y #211 cerrados**), ninguno fusionado.
 > Ninguna rama abierta equivale a producción. `main` permanece en #157.
-> (#208 = H1 preflight fail-closed de credencial demo; #209 = ADR cookies HttpOnly, sólo documento.)
+> (#208 = H1 preflight fail-closed de credencial demo; #209 = ADR cookies HttpOnly, sólo documento;
+> #210 = bumps de dependencias con CVE — multer/axios/python-jose.)
+
+## Decisión de avance (2026-09-07) — olas priorizadas por valor/riesgo
+
+> Síntesis ejecutiva sobre la auditoría de integración (lotes 0-6, evidencia en `docs/evidence/`).
+> **Ningún merge sin OK del propietario, PR por PR.** El detalle de orden vive en §Orden bottom-up.
+> Principio rector: **primero lo que elimina riesgo (seguridad), luego lo que enciende el CI de datos
+> (para no fusionar a ciegas), luego corrección de negocio, y al final lo grande con migraciones.**
+
+**Resoluciones de estado (hechas hoy, sin fusionar):**
+- **#193 CERRADO** como **subconjunto estricto de #194** (mismo fix de `web/src/lib/workdayConfig.ts`; #194
+  lo incluye con un comentario extra). Ya no hay ambigüedad #193↔#194.
+- **#194 listo para revisión (sigue Draft):** CI **9/9 en verde** sobre `e527506` (API×3 TZ, Bridge×3 TZ,
+  Web build, **Analytics**, **DB — migraciones MySQL 8 efímero**); `mergeable_state: clean`; base `main@078cd67`.
+  Es el **candidato #1** de la Ola 1.
+- **#210 (CVE) CI en verde** sobre `1e2881d` (API/Web/Bridge). Bumps directos multer/axios/python-jose;
+  api+bridge highs → 0. Web CVE queda ligado al fix de build (#194) — no se toca aquí.
+
+**Ola 1 — Seguridad + encender CI de datos (bajo riesgo, máximo valor).** `→ Lote 1`
+`#194` (H3 token en logs + migración 020 autocontenida + **job MySQL efímero** + fix build web) →
+`#208` (H1 preflight fail-closed) → `#207` (JWT HS256 + 5xx sin fuga) → `#192` (authz por alcance + PII + inyección att2000).
+Sueltos: `#190` (trigger CI `claude/**`), `#195` (saneo dominio restante), `#165`, `#166`, `#210` (CVE).
+
+**Ola 2 — Corrección de negocio (nocturno), sin migraciones.** `→ Lote 2`
+Cadena `#196 → #204 → #205` (lecturas por el motor correcto; **no** toca `daily_summary`, **no** activa flags).
+Luego `#197` (recibo self-service), `#200` (export horas + API).
+
+**Ola 3 — Módulos aditivos (export CSV/UI), bajo riesgo.** `→ Lote 4`
+`#178→#179→#180→#181→#187`; sueltos `#177`, `#188`, `#162`, `#163`.
+
+**Ola 4 — FASE E read-only (red de seguridad ANTES de cualquier activación).** `→ Lote 5 (parte read-only)`
+`#174→…→#184`; sueltos `#186`, `#164`. Guards/gates/goldens: **no** cambian runtime.
+
+**Ola 5 — BLOQUEADO hasta decisión del propietario + auditoría Codex.** `→ Lotes 3, 5(083), 6`
+- **Orden de migraciones 081/082/083 vs 076–080** (§Orden de migraciones): NO-GO hasta guardia de
+  monotonicidad en `migrate.js` **o** renumeración. **Recomendado:** guardia + rebase de 083 sobre 076–080.
+- **FASE F** (#158–#161, F+ #167–#173, #185, #189): épica multiempresa, **congelada**; requiere auditoría
+  Codex dedicada antes de descongelar (D1 = multiempresa es requisito confirmado).
+- `#198/#199/#201/#203` (aprobación+firma, 081/082); **#202** (083, además choca con FASE E en
+  `workdaySummaryService.js`); `#209` (cookies HttpOnly, **implementación no autorizada**).
+
+**Primera acción recomendada:** preparar/fusionar **#194** (con OK), porque mata H3 y enciende el CI de
+datos del que dependen todas las olas siguientes — mayor retorno por el menor riesgo.
 
 ## Vocabulario de estado
 
@@ -57,7 +100,7 @@ main
 | Conflicto potencial | PRs | Detalle | Acción del líder |
 |---|---|---|---|
 | **Redacción de token en logs = DUPLICADO** | **#194 vs #207** | #194 trae `api/src/utils/logRedaction.js` (`urlToken`+`redactSensitiveLogLine`) sobre morgan. | **RESUELTO:** #207 quedó recortado a H10 (algoritmos JWT) + H7 (5xx genérico); su HEAD **ya NO** contiene `redactUrl.js` ni el cambio de morgan. La redacción de logs es responsabilidad única de #194. |
-| `web/src/lib/workdayConfig.ts` | **#193 vs #194** | Ambos tocan el mismo archivo (fix de tipo). Posible solape/duplicado parcial. | Auditar cuál corrige el build; el otro se recorta o se marca SUPERSEDED. |
+| `web/src/lib/workdayConfig.ts` | **#193 vs #194** | Ambos tocan el mismo archivo (fix de tipo de `workdayConfigPayloadForSave`). | **RESUELTO (2026-09-07):** #194 incluye el fix íntegro (mismo diff + comentario extra). **#193 cerrado** como subconjunto estricto. El fix de build web es responsabilidad única de #194. |
 | `.github/workflows/ci.yml` | #158, #189, #190, #194 | #190 agrega trigger `claude/**`; #194 agrega job Analytics/Python + concurrency; #158/#189 tocan CI de FASE F. **No son duplicados** pero colisionan en secuencia. | Integrar CI en un orden único (ver batches); rebasar los siguientes tras cada merge. |
 | `api/.env.example` | #158–#161, #195, #201, #202 | Varias adiciones de variables. | Conflictos de merge menores; resolver por rebase incremental. |
 | `database/migrations/` **orden fuera de secuencia** | 076–080 (F, lote 6), 081–082 (firma, lote 3), 083 (consola, lote 5) | Números únicos (sin choque), **pero el plan mergea 081–083 ANTES que las MENORES 076–080**. `migrate.js` no tiene guardia de monotonicidad. | **Ver §Orden de migraciones (P1-C).** Marcado **NO-GO** para 081/082/083 hasta resolver FASE F (076–080). |
@@ -71,7 +114,7 @@ luego #191 (recortar a lo que NO duplique #206) y #209 (ADR cookies; sólo docum
 **Lote 1 — Infra/seguridad base sobre main (habilita CI real para el resto):**
 1. #190 (trigger CI `claude/**`) — habilita CI en las ramas encadenadas.
 2. #194 (CI Analytics + concurrency + **logRedaction** + migración 020 + saneo) — rebasar sobre #190.
-3. #193 (fix build web) **o** reconciliar con #194 (`workdayConfig.ts`).
+3. ~~#193 (fix build web)~~ — **RESUELTO:** incluido en #194; #193 cerrado (subconjunto estricto).
 4. #207 (recortado: algoritmos JWT + 5xx genérico) — tras #194.
 5. #192 (authz por alcance + auditoría sin PII + fix inyección att2000).
 6. #165 (insertId), #166 (auditoría egreso sin PII), #195 (saneo dominio restante).
@@ -178,7 +221,7 @@ No hay estado destructivo: migraciones sólo forward, pero **no** se aplican en 
 - **#191 (docs) vs #206:** **#206 es la fuente canónica** de estado/plan/trazabilidad (AI_HANDOFF,
   IMPLEMENTATION_STATUS, INTEGRATION_PLAN, REQUIREMENTS_TRACEABILITY). #191 debe **recortarse** a lo que
   no dupliquen esos archivos; ante divergencia gana #206.
-- #193 vs #194 (`workdayConfig.ts`).
+- ~~#193 vs #194 (`workdayConfig.ts`)~~ — **RESUELTO** (2026-09-07): #194 incluye el fix; #193 cerrado.
 - #207 (recorte por duplicado con #194) — **RESUELTO** (HEAD sin `redactUrl.js` ni cambio de morgan).
 - **081/082/083 (#198/#201/#202): NO-GO** hasta resolver el orden de migraciones vs FASE F (§Orden de migraciones).
 - Toda la cadena G7 nocturno/firma: revisar orden reports/me vs #192.
