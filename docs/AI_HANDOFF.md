@@ -89,8 +89,11 @@ horas extra, reportes, nómina y analítica.
 **Multiempresa (requisito confirmado por el propietario, D1 = SÍ):**
 - **NO está en `main`** (no hay `company_id` en el esquema de `main`).
 - **Se está implementando en la cadena FASE F (CONGELADA):** #158 aporta `076_governance_companies_cost_centers.sql`
-  (tablas `companies`/`cost_centers`); #159–#161 construyen encima. Estado: `OPEN_PR_BLOCKED` (pendiente de auditoría
-  Codex y merge). **No** clasificar como `NOT_PRESENT` a nivel proyecto; a nivel `main` es `NOT_PRESENT_ON_MAIN`.
+  (tablas `companies`/`cost_centers`); #159–#161 construyen encima. Estado: `OPEN_PR_BLOCKED`. **Auditoría Codex
+  read-only COMPLETADA (2026-09-07): GO condicional** (`docs/evidence/fase-f-codex-audit.md`) — aislamiento por
+  empresa realmente enforced (`orgScope.js`), fail-closed, att2000 READ-ONLY, migraciones autocontenidas e
+  idempotentes en CI; sin BLOCKER de código. Gate restante = orden de migraciones (081/082/083 vs 076–080) + OK del
+  propietario + merge base-first f1→f2→f3→f4. **No** clasificar como `NOT_PRESENT` a nivel proyecto; a nivel `main` es `NOT_PRESENT_ON_MAIN`.
 - La nómina global de F4 (#161) es una **excepción temporal explícita** al aislamiento por empresa; no invalida el requisito.
 - No abrir una segunda épica de multiempresa: auditar y reutilizar la implementación de FASE F.
 

@@ -42,8 +42,11 @@ Luego `#197` (recibo self-service), `#200` (export horas + API).
 **Ola 5 — BLOQUEADO hasta decisión del propietario + auditoría Codex.** `→ Lotes 3, 5(083), 6`
 - **Orden de migraciones 081/082/083 vs 076–080** (§Orden de migraciones): NO-GO hasta guardia de
   monotonicidad en `migrate.js` **o** renumeración. **Recomendado:** guardia + rebase de 083 sobre 076–080.
-- **FASE F** (#158–#161, F+ #167–#173, #185, #189): épica multiempresa, **congelada**; requiere auditoría
-  Codex dedicada antes de descongelar (D1 = multiempresa es requisito confirmado).
+- **FASE F** (#158–#161, F+ #167–#173, #185, #189): épica multiempresa, **congelada**. **Auditoría Codex
+  read-only COMPLETADA (2026-09-07): veredicto GO condicional** (`docs/evidence/fase-f-codex-audit.md`) —
+  aislamiento por empresa realmente enforced, fail-closed, att2000 READ-ONLY, migraciones autocontenidas e
+  idempotentes en CI; **sin BLOCKER de código**. Cierra la compuerta "auditoría Codex" pero **NO** autoriza
+  fusión: sigue gateada por el orden de migraciones (abajo) y el OK del propietario. Descongelar sólo tras olas 1–4.
 - `#198/#199/#201/#203` (aprobación+firma, 081/082); **#202** (083, además choca con FASE E en
   `workdaySummaryService.js`); `#209` (cookies HttpOnly, **implementación no autorizada**).
 
@@ -143,7 +146,10 @@ luego #191 (recortar a lo que NO duplique #206) y #209 (ADR cookies; sólo docum
 **Lote 5 — FASE E read-only:** #174→#175→#176→#182→#183→#184; #186; #164; #202 (consola, no activa nada;
 migración **083**, **NO-GO hasta resolver orden vs 076–080**).
 
-**Lote 6 — FASE F núcleo + F+ (BLOQUEADO hasta auditoría Codex):** #158→#159→#160→#161 (incluye **multiempresa** 076), luego #167→…→#173→#185 y #189. **No integrar ni rebasar hasta que Codex termine.**
+**Lote 6 — FASE F núcleo + F+ (auditoría Codex COMPLETADA = GO condicional; sigue congelado hasta OK del propietario):**
+#158→#159→#160→#161 (incluye **multiempresa** 076), luego #167→…→#173→#185 y #189. Auditoría read-only en
+`docs/evidence/fase-f-codex-audit.md`: sin BLOCKER de código; gate real = orden de migraciones (§abajo) + fusión
+base-first f1→f2→f3→f4 con OK PR por PR. **No integrar ni rebasar sin autorización expresa.**
 
 ## Orden de migraciones (P1-C — evidencia sobre MySQL 8 descartable)
 
@@ -225,7 +231,8 @@ No hay estado destructivo: migraciones sólo forward, pero **no** se aplican en 
 - #207 (recorte por duplicado con #194) — **RESUELTO** (HEAD sin `redactUrl.js` ni cambio de morgan).
 - **081/082/083 (#198/#201/#202): NO-GO** hasta resolver el orden de migraciones vs FASE F (§Orden de migraciones).
 - Toda la cadena G7 nocturno/firma: revisar orden reports/me vs #192.
-- FASE F (G1/G2/G3): **congelada**; sólo inspección/documentación, sin cambios de HEAD.
+- FASE F (G1/G2/G3): **congelada**; auditoría Codex read-only **completada** (GO condicional,
+  `docs/evidence/fase-f-codex-audit.md`); sin cambios de HEAD. Descongelar sólo con OK del propietario y orden de migraciones resuelto.
 
 ## Restricciones vigentes
 Cero merge/auto-merge/Ready/close/deploy. att2000 READ-ONLY. Sin activar flags/writers. Sin tocar
