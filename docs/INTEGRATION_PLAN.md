@@ -78,6 +78,10 @@ luego #191 (recortar a lo que NO duplique #206) y #209 (ADR cookies; sólo docum
 7. #208 (H1: preflight fail-closed de credencial demo + prevención de reintroducción). Independiente;
    solapa `authController.js` con #207 en funciones distintas (regiones no adyacentes).
 
+> **Auditoría read-only lotes 2/3:** footprints, matriz de conflictos (todos limpios) y GO/NO-GO por PR
+> en `docs/evidence/lots-2-3-audit.md`. Ensayo local lote1+lote2 = 0 conflictos, API 91 suites/1423 tests
+> verde en 3 TZ (nocturno sensible a TZ), tree `7032fafd`.
+
 **Lote 2 — Nocturno/lecturas (solo lectura, reversible):**
 7. #196 → #204 → #205 (motor en mensual/semanal/diario/analítica/self-service). Rebasar sobre #192.
 8. #197 (recibo self-service), #200 (export horas+API, s/#196).
