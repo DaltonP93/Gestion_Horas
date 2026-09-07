@@ -14,7 +14,9 @@
 - Todas las consultas administrativas van por `docker exec` (sin salir a red). La **única** conexión
   TCP es la del checker Node (mysql2) al puerto loopback del propio contenedor descartable — es
   justo el camino que se quiere validar.
-- Imagen **pinneada** `mysql:8.0.40` (no `mysql:8.0` mutable).
+- Imagen **fijada por DIGEST** (`mysql:8.0.40@sha256:d58ac9…`, manifest multi-arch inmutable; no `mysql:8.0` mutable).
+- **Sólo Docker LOCAL:** aborta si hay `DOCKER_HOST` o un contexto Docker no-`default` (evita crear contenedores en un host remoto).
+- **Guard de fuga:** verifica que la salida publicada **no** contenga SQL, hashes bcrypt, la contraseña demo ni el password descartable.
 - Comprueba explícitamente: `docker run`, readiness (query **autenticada** a la base propia — no
   `mysqladmin ping`, que reporta "alive" ya en el server temporal de init), carga de `init.sql`,
   `UPDATE` y `DROP`. Cada paso falla con exit ≠ 0 si no cumple.

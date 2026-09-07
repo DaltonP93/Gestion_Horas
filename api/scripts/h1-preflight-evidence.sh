@@ -12,9 +12,12 @@
 #  - Todas las consultas administrativas van por `docker exec` (sin salir a red).
 #    La ÚNICA conexión TCP es la del checker Node (mysql2) al puerto loopback del
 #    propio contenedor descartable — es justo el camino que se quiere validar.
-#  - Imagen MySQL PINNEADA (no `mysql:8.0` mutable).
+#  - Imagen MySQL PINNEADA POR DIGEST (inmutable, no `mysql:8.0` mutable).
+#  - SÓLO Docker LOCAL: aborta si hay DOCKER_HOST o un contexto no-default (remoto).
 #  - `set -Eeuo pipefail` + `trap` de limpieza desde el inicio.
 #  - Valida mecánicamente los 3 escenarios; cualquier desviación => exit != 0.
+#  - Verifica que la salida publicada no contenga SQL, hashes bcrypt, la contraseña
+#    demo ni el password descartable.
 #
 # NUNCA correr contra producción ni att2000. No requiere variables externas.
 set -Eeuo pipefail
@@ -25,11 +28,29 @@ NONCE="$(openssl rand -hex 6 2>/dev/null || printf '%s%s' "$$" "${RANDOM}${RANDO
 CID="sishoras-h1ev-${NONCE}"
 DB_NAME="h1ev_${NONCE}"
 DB_PW="$(openssl rand -hex 16 2>/dev/null || printf 'pw%s%s' "$$" "${RANDOM}${RANDOM}")"
-MYSQL_IMAGE="mysql:8.0.40"          # pinneada (no mutable)
+# Imagen fijada por DIGEST (tag versionada 8.0.40 + digest inmutable del manifest multi-arch).
+MYSQL_IMAGE="mysql:8.0.40@sha256:d58ac93387f644e4e040c636b8f50494e78e5afc27ca0a87348b2f577da2b7ff"
 API_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_DIR="$(cd "$API_DIR/.." && pwd)"
 
 fail(){ echo "FALLO: $*" >&2; exit 1; }
+
+# Sólo Docker LOCAL: nunca un daemon remoto (evita crear contenedores en otro host).
+assert_local_docker(){
+  [ -z "${DOCKER_HOST:-}" ] || fail "DOCKER_HOST está seteado ('${DOCKER_HOST}'): se exige Docker local"
+  local ctx; ctx="$(docker context show 2>/dev/null || echo default)"
+  [ "$ctx" = "default" ] || fail "contexto Docker no-default ('$ctx'): se exige Docker local"
+}
+
+# La salida publicada no debe contener SQL, hashes bcrypt, la contraseña demo ni el password descartable.
+guard_output(){ # $1=texto combinado
+  local t="$1"
+  printf '%s' "$t" | grep -q "Admin1234!"          && fail "fuga: la salida contiene la contraseña demo"
+  printf '%s' "$t" | grep -q '\$2[aby]\$'          && fail "fuga: la salida contiene un hash bcrypt"
+  printf '%s' "$t" | grep -Fq "$DB_PW"             && fail "fuga: la salida contiene el password descartable"
+  printf '%s' "$t" | grep -qiE '\b(INSERT|UPDATE|DELETE|DROP|SELECT)[[:space:]]+' && fail "fuga: la salida contiene SQL"
+  echo "guard_output OK: sin SQL/bcrypt/demo/password en la salida publicada"
+}
 cleanup(){
   # Sólo eliminar SI la etiqueta del contenedor coincide con NUESTRO nonce.
   local lbl
@@ -39,8 +60,9 @@ cleanup(){
 trap cleanup EXIT INT TERM
 
 command -v docker >/dev/null || fail "docker no disponible"
+assert_local_docker
 
-echo "== arrancando ${MYSQL_IMAGE} efímero (nonce ${NONCE}) =="
+echo "== arrancando MySQL (pinneada por digest) efímero (nonce ${NONCE}) =="
 docker run -d --name "$CID" --label "h1evidence=${NONCE}" \
   -e MYSQL_ROOT_PASSWORD="$DB_PW" -e MYSQL_DATABASE="$DB_NAME" \
   -p 127.0.0.1:0:3306 "$MYSQL_IMAGE" >/dev/null \
@@ -99,6 +121,11 @@ mexec -e "SET FOREIGN_KEY_CHECKS=0; DROP TABLE users; SET FOREIGN_KEY_CHECKS=1;"
   || fail "DROP TABLE users"
 set +e; OUT3="$(run_checker)"; C3=$?; set -e
 assert "ESC3 DEFAULT_ADMIN_CHECK_UNAVAILABLE" 3 "BLOCKED: DEFAULT_ADMIN_CHECK_UNAVAILABLE" "$OUT3" "$C3"
+
+echo "== guard de fuga sobre la salida publicada =="
+guard_output "${OUT1}
+${OUT2}
+${OUT3}"
 
 echo "== OK: los 3 escenarios validados mecánicamente =="
 echo "DONE"
