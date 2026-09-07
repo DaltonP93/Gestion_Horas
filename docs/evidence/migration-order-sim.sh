@@ -27,7 +27,8 @@ NONCE="$(openssl rand -hex 6 2>/dev/null || printf '%s%s' "$$" "${RANDOM}${RANDO
 CID="sishoras-migord-${NONCE}"
 DB_NAME="migord_${NONCE}"
 DB_PW="$(openssl rand -hex 16 2>/dev/null || printf 'pw%s%s' "$$" "${RANDOM}${RANDOM}")"
-MYSQL_IMAGE="mysql:8.0.40"
+# Imagen fijada por DIGEST (tag versionada 8.0.40 + digest inmutable del manifest multi-arch).
+MYSQL_IMAGE="mysql:8.0.40@sha256:d58ac93387f644e4e040c636b8f50494e78e5afc27ca0a87348b2f577da2b7ff"
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d)"; SIM="$WORK/sim"
 
@@ -40,8 +41,16 @@ cleanup(){
 }
 trap cleanup EXIT INT TERM
 
+# Sólo Docker LOCAL: nunca un daemon remoto.
+assert_local_docker(){
+  [ -z "${DOCKER_HOST:-}" ] || fail "DOCKER_HOST está seteado ('${DOCKER_HOST}'): se exige Docker local"
+  local ctx; ctx="$(docker context show 2>/dev/null || echo default)"
+  [ "$ctx" = "default" ] || fail "contexto Docker no-default ('$ctx'): se exige Docker local"
+}
+
 command -v docker >/dev/null || fail "docker no disponible"
 command -v mysql  >/dev/null || fail "cliente mysql no disponible (lo usa migrate.js)"
+assert_local_docker
 
 # --- extraer migraciones 076-083 por SHA (sólo lectura de refs) --------------
 declare -A SHA=( [161]=807f82a83f11f019d1297154abb01d2d9f901499
@@ -97,6 +106,23 @@ assert_applied(){ # $1=esperado_csv $2=fase
   echo "   aplicadas 076-083 ($2): [${got}]"
   [ "$got" = "$1" ] || fail "$2: set aplicado esperado [$1], obtenido [$got]"
 }
+total_in_range(){ ls "$SIM/database/migrations" | grep -cE '^0(7[6-9]|8[0-3])_'; }
+applied_count(){ mexec -N -e "SELECT COUNT(*) FROM schema_migrations WHERE filename REGEXP '^0(7[6-9]|8[0-3])';" "$DB_NAME" | tr -d '\n '; }
+is_applied(){ mexec -N -e "SELECT COUNT(*) FROM schema_migrations WHERE filename LIKE '${1}%';" "$DB_NAME" | tr -d '\n '; }
+assert_083_state(){ # $1=fase — total 8, aplicadas 7, pendiente ÚNICAMENTE 083
+  local total applied a083; total="$(total_in_range)"; applied="$(applied_count)"; a083="$(is_applied 083)"
+  echo "   $1: total=$total aplicadas=$applied pendientes=$((total-applied)) 083_aplicada=$a083"
+  [ "$total"   = "8" ] || fail "$1: total esperado 8, obtenido $total"
+  [ "$applied" = "7" ] || fail "$1: aplicadas esperado 7, obtenido $applied"
+  [ "$a083"    = "0" ] || fail "$1: 083 NO debía estar aplicada (única pendiente esperada)"
+}
+assert_cause_083(){ # $1=out $2=fase — causa exacta 083/system_settings
+  echo "$1" | grep -q "083_fase_e_activation_console" || fail "$2: el fallo no menciona 083"
+  echo "$1" | grep -q "system_settings"               || fail "$2: el fallo no menciona system_settings"
+}
+assert_no_reapply(){ # $1=out $2=regex_ya_aplicadas $3=fase
+  if echo "$1" | grep -E "Aplicando ($2)_" >/dev/null; then fail "$3: se reaplicó una migración ya aplicada ($2)"; fi
+}
 
 echo; echo "== FASE 1: migrate con 081-083 presentes, SIN 076-080 =="
 cp "$WORK"/migs/081_*.sql "$WORK"/migs/082_*.sql "$WORK"/migs/083_*.sql "$SIM/database/migrations/"
@@ -110,17 +136,22 @@ echo; echo "== FASE 2: se AÑADEN 076-080 (menores) y se corre migrate de nuevo 
 cp "$WORK"/migs/076_*.sql "$WORK"/migs/077_*.sql "$WORK"/migs/078_*.sql "$WORK"/migs/079_*.sql "$WORK"/migs/080_*.sql "$SIM/database/migrations/"
 set +e; OUT2="$(run_migrate 2>&1)"; RC2=$?; set -e
 echo "$OUT2"; echo "   (migrate exit=$RC2 — se ESPERA != 0: 083 sigue fallando)"
-[ "$RC2" -ne 0 ] || fail "FASE 2: migrate debía fallar por 083/system_settings"
+[ "$RC2" -ne 0 ] || fail "FASE 2: migrate debía fallar (exit!=0) por 083/system_settings"
+assert_cause_083 "$OUT2" "FASE 2"                 # causa exacta 083/system_settings
+assert_no_reapply "$OUT2" "08[12]" "FASE 2"       # 081/082 (ya aplicadas en FASE 1) NO se reaplican
 assert_applied "076,077,078,079,080,081,082" "FASE 2"
+assert_083_state "FASE 2"                          # total 8, aplicadas 7, pendiente ÚNICAMENTE 083
 echo "   orden temporal (applied_at):"
 mexec -N -e "SELECT filename, applied_at FROM schema_migrations WHERE filename REGEXP '^0(7[6-9]|8[0-3])' ORDER BY applied_at, filename;" "$DB_NAME"
 
 echo; echo "== FASE 3: idempotencia — migrate otra vez (076-082 NO deben reaplicarse) =="
 set +e; OUT3="$(run_migrate 2>&1)"; RC3=$?; set -e
-echo "$OUT3"
-# En la 3ª corrida sólo 083 debe intentarse (y fallar); ninguna de 076-082 debe reaparecer como "Aplicando".
-if echo "$OUT3" | grep -E "Aplicando 0(7[6-9]|8[0-2])_" ; then fail "FASE 3: se reaplicó una migración 076-082 (no idempotente)"; fi
+echo "$OUT3"; echo "   (migrate exit=$RC3 — se ESPERA != 0: 083 sigue fallando)"
+[ "$RC3" -ne 0 ] || fail "FASE 3: migrate debía fallar (exit!=0) por 083/system_settings"
+assert_cause_083 "$OUT3" "FASE 3"                 # causa exacta 083/system_settings
+assert_no_reapply "$OUT3" "0(7[6-9]|8[0-2])" "FASE 3"   # ninguna de 076-082 se reaplica
 assert_applied "076,077,078,079,080,081,082" "FASE 3"
+assert_083_state "FASE 3"                          # total 8, aplicadas 7, pendiente ÚNICAMENTE 083
 
 echo; echo "== VERIFICACIÓN de objetos y FK cruzada =="
 V="$(mexec -N -e "SELECT
