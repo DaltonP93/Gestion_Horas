@@ -16,7 +16,8 @@
   justo el camino que se quiere validar.
 - Imagen **fijada por DIGEST** (`mysql:8.0.40@sha256:d58ac9…`, manifest multi-arch inmutable; no `mysql:8.0` mutable).
 - **Sólo Docker LOCAL:** aborta si hay `DOCKER_HOST` o un contexto Docker no-`default` (evita crear contenedores en un host remoto).
-- **Guard de fuga:** verifica que la salida publicada **no** contenga SQL, hashes bcrypt, la contraseña demo ni el password descartable.
+- **Guard de fuga ANTES de imprimir:** `guard_output` valida **cada** salida del checker **antes** de cualquier `echo`/`printf`/`sed`; si detecta SQL, hash bcrypt, la contraseña demo o el password descartable, **aborta** informando **sólo el tipo** de fuga (nunca el valor) y **sin reimprimir** el contenido rechazado.
+- **Prueba negativa** (`bash scripts/h1-preflight-evidence.sh --selftest`, sin Docker): un centinela que el guard debe rechazar → el harness termina con **exit ≠ 0** y el centinela **no** aparece en stdout/stderr. Verificado: `SELFTEST OK`.
 - Comprueba explícitamente: `docker run`, readiness (query **autenticada** a la base propia — no
   `mysqladmin ping`, que reporta "alive" ya en el server temporal de init), carga de `init.sql`,
   `UPDATE` y `DROP`. Cada paso falla con exit ≠ 0 si no cumple.

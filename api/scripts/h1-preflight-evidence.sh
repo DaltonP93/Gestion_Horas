@@ -16,8 +16,11 @@
 #  - SÓLO Docker LOCAL: aborta si hay DOCKER_HOST o un contexto no-default (remoto).
 #  - `set -Eeuo pipefail` + `trap` de limpieza desde el inicio.
 #  - Valida mecánicamente los 3 escenarios; cualquier desviación => exit != 0.
-#  - Verifica que la salida publicada no contenga SQL, hashes bcrypt, la contraseña
-#    demo ni el password descartable.
+#  - guard_output valida CADA salida ANTES de imprimirla/publicarla; si detecta SQL,
+#    hash bcrypt, la contraseña demo o el password descartable, ABORTA informando
+#    SÓLO el tipo de fuga (nunca el valor) y sin reimprimir el contenido rechazado.
+#  - `--selftest`: prueba negativa con un centinela que el guard debe rechazar
+#    (exit != 0, sin filtrar el centinela). No requiere Docker.
 #
 # NUNCA correr contra producción ni att2000. No requiere variables externas.
 set -Eeuo pipefail
@@ -42,15 +45,29 @@ assert_local_docker(){
   [ "$ctx" = "default" ] || fail "contexto Docker no-default ('$ctx'): se exige Docker local"
 }
 
-# La salida publicada no debe contener SQL, hashes bcrypt, la contraseña demo ni el password descartable.
-guard_output(){ # $1=texto combinado
+# guard_output: valida un texto ANTES de que se imprima/publique. Si detecta la
+# contraseña demo, un hash bcrypt, el password descartable o SQL, ABORTA e informa
+# SÓLO el tipo de fuga — NUNCA el valor detectado ni el contenido rechazado.
+# Silencioso en éxito (para poder llamarlo antes de cualquier echo/printf/sed).
+guard_output(){ # $1=texto a validar
   local t="$1"
-  printf '%s' "$t" | grep -q "Admin1234!"          && fail "fuga: la salida contiene la contraseña demo"
-  printf '%s' "$t" | grep -q '\$2[aby]\$'          && fail "fuga: la salida contiene un hash bcrypt"
-  printf '%s' "$t" | grep -Fq "$DB_PW"             && fail "fuga: la salida contiene el password descartable"
-  printf '%s' "$t" | grep -qiE '\b(INSERT|UPDATE|DELETE|DROP|SELECT)[[:space:]]+' && fail "fuga: la salida contiene SQL"
-  echo "guard_output OK: sin SQL/bcrypt/demo/password en la salida publicada"
+  printf '%s' "$t" | grep -q "Admin1234!"          && fail "fuga detectada (tipo: contraseña demo) — contenido NO impreso"
+  printf '%s' "$t" | grep -q '\$2[aby]\$'          && fail "fuga detectada (tipo: hash bcrypt) — contenido NO impreso"
+  printf '%s' "$t" | grep -Fq "$DB_PW"             && fail "fuga detectada (tipo: password descartable) — contenido NO impreso"
+  printf '%s' "$t" | grep -qiE '\b(INSERT|UPDATE|DELETE|DROP|SELECT)[[:space:]]+' && fail "fuga detectada (tipo: SQL) — contenido NO impreso"
+  return 0
 }
+
+# Prueba negativa (self-test): un CENTINELA que guard_output DEBE rechazar. Demuestra
+# que el harness aborta (exit!=0) y que el centinela NO aparece en stdout ni stderr.
+if [ "${1:-}" = "--selftest" ]; then
+  SENTINEL='centinela-$2b$10$ZZZ-SQL SELECT-Admin1234!'   # incluye varios patrones que el guard bloquea
+  set +e; ST_OUT="$( guard_output "linea con $SENTINEL" 2>&1 )"; ST_RC=$?; set -e
+  [ "$ST_RC" -ne 0 ] || { echo "SELFTEST FALLO: guard_output no abortó ante el centinela"; exit 1; }
+  if printf '%s' "$ST_OUT" | grep -Fq "$SENTINEL"; then echo "SELFTEST FALLO: el centinela apareció en la salida"; exit 1; fi
+  echo "SELFTEST OK: guard abortó (exit=$ST_RC) informando sólo el tipo de fuga, sin filtrar el centinela"
+  exit 0
+fi
 cleanup(){
   # Sólo eliminar SI la etiqueta del contenedor coincide con NUESTRO nonce.
   local lbl
@@ -95,37 +112,32 @@ run_checker(){ # imprime salida combinada; devuelve exit del checker
   ( cd "$API_DIR" && DB_HOST=127.0.0.1 DB_PORT="$HOST_PORT" DB_USER=root \
       DB_PASSWORD="$DB_PW" DB_NAME="$DB_NAME" node scripts/preflight-mysql-check.js ) 2>&1
 }
-assert(){ # $1=nombre $2=exit_esperado $3=patrón $4=salida $5=exit_real
-  local name="$1" want_exit="$2" pat="$3" out="$4" got_exit="$5"
-  echo "--- $name (exit=$got_exit) ---"
-  # Sanitizar: nunca imprimir el password del contenedor descartable.
-  echo "$out" | sed "s/${DB_PW}/<redacted>/g"
-  [ "$got_exit" = "$want_exit" ] || fail "$name: exit esperado $want_exit, obtenido $got_exit"
-  echo "$out" | grep -q "$pat" || fail "$name: no se encontró el patrón esperado '$pat'"
+# scenario: corre el checker, VALIDA la salida con guard_output ANTES de cualquier
+# echo/printf/sed, y sólo entonces imprime (redactando el password) y valida exit+patrón.
+scenario(){ # $1=nombre $2=exit_esperado $3=patrón
+  local name="$1" want_exit="$2" pat="$3" out code
+  set +e; out="$(run_checker)"; code=$?; set -e
+  guard_output "$out"                              # <-- guard ANTES de imprimir; aborta sin reimprimir si hay fuga
+  echo "--- $name (exit=$code) ---"
+  printf '%s\n' "$out" | sed "s/${DB_PW}/<redacted>/g"
+  [ "$code" = "$want_exit" ] || fail "$name: exit esperado $want_exit, obtenido $code"
+  printf '%s' "$out" | grep -q "$pat" || fail "$name: no se encontró el patrón esperado '$pat'"
 }
 
 echo "== ESC1: admin demo activo (init.sql) =="
-set +e; OUT1="$(run_checker)"; C1=$?; set -e
-assert "ESC1 DEFAULT_ADMIN_CREDENTIAL" 3 "BLOCKED: DEFAULT_ADMIN_CREDENTIAL" "$OUT1" "$C1"
+scenario "ESC1 DEFAULT_ADMIN_CREDENTIAL" 3 "BLOCKED: DEFAULT_ADMIN_CREDENTIAL"
 
 echo "== ESC2: hash del admin ROTADO =="
 NEWHASH="$(cd "$API_DIR" && node -e 'console.log(require("bcrypt").hashSync("Un4-Cl4v3-Fuerte-2026#",12))')" \
   || fail "generación de hash rotado"
 mexec -e "UPDATE users SET password_hash='${NEWHASH}' WHERE username='admin';" "$DB_NAME" \
   || fail "UPDATE del hash rotado"
-set +e; OUT2="$(run_checker)"; C2=$?; set -e
-assert "ESC2 RESULT ok" 0 '"ok":true' "$OUT2" "$C2"
+scenario "ESC2 RESULT ok" 0 '"ok":true'
 
 echo "== ESC3: BD SIN tabla users =="
 mexec -e "SET FOREIGN_KEY_CHECKS=0; DROP TABLE users; SET FOREIGN_KEY_CHECKS=1;" "$DB_NAME" \
   || fail "DROP TABLE users"
-set +e; OUT3="$(run_checker)"; C3=$?; set -e
-assert "ESC3 DEFAULT_ADMIN_CHECK_UNAVAILABLE" 3 "BLOCKED: DEFAULT_ADMIN_CHECK_UNAVAILABLE" "$OUT3" "$C3"
+scenario "ESC3 DEFAULT_ADMIN_CHECK_UNAVAILABLE" 3 "BLOCKED: DEFAULT_ADMIN_CHECK_UNAVAILABLE"
 
-echo "== guard de fuga sobre la salida publicada =="
-guard_output "${OUT1}
-${OUT2}
-${OUT3}"
-
-echo "== OK: los 3 escenarios validados mecánicamente =="
+echo "== OK: los 3 escenarios validados (cada salida pasó por guard_output ANTES de imprimirse) =="
 echo "DONE"
