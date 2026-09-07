@@ -90,6 +90,11 @@ luego #191 (recortar a lo que NO duplique #206) y #209 (ADR cookies; sólo docum
 9. #198 → #199 (UI) → #201 (PAdES) → #203 (deploy firma). Migraciones 081/082.
    **NO-GO hasta resolver el orden de migraciones vs FASE F 076–080** (ver §Orden de migraciones).
 
+> **Auditoría read-only lotes 4/5/6:** `docs/evidence/lots-4-6-audit.md` — lote 4 sin migraciones y
+> mergeable limpio (incl. #188 `reports.js` vs nocturno); FASE E #174-#184/#186/#164 read-only GO;
+> **#202 NO-GO doble** (083 + conflicto con FASE E en `workdaySummaryService.js`); FASE F congelada.
+> Orden global sugerido: 0→1→2→4→(5 read-only)→[orden migraciones + Codex FASE F]→6(076-080)→3(081/082)→#202(083).
+
 **Lote 4 — Módulos/export:** #178→#179→#180→#181→#187; #177; #188; #162; #163.
 
 **Lote 5 — FASE E read-only:** #174→#175→#176→#182→#183→#184; #186; #164; #202 (consola, no activa nada;
