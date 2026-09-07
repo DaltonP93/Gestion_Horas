@@ -1,7 +1,9 @@
 # Runbook — preflight READ-ONLY del servidor (lo ejecuta el DUEÑO)
 
-> **Propósito:** relevar el estado del servidor **sin cambiarlo**. Todos los comandos son de
-> **sólo lectura**. Este runbook lo ejecuta **el dueño** en el servidor; el agente **no** lo corre.
+> **Propósito:** relevar el estado del servidor **sin cambiarlo**. Los comandos son de **sólo lectura**,
+> con **una única excepción acotada**: el paso 7(b) *ejecuta* `att2000Readonly.test.js` con Jest **ya
+> instalado** (`--no-cache`, sin instalar ni descargar nada); ese test es **offline** y **no** escribe
+> datos, ni toca `att2000`, ni modifica el repo. Este runbook lo ejecuta **el dueño**; el agente **no** lo corre.
 >
 > **PROHIBIDO en este preflight:** `git pull`/`fetch`/`checkout`, `pm2 restart/reload/stop`,
 > reinicios de servicio, migraciones (`npm run migrate`), **cualquier** `INSERT/UPDATE/DELETE`,
@@ -68,13 +70,16 @@ BACKUP_DIR="__COMPLETAR__"                    # <-- destino real de scripts/back
 ```bash
 # Ajustar al nombre EXACTO del proceso PM2 de la API (o Bridge). Falla si no es único.
 API_PROC="${API_PROC:-api}"
-pm2 jlist > /tmp/pm2_snapshot.json 2>/dev/null || { echo "FALLO: pm2 jlist"; }
-node -e '
+# `pm2 jlist` se procesa por STDIN hacia Node. NO se escribe ningún archivo temporal
+# (no /tmp/*.json) y NO se imprime el JSON completo: sólo salida allowlisted.
+( set -o pipefail; pm2 jlist | node -e '
 const fs=require("fs");
 const name=process.argv[1];
 const flags=["ATT2000_AUTO_PULL_ENABLED","ZKTECO_AUTO_POLL","WORKDAY_CONFIG_WRITE_ENABLED","WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED"];
 const secrets=["JWT_SECRET","JWT_REFRESH_SECRET","DB_PASSWORD","ATT_PASSWORD"];
-let list; try{list=JSON.parse(fs.readFileSync("/tmp/pm2_snapshot.json","utf8"))}catch(e){console.error("FALLO: pm2 json ilegible");process.exit(1)}
+let raw; try{raw=fs.readFileSync(0,"utf8")}catch(e){console.error("FALLO: no se pudo leer pm2 jlist por stdin");process.exit(1)}
+let list; try{list=JSON.parse(raw)}catch(e){console.error("FALLO: JSON de pm2 jlist inválido");process.exit(1)}
+if(!Array.isArray(list)){console.error("FALLO: pm2 jlist no devolvió un arreglo");process.exit(1)}
 const m=list.filter(p=>p&&p.name===name);
 if(m.length!==1){console.error("FALLO: proceso PM2 \""+name+"\" no identificado unívocamente (encontrados: "+m.length+")");process.exit(2)}
 const env=(m[0].pm2_env)||{};
@@ -84,11 +89,11 @@ for(const k of flags){const v=env[k];
   console.log(k+"="+s);}
 // Secretos: sólo presencia, nunca el valor.
 for(const k of secrets){const v=env[k];console.log(k+"="+((v===undefined||v===null||v==="")?"MISSING":"SET"));}
-' "$API_PROC"
-rm -f /tmp/pm2_snapshot.json
+' "$API_PROC" ) || echo "FALLO: preflight de flags no completado (pm2 jlist falló / JSON inválido / proceso inexistente o ambiguo)"
 ```
 > Se espera todos los flags en **false/unset** (fail-closed). Cualquier `true` es hallazgo a revisar con el dueño.
-> Si el proceso no se identifica unívocamente, el script **falla** (no adivina).
+> Si `pm2 jlist` falla, el JSON es inválido o el proceso no se identifica unívocamente, el bloque **falla**
+> (no adivina). **No** se escribe ni se imprime el JSON completo; no queda ningún archivo temporal con `pm2_env`.
 
 ## 7. att2000 READ-ONLY — inspección ESTÁTICA **orientativa** (NO prueba permisos efectivos)
 ```bash
@@ -97,9 +102,15 @@ grep -RInEi "writeCheckinOut|ATT2000_WRITE_ENABLED" api/src config 2>/dev/null \
   && echo "REVISAR: aparece un símbolo de escritura" || echo "orientativo: sin writeCheckinOut/ATT2000_WRITE_ENABLED"
 grep -RInEi "(INSERT|UPDATE|DELETE)[[:space:]].*CHECKINOUT" api/src 2>/dev/null \
   && echo "REVISAR: aparece DML sobre CHECKINOUT" || echo "orientativo: sin DML sobre CHECKINOUT"
-# (b) EJECUTAR el test que fija el contrato read-only (no basta con que exista el archivo):
-if [ -d api/node_modules ]; then ( cd api && npx jest att2000Readonly 2>&1 | tail -6 ); \
-  else echo "REVISAR: api/node_modules ausente; no se pudo correr att2000Readonly.test.js"; fi
+# (b) EJECUTAR el test que fija el contrato read-only (no basta con que exista el archivo).
+#     Usa el binario YA instalado (sin `npx`, sin descargas/instalaciones) y preserva el exit real
+#     (sin `| tail` que lo oculte). `--no-cache` evita escribir la caché de Jest.
+if [ -x api/node_modules/.bin/jest ]; then
+  ( cd api && ./node_modules/.bin/jest tests/att2000Readonly.test.js --runInBand --no-cache ); rc=$?
+  if [ "$rc" -eq 0 ]; then echo "OK: att2000Readonly.test.js verde (exit 0)"; else echo "FALLO: att2000Readonly.test.js exit=$rc"; fi
+else
+  echo "REVISAR: api/node_modules/.bin/jest ausente; NO se instala nada en el servidor (paso omitido)"
+fi
 # (c) Permisos EFECTIVOS en la fuente:
 echo "UNVERIFIED_DB_PERMISSIONS: sin una conexión autorizada de sólo lectura a att2000, los permisos"
 echo "efectivos NO se verifican desde este preflight (esta sección es estática y orientativa)."

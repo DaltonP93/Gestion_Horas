@@ -25,7 +25,27 @@ git -C <tmp> rev-parse HEAD^{tree}              # tree SHA determinista del stac
 (cd <tmp>/bridge && npm ci && npm test)
 (cd <tmp>/web    && npm ci && npm test && npm run build)
 (cd <tmp>/analytics && python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt && python -m py_compile main.py && python -c "import main; assert main.app")
-# DB efímero (con #194 presente): init.sql -> migrate --status (RO) -> migrate -> migrate (idempotencia)
+```
+
+### Job MySQL descartable — comando EXACTO usado (aislado; nunca producción/att2000)
+```bash
+N=$(openssl rand -hex 6); CID="i2db-$N"; DB="i2_$N"; PW=$(openssl rand -hex 16)
+IMG="mysql:8.0.40@sha256:d58ac93387f644e4e040c636b8f50494e78e5afc27ca0a87348b2f577da2b7ff"   # pinneada por digest
+cleanup(){ lbl=$(docker inspect -f '{{ index .Config.Labels "i2db" }}' "$CID" 2>/dev/null||true); [ "$lbl" = "$N" ] && docker rm -f "$CID" >/dev/null 2>&1||true; }
+trap cleanup EXIT
+docker run -d --name "$CID" --label "i2db=$N" -e MYSQL_ROOT_PASSWORD="$PW" -e MYSQL_DATABASE="$DB" -p 127.0.0.1:0:3306 "$IMG" >/dev/null
+PORT=$(docker port "$CID" 3306/tcp | sed -n 's/.*:\([0-9]\{1,5\}\)$/\1/p' | head -1)
+mx(){ docker exec -e MYSQL_PWD="$PW" -i "$CID" mysql -uroot "$@"; }         # consultas admin por docker exec
+for i in $(seq 1 120); do mx -e "SELECT 1;" "$DB" >/dev/null 2>&1 && break; sleep 2; done   # readiness autenticada
+docker exec -e MYSQL_PWD="$PW" -i "$CID" mysql -uroot "$DB" < <tmp>/database/init.sql        # esquema base
+mx -e "SET GLOBAL log_bin_trust_function_creators = 1;"                     # permitir rutinas (073) sin SUPER
+cd <tmp>/api
+DB_HOST=127.0.0.1 DB_PORT=$PORT DB_USER=root DB_PASSWORD="$PW" DB_NAME="$DB" node scripts/migrate.js --status   # read-only
+DB_HOST=127.0.0.1 DB_PORT=$PORT DB_USER=root DB_PASSWORD="$PW" DB_NAME="$DB" node scripts/migrate.js             # aplicar
+DB_HOST=127.0.0.1 DB_PORT=$PORT DB_USER=root DB_PASSWORD="$PW" DB_NAME="$DB" node scripts/migrate.js             # idempotencia
+```
+> Credenciales de contenedor **descartable** (aleatorias por corrida); nunca son de producción ni de att2000.
+> La única conexión TCP es la del runner al puerto loopback del propio contenedor.
 ```
 
 ## Resultado
