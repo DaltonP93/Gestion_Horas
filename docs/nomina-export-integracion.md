@@ -107,11 +107,13 @@ GET /api/integration/payroll/export.xlsx?year=&month=&department_id=
 - El **acceso** al export (horas/asistencia + identificadores) requiere rol
   `admin`/`hr`/`gth` (+`super_admin`) y `nomina.view`. Un rol fuera de ese
   conjunto recibe **403**.
-- Los **montos** (`salario_base`) se acotan aún más: sólo `super_admin`,
-  `admin` y `hr`. El rol `gth` obtiene la planilla de horas/asistencia pero
-  **sin salarios**. Cuando no hay autorización de montos, la columna
-  `salario_base` se omite en el dataset y por lo tanto en CSV, XLSX y JSON
-  (`includes_amounts: false`).
+- Los **montos** (`salario_base`) los ven los mismos roles con acceso al
+  endpoint: `super_admin`, `admin`, `hr` y **`gth`** (confirmado por el
+  propietario — GTH gestiona talento humano y necesita los salarios para
+  nómina). Un rol con acceso pero sin autorización de montos recibiría el
+  dataset sin la columna; hoy todos los roles habilitados al endpoint ven
+  montos. La vía por **`X-API-Key`** (integración) **nunca** incluye
+  `salario_base` (`includes_amounts: false`), sin importar el rol.
 
 ## Ejemplos
 

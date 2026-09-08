@@ -6,7 +6,8 @@
  *
  *   - Rol fuera de admin/hr/gth (+super_admin) → 403 (sin tocar la BD).
  *   - admin (autorizado a montos) → export CON salario_base.
- *   - gth (autorizado al endpoint pero NO a montos) → export SIN salario_base.
+ *   - gth (autorizado al endpoint y a montos, confirmado por el propietario) → export CON salario_base.
+ *   - vía X-API-Key (integración) → SIEMPRE sin salario_base, sin importar el rol.
  *   - JSON expone schema_version y metadatos de período.
  */
 
@@ -87,7 +88,7 @@ describe('RBAC /api/payroll/export.* ', () => {
     expect(ds.rows[0].minutos_trabajados).toBe(510);
   });
 
-  test('gth → autorizado al endpoint pero SIN montos', async () => {
+  test('gth → autorizado al endpoint y CON montos (confirmado por el propietario)', async () => {
     // gth: requirePermission consulta user_permissions (can_view=1), luego handler.
     sequelize.query
       .mockResolvedValueOnce([[{ can_view: 1, can_create: 0, can_update: 0, can_delete: 0 }]])
@@ -96,9 +97,9 @@ describe('RBAC /api/payroll/export.* ', () => {
     const { status, body } = await get('/api/payroll/export.json?year=2025&month=1', 'gth');
     expect(status).toBe(200);
     const ds = JSON.parse(body);
-    expect(ds.includes_amounts).toBe(false);
-    expect(ds.rows[0]).not.toHaveProperty('salario_base');
-    // Horas/asistencia igual presentes (lo esencial para nómina).
+    expect(ds.includes_amounts).toBe(true);
+    expect(ds.rows[0]).toHaveProperty('salario_base', 3000000);
+    // Horas/asistencia igual presentes.
     expect(ds.rows[0].minutos_trabajados).toBe(510);
   });
 

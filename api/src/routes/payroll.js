@@ -257,10 +257,9 @@ router.get('/ips-aportes', async (req, res) => {
 // del MOTOR (nocturno correcto), NO de SUM(daily_summary.worked_minutes).
 //
 // Es SÓLO LECTURA. RBAC igual que el resto del router: rol admin/hr/gth
-// (+ super_admin) y permiso `nomina.view`. Los MONTOS (salario_base) se acotan
-// aún más y sólo se incluyen para roles autorizados (ver `canSeeAmounts`), así
-// un rol autorizado a horas/asistencia pero no a montos recibe el dataset SIN
-// salarios.
+// (+ super_admin) y permiso `nomina.view`. Los MONTOS (salario_base) los ven
+// esos mismos roles con acceso al endpoint (super_admin/admin/hr/gth, ver
+// `canSeeAmounts`); la vía por X-API-Key (integración) NUNCA incluye montos.
 //
 // Documentación de campos, tipos y UNIDADES (minutos vs horas):
 //   docs/nomina-export-integracion.md

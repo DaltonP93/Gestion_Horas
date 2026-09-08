@@ -8,8 +8,8 @@
  *   2. CSV / XLSX / JSON con EXACTAMENTE las mismas filas y valores.
  *   3. Nocturno que cruza medianoche cuenta como UN jornal (mismo caso del
  *      helper del motor), atribuido al día en que empezó.
- *   4. RBAC de MONTOS: sólo super_admin/admin/hr ven salario_base; el dataset y
- *      las tres serializaciones lo OMITEN para roles no autorizados (gth).
+ *   4. RBAC de MONTOS: super_admin/admin/hr/gth ven salario_base; el dataset y
+ *      las tres serializaciones lo OMITEN para roles no autorizados (p. ej. manager).
  *   5. RBAC de acceso: un rol fuera de admin/hr/gth recibe 403 en el endpoint.
  *   6. Período sin datos → export vacío pero válido en los tres formatos.
  *
@@ -202,11 +202,11 @@ describe('serializaciones CSV / XLSX / JSON — mismas filas y valores', () => {
 });
 
 describe('canSeeAmounts — RBAC de montos', () => {
-  test('super_admin/admin/hr ven montos; gth y otros no', () => {
+  test('super_admin/admin/hr/gth ven montos; otros no', () => {
     expect(canSeeAmounts({ role: 'super_admin' })).toBe(true);
     expect(canSeeAmounts({ role: 'admin' })).toBe(true);
     expect(canSeeAmounts({ role: 'hr' })).toBe(true);
-    expect(canSeeAmounts({ role: 'gth' })).toBe(false);
+    expect(canSeeAmounts({ role: 'gth' })).toBe(true); // confirmado por el propietario
     expect(canSeeAmounts({ role: 'manager' })).toBe(false);
     expect(canSeeAmounts(null)).toBe(false);
     expect(canSeeAmounts(undefined)).toBe(false);

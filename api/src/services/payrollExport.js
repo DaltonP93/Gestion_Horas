@@ -106,13 +106,14 @@ const UNITS = {
  * ¿Puede este usuario exportar MONTOS (salario_base)?
  *
  * El endpoint de export ya exige rol admin/hr/gth (+ super_admin) y permiso
- * `nomina.view` para acceder a horas/asistencia. Los montos son sensibles y se
- * acotan aún más: sólo super_admin, admin y hr los ven. `gth` obtiene la
- * planilla de horas/asistencia (que es lo esencial para nómina) pero NO los
- * salarios. Un rol fuera de ese conjunto no llega siquiera al endpoint.
+ * `nomina.view` para acceder a horas/asistencia. Los montos son sensibles: los
+ * ven super_admin, admin, hr y **gth** (confirmado por el propietario — GTH es
+ * un rol de gestión de talento humano que necesita los salarios para nómina).
+ * Un rol fuera de ese conjunto no llega siquiera al endpoint. La vía por
+ * `X-API-Key` (integración) sigue SIN montos, sin importar el rol.
  */
 function canSeeAmounts(user) {
-  return !!user && ['super_admin', 'admin', 'hr'].includes(user.role);
+  return !!user && ['super_admin', 'admin', 'hr', 'gth'].includes(user.role);
 }
 
 /** Redondeo a 2 decimales, tolerante a null. */
