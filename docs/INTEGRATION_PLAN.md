@@ -73,14 +73,16 @@ Mergeabilidad entre olas 1–4: **sin conflictos** (`merge-tree` limpio; #192 no
 > Cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
 
 ### Gate raíz (desbloquea a todos los demás): **orden de migraciones 081/082/083 vs 076–080**
-- **Problema:** el plan integraría 081 (#198), 082 (#201) y 083 (#202) **antes** que las menores 076–080 (FASE F).
-  `migrate.js` **no** tiene guardia de monotonicidad (§Orden de migraciones). Además **083 no es autocontenida**
-  (falla por `system_settings`, tabla del ORM), igual que la 020 antes del fix de #194.
+
+> **Actualización 2026-09-08 — trabajo seguro del gate raíz HECHO (Draft #212), y corrección de un bloqueo fantasma:**
+> - **Guardia de monotonicidad + unicidad de número:** implementada en `migrate.js` en **#212** (`claude/migrate-monotonicity-guard`, base main). `migrate`/`baseline` **abortan** si hay números duplicados (sin override) o pendientes fuera de secuencia (override explícito `--allow-out-of-order`); `--status` sólo reporta. 10 tests puros (incl. el caso 081/082/083 vs 076–080) verdes en 3 TZ; suite api 76/1302. El replay a nivel BD lo cubre el job de #194 al integrarse.
+> - **083 SÍ es SQL-safe en un replay completo (corrección):** `system_settings` la crea la **migración SQL 033** (`033_audit_fulltext.sql`, `CREATE TABLE IF NOT EXISTS system_settings (key_name PK, value TEXT, …)`), **no** el ORM. La falla "083 por `system_settings`" del sim anterior fue un **artefacto de correr 081/082/083 en aislamiento** (sin 033), no un defecto: en `init.sql→002→…→033→…→083` la tabla existe cuando 083 inserta. Por eso **NO** se agregó un `CREATE TABLE system_settings` redundante a 083 (033 ya es la fuente de verdad). El caso 020→`webhooks` era distinto (ninguna migración SQL creaba `webhooks`; sólo el ORM → #194 lo arregló). El único gate real de 083 pasa a ser el **orden** (ya cubierto por #212) + el **conflicto con FASE E** (#184↔#202).
+
+- **Problema (original):** el plan integraría 081 (#198), 082 (#201) y 083 (#202) **antes** que las menores 076–080 (FASE F), y `migrate.js` no tenía guardia de monotonicidad. **#212 cierra esa guardia.**
 - **Decisión del propietario (elegir una):**
   - **(A) Preferida:** integrar **076–080 (FASE F) primero** → orden numérico = orden temporal; se preserva el invariante "menores primero". Depende de descongelar FASE F.
-  - **(B) Alternativa:** **renumerar** 081/082/083 (unmerged) por encima del número final de FASE F, **o** agregar una **guardia de monotonicidad** a `migrate.js` + rebasar 083 sobre 076–080.
-- **Recomendado:** (A) si se descongela FASE F ahora; si no, **guardia de monotonicidad en `migrate.js` + hacer 083 autocontenida** (patrón 020) antes de tocar #202.
-- **Trabajo seguro que SÍ puedo preparar sin descongelar** (si lo autorizás): la **guardia de monotonicidad** en `migrate.js` + test en MySQL efímero, y volver **autocontenida** la 083 — ambos son aditivos y fail-loud. Decilo y lo dejo como PR Draft.
+  - **(B) Alternativa:** **renumerar** 081/082/083 (unmerged) por encima del número final de FASE F, **o** —ya disponible— apoyarse en la **guardia de #212** y pasar `--allow-out-of-order` sólo tras verificar el orden.
+- **Recomendado:** (A) si se descongela FASE F ahora. Con #212 en `main`, cualquier intento de aplicar 081/082/083 antes que 076–080 queda **bloqueado por el runner**, no sólo por convención.
 
 ### PRs de la Ola 5 y su desbloqueo
 
@@ -88,7 +90,7 @@ Mergeabilidad entre olas 1–4: **sin conflictos** (`merge-tree` limpio; #192 no
 |---|---|---|---|---|
 | **FASE F** #158→#159→#160→#161 (+ F+ #167–#173, #185; CI #189) | Multiempresa (`companies`/`cost_centers`), gobierno, personas, calendario, nómina-base | **076–080** | Congelada; **auditoría Codex COMPLETADA = GO condicional** (`docs/evidence/fase-f-codex-audit.md`) | Decisión del propietario de **descongelar** + gate raíz (migraciones) resuelto + merge **base-first f1→f2→f3→f4** con OK PR por PR. Abrir además los 3 tickets de deuda del audit (nómina global, redacción `legal_name`, enlace org del onboarding). |
 | **#198 → #199 → #201 → #203** | Aprobación multinivel + firma con hash + firma **PAdES** local + deploy de firma | **081, 082** | Gate raíz (081/082 fuera de secuencia vs 076–080) | Gate raíz resuelto (081/082 quedan **después** de 076–080). Sim. sobre MySQL 8: 081/082 **SQL-safe** (no dependen de FASE F); una vez fijado el orden, van tras FASE F. Merge base-first. |
-| **#202** | Consola de activación FASE E (doble compuerta, no activa nada) | **083** | **Doble bloqueo:** (1) 083 no autocontenida + orden; (2) **conflicto real con la cadena FASE E** en `api/src/services/workdaySummaryService.js` (`#184 ↔ #202`, confirmado por `merge-tree` el 2026-09-08) | Gate raíz + **083 autocontenida** + integrar **después** de la Ola 4 (FASE E read-only) y **resolver** el conflicto en `workdaySummaryService.js`. Sigue **sin activar** ningún flag. |
+| **#202** | Consola de activación FASE E (doble compuerta, no activa nada) | **083** | **Bloqueo restante:** el **conflicto real con la cadena FASE E** en `api/src/services/workdaySummaryService.js` (`#184 ↔ #202`, confirmado por `merge-tree` el 2026-09-08). El orden de 083 lo cubre la guardia de #212; 083 ya es SQL-safe (033 crea `system_settings`) | Integrar **después** de la Ola 4 (FASE E read-only) y **resolver** el conflicto en `workdaySummaryService.js`. El orden queda garantizado por #212. Sigue **sin activar** ningún flag. |
 | **#209** | ADR: auth web a cookies HttpOnly (dirección aceptada) | — | **Sólo documento; implementación NO autorizada** | Es un ADR, no código. Se integra como doc cuando quieras; la **implementación** (Etapa 1 cookies) requiere una autorización aparte y explícita. |
 | **#191** | Documentación integral (previa a #206) | — | Duplica a #206 (canónico) | Recortar a lo que #206 no cubra, o cerrar; ante divergencia gana #206. |
 
@@ -151,7 +153,7 @@ main
 | `web/src/lib/workdayConfig.ts` | **#193 vs #194** | Ambos tocan el mismo archivo (fix de tipo de `workdayConfigPayloadForSave`). | **RESUELTO (2026-09-07):** #194 incluye el fix íntegro (mismo diff + comentario extra). **#193 cerrado** como subconjunto estricto. El fix de build web es responsabilidad única de #194. |
 | `.github/workflows/ci.yml` | #158, #189, #190, #194 | #190 agrega trigger `claude/**`; #194 agrega job Analytics/Python + concurrency; #158/#189 tocan CI de FASE F. **No son duplicados** pero colisionan en secuencia. | Integrar CI en un orden único (ver batches); rebasar los siguientes tras cada merge. |
 | `api/.env.example` | #158–#161, #195, #201, #202 | Varias adiciones de variables. | Conflictos de merge menores; resolver por rebase incremental. |
-| `database/migrations/` **orden fuera de secuencia** | 076–080 (F, lote 6), 081–082 (firma, lote 3), 083 (consola, lote 5) | Números únicos (sin choque), **pero el plan mergea 081–083 ANTES que las MENORES 076–080**. `migrate.js` no tiene guardia de monotonicidad. | **Ver §Orden de migraciones (P1-C).** Marcado **NO-GO** para 081/082/083 hasta resolver FASE F (076–080). |
+| `database/migrations/` **orden fuera de secuencia** | 076–080 (F, lote 6), 081–082 (firma, lote 3), 083 (consola, lote 5) | Números únicos (sin choque), **pero el plan mergea 081–083 ANTES que las MENORES 076–080**. ~~`migrate.js` no tiene guardia~~ → **guardia en #212**. | **Ver §Orden de migraciones (P1-C).** Con #212, aplicar 081/082/083 antes que 076–080 queda **bloqueado por el runner**; el orden se decide por FASE F-primero o `--allow-out-of-order` verificado. |
 | `api/src/routes/reports.js`, `me.js` | #196/#204/#205 vs #192 vs #197 vs #198 | El motor nocturno, el authz por alcance, el recibo y la aprobación tocan reports/me. | Orden recomendado: authz (#192) → nocturno (#196→204→205) → recibo/aprobación; rebasar entre medio. |
 
 ## Orden bottom-up recomendado (propuesta; NINGÚN merge sin tu OK por PR)
@@ -205,13 +207,17 @@ se aplicarían después. Riesgo: un despliegue con 081–083 ya aplicadas que lu
 **Cómo se comporta `migrate.js`** (lectura del código + simulación real, ver abajo):
 - Registra lo aplicado por **nombre de archivo** en `schema_migrations`; `pending` = **cualquier**
   archivo en disco que no esté registrado; los aplica en **orden lexicográfico (numérico) ascendente**.
-- **No hay guardia de monotonicidad:** una migración de número **menor** añadida después se toma como
-  pendiente y se aplica **después** de las mayores ya aplicadas, sin advertir.
+- ~~**No hay guardia de monotonicidad**~~ → **RESUELTO en #212 (2026-09-08):** `migrate.js` ahora **aborta**
+  (`migrate`/`baseline`) si hay una migración pendiente de número menor que el máximo aplicado, o números
+  duplicados; `--status` sólo reporta. Override explícito `--allow-out-of-order` para el desorden decidido.
 - Idempotente: lo ya aplicado nunca se reaplica.
 
 **Simulación (contenedor `mysql:8.0` efímero, runner real, sin base remota):**
-1. **Fase 1** — presentes sólo 081/082/083 (SIN 076–080): 081 y 082 aplican **OK**; **083 FALLA** por
-   `system_settings` (tabla del ORM, no por FASE F). → 081/082 **no dependen** de 076–080.
+1. **Fase 1** — presentes sólo 081/082/083 (SIN 076–080): 081 y 082 aplican **OK**; **083 falla en este
+   escenario AISLADO** porque falta `system_settings`. **⚠️ Corrección 2026-09-08:** esto **no** es un defecto
+   de 083 — `system_settings` la crea la **migración SQL 033** (`033_audit_fulltext.sql`), no el ORM; en un
+   replay completo `init.sql→002→…→033→…→083` la tabla existe y 083 aplica. La falla del sim era artefacto
+   de omitir 033. → 081/082/083 **no dependen** de 076–080.
 2. **Fase 2** — se añaden 076–080 (menores): el runner las toma como pendientes y las aplica
    **temporalmente después** de 081/082 (set aplicado = `076,077,078,079,080,081,082`). El FK que cruza
    el límite (`branches.company_id → companies(id)`) queda **íntegro**. 083 sigue fallando.
@@ -219,25 +225,26 @@ se aplicarían después. Riesgo: un despliegue con 081–083 ya aplicadas que lu
 
 Evidencia reproducible y aserciones mecánicas: `docs/evidence/migration-order-sim.{sh,md}`.
 
-**Conclusión (limitada a lo PROBADO):** el orden fuera de secuencia es **SQL-safe sólo para 076–082**
-en el esquema sintético (no hay dependencia cruzada: 081/082 no referencian objetos de FASE F, y
-076–080 no referencian 081+; acoplación intra-grupo 082→081, 076→080). **083 NO se probó SQL-safe**
-(falla por `system_settings`, no por FASE F) → **#202/083 sigue NO-GO** hasta una prueba independiente
-correcta. Los stubs no equivalen a un replay integral de 002–075 (eso lo cubre el job DB de #194).
+**Conclusión (actualizada 2026-09-08):** el orden fuera de secuencia es **SQL-safe para 076–083**: no hay
+dependencia cruzada (081/082 no referencian objetos de FASE F; 076–080 no referencian 081+; acoplación
+intra-grupo 082→081, 076→080) y **083 sólo depende de `system_settings`, que crea la migración SQL 033** —
+presente en cualquier replay completo. El bloqueo de #202 **ya no es la migración 083** sino su **conflicto
+con la cadena FASE E** (#184↔#202 en `workdaySummaryService.js`). Los stubs no equivalen a un replay integral
+de 002–083 (eso lo cubre el job DB de #194 al extenderlo a 076–083).
 
 **Pero la seguridad es CONTINGENTE y frágil** (por eso NO-GO hasta resolver, no "OK"):
 - `migrate.js` no garantiza nada: si cualquier PR de lote temprano introdujera una migración que
   referencie un objeto de FASE F, fallaría al aplicar (fail-loud, pero **bloquea** el despliegue).
 - **Colisión de números entre PRs abiertos:** el runner llavea por nombre; dos PRs con el mismo
   `NNN_*.sql` divergente harían que el segundo se considere "ya aplicado" y se **saltee** silenciosamente.
-  Con 52 PRs abiertos hay que **garantizar unicidad global de número** antes de integrar.
-- **`migrate.js` no es autosuficiente desde `init.sql`:** varias migraciones asumen tablas creadas
-  por el **sync del ORM (sequelize)**, no por SQL (p. ej. 020→`webhooks`, 083→`system_settings`).
-  La estrategia del proyecto es **migración autocontenida**: **#194 ya arregla la 020** (le agrega
-  `CREATE TABLE IF NOT EXISTS webhooks`) y su job **DB — migraciones (MySQL 8 efímero)** corre
-  `init.sql`→`migrate` (002–075) **en verde**. Requisito para los lotes siguientes: **cada migración
-  que entre a un lote con el job de BD debe ser autocontenida** (patrón 020) — pendiente verificar
-  **083** (`system_settings`, #202) y extender el job de BD a **076–083** cuando esos lotes se integren.
+  **RESUELTO en #212:** `findDuplicateNumbers` aborta el runner si hay números repetidos en disco.
+- **`migrate.js` no es autosuficiente desde `init.sql`:** algunas migraciones asumían tablas creadas
+  por el **sync del ORM**, no por SQL. El caso confirmado era **020→`webhooks`** (ninguna migración SQL
+  creaba `webhooks`) → **#194 lo arregló** (le agrega `CREATE TABLE IF NOT EXISTS webhooks`) y su job
+  **DB — migraciones (MySQL 8 efímero)** corre `init.sql`→`migrate` (002–075) **en verde**. **083→`system_settings`
+  NO era uno de esos casos** (lo crea la migración SQL 033; ver corrección arriba). Requisito vigente para
+  lotes con migraciones: verificar autocontención por replay completo en el job de BD y **extenderlo a 076–083**
+  cuando esos lotes se integren.
 
 **Decisión (requiere OK del propietario, PR por PR):**
 - **Preferido:** integrar **076–080 (FASE F) ANTES** de cualquier lote que traiga 081–083 → orden

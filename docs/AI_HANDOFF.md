@@ -60,13 +60,15 @@ horas extra, reportes, nómina y analítica.
 - Nocturno/nómina/firma: #196→#200; #196→#204→#205; #197; #198→#199→#201; #202; #203.
 - ZKTeco/impacto: #162, #163, #164, #165, #166.
 
-> **Orden de migraciones (P1-C):** las migraciones **081/082/083** (firma/consola, lotes 3/5) se integrarían
-> **antes** que las **menores 076–080** (FASE F, lote 6). `migrate.js` no tiene guardia de monotonicidad.
-> Simulación sobre MySQL 8 descartable (aserciones mecánicas, `docs/evidence/migration-order-sim.{sh,md}`):
-> SQL-safe **sólo para 076–082** (FK cruzado íntegro; idempotente), **contingente**. **083 NO probada
-> SQL-safe** (falla por `system_settings`, tabla del ORM) → **#202/083 NO-GO**. `migrate.js` **no es
-> autosuficiente desde `init.sql`**: la estrategia es *migración autocontenida* (#194 ya lo hizo con la 020).
-> **NO-GO** para 081/082/083 hasta ordenar vs 076–080. Detalle en `INTEGRATION_PLAN.md` §Orden de migraciones.
+> **Orden de migraciones (P1-C) — actualizado 2026-09-08:** las migraciones **081/082/083** (firma/consola)
+> se integrarían **antes** que las **menores 076–080** (FASE F). ~~`migrate.js` no tiene guardia de monotonicidad~~
+> → **guardia implementada en #212** (`claude/migrate-monotonicity-guard`): aborta si hay pendientes fuera de
+> secuencia o números duplicados; override explícito `--allow-out-of-order`. Simulación previa sobre MySQL 8
+> descartable (`docs/evidence/migration-order-sim.{sh,md}`): 076–082 SQL-safe. **Corrección:** **083 SÍ es
+> SQL-safe en un replay completo** — `system_settings` la crea la **migración SQL 033** (no el ORM); la falla del
+> sim fue por correr 083 aislada sin 033. El bloqueo real de **#202/083 pasa a ser el conflicto con la cadena
+> FASE E** (#184↔#202 en `workdaySummaryService.js`), no la migración. El caso ORM real era 020→`webhooks`
+> (arreglado por #194). Detalle en `INTEGRATION_PLAN.md` §Orden de migraciones.
 
 > **CI observada (base `main`):** runs #654–#658 en verde para los HEAD verificados, pero **sólo** cubren
 > los jobs **API / Web / Bridge**; **no** hay job de **MySQL efímero** (vive en #194, sin fusionar) ni de
