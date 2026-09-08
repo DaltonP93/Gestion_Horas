@@ -53,6 +53,51 @@ Luego `#197` (recibo self-service), `#200` (export horas + API).
 **Primera acción recomendada:** preparar/fusionar **#194** (con OK), porque mata H3 y enciende el CI de
 datos del que dependen todas las olas siguientes — mayor retorno por el menor riesgo.
 
+## Estado de preparación de las olas (2026-09-08)
+
+Olas 1–4 **preparadas y verificadas** (evidencia local + CI donde aplica; bodies review-ready; todo Draft, nada fusionado):
+
+| Ola | PRs | Preparación | Evidencia |
+|---|---|---|---|
+| **1 — Seguridad + CI** | #194, #208, #207, #192, #190, #195, #165, #166, #210 | #194 review-ready (CI 9/9), #193 cerrado; resto documentado | #194 CI completa verde; #210 CI verde |
+| **2 — Nocturno** | #196→#204→#205; #197; #200 | bodies review-ready; #200 gth resuelto | tip #205 **78/1310** ×3 TZ; #197 **77/1314**; #200 **78/1311** ×3 TZ |
+| **3 — Módulos/export** | #178→#179→#180→#181→#187; #177; #188; #162; #163 | bodies review-ready | tip #187 api **76/1298** ×3 TZ + web **33/441** + `next build`; singletons verdes |
+| **4 — FASE E read-only** | #174→…→#184; #186; #164 | bodies review-ready; read-only verificado por diff | tip #184 api **81/1355** ×3 TZ; #186 **76/1296**; #164 **76/1304** ×3 TZ |
+
+Mergeabilidad entre olas 1–4: **sin conflictos** (`merge-tree` limpio; #192 no toca `reports.js`/`me.js`; #188↔nocturno limpio; #184↔#194/#164 limpio). Orden de integración: **1 → 2 → 3 → 4**, cada PR con OK del propietario, base-first en las cadenas.
+
+## Hoja de ruta de la Ola 5 (BLOQUEADA) — qué decisión desbloquea cada PR
+
+> La Ola 5 **no** se "prepara con evidencia" como las anteriores: su gate es una **decisión del propietario**
+> (orden de migraciones + descongelar FASE F), no una prueba. Nada de esto se toca sin autorización expresa.
+> Cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
+
+### Gate raíz (desbloquea a todos los demás): **orden de migraciones 081/082/083 vs 076–080**
+- **Problema:** el plan integraría 081 (#198), 082 (#201) y 083 (#202) **antes** que las menores 076–080 (FASE F).
+  `migrate.js` **no** tiene guardia de monotonicidad (§Orden de migraciones). Además **083 no es autocontenida**
+  (falla por `system_settings`, tabla del ORM), igual que la 020 antes del fix de #194.
+- **Decisión del propietario (elegir una):**
+  - **(A) Preferida:** integrar **076–080 (FASE F) primero** → orden numérico = orden temporal; se preserva el invariante "menores primero". Depende de descongelar FASE F.
+  - **(B) Alternativa:** **renumerar** 081/082/083 (unmerged) por encima del número final de FASE F, **o** agregar una **guardia de monotonicidad** a `migrate.js` + rebasar 083 sobre 076–080.
+- **Recomendado:** (A) si se descongela FASE F ahora; si no, **guardia de monotonicidad en `migrate.js` + hacer 083 autocontenida** (patrón 020) antes de tocar #202.
+- **Trabajo seguro que SÍ puedo preparar sin descongelar** (si lo autorizás): la **guardia de monotonicidad** en `migrate.js` + test en MySQL efímero, y volver **autocontenida** la 083 — ambos son aditivos y fail-loud. Decilo y lo dejo como PR Draft.
+
+### PRs de la Ola 5 y su desbloqueo
+
+| PR(s) | Qué aporta | Migración | Bloqueo | Qué lo desbloquea |
+|---|---|---|---|---|
+| **FASE F** #158→#159→#160→#161 (+ F+ #167–#173, #185; CI #189) | Multiempresa (`companies`/`cost_centers`), gobierno, personas, calendario, nómina-base | **076–080** | Congelada; **auditoría Codex COMPLETADA = GO condicional** (`docs/evidence/fase-f-codex-audit.md`) | Decisión del propietario de **descongelar** + gate raíz (migraciones) resuelto + merge **base-first f1→f2→f3→f4** con OK PR por PR. Abrir además los 3 tickets de deuda del audit (nómina global, redacción `legal_name`, enlace org del onboarding). |
+| **#198 → #199 → #201 → #203** | Aprobación multinivel + firma con hash + firma **PAdES** local + deploy de firma | **081, 082** | Gate raíz (081/082 fuera de secuencia vs 076–080) | Gate raíz resuelto (081/082 quedan **después** de 076–080). Sim. sobre MySQL 8: 081/082 **SQL-safe** (no dependen de FASE F); una vez fijado el orden, van tras FASE F. Merge base-first. |
+| **#202** | Consola de activación FASE E (doble compuerta, no activa nada) | **083** | **Doble bloqueo:** (1) 083 no autocontenida + orden; (2) **conflicto real con la cadena FASE E** en `api/src/services/workdaySummaryService.js` (`#184 ↔ #202`, confirmado por `merge-tree` el 2026-09-08) | Gate raíz + **083 autocontenida** + integrar **después** de la Ola 4 (FASE E read-only) y **resolver** el conflicto en `workdaySummaryService.js`. Sigue **sin activar** ningún flag. |
+| **#209** | ADR: auth web a cookies HttpOnly (dirección aceptada) | — | **Sólo documento; implementación NO autorizada** | Es un ADR, no código. Se integra como doc cuando quieras; la **implementación** (Etapa 1 cookies) requiere una autorización aparte y explícita. |
+| **#191** | Documentación integral (previa a #206) | — | Duplica a #206 (canónico) | Recortar a lo que #206 no cubra, o cerrar; ante divergencia gana #206. |
+
+### Orden global sugerido (recordatorio, cada merge con OK)
+`0 → 1 → 2 → 4 → (5 read-only ya cubierto por Ola 4) →` **[resolver gate raíz de migraciones + descongelar/auditar FASE F]** `→ 6 (FASE F 076–080) → 3 (firma 081/082) → #202 (083)`.
+
+### Lo que NO se hace sin autorización explícita (recordatorio)
+Descongelar FASE F, activar flags/writers, recalcular `daily_summary`, tocar producción/PM2/`git pull`/migraciones remotas, escribir en att2000, implementar cookies HttpOnly, fusionar/Ready-for-review cualquier PR.
+
 ## Vocabulario de estado
 
 `MERGED_VERIFIED` · `OPEN_PR_UNAUDITED` · `OPEN_PR_TESTED` (pruebas locales del autor, sin CI remoto/rev humana) ·
