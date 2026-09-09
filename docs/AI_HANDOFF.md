@@ -59,9 +59,16 @@ horas extra, reportes, nómina y analítica.
     (`GOVERNANCE/PEOPLE/CALENDAR/PAYROLL_WRITE_ENABLED` = `false`): el código está en `main` pero multiempresa
     **no está activa**. **Migraciones 076–080 en el repo pero NO aplicadas en prod.** Detalle SHA-a-SHA en
     `main-integration-log.md`; preparación en `fase-f-review-prep.md`.
-- **Paso operativo pendiente (requiere OK expreso del propietario, NO hecho):** aplicar 076–080 en el servidor
-  de prod (con backup previo, ver `deploy/DEPLOY-RUNBOOK.md`) y, por separado, activar los writers de
-  multiempresa. Fusionar a `main` **no** hizo ninguna de las dos.
+- **Rollout operativo de FASE F (2 pasos, los corre OPS en el servidor — este agente no toca prod):**
+  1. **Aplicar migraciones `072–080`** (autorizado 2026-09-09, aplicar juntas) → runbook
+     `deploy/RUNBOOK-migraciones-076-080.md` (preflight `--status`, backup obligatorio, `migrate`,
+     verificación, rollback).
+  2. **Activar los writers de multiempresa** (por fase, cada una con OK del propietario) → runbook
+     `deploy/RUNBOOK-activacion-writers-multiempresa.md`. Clave: encender flags ≠ multiempresa activa;
+     hay que **sembrar** `companies` + `branches.company_id` y otorgar permisos. Orden: gobierno →
+     personas → calendario → nómina; `pm2 reload --update-env`; rollback = flag→`false`.
+  **Ninguno de los dos pasos se ejecutó todavía.** Fusionar a `main` **no** aplicó migraciones ni activó
+  writers (siguen fail-closed, `503`). Runbook DevOps general de apoyo: `deploy/DEPLOY-RUNBOOK.md`.
 - **Abiertas todavía (NO fusionadas, bloqueo real):** firma #198/#199/#201/#203 (081/082); **#202** (083 +
   conflicto con FASE E); #191 (dup de #206); #209 (ADR cookies, implementación NO autorizada).
 - Regla vigente del propietario: **no fusionar el resto ni desplegar sin autorización explícita.**
@@ -197,7 +204,12 @@ Firma PAdES (PR #203): `SIGNING_MODE`, `HTML2PDF_URL`, `PADES_SIGNER_URL`,
 > verificación, rollback). El runner es forward-only y aplica todo lo pendiente en orden; 072–075
 > son aditivas e inertes (writers de jornada en OFF), por eso van con 076–080 sin drift. **Aplicar
 > el esquema NO activa multiempresa** (writers `*_WRITE_ENABLED` siguen en `false`; activarlos es
-> otro paso con su propia autorización). 081/082/083 (firma/consola) **no** están en `main`.
+> otro paso con su propia autorización → `deploy/RUNBOOK-activacion-writers-multiempresa.md`).
+> 081/082/083 (firma/consola) **no** están en `main`.
+>
+> **Runbooks operativos FASE F (en `main`, los ejecuta ops):** paso 1 migraciones →
+> `deploy/RUNBOOK-migraciones-076-080.md`; paso 2 activación de writers →
+> `deploy/RUNBOOK-activacion-writers-multiempresa.md`.
 
 ## 11. Decisiones arquitectónicas vigentes
 
