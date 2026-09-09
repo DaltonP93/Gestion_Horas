@@ -5,6 +5,7 @@ const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 const audit = require('../services/audit');
 const totp = require('../services/totp');
+const { isDefaultAdminPassword } = require('../config/securityPreflight');
 
 const SALT_ROUNDS = 12;
 
@@ -180,6 +181,10 @@ async function changePassword(req, res) {
   // Regla mínima: 1 letra + 1 número
   if (!/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
     return res.status(400).json({ error: 'La contraseña debe contener letras y números' });
+  }
+  if (isDefaultAdminPassword(newPassword)) {
+    // H1: impedir reintroducir una credencial por defecto conocida al cambiarla.
+    return res.status(400).json({ error: 'La contraseña coincide con una contraseña por defecto no permitida; elegí otra.' });
   }
   if (currentPassword === newPassword) {
     return res.status(400).json({ error: 'La nueva contraseña debe ser distinta a la actual' });
