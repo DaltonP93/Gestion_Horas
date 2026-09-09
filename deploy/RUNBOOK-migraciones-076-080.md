@@ -49,6 +49,13 @@ y (según la doc histórica) **no estaban aplicadas en prod**.
 
 ## 2. Precondiciones (checklist antes de tocar prod)
 
+- [ ] **Validación descartable en verde** (recomendado antes de tocar prod): correr
+      `scripts/validate-disposable.sh` en un host con Docker/Node/Python. Levanta un worktree +
+      MySQL 8 **efímeros** (sin datos ni credenciales de prod), corre el matrix de tests (api/bridge
+      3 TZ, web build, analytics), aplica 072→080 en la BD descartable y verifica idempotencia; deja
+      un veredicto GO/NO-GO para **(A) código** y **(B) migraciones**. **No** sustituye el preflight
+      del host (Bloques 1–4 del procedimiento operativo), pero confirma que el código y las 072–080
+      del HEAD remoto están sanos.
 - [ ] **Autorización explícita del propietario** para esta corrida. Decisión 072–075 ya tomada:
       **aplicar 072–080 juntas** (§1).
 - [ ] **Ventana de mantenimiento** acordada (el `ALTER` de `audit_events`/`branches`/`departments`
