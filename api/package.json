@@ -13,7 +13,8 @@
     "test:watch": "jest --watch",
     "migrate": "node scripts/migrate.js",
     "migrate:status": "node scripts/migrate.js --status",
-    "schema:drift": "node scripts/check-schema-drift.js"
+    "schema:drift": "node scripts/check-schema-drift.js",
+    "phase-e:preflight": "node scripts/phase-e-preflight.js"
   },
   "dependencies": {
     "axios": "^1.15.0",
