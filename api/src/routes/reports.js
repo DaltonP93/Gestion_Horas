@@ -4,6 +4,8 @@ const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { dbTimeHHmm } = require('../utils/dbTime');
 const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM, maxPairsOf } = require('../services/scheduler');
+const { monthlyWorkedByEmployee } = require('../services/monthlyWorkedFromEngine');
+const { engineWorkedByDate, ymd, overrideWorkedFromEngine } = require('../services/workedReads');
 const { renderMarcadasPdf } = require('../services/marcadasPdf');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
 const {
@@ -29,6 +31,9 @@ function scopeToClause(scope, col = 'e.department_id') {
   };
 }
 
+// Nocturno: worked_minutes por el MOTOR de jornada (atribuido al día de inicio).
+// Los helpers viven en services/workedReads.js y los comparten reports.js y me.js.
+
 // GET /api/reports/monthly?year=&month=&dept=
 router.get('/monthly', asyncHandler(async (req, res) => {
   const { year = new Date().getFullYear(), month = new Date().getMonth() + 1, dept } = req.query;
@@ -45,6 +50,12 @@ router.get('/monthly', asyncHandler(async (req, res) => {
   deptFilter += ` ${sc.clause}`;
   params.push(...sc.params);
 
+  // `total_worked_minutes` NO se toma de `SUM(daily_summary.worked_minutes)`:
+  // esa columna la escribe el motor LEGACY por fecha civil y parte en dos los
+  // turnos nocturnos que cruzan medianoche, así que el mensual no cerraba con
+  // Marcadas. Se calcula abajo con el MISMO motor que Marcadas (sólo lectura).
+  // Los conteos de estado (presente/tarde/ausente) y el atraso/extra siguen
+  // viniendo de daily_summary; migrarlos al motor es un follow-up de esta fase.
   const [rows] = await sequelize.query(`
     SELECT
       e.id, e.code, CONCAT(e.first_name,' ',e.last_name) AS employee_name,
@@ -52,7 +63,6 @@ router.get('/monthly', asyncHandler(async (req, res) => {
       COUNT(CASE WHEN ds.status IN ('present','late') THEN 1 END)  AS days_present,
       COUNT(CASE WHEN ds.status = 'late'              THEN 1 END)  AS days_late,
       COUNT(CASE WHEN ds.status = 'absent'            THEN 1 END)  AS days_absent,
-      SUM(ds.worked_minutes)                                        AS total_worked_minutes,
       SUM(ds.late_minutes)                                          AS total_late_minutes,
       SUM(ds.overtime_minutes)                                      AS total_overtime_minutes
     FROM employees e
@@ -63,15 +73,28 @@ router.get('/monthly', asyncHandler(async (req, res) => {
     ORDER BY d.name, e.last_name
   `, { replacements: params });
 
+  // Total trabajado del mes por el motor de jornada (SÓLO LECTURA).
+  let engineWorked;
+  try {
+    engineWorked = await monthlyWorkedByEmployee(rows.map((r) => r.id), { from: dateFrom, to: dateTo });
+  } catch (err) {
+    return res.status(err.status || 500).json({ error: err.message });
+  }
+  for (const r of rows) {
+    const agg = engineWorked.get(Number(r.id));
+    r.total_worked_minutes = agg ? agg.workedMinutes : 0;
+  }
+
   res.json({ data: rows, period: { year, month, from: dateFrom, to: dateTo } });
 }));
 
 // GET /api/reports/weekly?week=&year=
-router.get('/weekly', asyncHandler(async (req, res) => {
+// Datos del reporte semanal (read-only). Compartido por la vista JSON y por el
+// export CSV para no divergir el cálculo de la semana ni el RBAC.
+async function loadWeeklyReport(req) {
   const now = new Date();
   const { year = now.getFullYear(), week } = req.query;
 
-  // Calcular inicio y fin de la semana
   const jan1 = new Date(year, 0, 1);
   const weekNum = week || Math.ceil(((now - jan1) / 86400000 + jan1.getDay() + 1) / 7);
   const from = new Date(jan1.getTime() + (weekNum - 1) * 7 * 86400000);
@@ -81,8 +104,11 @@ router.get('/weekly', asyncHandler(async (req, res) => {
   const scope = await getVisibleDepartmentIds(req.user);
   const sc = scopeToClause(scope, 'e.department_id');
 
+  const fromStr = from.toISOString().split('T')[0];
+  const toStr = to.toISOString().split('T')[0];
   const [rows] = await sequelize.query(`
     SELECT
+      e.id AS employee_id,
       ds.date, ds.status, ds.first_in, ds.last_out, ds.worked_minutes, ds.late_minutes,
       CONCAT(e.first_name,' ',e.last_name) AS employee_name, d.name AS department
     FROM daily_summary ds
@@ -90,9 +116,46 @@ router.get('/weekly', asyncHandler(async (req, res) => {
     LEFT JOIN departments d ON e.department_id = d.id
     WHERE ds.date BETWEEN ? AND ? ${sc.clause}
     ORDER BY ds.date, e.last_name
-  `, { replacements: [from.toISOString().split('T')[0], to.toISOString().split('T')[0], ...sc.params] });
+  `, { replacements: [fromStr, toStr, ...sc.params] });
 
+  // Nocturno: worked_minutes por el motor (atribuido al día de inicio de la jornada).
+  await overrideWorkedFromEngine(rows, {
+    from: fromStr, to: toStr, route: 'weekly',
+    idOf: (r) => r.employee_id, dateOf: (r) => r.date,
+  });
+
+  return { rows, weekNum, from, to };
+}
+
+// Escapa una celda CSV (RFC 4180): comillas, comas y saltos de línea.
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+router.get('/weekly', asyncHandler(async (req, res) => {
+  const { rows, weekNum, from, to } = await loadWeeklyReport(req);
   res.json({ data: rows, week: weekNum, from, to });
+}));
+
+// ─── GET /api/reports/weekly/export?year=&week=  (CSV) ──────────────
+// Paridad con /monthly/export: descarga imprimible del reporte semanal.
+// Sólo lectura de daily_summary; mismo RBAC que /weekly.
+router.get('/weekly/export', asyncHandler(async (req, res) => {
+  const { rows, weekNum, from, to } = await loadWeeklyReport(req);
+  const iso = (d) => new Date(d).toISOString().split('T')[0];
+  const headers = ['Fecha', 'Empleado', 'Departamento', 'Estado', 'Entrada', 'Salida', 'Min trabajados', 'Min tarde'];
+  const lines = [headers.map(csvCell).join(',')];
+  for (const r of rows) {
+    lines.push([
+      iso(r.date), r.employee_name, r.department || '', r.status || '',
+      r.first_in || '', r.last_out || '', r.worked_minutes ?? 0, r.late_minutes ?? 0,
+    ].map(csvCell).join(','));
+  }
+  const csv = '﻿' + lines.join('\r\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="reporte-semanal_${iso(from)}_${iso(to)}_S${weekNum}.csv"`);
+  res.send(csv);
 }));
 
 // ─── GET /api/reports/marcadas ─────────────────────────────────────
@@ -156,6 +219,13 @@ router.get('/daily-detail', async (req, res) => {
     }) : [],
     marks_raw: undefined,
   }));
+
+  // Nocturno: worked_minutes del día por el motor (la jornada que empezó ESTE día
+  // se atribuye entera acá; la que empezó ayer y cerró hoy NO cuenta hoy).
+  await overrideWorkedFromEngine(data, {
+    from: date, to: date, route: 'daily-detail',
+    idOf: (r) => r.employee_id, dateOf: () => date,
+  });
 
   res.json({ date, data });
 });
@@ -282,6 +352,13 @@ router.get('/employee/:id/analytics', async (req, res) => {
       WHERE ds.employee_id = ? AND ds.date BETWEEN ? AND ?
       ORDER BY ds.date
     `, { replacements: [empId, from, to] });
+
+    // Nocturno: worked_minutes por el motor antes de sumar totales/semanal, para
+    // que el total y la tendencia no partan los turnos que cruzan medianoche.
+    await overrideWorkedFromEngine(daily, {
+      from, to, route: 'employee-analytics',
+      idOf: () => empId, dateOf: (d) => d.date,
+    });
 
     // Resumen del período
     const present = daily.filter(d => ['present','late'].includes(d.status)).length;
@@ -412,6 +489,37 @@ router.get('/monthly/export', async (req, res) => {
       "SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN ('system_signature_url','system_seal_url','system_signer_name','system_signer_position','system_signer_doc_id')"
     );
     const sig = Object.fromEntries(sigRows.map(r => [r.setting_key, r.setting_value]));
+
+    // ── Trabajado por el MOTOR (SÓLO LECTURA) ──────────────────────
+    //
+    // La grilla y los conteos de estado siguen saliendo de daily_summary, pero
+    // el TRABAJADO (columna "Trab." y total) se reemplaza por el del motor de
+    // jornada, el mismo que Marcadas: así un turno nocturno que cruza medianoche
+    // se cuenta como UN jornal del día que empezó, y el total del mes cierra con
+    // Marcadas. Se consolida por `work_date`, de modo que el total de la planilla
+    // es la suma exacta de la columna "Trab." día por día.
+    const engineWorked = await monthlyWorkedByEmployee(
+      employees.map((e) => e.id), { from: dateFrom, to: dateTo });
+    for (const emp of employees) {
+      const agg = engineWorked.get(Number(emp.id));
+      emp.totals.worked = agg ? agg.workedMinutes : 0;
+      // `work_date` ('YYYY-MM-DD', dentro del mes) → día del mes, la misma clave
+      // que usa `emp.days`.
+      const porDia = new Map();
+      if (agg) for (const [wd, mins] of agg.byDate) porDia.set(String(Number(wd.slice(8, 10))), mins);
+      // La fila legacy conserva estado/entrada/salida/atraso; sólo se pisa su
+      // trabajado con el del motor (0 si el motor no ve jornada ese día).
+      for (const [dayKey, rec] of Object.entries(emp.days)) {
+        rec.worked_minutes = porDia.get(dayKey) || 0;
+        porDia.delete(dayKey);
+      }
+      // Jornada que el motor fecha en un día sin fila legacy (raro: el día de la
+      // primera entrada siempre tiene marcas): se materializa una celda mínima
+      // para que la columna "Trab." sume el total y no se pierdan horas.
+      for (const [dayKey, mins] of porDia) {
+        emp.days[dayKey] = { ...(emp.days[dayKey] || {}), worked_minutes: mins };
+      }
+    }
 
     if (format === 'pdf') {
       const PDFDocument = require('pdfkit');
@@ -711,8 +819,12 @@ router.get('/monthly/export', async (req, res) => {
     await wb.xlsx.write(res);
     res.end();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    // `err.status` viaja cuando el error es tipado (p. ej. 413 por exceso de
+    // marcajes del motor): así la UI puede distinguir lo no reintentable.
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
 module.exports = router;
+// Exponer helpers puros para tests unitarios (no forman parte de la API HTTP).
+module.exports.__testables = { engineWorkedByDate, ymd, overrideWorkedFromEngine };

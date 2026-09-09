@@ -1,0 +1,36 @@
+# Dockerfile.migrate — imagen ONE-SHOT para correr migraciones de BD.
+#
+# El problema que resuelve: `api/Dockerfile` sólo copia `src/`, así que el
+# runner `api/scripts/migrate.js`, las migraciones de `database/migrations/`
+# (que viven FUERA del contexto de build `./api`) y el cliente `mysql` que el
+# runner invoca NO están en la imagen de la API. Con esta imagen las
+# migraciones se corren desde un contenedor efímero con contexto = raíz del
+# repo.
+#
+# Uso (no corre en `up`; está en el profile `tools`):
+#   docker compose --profile tools run --rm migrate                     # aplica pendientes
+#   docker compose --profile tools run --rm migrate node scripts/migrate.js --status   # read-only
+#
+# migrate.js resuelve MIGRATIONS_DIR = <script>/../../database/migrations.
+# Con el script en /app/api/scripts/migrate.js → /app/database/migrations, que
+# es donde `COPY database` lo deja.
+
+FROM node:20-alpine
+
+# Cliente mysql (el runner aplica cada archivo con el binario `mysql` por los
+# DELIMITER de los procedimientos almacenados).
+RUN apk add --no-cache mysql-client
+
+WORKDIR /app
+
+# Sólo las deps de runtime del runner (mysql2, dotenv, …).
+COPY api/package*.json ./api/
+RUN cd api && npm ci --omit=dev
+
+# El runner y las migraciones.
+COPY api/scripts ./api/scripts
+COPY database ./database
+
+WORKDIR /app/api
+# Por defecto aplica pendientes; se puede sobrescribir el comando (p. ej. --status).
+CMD ["node", "scripts/migrate.js"]

@@ -25,6 +25,12 @@ jest.mock('../src/services/departmentScope', () => ({
   canSeeEmployee: async () => true,
   scopeToClause: () => ({ clause: '', params: [], empty: false }),
 }));
+// El total trabajado ahora lo calcula el motor de jornada (SÓLO LECTURA). Sin
+// configuración cargada las jornadas caen en historical_fallback, y los
+// marcajes que el motor lee salen del mock de sequelize (respuesta por defecto).
+jest.mock('../src/services/workdayConfig', () => ({
+  loadWorkdayConfig: jest.fn(async () => ({ forDate: () => null, historyFor: () => [] })),
+}));
 
 const express = require('express');
 const http = require('http');
@@ -84,6 +90,11 @@ function contarPaginas(buf) {
 describe('planilla mensual en PDF', () => {
   beforeEach(() => {
     mockQuery.mockReset();
+    // Respuesta por defecto para las lecturas de marcajes del motor (tras las
+    // consultas de daily_summary y firma que cada test encola). Sin marcas, el
+    // motor no ve jornadas: la grilla y el conteo de páginas —lo que estos
+    // tests verifican— no dependen del trabajado, sólo del layout mensual.
+    mockQuery.mockResolvedValue([[]]);
   });
 
   function prepararDatos(emps, year, month) {
