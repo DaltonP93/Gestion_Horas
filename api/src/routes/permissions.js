@@ -4,6 +4,7 @@
  * Transiciones controladas por permissionWorkflow.js.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const path = require('path');
 const fs   = require('fs');
 const multer = require('multer');
@@ -155,13 +156,13 @@ router.post('/', async (req, res) => {
     );
 
     await wf.logEvent({
-      permission_id: r.insertId, actor_id: req.user.id,
+      permission_id: insertId(r), actor_id: req.user.id,
       from_state: 'n/a', to_state: 'pending',
       note: `Solicitud creada (tipo=${type})`,
     });
 
-    notif.notifyPermissionCreated(r.insertId).catch(() => {});
-    res.status(201).json({ id: r.insertId, message: 'Permiso solicitado' });
+    notif.notifyPermissionCreated(insertId(r)).catch(() => {});
+    res.status(201).json({ id: insertId(r), message: 'Permiso solicitado' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

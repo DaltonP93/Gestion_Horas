@@ -4,6 +4,7 @@
  * Escritura: admin / gth / super_admin.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
@@ -47,7 +48,7 @@ router.post('/', authorize('admin','gth'), requirePermission('departamentos', 'c
       'INSERT INTO departments (name, code, coordinator_id, manager_id) VALUES (?,?,?,?)',
       { replacements: [name, code || null, coordinator_id || null, manager_id || null] }
     );
-    res.status(201).json({ id: r.insertId });
+    res.status(201).json({ id: insertId(r) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

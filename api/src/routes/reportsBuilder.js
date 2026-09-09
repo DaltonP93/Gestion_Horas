@@ -13,6 +13,8 @@ const router = require('express').Router();
 const ExcelJS = require('exceljs');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const logger = require('../config/logger');
+const { logInternalError } = require('../utils/logInternalError');
 
 router.use(authenticate);
 router.use(authorize('admin', 'gth', 'hr', 'manager', 'gestor'));
@@ -206,21 +208,38 @@ function buildQuery({ source, fields, filters = {}, groupBy = null, orderBy = nu
 
 // POST /api/reports-builder/preview
 router.post('/preview', async (req, res) => {
+  // buildQuery lanza errores de validación (source/campos inválidos) que SÍ
+  // deben informarse al cliente (4xx). Un fallo posterior de BD es un 5xx y no
+  // debe filtrar err.message crudo: se loguea en servidor y se responde genérico.
+  let built;
   try {
-    const { sql, params, useFields, def } = buildQuery(req.body);
+    built = buildQuery(req.body);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  try {
+    const { sql, params, useFields, def } = built;
     const [rows] = await sequelize.query(sql, { replacements: params });
     const headers = useFields.map(f => def.fields[f].label);
     res.json({ ok: true, count: rows.length, fields: useFields, headers, rows });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    logInternalError(logger, { event: 'reports-builder POST /preview', route: 'reports-builder POST /preview', err });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
 // POST /api/reports-builder/export?format=csv|xlsx
 router.post('/export', async (req, res) => {
   const format = (req.query.format || req.body.format || 'xlsx').toLowerCase();
+  // Igual que /preview: validación → 4xx con mensaje; fallo de BD/generación → 5xx genérico.
+  let built;
   try {
-    const { sql, params, useFields, def } = buildQuery(req.body);
+    built = buildQuery(req.body);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  try {
+    const { sql, params, useFields, def } = built;
     const [rows] = await sequelize.query(sql, { replacements: params });
     const headers = useFields.map(f => def.fields[f].label);
     const fname = `reporte_${req.body.source || 'custom'}_${new Date().toISOString().slice(0,10)}`;
@@ -247,7 +266,12 @@ router.post('/export', async (req, res) => {
     await wb.xlsx.write(res);
     res.end();
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    logInternalError(logger, { event: 'reports-builder POST /export', route: 'reports-builder POST /export', err });
+    // Si el fallo ocurre DESPUÉS de enviar headers (streaming del xlsx), no se
+    // puede responder JSON: se destruye la conexión de forma controlada para que
+    // el cliente vea un error de red y no un archivo truncado 'válido'.
+    if (!res.headersSent) res.status(500).json({ error: 'Error interno' });
+    else res.destroy();
   }
 });
 
