@@ -3,8 +3,10 @@
 > **Actualizado:** 2026-09-07 · Autor: Agente 0 (líder). Autorizado por el propietario para
 > **preparar** el plan (D2, opción A): **sin fusionar, sin auto-merge, sin Ready-for-review,
 > sin cerrar, sin desplegar, sin rebasar FASE F**. Cada merge requiere autorización expresa posterior, PR por PR.
-> **Snapshot:** `main @ 078cd67` (#157). PRs Draft abiertos #158–#210 (**#193 y #211 cerrados**), ninguno fusionado.
-> Ninguna rama abierta equivale a producción. `main` permanece en #157.
+> **Snapshot (actualizado 2026-09-09):** `main @ 79c01d5` tras integrar **Olas 1–4 + deps + docs (34 PRs)** —
+> ver `docs/evidence/main-integration-log.md`. Este plan describe el estado **previo** (baseline `078cd67`/#157)
+> y el orden que se ejecutó; se conserva como registro. **Abiertas todavía:** la Ola 5 (FASE F, firma #198–#203,
+> #202, #191, #209) + #213 (DevOps) — ninguna fusionada, todas con bloqueo real.
 > (#208 = H1 preflight fail-closed de credencial demo; #209 = ADR cookies HttpOnly, sólo documento;
 > #210 = bumps de dependencias con CVE — multer/axios/python-jose.)
 

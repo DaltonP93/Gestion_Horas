@@ -1,7 +1,8 @@
 # AI handoff — Gestion_Horas (SisHoras)
 
-> **Actualizado:** 2026-09-06 · **Autor:** Agente 0 (líder técnico) tras auditoría multiagente read-only.
-> **Baseline real:** `main @ 078cd67bb5241de0b962afa2b1e0b87358607478` (merge PR #157).
+> **Actualizado:** 2026-09-09 · **Autor:** Agente 0 (líder técnico) tras la integración autorizada a `main`.
+> **Baseline real:** `main @ 79c01d5` tras la **integración de Olas 1–4 + deps + docs (2026-09-09)**
+> — 34 PRs fusionados (antes `078cd67`/#157). Detalle SHA-a-SHA en `docs/evidence/main-integration-log.md`.
 > **Este documento es la ENTRADA CANÓNICA.** Un agente nuevo (incl. Codex) debe poder
 > continuar leyendo sólo este archivo + la URL del repo, sin acceder a ninguna conversación.
 > La fuente de verdad es el repositorio (código, commits, PRs, CI). Este doc resume estado, no lo sustituye.
@@ -39,13 +40,19 @@ horas extra, reportes, nómina y analítica.
 
 ## 3. Estado de `main` y de los PRs
 
-- `main` = `078cd67` (merge #157). Última doc previa fijaba `53fee69`/#155: **desactualizada**, corregido aquí.
-- **`main` permanece en #157. Ninguna rama/PR abierto equivale a producción.**
-- **52 PRs Draft abiertos (#158–#209), NINGUNO fusionado** (checkpoint 2026-09-06, `main` `078cd67`).
-  `main` no avanza desde 2026-09-02. Hay **deuda de integración**: casi toda la funcionalidad nueva vive sólo en ramas.
-  Nuevos vs. el checkpoint de 50: **#208** (H1 preflight fail-closed de credencial demo + prevención de
-  reintroducción) y **#209** (ADR: cookies HttpOnly, sólo documento; implementación NO autorizada).
-- Regla vigente del propietario: **no fusionar ni desplegar sin autorización explícita.**
+- `main` = `79c01d5` tras la **integración autorizada del 2026-09-09** (antes `078cd67`/#157).
+  **Fusionado (MERGED_VERIFIED), 34 PRs — Olas 1–4 + deps + docs:**
+  - **Ola 1 (seguridad+CI):** #190, #194, #212, #208, #207, #192, #165, #166, #195, #210. H1/H3/H7/H10/H6 ya en
+    `main`; CI completo (API/Web/Bridge 3 TZ + **DB MySQL efímero** + **Analytics** + gate `npm audit` ALTO);
+    guardia de monotonicidad de migraciones (`migrate.js`).
+  - **Ola 2 (nocturno):** #196, #204, #205, #197, #200 — lecturas por el motor correcto (cross-midnight).
+  - **Ola 3 (módulos/export):** #178–#181, #187, #177, #188, #162, #163.
+  - **Ola 4 (FASE E read-only):** #174–#176, #182–#184, #186, #164 — guards/gates/goldens (no activan nada).
+  - **Docs:** #206 (canónico) + `docs/evidence/main-integration-log.md` (SHA por PR).
+- **Abiertas todavía (NO fusionadas, bloqueo real):** FASE F #158–#161 + F+ #167–#173/#185/#189 (multiempresa,
+  congelada, GO condicional); firma #198/#199/#201/#203 (081/082); **#202** (083 + conflicto con FASE E);
+  #191 (dup de #206); #209 (ADR cookies, implementación NO autorizada); **#213** (DevOps, Draft para ops).
+- Regla vigente del propietario: **no fusionar el resto ni desplegar sin autorización explícita.**
 - **Plan de integración bottom-up:** ver `INTEGRATION_PLAN.md` (grupos, grafo, orden, solapes/duplicados, rebase/test/rollback por lote). Autorizado sólo para *preparar* el plan (D2); cada merge requiere OK expreso, PR por PR.
 - **Convención:** cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
 - **Vocabulario de estado (canónico):** `MERGED_VERIFIED` · `OPEN_PR_UNAUDITED` · `OPEN_PR_TESTED` (pruebas locales del autor, sin CI remoto ni revisión humana) · `OPEN_PR_BLOCKED` · `SIMULATED_ONLY` · `NOT_PRESENT` · `PRODUCTION_UNVERIFIED`. Nada en un PR abierto está "resuelto en el proyecto" hasta llegar a `main`.
@@ -70,12 +77,15 @@ horas extra, reportes, nómina y analítica.
 > FASE E** (#184↔#202 en `workdaySummaryService.js`), no la migración. El caso ORM real era 020→`webhooks`
 > (arreglado por #194). Detalle en `INTEGRATION_PLAN.md` §Orden de migraciones.
 
-> **CI observada (base `main`):** runs #654–#658 en verde para los HEAD verificados, pero **sólo** cubren
-> los jobs **API / Web / Bridge**; **no** hay job de **MySQL efímero** (vive en #194, sin fusionar) ni de
-> **Analytics/Python**. "CI verde" aquí = esos 3 jobs, no la cadena completa.
+> **CI observada (base `main`, actualizado 2026-09-09):** tras integrar #194/#190, `main` corre la **cadena
+> completa** — API/Web/Bridge en 3 TZ + **DB migraciones (MySQL 8 efímero)** + **Analytics** + gate
+> `npm audit --audit-level=high`. Run #723 sobre `79c01d5` (cabeza integrada) en verde. El trigger `claude/**`
+> ya está en `main`, así que los PR sobre ramas `claude/*` reciben CI de GitHub.
 
-### CI (mecánica "opción B")
-`.github/workflows/ci.yml` en `main` dispara sólo con base `main` (jobs: API, Web, Bridge en 3 TZ UTC/Asunción/Tokyo). Los PR encadenados sobre ramas `claude/*` **no** reciben CI de GitHub hasta que su base se mergee. El job de **migraciones MySQL efímero** y el trigger `claude/**` viven en PRs (#194, #190) **no fusionados**. No hay job de Analytics/Python ni build de imágenes.
+### CI (mecánica actual)
+`.github/workflows/ci.yml` dispara con base `main` **y** en ramas/PR `claude/**` (trigger de #190, ya fusionado).
+Jobs: API/Web/Bridge en 3 TZ (UTC/Asunción/Tokyo), **DB migraciones MySQL 8 efímero** (init.sql→migrate,
+idempotencia, `--status` read-only), **Analytics** (py_compile+import) y gate `npm audit` nivel alto. Sin build de imágenes.
 
 ## 4. Funcionalidad: fusionado vs sólo-en-PR vs simulado
 
@@ -120,12 +130,12 @@ El driver/auto-polling att2000 y ZKTeco tiene kill-switch OFF por defecto
 
 ## 6. Riesgos de seguridad (detalle en `SECURITY.md`)
 
-P1 abiertos en `main`: credencial demo `admin/Admin1234!` en `init.sql` (H1); `access_token`
-en URL de descargas y logueado por morgan (H3); JWT+refresh en `localStorage` (H2);
-revocación inefectiva (access token stateless 1h no revalida `active`/empresa; WebSocket sin
-re-auth) (H4/H5). La auditoría de PII en logs (H6) está **mitigada sólo en el PR #192** (aún NO en `main`).
-La redacción de token en logs (H3) está **en dos PRs que se solapan: #194 y #207** (ver `INTEGRATION_PLAN.md`;
-#207 se recorta para no duplicar #194). Ningún hallazgo se considera resuelto en el proyecto hasta llegar a `main`.
+**Mitigados en `main` (2026-09-09):** **H1** credencial demo → preflight fail-closed (#208); **H3** token en
+logs → redacción morgan (#194); **H7** 5xx sin fuga + **H10** `algorithms:['HS256']` (#207); **H6** auditoría
+sin PII con allowlist + fix inyección att2000 (#192).
+**P1 aún abiertos en `main`:** **H2** JWT+refresh en `localStorage` (ADR #209 propone cookies HttpOnly, sin
+implementar); **H4/H5** revocación inefectiva (access token stateless 1h no revalida `active`/empresa; WebSocket
+sin re-auth). Ningún hallazgo se considera resuelto hasta llegar a `main`; H2/H4/H5 siguen pendientes.
 
 ## 7. Estado DevOps (detalle en `DEPLOYMENT.md`, `BACKUP_RESTORE.md`)
 
