@@ -85,10 +85,27 @@ método `merge` (merge commit); verificar `main` verde entre olas.
 ### Docs
 | PR | `main` tras merge |
 |---|---|
-| #206 snapshot consolidado (este log) | _(último merge)_ |
+| #206 snapshot consolidado (este log) | `79c01d5` |
+| #214 baseline canónico (AI_HANDOFF/INTEGRATION_PLAN) | `a7e3f91` |
+
+### DevOps — destrabar despliegue (`6b20e56`, autorizado 2026-09-09)
+| PR | `main` tras merge |
+|---|---|
+| #213 nginx compose + `Dockerfile.migrate` + restore/runbook + healthcheck TCP mysql | `6b20e56` |
+
+- **#213** cierra los 3 bloqueos de `DEPLOYMENT.md`: (1) nginx del compose (montaje fantasma `./nginx/`
+  → `deploy/nginx.compose.conf` a nombres de servicio), (2) imagen one-shot `Dockerfile.migrate` (profile
+  `tools`, corre el runner real con la guardia #212), (3) `scripts/restore-mysql.sh` + `deploy/DEPLOY-RUNBOOK.md`.
+  Se sumó el **healthcheck TCP autenticado** de `mysql` (`SELECT 1` vía `-h 127.0.0.1`, `start_period 30s`),
+  que evita el falso positivo de `mysqladmin ping` durante el init y hace fiable `depends_on: service_healthy`.
+- **Es aditivo:** no toca prod, no activa flags/writers, att2000 READ-ONLY, sin migraciones aplicadas.
+  **El levantamiento real del stack y la prueba de restore quedan para ops** (sin Docker en el entorno);
+  la §5.1 del runbook deja el procedimiento de validación en entorno descartable.
+- **CI:** run #727 (PR, cabeza `9d20475`) verde en la cadena completa; run #728 (push a `main`, `6b20e56`)
+  re-ejecuta el mismo código (los archivos de #213 no los ejercita CI) → verde esperado.
 
 ## Resumen final
-- **`main` avanzó de `078cd67` (#157) a la cabeza integrada** con **34 PRs** (Olas 1–4 + #210 + #206).
-- **CI de la cabeza:** cadena completa (API/Web/Bridge 3 TZ + DB MySQL efímero + Analytics) — el gate `npm audit --audit-level=high` quedó verde tras #210.
-- **Fuera (Ola 5), sin fusionar por bloqueo real:** FASE F (076–080, congelada, GO condicional), firma #198/#199/#201/#203 (081/082), #202 (083 + conflicto FASE E), #191 (dup de #206), #209 (ADR cookies, implementación no autorizada), y **#213 (DevOps)** que queda Draft para revisión/uso de ops.
+- **`main` avanzó de `078cd67` (#157) a `6b20e56`** con **36 PRs** (Olas 1–4 + #210 + #206 + #214 docs + #213 DevOps).
+- **CI de la cabeza:** cadena completa (API/Web/Bridge 3 TZ + DB MySQL efímero + Analytics) — el gate `npm audit --audit-level=high` quedó verde.
+- **Fuera (Ola 5), sin fusionar por bloqueo real:** FASE F (076–080, congelada, GO condicional), firma #198/#199/#201/#203 (081/082), #202 (083 + conflicto FASE E), #191 (dup de #206), #209 (ADR cookies, implementación no autorizada).
 - **Invariantes preservadas:** sin activar flags/writers, sin recalcular `daily_summary`, att2000 READ-ONLY, sin migraciones 076–083 aplicadas.
