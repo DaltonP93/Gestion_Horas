@@ -104,8 +104,48 @@ método `merge` (merge commit); verificar `main` verde entre olas.
 - **CI:** run #727 (PR, cabeza `9d20475`) verde en la cadena completa; run #728 (push a `main`, `6b20e56`)
   re-ejecuta el mismo código (los archivos de #213 no los ejercita CI) → verde esperado.
 
+### Ola 5 — FASE F multiempresa (`d88fe09`, autorizado 2026-09-09)
+> El propietario autorizó explícitamente ("Sí, fusionar todo") el merge de toda la cadena FASE F,
+> tras la preparación (rebase sobre `main` + CI verde) documentada en `docs/evidence/fase-f-review-prep.md`.
+> Merge base-first, retarget de cada apilado al `main` recién avanzado, método `merge`, `mergeable_state:
+> clean` verificado por PR. **Cero conflictos en el tren de merge** (resueltos antes, en la preparación).
+
+**Núcleo (multiempresa — migraciones 076–080):**
+| PR | `main` tras merge |
+|---|---|
+| #158 F1 gobierno/orgScope/auditoría (076/077) | `18e40ae` |
+| #159 F2 candidatos/asignaciones (078) | `12156c0` |
+| #160 F3 calendario/jornada 3-estados (079) | `a6d5217` |
+| #161 F4 nómina sandbox global (080) | `22ede82` |
+
+**F+ UI:**
+| PR | `main` tras merge |
+|---|---|
+| #167 historial organizativo (asignaciones) | `568983d` |
+| #168 ciclo de vida períodos de nómina | `3993772` |
+| #169 catálogo de conceptos versionados | `879035c` |
+| #170 autoría de calendarios + excepciones | `c899dff` |
+| #171 visor de jornada efectiva (read-only) | `7721d1d` |
+| #172 selector de alcance en candidatos | `b49c149` |
+| #173 headcount + evidencia de snapshot | `9967c0f` |
+| #185 ayuda contextual (HelpButton) | `e213cc5` |
+
+**CI:**
+| PR | `main` tras merge |
+|---|---|
+| #189 job idempotencia 072→075 (MySQL efímero) | `d88fe09` |
+
+- **CI de la cabeza final (`d88fe09`, run #773): verde en la cadena completa** — API/Web/Bridge 3 TZ + **DB
+  migraciones (aplica 076–080 por primera vez en el tronco, idempotente, `--status` read-only)** + Analytics
+  + gate `npm audit`. El job dedicado `migrations-072-075-idempotency` (#189) también verde.
+- **Invariantes:** migraciones 076–080 quedan en el repo pero **NO aplicadas en prod**; writers
+  fail-closed (`GOVERNANCE/PEOPLE/CALENDAR/PAYROLL_WRITE_ENABLED` = `false`); att2000 READ-ONLY;
+  `daily_summary` sin tocar. **Aplicar migraciones en prod + activar multiempresa = paso operativo aparte,
+  requiere OK expreso del propietario.**
+
 ## Resumen final
-- **`main` avanzó de `078cd67` (#157) a `6b20e56`** con **36 PRs** (Olas 1–4 + #210 + #206 + #214 docs + #213 DevOps).
-- **CI de la cabeza:** cadena completa (API/Web/Bridge 3 TZ + DB MySQL efímero + Analytics) — el gate `npm audit --audit-level=high` quedó verde.
-- **Fuera (Ola 5), sin fusionar por bloqueo real:** FASE F (076–080, congelada, GO condicional), firma #198/#199/#201/#203 (081/082), #202 (083 + conflicto FASE E), #191 (dup de #206), #209 (ADR cookies, implementación no autorizada).
-- **Invariantes preservadas:** sin activar flags/writers, sin recalcular `daily_summary`, att2000 READ-ONLY, sin migraciones 076–083 aplicadas.
+- **`main` avanzó de `078cd67` (#157) a `d88fe09`** con **49 PRs** (Olas 1–4 + #210 + #206 + #214 docs +
+  #213 DevOps + **Ola 5 FASE F: 13 PRs**).
+- **CI de la cabeza:** cadena completa (API/Web/Bridge 3 TZ + DB MySQL efímero + Analytics + gate `npm audit`) verde (run #773).
+- **Fuera todavía, sin fusionar por bloqueo real:** firma #198/#199/#201/#203 (081/082), #202 (083 + conflicto FASE E), #191 (dup de #206), #209 (ADR cookies, implementación no autorizada).
+- **Invariantes preservadas:** sin activar flags/writers, sin recalcular `daily_summary`, att2000 READ-ONLY, **migraciones aplicadas sólo en CI efímero, nunca en prod**.
