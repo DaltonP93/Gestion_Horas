@@ -5,9 +5,10 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
   ClipboardList, Plus, Send, BarChart3, X, CheckCircle2, Lock, Users,
-  Trash2, Star,
+  Trash2, Star, Download,
 } from 'lucide-react'
 import { api } from '@/lib/api'
+import { downloadCsv } from '@/lib/csvExport'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 
 const QTYPE_LABELS: Record<string, string> = {
@@ -115,6 +116,33 @@ export default function EncuestasPage() {
     } catch (e: any) {
       alert(e?.response?.data?.error || 'Error')
     }
+  }
+
+  // Exporta el AGREGADO de resultados (distribuciones + estadísticas). NUNCA
+  // exporta los comentarios de texto libre (posible PII / respuesta identificable):
+  // sólo su conteo.
+  function exportResults() {
+    if (!results) return
+    const rows: (string | number)[][] = []
+    for (const r of results.results as any[]) {
+      const p = r.question.prompt
+      const t = r.question.type
+      if ((t === 'scale' || t === 'yesno') && r.distribution) {
+        for (const d of r.distribution) {
+          const label = t === 'yesno' ? (d.value === 1 ? 'Sí' : 'No') : d.value
+          rows.push([p, t, label, d.count, r.stat?.avg_value ?? '', r.stat?.n ?? ''])
+        }
+      } else if (t === 'choice' && r.distribution) {
+        for (const d of r.distribution) rows.push([p, t, d.value, d.count, '', ''])
+      } else if (t === 'text') {
+        rows.push([p, t, 'comentarios (no exportados)', (r.comments?.length ?? 0), '', ''])
+      }
+    }
+    downloadCsv(
+      `encuesta-resultados_${showResults?.id ?? 'x'}.csv`,
+      ['Pregunta', 'Tipo', 'Valor/Opción', 'Conteo', 'Promedio', 'N'],
+      rows,
+    )
   }
 
   async function deleteSurvey(id: number) {
@@ -293,7 +321,13 @@ export default function EncuestasPage() {
                 <h3 className="font-bold flex items-center gap-2"><BarChart3 size={18} /> {results.survey.title}</h3>
                 <p className="text-xs text-slate-500 dark:text-white/40">{results.total_responses} respuesta{results.total_responses !== 1 ? 's' : ''}</p>
               </div>
-              <button onClick={() => setShowResults(null)} className="text-slate-400 hover:text-slate-600 dark:text-white/30"><X size={18} /></button>
+              <div className="flex items-center gap-2">
+                <button onClick={exportResults}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+                  <Download size={13} /> CSV
+                </button>
+                <button onClick={() => setShowResults(null)} className="text-slate-400 hover:text-slate-600 dark:text-white/30"><X size={18} /></button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {results.results.map((r: any, idx: number) => (

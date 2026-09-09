@@ -233,14 +233,18 @@ router.get('/push-to-att2000/preview', async (req, res) => {
 });
 
 // POST /api/sync/reconcile — ejecutar reconciliación manual (default: ayer)
-router.post('/reconcile', async (req, res) => {
+// `date` (opcional) se valida como fecha civil dentro de runReconciliation
+// ANTES de tocar cualquier base; una fecha inválida lanza HttpError(400) y no
+// llega a att2000. Los errores se delegan al manejador central (next), que no
+// filtra detalle interno en 5xx (G).
+router.post('/reconcile', async (req, res, next) => {
   try {
     const { runReconciliation } = require('../services/reconciliation');
     const { date } = req.body || {};
     const result = await runReconciliation(date);
     res.json({ ok: true, result });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    next(err);
   }
 });
 

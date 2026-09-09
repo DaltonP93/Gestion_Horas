@@ -4,6 +4,7 @@
  * así un empleado nunca ve datos de otros.
  */
 const router  = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
@@ -11,6 +12,7 @@ const crypto  = require('crypto');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
+const { overrideWorkedFromEngine, engineWorkedTotal, ymd } = require('../services/workedReads');
 const wf = require('../services/permissionWorkflow');
 const audit = require('../services/audit');
 const { todayInCompanyTZ } = require('../utils/civilDate');
@@ -327,6 +329,16 @@ router.get('/summary', asyncHandler(async (req, res) => {
     ORDER BY date DESC
     LIMIT 200
   `, { replacements: params });
+
+  // Nocturno: worked_minutes por el motor (jornada atribuida a su día de inicio),
+  // para que el empleado vea sus horas sin turnos partidos por medianoche.
+  if (rows.length) {
+    const dates = rows.map((r) => ymd(r.date)).filter(Boolean).sort();
+    await overrideWorkedFromEngine(rows, {
+      from: dates[0], to: dates[dates.length - 1],
+      route: 'me-summary', idOf: () => employeeId, dateOf: (r) => r.date,
+    });
+  }
   res.json(rows);
 }));
 
@@ -384,12 +396,12 @@ router.post('/permissions', async (req, res) => {
     );
 
     await wf.logEvent({
-      permission_id: r.insertId, actor_id: req.user.id,
+      permission_id: insertId(r), actor_id: req.user.id,
       from_state: 'n/a', to_state: 'pending',
       note: `Solicitud creada por el empleado (tipo=${type})`,
     });
 
-    res.status(201).json({ id: r.insertId, message: 'Permiso solicitado' });
+    res.status(201).json({ id: insertId(r), message: 'Permiso solicitado' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -539,6 +551,12 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
       { replacements: [employeeId, weekFrom, weekTo] }
     ).catch(() => [[{ worked_minutes: 0, late_minutes: 0, overtime_minutes: 0, present_days: 0 }]]);
     kpis = { ...rows[0], week_from: weekFrom, week_to: weekTo };
+    // Nocturno: worked_minutes de la semana por el motor (atribuido al día de
+    // inicio de la jornada). late/overtime/present_days siguen de daily_summary.
+    try {
+      kpis.worked_minutes = await engineWorkedTotal(employeeId, weekFrom, weekTo);
+      kpis.worked_source = 'engine';
+    } catch { kpis.worked_source = 'legacy_fallback'; }
 
     const [[lp]] = await sequelize.query(
       `SELECT timestamp, type FROM attendance_logs WHERE employee_id = ? ORDER BY timestamp DESC LIMIT 1`,
@@ -645,6 +663,39 @@ router.get('/documents/:id/download', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${doc.filename.replace(/"/g, '')}"`);
   fs.createReadStream(full).pipe(res);
+}));
+
+// ─── GET /api/me/payslip/pdf?year=&month= ───────────────────────
+// Recibo de sueldo del empleado logueado (atajo self-service del endpoint
+// /api/employees/:id/payslip/pdf, siempre restringido a SU propio
+// employee_id). Documento INFORMATIVO — ver disclaimer en el PDF; no es una
+// liquidación legal certificada, no calcula IRP ni todos los descuentos.
+router.get('/payslip/pdf', asyncHandler(async (req, res) => {
+  const employeeId = await getEmployeeId(req);
+  if (!employeeId) return res.status(400).json({ error: 'Tu usuario no está vinculado a un empleado' });
+
+  const now = new Date();
+  const year = parseInt(req.query.year, 10) || now.getFullYear();
+  const month = parseInt(req.query.month, 10) || (now.getMonth() + 1);
+  if (month < 1 || month > 12) return res.status(400).json({ error: 'Mes inválido' });
+
+  const { computePayslip, buildPayslipPdf } = require('../services/payslip');
+  const data = await computePayslip(sequelize, { employeeId, year, month });
+  if (!data) return res.status(404).json({ error: 'Recibo no disponible' });
+
+  audit.log({
+    req, user: req.user, action: 'me.payslip.pdf',
+    entity: 'employee', entity_id: employeeId, details: { year, month },
+  });
+
+  const PDFDocument = require('pdfkit');
+  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="recibo_sueldo_${year}_${String(month).padStart(2, '0')}.pdf"`);
+  doc.pipe(res);
+  buildPayslipPdf(doc, data);
+  doc.end();
 }));
 
 // ─── GET /api/me/data-export ─────────────────────────────────────
