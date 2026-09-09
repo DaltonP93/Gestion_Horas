@@ -52,9 +52,16 @@ horas extra, reportes, nómina y analítica.
   - **DevOps:** **#213** (`6b20e56`) — nginx del compose, imagen `Dockerfile.migrate` (profile `tools`),
     `scripts/restore-mysql.sh` + `deploy/DEPLOY-RUNBOOK.md`, healthcheck TCP autenticado de mysql. **Aditivo**:
     no toca prod, no aplica migraciones. **Levantamiento real del stack + prueba de restore: pendientes de ops.**
-- **Abiertas todavía (NO fusionadas, bloqueo real):** FASE F #158–#161 + F+ #167–#173/#185/#189 (multiempresa,
-  congelada, GO condicional); firma #198/#199/#201/#203 (081/082); **#202** (083 + conflicto con FASE E);
-  #191 (dup de #206); #209 (ADR cookies, implementación NO autorizada).
+- **Abiertas todavía (NO fusionadas, bloqueo real):**
+  - **FASE F (Ola 5) #158–#161 + F+ #167–#173/#185/#189 (multiempresa) — REBASADA sobre `main` actual
+    (`be7139b`) y lista para revisión (2026-09-09).** Se trajo `main` a toda la cadena y se resolvieron los
+    conflictos (F1: `ci.yml`/`index.js`/`audit.js` combinando correlation_id + anti-PII #192; #189: `ci.yml`
+    conservando el job de idempotencia 072–075). CI verde en el núcleo #158–#161 y #167; F+ restante + #189 en
+    cola; `next build` local verde en el tip F+. Migraciones 076–080 monótonas (guardia #212 no las bloquea; el
+    orden 081–083 es de firma/consola, no de FASE F). **Sigue CONGELADA:** GO condicional al OK expreso del
+    propietario, merge base-first PR por PR. Detalle en `docs/evidence/fase-f-review-prep.md`.
+  - firma #198/#199/#201/#203 (081/082); **#202** (083 + conflicto con FASE E); #191 (dup de #206);
+    #209 (ADR cookies, implementación NO autorizada).
 - Regla vigente del propietario: **no fusionar el resto ni desplegar sin autorización explícita.**
 - **Plan de integración bottom-up:** ver `INTEGRATION_PLAN.md` (grupos, grafo, orden, solapes/duplicados, rebase/test/rollback por lote). Autorizado sólo para *preparar* el plan (D2); cada merge requiere OK expreso, PR por PR.
 - **Convención:** cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
