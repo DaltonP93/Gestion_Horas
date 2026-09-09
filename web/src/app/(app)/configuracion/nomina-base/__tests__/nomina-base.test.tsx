@@ -29,9 +29,14 @@ const PERIODS = [
   { id: 2, code: '2026-02', label: 'Febrero 2026', period_start: '2026-02-01', period_end: '2026-02-28', status: 'closed', is_official: 0, closed_at: '2026-03-05' },
 ]
 
+const CONCEPTS = [
+  { id: 9, code: 'BASICO', name: 'Salario básico', kind: 'earning', formula_hint: null, version: 1, active: 1, valid_from: '2026-01-01', valid_to: null },
+]
+
 function baseGet(url: string) {
   if (url === '/api/payroll-base/periods') return Promise.resolve({ data: { data: PERIODS } })
   if (url === '/api/payroll-base/integrations') return Promise.resolve({ data: { data: [] } })
+  if (url === '/api/payroll-base/concepts') return Promise.resolve({ data: { data: CONCEPTS } })
   if (url.endsWith('/preview')) {
     return Promise.resolve({ data: {
       official: false,
@@ -83,4 +88,25 @@ test('la previsualización muestra el disclaimer NO OFICIAL y los agregados', as
   expect(within(dialog).getByText(/NO OFICIAL/i)).toBeInTheDocument()
   expect(within(dialog).getByText('42')).toBeInTheDocument()
   expect(within(dialog).getByText('3')).toBeInTheDocument()
+})
+
+test('lista los conceptos versionados y aclara que la pista de fórmula no se evalúa', async () => {
+  render(<NominaBasePage />)
+  expect(await screen.findByText('Salario básico')).toBeInTheDocument()
+  expect(screen.getByText('BASICO')).toBeInTheDocument()
+  expect(screen.getByText(/sólo descriptiva; nunca se evalúa/i)).toBeInTheDocument()
+})
+
+test('crear concepto: el 409 de duplicado muestra el mensaje del server', async () => {
+  apiPost.mockRejectedValue({ response: { status: 409, data: { error: 'Ya existe ese concepto en esa versión' } } })
+  render(<NominaBasePage />)
+  await screen.findByText('Salario básico')
+  await userEvent.click(screen.getByRole('button', { name: /Nuevo concepto/ }))
+  await userEvent.type(screen.getByPlaceholderText('ej: BASICO'), 'BASICO')
+  await userEvent.type(screen.getByPlaceholderText('ej: Salario básico'), 'Salario básico')
+  const dateInputs = document.querySelectorAll('input[type="date"]')
+  // El primer date del form de concepto es "Vigente desde".
+  await userEvent.type(dateInputs[dateInputs.length - 2] as HTMLInputElement, '2026-01-01')
+  await userEvent.click(screen.getByRole('button', { name: /Crear concepto/ }))
+  expect(await screen.findByText(/Ya existe ese concepto/i)).toBeInTheDocument()
 })
