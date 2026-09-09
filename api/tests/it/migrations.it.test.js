@@ -107,4 +107,21 @@ describeIT('migraciones FASE F (integración)', () => {
     expect(await fkRule('labor_calendars', 'fk_labor_cal_company')).toBe('RESTRICT');
     expect(await fkRule('labor_calendars', 'fk_labor_cal_branch')).toBe('RESTRICT');
   });
+
+  // ── 080 base de nómina (sandbox) ──
+  test('080: tablas de nómina existen', async () => {
+    expect(await hasTable('payroll_concepts')).toBe(true);
+    expect(await hasTable('payroll_periods')).toBe(true);
+    expect(await hasTable('payroll_period_snapshots')).toBe(true);
+  });
+
+  test('080: snapshot único por período (UNIQUE) y sin CASCADE (RESTRICT)', async () => {
+    const [rows] = await conn.query(
+      `SELECT index_name AS iname FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'payroll_period_snapshots'
+          AND non_unique = 0 AND column_name = 'period_id'`,
+    );
+    expect(rows.some((r) => r.iname === 'uq_pps_period')).toBe(true);
+    expect(await fkRule('payroll_period_snapshots', 'fk_pps_period')).toBe('RESTRICT');
+  });
 });
