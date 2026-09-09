@@ -14,6 +14,7 @@
  * Gobernado por el permiso 'reglas' (sección admin).
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
@@ -96,8 +97,8 @@ router.post('/', requirePermission('reglas', 'create'), async (req, res, next) =
       ] }
     );
     audit.log({ req, user: req.user, action: 'rule_create', entity: 'condition_rules',
-      entity_id: r.insertId, details: { name: rule.name, module: rule.module } });
-    res.status(201).json({ id: r.insertId });
+      entity_id: insertId(r), details: { name: rule.name, module: rule.module } });
+    res.status(201).json({ id: insertId(r) });
   } catch (e) { next(e); }
 });
 

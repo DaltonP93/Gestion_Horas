@@ -5,7 +5,7 @@ import { format, formatDistanceToNow } from 'date-fns'
 import { es } from 'date-fns/locale'
 import {
   GraduationCap, Plus, X, Send, ExternalLink, CheckCircle2, Clock, AlertCircle,
-  BookOpen, Users, Calendar, Award, Trash2,
+  BookOpen, Users, Calendar, Award, Trash2, Pencil,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
@@ -26,12 +26,14 @@ export default function CapacitacionesPage() {
 
   const [tab, setTab] = useState<'catalog' | 'mine'>(isEmployee ? 'mine' : 'catalog')
   const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
   const [showAssign, setShowAssign] = useState<any>(null)
   const [showProgress, setShowProgress] = useState<any>(null)
-  const [form, setForm] = useState<any>({
+  const emptyForm = {
     title: '', description: '', category: '', duration_hours: '',
     mandatory: 0, valid_until: '', resource_url: '',
-  })
+  }
+  const [form, setForm] = useState<any>({ ...emptyForm })
   const [assignForm, setAssignForm] = useState<any>({ mode: 'all', department_id: '', due_date: '' })
 
   const { data: catalog } = useQuery<any>({
@@ -58,13 +60,34 @@ export default function CapacitacionesPage() {
     enabled: !!showProgress,
   })
 
-  async function createCourse() {
+  function openCreate() {
+    setEditingId(null)
+    setForm({ ...emptyForm })
+    setShowForm(true)
+  }
+  function openEdit(c: any) {
+    setEditingId(c.id)
+    setForm({
+      title: c.title || '', description: c.description || '', category: c.category || '',
+      duration_hours: c.duration_hours ?? '', mandatory: c.mandatory ? 1 : 0,
+      valid_until: c.valid_until ? String(c.valid_until).slice(0, 10) : '',
+      resource_url: c.resource_url || '',
+    })
+    setShowForm(true)
+  }
+  function closeForm() {
+    setShowForm(false)
+    setEditingId(null)
+    setForm({ ...emptyForm })
+  }
+
+  async function saveCourse() {
     if (!form.title) return alert('Título es requerido')
     try {
-      await api.post('/api/courses', form)
+      if (editingId != null) await api.put(`/api/courses/${editingId}`, form)
+      else                   await api.post('/api/courses', form)
       qc.invalidateQueries({ queryKey: ['courses-catalog'] })
-      setShowForm(false)
-      setForm({ title: '', description: '', category: '', duration_hours: '', mandatory: 0, valid_until: '', resource_url: '' })
+      closeForm()
     } catch (e: any) {
       alert(e?.response?.data?.error || 'Error')
     }
@@ -111,7 +134,7 @@ export default function CapacitacionesPage() {
           </div>
         </div>
         {isAdmin && (
-          <button onClick={() => setShowForm(true)}
+          <button onClick={openCreate}
             className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
             <Plus size={14} /> Nuevo curso
           </button>
@@ -179,7 +202,11 @@ export default function CapacitacionesPage() {
                         className="flex items-center gap-1 border border-slate-200 hover:bg-slate-50 text-slate-700 px-2.5 py-1.5 rounded-lg text-xs font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
                         <BookOpen size={12} /> Progreso
                       </button>
-                      <button onClick={() => deleteCourse(c.id)}
+                      <button onClick={() => openEdit(c)} title="Editar curso"
+                        className="text-slate-500 hover:bg-slate-100 p-1.5 rounded-lg dark:text-white/60 dark:hover:bg-white/[0.06]">
+                        <Pencil size={12} />
+                      </button>
+                      <button onClick={() => deleteCourse(c.id)} title="Desactivar curso"
                         className="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg">
                         <Trash2 size={12} />
                       </button>
@@ -256,11 +283,11 @@ export default function CapacitacionesPage() {
         </div>
       )}
 
-      {/* Modal nuevo curso */}
+      {/* Modal nuevo / editar curso */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeForm}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-6 space-y-4 dark:bg-white/[0.04]" onClick={e => e.stopPropagation()}>
-            <h3 className="font-bold flex items-center gap-2"><GraduationCap size={18} /> Nuevo curso</h3>
+            <h3 className="font-bold flex items-center gap-2"><GraduationCap size={18} /> {editingId != null ? 'Editar curso' : 'Nuevo curso'}</h3>
             <input placeholder="Título *" value={form.title}
               onChange={e => setForm((f: any) => ({ ...f, title: e.target.value }))}
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
@@ -299,8 +326,8 @@ export default function CapacitacionesPage() {
               </label>
             </div>
             <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setShowForm(false)} className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
-              <button onClick={createCourse} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium">Crear</button>
+              <button onClick={closeForm} className="border border-slate-200 hover:bg-slate-50 px-4 py-2 rounded-xl text-sm dark:border-white/[0.08] dark:hover:bg-white/[0.04]">Cancelar</button>
+              <button onClick={saveCourse} className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-sm font-medium">{editingId != null ? 'Guardar' : 'Crear'}</button>
             </div>
           </div>
         </div>
