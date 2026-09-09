@@ -29,8 +29,19 @@ método `merge` (merge commit); verificar `main` verde entre olas.
 
 ## Estado de ejecución
 
-| Ola | PR | Método | Merge commit | CI post-merge | Estado |
-|---|---|---|---|---|---|
-| — | (partida) | — | `078cd67` | 3 jobs verde | baseline |
+| Ola | PR | Método | `main` tras el merge | Estado |
+|---|---|---|---|---|
+| — | (partida #157) | — | `078cd67` | baseline |
+| 1 | #190 CI trigger claude/** | merge | `8a5a2c6` | ✅ merged |
+| 1 | #194 migr.020 + logRedaction + CI MySQL/Analytics | merge | `cf59602` | ✅ merged |
+| 1 | #212 guardia de monotonicidad | merge | `e84bd44` | ✅ merged |
+| 1 | #208 H1 preflight | merge | `0705b70` | ✅ merged |
+| 1 | #207 JWT HS256 + 5xx | merge | `f22a6e7` | ✅ merged |
+| 1 | #192 authz + PII + fix att2000 | merge | `16f5db6` | ✅ merged |
+| 1 | #165 insertId | merge | `7fcd771` | ✅ merged |
+| 1 | #166 auditoría egreso sin PII | merge | `b190a21` | ✅ merged |
+| 1 | #195 saneo dominio | merge | `17c6814` | ✅ merged |
 
-_(se completa a medida que se fusiona)_
+**CI de `main` tras Ola 1:** run #694 sobre `17c6814` — cadena **completa** (API/Web/Bridge 3 TZ + **DB MySQL efímero** + **Analytics**, ya en `main` por #194). Los runs intermedios (#692/#693) se **cancelaron** por el grupo `concurrency` al llegar el push siguiente — comportamiento esperado; sólo el último HEAD corre a fondo. _(Resultado a confirmar antes de la Ola 2.)_
+
+_(Olas 2–4 + #206 + #210 se completan a medida que se fusionan.)_
