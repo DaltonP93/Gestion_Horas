@@ -42,6 +42,10 @@ método `merge` (merge commit); verificar `main` verde entre olas.
 | 1 | #166 auditoría egreso sin PII | merge | `b190a21` | ✅ merged |
 | 1 | #195 saneo dominio | merge | `17c6814` | ✅ merged |
 
-**CI de `main` tras Ola 1:** run #694 sobre `17c6814` — cadena **completa** (API/Web/Bridge 3 TZ + **DB MySQL efímero** + **Analytics**, ya en `main` por #194). Los runs intermedios (#692/#693) se **cancelaron** por el grupo `concurrency` al llegar el push siguiente — comportamiento esperado; sólo el último HEAD corre a fondo. _(Resultado a confirmar antes de la Ola 2.)_
+| 1+ | #210 deps: gate npm audit ALTO + bumps CVE | merge | `324b648` | ✅ merged |
 
-_(Olas 2–4 + #206 + #210 se completan a medida que se fusionan.)_
+**CI de `main` tras Ola 1:**
+- Run #694 sobre `17c6814` **falló** — pero **sólo en el step `npm audit (nivel alto)`** (gate que #194 activó): apareció un HIGH nuevo `nodemailer <=9.1.0` (advisory 2026-09-09) en api y un HIGH en web (next 16.2.11). Los jobs de **código** pasaron: **DB migraciones MySQL efímero ✅** (aplica 002→…, idempotente, `--status` read-only, guardia #212 sin falso positivo) y **Analytics ✅**. Los unit tests quedaron *skipped* porque el step de audit corta antes.
+- **Fix-forward = #210** (reconstruido sobre `17c6814`): `npm audit fix` en api (nodemailer→9.1.1), web (next→16.3.4, `next build` OK con el fix de #194) y bridge; + bumps CVE multer/axios/python-jose. Verificado local: api 88/1391, bridge 452, web build; `npm audit --audit-level=high` = **0** en api/web/bridge. → `main` `324b648`, run #698 (a confirmar verde antes de la Ola 2).
+
+_(Olas 2–4 + #206 se completan a medida que se fusionan.)_
