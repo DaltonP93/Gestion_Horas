@@ -277,7 +277,7 @@ Y el corte **no depende de que la sombra funcione**. Con la sombra apagada, sin 
 En orden:
 
 1. **Por serial**, si el reloj lo reporta y coincide con un `#serial` de `ZKTECO_DEVICES`.
-2. **Por IP**, si el serial no coincide con ninguno configurado. El `#serial` es **opcional** y el formato habitual no lo lleva (`Gerencia@10.0.0.11:4370`), así que sin este paso el reloj quedaría sin resolver y una allowlist por nombre no activaría observe-only.
+2. **Por IP**, si el serial no coincide con ninguno configurado. El `#serial` es **opcional** y el formato habitual no lo lleva (`Gerencia@10.x.x.11:4370`), así que sin este paso el reloj quedaría sin resolver y una allowlist por nombre no activaría observe-only.
 
 En el paso 2 sólo compiten los relojes que **no** declaran serial. Uno configurado con un serial distinto del reportado es demostrablemente otro aparato, y emparejarlo por compartir la IP atribuiría el marcaje al reloj equivocado.
 

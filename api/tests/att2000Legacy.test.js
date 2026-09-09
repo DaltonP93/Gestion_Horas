@@ -21,9 +21,13 @@ describe('autoPullEnabled (kill switch)', () => {
     delete process.env.ATT2000_AUTO_PULL_ENABLED;
     expect(legacy.autoPullEnabled()).toBe(false);
   });
-  test("'false' → false; 'true' → true (case-insensitive)", () => {
+  test("'false' → false; 'true' → true; contrato exacto (no case-insensitive)", () => {
     process.env.ATT2000_AUTO_PULL_ENABLED = 'false'; expect(legacy.autoPullEnabled()).toBe(false);
-    process.env.ATT2000_AUTO_PULL_ENABLED = 'TRUE';  expect(legacy.autoPullEnabled()).toBe(true);
+    process.env.ATT2000_AUTO_PULL_ENABLED = 'true';  expect(legacy.autoPullEnabled()).toBe(true);
+    // Igual que el resto de los kill switches fail-closed del proyecto
+    // (ZKTECO_AUTO_POLL, WORKDAY_CONFIG_WRITE_ENABLED): sólo el string
+    // literal "true" habilita. "TRUE"/"True" NO habilitan.
+    process.env.ATT2000_AUTO_PULL_ENABLED = 'TRUE';  expect(legacy.autoPullEnabled()).toBe(false);
   });
 });
 
