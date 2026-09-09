@@ -40,18 +40,21 @@ horas extra, reportes, nómina y analítica.
 
 ## 3. Estado de `main` y de los PRs
 
-- `main` = `79c01d5` tras la **integración autorizada del 2026-09-09** (antes `078cd67`/#157).
-  **Fusionado (MERGED_VERIFIED), 34 PRs — Olas 1–4 + deps + docs:**
+- `main` = `6b20e56` tras la **integración autorizada del 2026-09-09** (antes `078cd67`/#157; cabeza de código `79c01d5`).
+  **Fusionado (MERGED_VERIFIED), 36 PRs — Olas 1–4 + deps + docs + DevOps:**
   - **Ola 1 (seguridad+CI):** #190, #194, #212, #208, #207, #192, #165, #166, #195, #210. H1/H3/H7/H10/H6 ya en
     `main`; CI completo (API/Web/Bridge 3 TZ + **DB MySQL efímero** + **Analytics** + gate `npm audit` ALTO);
     guardia de monotonicidad de migraciones (`migrate.js`).
   - **Ola 2 (nocturno):** #196, #204, #205, #197, #200 — lecturas por el motor correcto (cross-midnight).
   - **Ola 3 (módulos/export):** #178–#181, #187, #177, #188, #162, #163.
   - **Ola 4 (FASE E read-only):** #174–#176, #182–#184, #186, #164 — guards/gates/goldens (no activan nada).
-  - **Docs:** #206 (canónico) + `docs/evidence/main-integration-log.md` (SHA por PR).
+  - **Docs:** #206 (canónico) + #214 (baseline) + `docs/evidence/main-integration-log.md` (SHA por PR).
+  - **DevOps:** **#213** (`6b20e56`) — nginx del compose, imagen `Dockerfile.migrate` (profile `tools`),
+    `scripts/restore-mysql.sh` + `deploy/DEPLOY-RUNBOOK.md`, healthcheck TCP autenticado de mysql. **Aditivo**:
+    no toca prod, no aplica migraciones. **Levantamiento real del stack + prueba de restore: pendientes de ops.**
 - **Abiertas todavía (NO fusionadas, bloqueo real):** FASE F #158–#161 + F+ #167–#173/#185/#189 (multiempresa,
   congelada, GO condicional); firma #198/#199/#201/#203 (081/082); **#202** (083 + conflicto con FASE E);
-  #191 (dup de #206); #209 (ADR cookies, implementación NO autorizada); **#213** (DevOps, Draft para ops).
+  #191 (dup de #206); #209 (ADR cookies, implementación NO autorizada).
 - Regla vigente del propietario: **no fusionar el resto ni desplegar sin autorización explícita.**
 - **Plan de integración bottom-up:** ver `INTEGRATION_PLAN.md` (grupos, grafo, orden, solapes/duplicados, rebase/test/rollback por lote). Autorizado sólo para *preparar* el plan (D2); cada merge requiere OK expreso, PR por PR.
 - **Convención:** cada `#NNN` refiere a `https://github.com/DaltonP93/Gestion_Horas/pull/NNN`.
