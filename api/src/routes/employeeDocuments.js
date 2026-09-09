@@ -18,6 +18,7 @@ const path    = require('path');
 const fs      = require('fs');
 const crypto  = require('crypto');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
+const enforceEmployeeScope = require('../middleware/enforceEmployeeScope');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
@@ -110,8 +111,11 @@ router.post('/',
 );
 
 // ── GET /api/employees/:id/documents ────────────────────────────
+// Los roles scoped sólo listan documentos de empleados de su ámbito;
+// fuera de alcance → 404 (H-3: IDOR de documentos de RR.HH.).
 router.get('/',
   requirePermission('empleados', 'view'),
+  enforceEmployeeScope('id'),
   asyncHandler(async (req, res) => {
     const employeeId = parseInt(req.params.id, 10);
     const [rows] = await sequelize.query(
@@ -129,8 +133,11 @@ router.get('/',
 );
 
 // ── GET /api/employees/:id/documents/:docId/download ────────────
+// Mismo alcance que el listado: descargar recibos/contratos de un empleado
+// fuera del ámbito del rol scoped → 404 (H-3).
 router.get('/:docId/download',
   requirePermission('empleados', 'view'),
+  enforceEmployeeScope('id'),
   asyncHandler(async (req, res) => {
     const employeeId = parseInt(req.params.id, 10);
     const docId      = parseInt(req.params.docId, 10);
