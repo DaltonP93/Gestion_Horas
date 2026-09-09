@@ -26,34 +26,31 @@
   `employee_schedule_history`/`workday_configuration`. Verificado en el diff.
 - **SQL-safe e idempotentes** validadas en CI (MySQL 8 efímero, run #773 sobre `main d88fe09`).
 
-## 1. ⚠️ La decisión previa: 072–075 (FASE C jornada)
+## 1. Decisión tomada: aplicar **072–080 juntas** (autorizado por el propietario, 2026-09-09)
 
 El runner `migrate.js` es **forward-only y aplica TODO lo pendiente en orden**; **no** tiene
-un modo "aplicar sólo 076–080". Las migraciones **072–075** están **antes** de 076 y (según la
-doc histórica) **no estaban aplicadas en prod**. Por lo tanto, antes de aplicar hay que resolver:
+un modo "aplicar sólo 076–080". Las migraciones **072–075** (FASE C jornada) están **antes** de 076
+y (según la doc histórica) **no estaban aplicadas en prod**.
 
-**Paso 3 (preflight `--status`) dirá cuál de estos dos casos es el real:**
+> **RESOLUCIÓN DEL PROPIETARIO:** aplicar **072–080 juntas**. 072–075 son **aditivas e inertes**
+> (crean tablas de jornada y amplían el ENUM `daily_summary.status`, pero **no activan nada**: los
+> writers de jornada siguen gateados por `WORKDAY_CONFIG_WRITE_ENABLED` /
+> `WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED` en OFF). Son las mismas que valida el job de
+> idempotencia de CI. Deja el esquema **coherente, sin drift**.
+>
+> **NO** usar `--baseline` para saltar 072–075 (marcaría aplicadas sin crear su esquema → drift).
 
-- **Caso A — 072–075 ya aplicadas en prod:** `migrate` aplicará **sólo 076–080**. Camino limpio,
-  sin decisión adicional. Ir directo al Paso 4.
-- **Caso B — 072–075 pendientes:** hay que elegir, **y esto lo decide el propietario:**
-  1. **Aplicar 072–080 juntas (recomendado).** 072–075 son **aditivas e inertes**: crean tablas
-     de jornada y amplían el ENUM `daily_summary.status`, pero **no activan nada** (los writers de
-     jornada siguen gateados por `WORKDAY_*_ENABLED` en OFF). Son las mismas que valida el job de
-     idempotencia de CI. Deja el esquema **coherente** (sin drift).
-  2. **Mantener 072–075 fuera:** **NO** usar `--baseline` para saltarlas. Baseline las marca como
-     aplicadas **sin** crear su esquema → **drift** (schema_migrations dice "aplicada" pero las
-     columnas/tablas no existen), justo lo que el drift-checker de FASE E previene. Si 072–075 no
-     pueden entrar todavía, **posponer 076–080** hasta resolver ese gate; no hay forma limpia de
-     aplicar 076–080 solas con este runner.
-
-> Recomendación técnica: si 072–075 no tienen un impedimento específico, tomar el **Caso B.1**
-> (aplicar 072–080 juntas). Es aditivo, inerte y sin drift. Pero es **tu** decisión, no la mía.
+**Verificación en el Paso 3 (preflight `--status`), sin cambiar la decisión:**
+- Confirmar que las pendientes son exactamente **072,073,074,075,076,077,078,079,080** (y nada
+  con número **mayor** que 080 — 081/082/083 NO están en `main`).
+- Si `--status` mostrara que 072–075 **ya** estaban aplicadas, mejor aún: `migrate` aplicará sólo
+  076–080. En cualquier caso el comando a correr es el mismo `migrate` (§5) y el resultado buscado
+  es dejar 072–080 aplicadas.
 
 ## 2. Precondiciones (checklist antes de tocar prod)
 
-- [ ] **Autorización explícita del propietario** para esta corrida (y, si aplica el Caso B, la
-      decisión 072–075 tomada por escrito).
+- [ ] **Autorización explícita del propietario** para esta corrida. Decisión 072–075 ya tomada:
+      **aplicar 072–080 juntas** (§1).
 - [ ] **Ventana de mantenimiento** acordada (el `ALTER` de `audit_events`/`branches`/`departments`
       es rápido en tablas de este tamaño, pero planificarla igual).
 - [ ] **Backup fresco y verificado** (Paso 4) — es el único rollback (migraciones sin `down`).
@@ -107,8 +104,8 @@ cd /ruta/Gestion_Horas/api && npm run migrate
 docker compose --profile tools run --rm migrate
 ```
 
-- **Caso A** (072–075 ya aplicadas): esto aplica **sólo 076–080**.
-- **Caso B.1** (aplicar 072–080 juntas, autorizado): esto aplica 072→080 en orden.
+- Decisión vigente (§1): **aplicar 072–080 juntas** → esto aplica 072→080 en orden (o sólo 076–080
+  si 072–075 ya estaban aplicadas; el comando es el mismo).
 - El runner es idempotente: si algo ya estaba, no lo repite. Migraciones **forward-only** (sin `down`).
 
 La corrida imprime cada archivo aplicado. Guardar el log completo de la salida como evidencia.
