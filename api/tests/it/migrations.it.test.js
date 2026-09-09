@@ -59,4 +59,26 @@ describeIT('migraciones FASE F (integración)', () => {
   test('077: audit_events.correlation_id existe', async () => {
     expect(await hasColumn('audit_events', 'correlation_id')).toBe(true);
   });
+
+  // ── 078 personas ──
+  test('078: candidates y employee_assignments existen', async () => {
+    expect(await hasTable('candidates')).toBe(true);
+    expect(await hasTable('employee_assignments')).toBe(true);
+  });
+
+  test('078: historial NO se borra en cascada (fk_ea_emp = RESTRICT)', async () => {
+    expect(await fkRule('employee_assignments', 'fk_ea_emp')).toBe('RESTRICT');
+  });
+
+  test('078: candidates.converted_employee_id SET NULL; access_level aditivo', async () => {
+    expect(await fkRule('candidates', 'fk_candidates_employee')).toBe('SET NULL');
+    expect(await hasColumn('employee_documents', 'access_level')).toBe(true);
+  });
+
+  test('078: candidates con alcance (company_id/branch_id) y FKs SET NULL', async () => {
+    expect(await hasColumn('candidates', 'company_id')).toBe(true);
+    expect(await hasColumn('candidates', 'branch_id')).toBe(true);
+    expect(await fkRule('candidates', 'fk_candidates_company')).toBe('SET NULL');
+    expect(await fkRule('candidates', 'fk_candidates_branch')).toBe('SET NULL');
+  });
 });

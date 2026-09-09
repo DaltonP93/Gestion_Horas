@@ -28,6 +28,8 @@ const MODULES = [
   { key: 'centros_costo',  label: 'Centros de costo',     section: 'admin'   },
   { key: 'usuarios',       label: 'Usuarios',             section: 'admin'   },
   { key: 'ingresos',       label: 'Ingresos / Egresos',   section: 'gestion' },
+  { key: 'candidatos',     label: 'Candidatos',           section: 'gestion' },
+  { key: 'asignaciones',   label: 'Asignaciones (vigencias)', section: 'gestion' },
   { key: 'lactancia',      label: 'Maternidad / Lactancia', section: 'gestion' },
   { key: 'auditoria',      label: 'Auditoría',            section: 'admin'   },
   { key: 'reglas',         label: 'Reglas (condiciones)', section: 'admin'   },

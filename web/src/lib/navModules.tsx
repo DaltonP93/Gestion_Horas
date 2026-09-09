@@ -13,7 +13,7 @@ import {
   CalendarRange, BarChart2, FileText, TrendingUp, DollarSign, Cake, Plane, PiggyBank,
   Megaphone, GraduationCap, ClipboardList, Star, FileSignature, Baby, UserCheck,
   Building2, Shield, SlidersHorizontal, Settings, RefreshCw, Server, Activity,
-  UserCircle2, QrCode, Home, UsersRound, UserCog, Sparkles, HeartHandshake, Target, Wrench,
+  UserCircle2, QrCode, Home, UsersRound, UserCog, Sparkles, HeartHandshake, Target, Wrench, UserPlus,
   type LucideIcon,
 } from 'lucide-react'
 import { useCurrentUser, hasRole, isSuperAdmin, type Role } from '@/lib/useCurrentUser'
@@ -58,6 +58,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'gestion-personal', label: 'Gestión de personal', icon: UsersRound, desc: 'Empleados, asistencia, permisos e incidencias.',
     items: [
       { href: '/empleados',   icon: Users,        i18nKey: 'nav.employees',   desc: 'Alta, edición y baja de empleados.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'empleados', color: 'bg-cyan-500' },
+      { href: '/candidatos',  icon: UserPlus,     i18nKey: 'nav.candidates',  desc: 'Postulantes y conversión a empleado.', roles: ['admin','gth','hr'], module: 'candidatos', color: 'bg-cyan-600' },
       { href: '/asistencia',  icon: Clock,        i18nKey: 'nav.attendance',  desc: 'Marcaciones del día con detalle.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'asistencia', color: 'bg-emerald-500' },
       { href: '/permisos',    icon: Calendar,     i18nKey: 'nav.permissions', desc: 'Gestión de permisos y ausencias.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'permisos', color: 'bg-amber-500' },
       { href: '/aprobaciones',icon: CheckSquare,  i18nKey: 'nav.approvals',   desc: 'Aprobar o rechazar solicitudes.', roles: ['admin','gth','hr','coordinator','manager'], module: 'aprobaciones', color: 'bg-green-600' },
