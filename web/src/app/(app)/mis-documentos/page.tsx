@@ -1,7 +1,10 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { FileText, Download, AlertCircle, Receipt, FileSignature, BadgeCheck, File } from 'lucide-react'
-import { api, apiUrl } from '@/lib/api'
+import { api, apiUrl, downloadUrl } from '@/lib/api'
+
+const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
 interface Doc {
   id: number
@@ -35,6 +38,17 @@ export default function MisDocumentosPage() {
   const [items, setItems] = useState<Doc[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const now = new Date()
+  const [year, setYear] = useState(now.getFullYear())
+  const [month, setMonth] = useState(now.getMonth() + 1)
+
+  function descargarRecibo() {
+    // Recibo informativo generado al vuelo por la API para el propio empleado.
+    // El JWT viaja como ?access_token= (downloadUrl) porque es una descarga GET.
+    window.open(downloadUrl('/api/me/payslip/pdf', { year, month }), '_blank')
+  }
+
+  const years = Array.from({ length: 6 }, (_, i) => now.getFullYear() - i)
 
   useEffect(() => {
     api.get<{ items: Doc[] }>('/api/me/documents')
@@ -68,6 +82,36 @@ export default function MisDocumentosPage() {
           <p className="text-slate-500 text-sm dark:text-white/40">Tus recibos de sueldo, contratos y certificados.</p>
         </div>
       </header>
+
+      <section className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
+        <div className="flex items-center gap-2 mb-3">
+          <Receipt size={16} className="text-fuchsia-600" />
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Descargar mi recibo</h2>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-xs text-slate-500 dark:text-white/40">
+            Mes
+            <select value={month} onChange={e => setMonth(Number(e.target.value))}
+              className="mt-1 block rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.06] px-3 py-1.5 text-sm text-slate-900 dark:text-white">
+              {MESES.map((m, i) => <option key={i} value={i + 1}>{m}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-500 dark:text-white/40">
+            Año
+            <select value={year} onChange={e => setYear(Number(e.target.value))}
+              className="mt-1 block rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-white/[0.06] px-3 py-1.5 text-sm text-slate-900 dark:text-white">
+              {years.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </label>
+          <button onClick={descargarRecibo}
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-lg bg-fuchsia-600 hover:bg-fuchsia-700 text-white">
+            <Download size={14} /> Descargar recibo
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-slate-400 dark:text-white/30">
+          Documento informativo, no constituye liquidación legal certificada.
+        </p>
+      </section>
 
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 text-sm text-red-900">
