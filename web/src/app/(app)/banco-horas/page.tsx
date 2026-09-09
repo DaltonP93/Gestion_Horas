@@ -1,11 +1,12 @@
 'use client'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { PiggyBank, Plus, Minus, RefreshCw, ArrowDownCircle, ArrowUpCircle, Search, X } from 'lucide-react'
+import { PiggyBank, Plus, Minus, RefreshCw, ArrowDownCircle, ArrowUpCircle, Search, X, Download } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
+import { downloadCsv } from '@/lib/csvExport'
 
 function minsToHM(m: number) {
   const sign = m < 0 ? '-' : ''
@@ -19,6 +20,7 @@ export default function BancoHorasPage() {
   const qc = useQueryClient()
   const user = useCurrentUser()
   const [search, setSearch] = useState('')
+  const [dept, setDept] = useState('')
   const [selectedEmp, setSelectedEmp] = useState<any>(null)
   const [showSync, setShowSync] = useState(false)
   const [syncFrom, setSyncFrom] = useState('')
@@ -40,11 +42,31 @@ export default function BancoHorasPage() {
     enabled: !!selectedEmp,
   })
 
+  const departments = useMemo(() => {
+    const s = new Set<string>()
+    for (const r of (summary?.data || [])) if (r.department) s.add(r.department)
+    return [...s].sort()
+  }, [summary])
+
   const filtered = (summary?.data || []).filter((r: any) =>
-    !search ||
-    r.employee_name?.toLowerCase().includes(search.toLowerCase()) ||
-    r.code?.toLowerCase().includes(search.toLowerCase())
+    (!search ||
+      r.employee_name?.toLowerCase().includes(search.toLowerCase()) ||
+      r.code?.toLowerCase().includes(search.toLowerCase())) &&
+    (!dept || r.department === dept)
   )
+
+  function exportCsv() {
+    if (!filtered.length) return
+    downloadCsv(
+      'banco-horas_saldos.csv',
+      ['Código', 'Empleado', 'Departamento', 'Saldo (min)', 'Acumulado (min)', 'Canjeado (min)', 'Última actividad'],
+      filtered.map((r: any) => [
+        r.code, r.employee_name, r.department || '',
+        r.balance_minutes, r.total_deposited, r.total_redeemed,
+        r.last_activity ? String(r.last_activity).slice(0, 10) : '',
+      ]),
+    )
+  }
 
   async function syncFromDaily() {
     if (!syncFrom || !syncTo) return alert('Ingresá rango de fechas')
@@ -98,11 +120,20 @@ export default function BancoHorasPage() {
 
       {/* Lista de saldos */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden dark:bg-white/[0.04] dark:border-white/[0.06]">
-        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 dark:border-white/[0.06]">
+        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-2 flex-wrap dark:border-white/[0.06]">
           <Search size={16} className="text-slate-400 dark:text-white/30" />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Buscar empleado..."
-            className="flex-1 outline-none text-sm" />
+            className="flex-1 min-w-[8rem] outline-none text-sm bg-transparent" />
+          <select value={dept} onChange={e => setDept(e.target.value)}
+            className="border border-slate-200 rounded-lg px-2 py-1 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
+            <option value="">Todos los deptos.</option>
+            {departments.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <button onClick={exportCsv} disabled={!filtered.length}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+            <Download size={13} /> CSV
+          </button>
           <span className="text-xs text-slate-400 dark:text-white/30">{filtered.length}</span>
         </div>
         <div className="overflow-x-auto">

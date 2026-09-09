@@ -3,6 +3,7 @@
  * Solo GTH / admin / super_admin.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
@@ -46,7 +47,7 @@ router.post('/', async (req, res) => {
       parseInt(self_approve_max_days) || 0,
       notes || null, active ? 1 : 0, req.user.id,
     ]});
-    res.status(201).json({ id: r.insertId });
+    res.status(201).json({ id: insertId(r) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
