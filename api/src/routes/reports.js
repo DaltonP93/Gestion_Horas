@@ -5,6 +5,7 @@ const { sequelize } = require('../config/database');
 const { dbTimeHHmm } = require('../utils/dbTime');
 const { generateMarcadasReport, buildMarcadasTableHtml, minsToHM, maxPairsOf } = require('../services/scheduler');
 const { monthlyWorkedByEmployee } = require('../services/monthlyWorkedFromEngine');
+const logger = require('../config/logger');
 const { renderMarcadasPdf } = require('../services/marcadasPdf');
 const { sendMail, buildReportEmailHtml } = require('../services/emailService');
 const {
@@ -28,6 +29,53 @@ function scopeToClause(scope, col = 'e.department_id') {
     params: ids,
     empty: false,
   };
+}
+
+// ── Nocturno: worked_minutes por (empleado, día) desde el MOTOR de jornada ──
+// `daily_summary.worked_minutes` lo escribe el motor LEGACY por FECHA CIVIL, así
+// que un turno que cruza medianoche (entra miércoles 21:00, sale jueves 06:00)
+// queda partido en dos filas. Igual que /monthly (#196), estas lecturas piden al
+// MOTOR los minutos trabajados atribuidos al día en que la jornada EMPEZÓ (por su
+// primera entrada). Es SÓLO LECTURA: no toca `daily_summary` ni ningún flag.
+
+/** Map<employee_id, Map<'YYYY-MM-DD', minutos>> por el motor. */
+async function engineWorkedByDate(employeeIds, from, to) {
+  const res = await monthlyWorkedByEmployee(employeeIds, { from, to });
+  const out = new Map();
+  for (const [id, agg] of res) out.set(Number(id), agg.byDate);
+  return out;
+}
+
+/** Normaliza una fecha (Date | 'YYYY-MM-DD...') a 'YYYY-MM-DD'. */
+function ymd(v) {
+  if (v instanceof Date) return v.toISOString().split('T')[0];
+  return String(v || '').slice(0, 10);
+}
+
+/**
+ * Sobrescribe `worked_minutes` de cada fila con el valor del motor (jornada
+ * atribuida a su día de inicio). Resiliente: si el motor no está disponible
+ * (p. ej. 413 por rango enorme) conserva el valor legacy y marca la fila con
+ * `worked_source: 'legacy_fallback'` para que la degradación sea observable,
+ * sin romper la pantalla. Cada fila queda con `worked_source: 'engine'` en el
+ * camino normal.
+ */
+async function overrideWorkedFromEngine(rows, { from, to, idOf, dateOf, route }) {
+  if (!rows || !rows.length) return;
+  const ids = [...new Set(rows.map((r) => Number(idOf(r))).filter(Number.isInteger))];
+  try {
+    const worked = await engineWorkedByDate(ids, from, to);
+    for (const r of rows) {
+      const byDate = worked.get(Number(idOf(r)));
+      r.worked_minutes = byDate ? (byDate.get(ymd(dateOf(r))) || 0) : 0;
+      r.worked_source = 'engine';
+    }
+  } catch (err) {
+    logger.warn('reports: worked_minutes por motor no disponible; se usa legacy', {
+      route, reason: err.code || 'ENGINE_ERROR',
+    });
+    for (const r of rows) r.worked_source = 'legacy_fallback';
+  }
 }
 
 // GET /api/reports/monthly?year=&month=&dept=
@@ -99,8 +147,11 @@ router.get('/weekly', asyncHandler(async (req, res) => {
   const scope = await getVisibleDepartmentIds(req.user);
   const sc = scopeToClause(scope, 'e.department_id');
 
+  const fromStr = from.toISOString().split('T')[0];
+  const toStr = to.toISOString().split('T')[0];
   const [rows] = await sequelize.query(`
     SELECT
+      e.id AS employee_id,
       ds.date, ds.status, ds.first_in, ds.last_out, ds.worked_minutes, ds.late_minutes,
       CONCAT(e.first_name,' ',e.last_name) AS employee_name, d.name AS department
     FROM daily_summary ds
@@ -108,7 +159,13 @@ router.get('/weekly', asyncHandler(async (req, res) => {
     LEFT JOIN departments d ON e.department_id = d.id
     WHERE ds.date BETWEEN ? AND ? ${sc.clause}
     ORDER BY ds.date, e.last_name
-  `, { replacements: [from.toISOString().split('T')[0], to.toISOString().split('T')[0], ...sc.params] });
+  `, { replacements: [fromStr, toStr, ...sc.params] });
+
+  // Nocturno: worked_minutes por el motor (atribuido al día de inicio de la jornada).
+  await overrideWorkedFromEngine(rows, {
+    from: fromStr, to: toStr, route: 'weekly',
+    idOf: (r) => r.employee_id, dateOf: (r) => r.date,
+  });
 
   res.json({ data: rows, week: weekNum, from, to });
 }));
@@ -174,6 +231,13 @@ router.get('/daily-detail', async (req, res) => {
     }) : [],
     marks_raw: undefined,
   }));
+
+  // Nocturno: worked_minutes del día por el motor (la jornada que empezó ESTE día
+  // se atribuye entera acá; la que empezó ayer y cerró hoy NO cuenta hoy).
+  await overrideWorkedFromEngine(data, {
+    from: date, to: date, route: 'daily-detail',
+    idOf: (r) => r.employee_id, dateOf: () => date,
+  });
 
   res.json({ date, data });
 });
@@ -300,6 +364,13 @@ router.get('/employee/:id/analytics', async (req, res) => {
       WHERE ds.employee_id = ? AND ds.date BETWEEN ? AND ?
       ORDER BY ds.date
     `, { replacements: [empId, from, to] });
+
+    // Nocturno: worked_minutes por el motor antes de sumar totales/semanal, para
+    // que el total y la tendencia no partan los turnos que cruzan medianoche.
+    await overrideWorkedFromEngine(daily, {
+      from, to, route: 'employee-analytics',
+      idOf: () => empId, dateOf: (d) => d.date,
+    });
 
     // Resumen del período
     const present = daily.filter(d => ['present','late'].includes(d.status)).length;
@@ -767,3 +838,5 @@ router.get('/monthly/export', async (req, res) => {
 });
 
 module.exports = router;
+// Exponer helpers puros para tests unitarios (no forman parte de la API HTTP).
+module.exports.__testables = { engineWorkedByDate, ymd, overrideWorkedFromEngine };
