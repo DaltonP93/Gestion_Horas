@@ -11,6 +11,18 @@
  *   node scripts/workday-config-preflight.js --json
  *   node scripts/workday-config-preflight.js --env /ruta/api/.env
  *   node scripts/workday-config-preflight.js --no-env
+ *   node scripts/workday-config-preflight.js --require-ready  # exit 1 salvo GO
+ *   node scripts/workday-config-preflight.js --require-safe   # exit 1 sólo en NO_GO_PARTIAL
+ *
+ * Gate tri-estado (regla más importante del rollout, ver
+ * docs/workday-engine-rollout-status.md §Gates):
+ *   - GO             → esquema FASE C completo; se puede avanzar.
+ *   - SAFE_DEGRADED  → `employee_schedule_history` AUSENTE por completo: el motor
+ *                      degrada a `historical_fallback` por diseño. ÚNICO estado
+ *                      degradado seguro.
+ *   - NO_GO_PARTIAL  → la tabla existe pero el esquema está a medias (faltan
+ *                      columnas / ENUM 074 / migraciones): NO degrada, PROPAGA
+ *                      error. Estado peligroso; `--require-safe` sale 1 aquí.
  */
 
 'use strict';
@@ -52,6 +64,20 @@ const REQUIRED_HISTORY_COLUMNS = [
   'rounding_policy_version', 'rounding_policy_config',
   'overtime_policy_version', 'overtime_policy_config',
 ];
+
+/**
+ * Clasifica el gate del rollout a partir de dos hechos ya calculados. Función
+ * PURA (sin DB) para poder testearla sin base y hacer la regla verificable.
+ *
+ *   GO            = esquema FASE C completo.
+ *   SAFE_DEGRADED = tabla de historial AUSENTE por completo → historical_fallback.
+ *   NO_GO_PARTIAL = tabla presente pero esquema a medias → propaga error, no degrada.
+ */
+function classifyGate({ schemaReady, historyExists }) {
+  if (schemaReady) return 'GO';
+  if (!historyExists) return 'SAFE_DEGRADED';
+  return 'NO_GO_PARTIAL';
+}
 
 async function tableExists(name) {
   const [rows] = await sequelize.query(
@@ -134,6 +160,8 @@ async function main() {
     && !flags.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED
     && !flags.WORKDAY_ENGINE_STATUS_074_ENABLED;
 
+  const gate = classifyGate({ schemaReady, historyExists });
+
   const report = {
     read_only: true,
     env_source: ENV.mode,
@@ -145,6 +173,7 @@ async function main() {
     flags,
     schema_ready_for_phase_c: schemaReady,
     flags_safe_for_pre_rollout: safeForDevelopment,
+    gate,
   };
 
   if (json) {
@@ -161,18 +190,29 @@ async function main() {
     console.log(`status074 flag: ${flags.WORKDAY_ENGINE_STATUS_074_ENABLED ? 'ON' : 'OFF'}`);
     console.log(`flags seguros pre-rollout: ${safeForDevelopment ? 'SÍ' : 'NO'}`);
     console.log(`schema listo FASE C: ${schemaReady ? 'SÍ' : 'NO'}`);
+    console.log(`GATE: ${gate}`);
   }
 
   // Un preflight incompleto debe poder usarse para diagnóstico sin aplicar nada,
-  // por eso sólo sale 1 si alguien pidió explícitamente --require-ready.
-  if (argv.includes('--require-ready') && !schemaReady) process.exitCode = 1;
+  // por eso sólo sale ≠0 si alguien pidió explícitamente un gate:
+  //   --require-ready  → 1 salvo GO (esquema completo).
+  //   --require-safe   → 1 SÓLO en NO_GO_PARTIAL (el estado peligroso). GO y
+  //                      SAFE_DEGRADED salen 0: el fallback por tabla ausente es seguro.
+  if (argv.includes('--require-ready') && gate !== 'GO') process.exitCode = 1;
+  if (argv.includes('--require-safe') && gate === 'NO_GO_PARTIAL') process.exitCode = 1;
 }
 
-main()
-  .catch((err) => {
-    console.error('Preflight falló:', err.message);
-    process.exitCode = 2;
-  })
-  .finally(async () => {
-    try { await sequelize.close(); } catch {}
-  });
+// El main() con MySQL sólo corre como CLI; así el módulo se puede requerir en
+// tests para ejercitar la lógica pura (classifyGate) sin conectar a la base.
+if (require.main === module) {
+  main()
+    .catch((err) => {
+      console.error('Preflight falló:', err.message);
+      process.exitCode = 2;
+    })
+    .finally(async () => {
+      try { await sequelize.close(); } catch {}
+    });
+}
+
+module.exports = { classifyGate };

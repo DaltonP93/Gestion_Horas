@@ -206,6 +206,27 @@ const COLUMNAS_CRITICAS = [
     usadaPor: 'cron capacitaciones_vencimiento (destinatario) + GET /courses/my' },
   { tabla: 'external_hr_sources', columna: 'schedule_cron',
     usadaPor: 'loadHrSchedules (arranque de la API)' },
+  // FASE C / motor de jornada: columnas del perfil 073 que loadScheduleHistory
+  // SIEMPRE selecciona. Si la tabla existe (072 aplicada) pero falta alguna de
+  // estas (073 a medias), la consulta se rompe entera con ER_BAD_FIELD_ERROR
+  // (42S22) en runtime. El chequeo de tabla no lo ve —la tabla existe—; sólo el
+  // par (tabla, columna) detecta el esquema parcial peligroso del rollout.
+  { tabla: 'employee_schedule_history', columna: 'work_regime',
+    usadaPor: 'workdayConfig.loadScheduleHistory (perfil 073)' },
+  { tabla: 'employee_schedule_history', columna: 'daily_target_minutes',
+    usadaPor: 'workdayConfig.loadScheduleHistory (objetivo diario 073)' },
+  { tabla: 'employee_schedule_history', columna: 'weekly_target_minutes',
+    usadaPor: 'workdayConfig.loadScheduleHistory (objetivo semanal 073)' },
+  { tabla: 'employee_schedule_history', columna: 'overtime_policy',
+    usadaPor: 'workdayConfig.loadScheduleHistory (política de horas extra 073)' },
+  { tabla: 'employee_schedule_history', columna: 'rounding_policy',
+    usadaPor: 'workdayConfig.loadScheduleHistory (política de redondeo 073)' },
+  { tabla: 'employee_schedule_history', columna: 'night_start',
+    usadaPor: 'workdayConfig.loadScheduleHistory (ventana nocturna 073)' },
+  { tabla: 'employee_schedule_history', columna: 'night_end',
+    usadaPor: 'workdayConfig.loadScheduleHistory (ventana nocturna 073)' },
+  { tabla: 'employee_schedule_history', columna: 'work_days',
+    usadaPor: 'workdayConfig.loadScheduleHistory (días laborables 073)' },
 ];
 
 /**

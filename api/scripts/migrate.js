@@ -14,6 +14,13 @@
  * Uso:
  *   node api/scripts/migrate.js                    # aplica pendientes
  *   node api/scripts/migrate.js --status           # lista estado, no aplica
+ *
+ * Gate raíz (integridad de numeración): antes de aplicar, el runner rechaza
+ * (exit 1) si hay números de migración DUPLICADOS en disco, o si una migración
+ * PENDIENTE tiene número MENOR que el máximo ya aplicado (aplicarla la correría
+ * fuera de secuencia). `--status` sólo lo REPORTA (read-only). El desorden se
+ * puede forzar con `--allow-out-of-order` cuando el orden fue una decisión
+ * explícita y verificada; los duplicados no tienen override.
  *   node api/scripts/migrate.js --baseline=<archivo>
  *          # marca como aplicadas (sin ejecutar) las migraciones HASTA e
  *          # incluyendo <archivo>, para adoptar el runner en una BD que ya
@@ -43,6 +50,57 @@ function listMigrationFiles() {
   return fs.readdirSync(MIGRATIONS_DIR)
     .filter(f => f.endsWith('.sql'))
     .sort(); // 001_, 002_, ... — orden lexicográfico correcto por el prefijo numérico
+}
+
+/** Extrae el número de migración (prefijo NNN) del nombre de archivo, o null. */
+function parseMigrationNumber(file) {
+  const m = /^(\d+)/.exec(file);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Detecta números de migración DUPLICADOS entre los archivos en disco.
+ * El runner llavea por NOMBRE de archivo en `schema_migrations`, así que dos
+ * archivos con el mismo prefijo NNN pero contenido distinto harían que el
+ * segundo se considere "ya aplicado" y se SALTEE en silencio. Con muchos PRs
+ * abiertos que agregan migraciones, garantizar unicidad de número es un gate.
+ * Devuelve [{ number, files:[...] }, ...] (vacío si no hay duplicados).
+ */
+function findDuplicateNumbers(files) {
+  const byNum = new Map();
+  for (const f of files) {
+    const n = parseMigrationNumber(f);
+    if (n === null) continue;
+    if (!byNum.has(n)) byNum.set(n, []);
+    byNum.get(n).push(f);
+  }
+  return [...byNum.entries()]
+    .filter(([, group]) => group.length > 1)
+    .map(([number, group]) => ({ number, files: group.slice().sort() }))
+    .sort((a, b) => a.number - b.number);
+}
+
+/**
+ * Guardia de MONOTONICIDAD: detecta migraciones PENDIENTES cuyo número es
+ * MENOR que el máximo ya aplicado. Aplicarlas ahora las correría FUERA DE
+ * SECUENCIA (una migración de número menor ejecutándose DESPUÉS de una mayor),
+ * que es exactamente el riesgo 081/082/083-antes-de-076-080. `migrate.js` no
+ * tenía esta guardia. Devuelve la lista ordenada de pendientes fuera de orden.
+ */
+function outOfOrderPending(pendingFiles, doneFiles) {
+  let maxApplied = -1;
+  for (const f of doneFiles) {
+    const n = parseMigrationNumber(f);
+    if (n !== null && n > maxApplied) maxApplied = n;
+  }
+  if (maxApplied < 0) return []; // nada aplicado todavía → no puede haber desorden
+  return pendingFiles
+    .filter(f => {
+      const n = parseMigrationNumber(f);
+      return n !== null && n < maxApplied;
+    })
+    .slice()
+    .sort();
 }
 
 function applyWithMysqlClient(file) {
@@ -86,13 +144,41 @@ async function main() {
     const pending = files.filter(f => !done.has(f));
     console.log(`Migraciones: ${files.length} totales, ${done.size} aplicadas, ${pending.length} pendientes.`);
 
+    // ── Gate raíz: integridad de numeración de migraciones ───────────────
+    // Se evalúa SIEMPRE (también en --status) y se REPORTA; el corte fail-closed
+    // se aplica sólo en los modos que escriben (migrate/baseline), ya que
+    // --status es estrictamente read-only.
+    const duplicates = findDuplicateNumbers(files);
+    const outOfOrder = outOfOrderPending(pending, [...done]);
+    const allowOutOfOrder = process.argv.includes('--allow-out-of-order');
+
+    if (duplicates.length) {
+      console.error('❌ Números de migración DUPLICADOS en database/migrations/ (el runner llavea por nombre → el 2° se saltearía en silencio):');
+      duplicates.forEach(d => console.error(`   ${String(d.number).padStart(3, '0')} → ${d.files.join(', ')}`));
+      console.error('   Acción: renumerá para que cada migración tenga un número único.');
+    }
+    if (outOfOrder.length) {
+      const maxApplied = Math.max(...[...done].map(parseMigrationNumber).filter(n => n !== null));
+      console.error(`❌ Migraciones PENDIENTES fuera de secuencia (número menor que ${maxApplied}, ya aplicado):`);
+      outOfOrder.forEach(f => console.error(`   ${f}`));
+      console.error('   Aplicarlas ahora las correría fuera de orden. Acción: renumerálas por encima del máximo');
+      console.error('   aplicado, o —si el orden fue una decisión explícita y verificada— reejecutá con --allow-out-of-order.');
+    }
+
     if (statusOnly) {
       if (!schemaMigrationsExists) {
         console.log('  schema_migrations no existe; --status no la crea (modo read-only).');
       }
       pending.forEach(f => console.log(`  pendiente: ${f}`));
+      // --status es read-only: informa los problemas pero NO cambia el exit code.
       return;
     }
+
+    // Modos que ESCRIBEN (migrate/baseline): fallar-cerrado ante integridad rota.
+    // Los duplicados abortan siempre (no hay override: rompen la identidad por
+    // nombre). El desorden aborta salvo override explícito.
+    if (duplicates.length) process.exit(1);
+    if (outOfOrder.length && !allowOutOfOrder) process.exit(1);
 
     // Los modos que sí modifican estado (migrate/baseline) crean la tabla de
     // control si todavía no existe.
@@ -145,7 +231,12 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('❌ Error en migración:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch(err => {
+    console.error('❌ Error en migración:', err.message);
+    process.exit(1);
+  });
+}
+
+// Helpers puros exportados para test (sin base de datos).
+module.exports = { parseMigrationNumber, findDuplicateNumbers, outOfOrderPending };
