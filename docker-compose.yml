@@ -21,10 +21,16 @@ services:
     networks:
       - asistencia_net
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # TCP autenticado (-h 127.0.0.1 fuerza TCP, no el socket): sólo pasa cuando
+      # mysqld ya sirve la instancia real. `mysqladmin ping` daba falsos positivos
+      # durante el init de docker-entrypoint (responde antes de aplicar init.sql),
+      # y `depends_on: service_healthy` arrancaba api/analytics/migrate contra una
+      # base a medio inicializar. $$MYSQL_ROOT_PASSWORD lo resuelve el contenedor.
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" -e 'SELECT 1' >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   # ─── Redis (Pub/Sub + Cache) ──────────────────────────────────
   redis:
@@ -174,10 +180,36 @@ services:
       - analytics
     ports:
       - "80:80"
-      - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
+      # Server-block del stack de compose (proxy a los NOMBRES DE SERVICIO
+      # web/api/analytics). El nginx.conf base de la imagen ya incluye
+      # conf.d/*.conf dentro de su http{}. HTTP-only: el TLS lo termina el nginx
+      # del host (deploy/nginx-sishoras.conf) o un balanceador delante del stack.
+      - ./deploy/nginx.compose.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - asistencia_net
+
+  # ─── Migraciones (one-shot, NO corre en `up`) ─────────────────
+  # Contexto de build = raíz del repo, para incluir scripts + database/ +
+  # cliente mysql (ver Dockerfile.migrate). Correr a demanda:
+  #   docker compose --profile tools run --rm migrate                     # aplica
+  #   docker compose --profile tools run --rm migrate node scripts/migrate.js --status
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    container_name: asistencia_migrate
+    profiles: ["tools"]
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-asistencia}
+      DB_USER: ${DB_USER:-asistencia_user}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD requerido}
     networks:
       - asistencia_net
 
