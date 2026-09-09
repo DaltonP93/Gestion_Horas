@@ -3,6 +3,7 @@
  * Inserta en DB y emite por Socket.io al room del usuario.
  */
 const { sequelize } = require('../config/database');
+const { insertId } = require('../utils/insertId');
 const { getIO } = require('../socket/socketServer');
 
 async function notifyUser(userId, { type = 'info', title, body = null, link = null }) {
@@ -13,7 +14,7 @@ async function notifyUser(userId, { type = 'info', title, body = null, link = nu
        VALUES (?, ?, ?, ?, ?)`,
       { replacements: [userId, type, title, body, link] }
     );
-    const payload = { id: result.insertId, user_id: userId, type, title, body, link, read_at: null, created_at: new Date() };
+    const payload = { id: insertId(result), user_id: userId, type, title, body, link, read_at: null, created_at: new Date() };
     try {
       const io = getIO?.();
       if (io) io.to(`user:${userId}`).emit('notification', payload);

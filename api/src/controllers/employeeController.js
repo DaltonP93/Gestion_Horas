@@ -1,4 +1,5 @@
 const { sequelize } = require('../config/database');
+const { insertId } = require('../utils/insertId');
 const logger = require('../config/logger');
 const audit = require('../services/audit');
 const { capsForRole } = require('../services/employeeCaps');
@@ -203,7 +204,7 @@ async function create(req, res) {
         phone, department_id, schedule_id, position, hire_date] });
 
     logger.info(`Empleado creado: ${code} - ${first_name} ${last_name}`);
-    res.status(201).json({ id: result.insertId, message: 'Empleado creado correctamente' });
+    res.status(201).json({ id: insertId(result), message: 'Empleado creado correctamente' });
   } catch (err) {
     if (err.original?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'El código o email ya existe' });

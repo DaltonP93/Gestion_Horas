@@ -22,6 +22,7 @@
  */
 
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const crypto = require('crypto');
 const axios  = require('axios');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -193,7 +194,7 @@ router.post('/', async (req, res) => {
     'INSERT INTO webhooks (name, url, secret, events, format, channel) VALUES (?, ?, ?, ?, ?, ?)',
     { replacements: [name, url, secret || null, JSON.stringify(events), format, channel || null] }
   );
-  res.status(201).json({ id: result.insertId, message: 'Webhook registrado' });
+  res.status(201).json({ id: insertId(result), message: 'Webhook registrado' });
 });
 
 // POST /api/webhooks/broadcast — enviar mensaje custom a todos los webhooks que escuchan custom.message

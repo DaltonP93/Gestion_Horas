@@ -4,6 +4,7 @@
  * así un empleado nunca ve datos de otros.
  */
 const router  = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
@@ -384,12 +385,12 @@ router.post('/permissions', async (req, res) => {
     );
 
     await wf.logEvent({
-      permission_id: r.insertId, actor_id: req.user.id,
+      permission_id: insertId(r), actor_id: req.user.id,
       from_state: 'n/a', to_state: 'pending',
       note: `Solicitud creada por el empleado (tipo=${type})`,
     });
 
-    res.status(201).json({ id: r.insertId, message: 'Permiso solicitado' });
+    res.status(201).json({ id: insertId(r), message: 'Permiso solicitado' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
