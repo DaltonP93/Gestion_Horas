@@ -34,6 +34,7 @@ import { fmtTimePy } from '@/lib/datetime'
 import { formatPYG } from '@/lib/currency'
 import EmployeeNotes from '@/components/EmployeeNotes'
 import EmployeeAssignments from '@/components/EmployeeAssignments'
+import EmployeeWorkdayViewer from '@/components/EmployeeWorkdayViewer'
 import EmployeeDocuments from '@/components/EmployeeDocuments'
 import BiometriaRelojes from '@/components/BiometriaRelojes'
 import EmployeeEditModal from '@/components/EmployeeEditModal'
@@ -508,6 +509,7 @@ export default function EmpleadoDetallePage() {
               y no se parten en dos. El panel de asignaciones se auto-oculta si el
               rol no tiene permiso de lectura o el empleado está fuera de alcance. */}
           {emp?.id && <div className="min-w-0"><EmployeeAssignments employeeId={emp.id} /></div>}
+          {emp?.id && canConfigureWorkday && <div className="min-w-0"><EmployeeWorkdayViewer employeeId={emp.id} /></div>}
           {emp?.id && <div className="min-w-0"><EmployeeDocuments employeeId={emp.id} /></div>}
           {emp?.id && <div className="min-w-0"><EmployeeNotes employeeId={emp.id} /></div>}
         </div>
