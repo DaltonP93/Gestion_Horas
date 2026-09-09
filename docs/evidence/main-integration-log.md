@@ -48,4 +48,47 @@ método `merge` (merge commit); verificar `main` verde entre olas.
 - Run #694 sobre `17c6814` **falló** — pero **sólo en el step `npm audit (nivel alto)`** (gate que #194 activó): apareció un HIGH nuevo `nodemailer <=9.1.0` (advisory 2026-09-09) en api y un HIGH en web (next 16.2.11). Los jobs de **código** pasaron: **DB migraciones MySQL efímero ✅** (aplica 002→…, idempotente, `--status` read-only, guardia #212 sin falso positivo) y **Analytics ✅**. Los unit tests quedaron *skipped* porque el step de audit corta antes.
 - **Fix-forward = #210** (reconstruido sobre `17c6814`): `npm audit fix` en api (nodemailer→9.1.1), web (next→16.3.4, `next build` OK con el fix de #194) y bridge; + bumps CVE multer/axios/python-jose. Verificado local: api 88/1391, bridge 452, web build; `npm audit --audit-level=high` = **0** en api/web/bridge. → `main` `324b648`, run #698 (a confirmar verde antes de la Ola 2).
 
-_(Olas 2–4 + #206 se completan a medida que se fusionan.)_
+### Ola 2 — Nocturno (`3f89486`)
+| PR | `main` tras merge |
+|---|---|
+| #196 total mensual por motor | `8247016` |
+| #204 semanal/diario/analítica | `add9a24` |
+| #205 self-service `/me` | `038e8ce` |
+| #197 recibo self-service | `5e9f516` |
+| #200 export planilla + API (gth ve salario) | `3f89486` |
+
+### Ola 3 — Módulos/export (`78924de`)
+| PR | `main` tras merge |
+|---|---|
+| #178 export CSV marcaciones (util) | `2e3c03d` |
+| #179 vacaciones CSV | `b47331a` |
+| #180 encuestas CSV | `96ad309` |
+| #181 banco-horas filtro+CSV | `9138463` |
+| #187 horas extra CSV + decide-batch | `023ccab` |
+| #177 capacitaciones editar (web) | `37c2c6e` |
+| #188 reporte semanal CSV (api) | `eb47c0a` |
+| #162 relojes ZKTeco UI | `be590cb` |
+| #163 zkteco read hardening | `78924de` |
+
+### Ola 4 — FASE E read-only (`1a5e184`)
+| PR | `main` tras merge |
+|---|---|
+| #174 guard estático read-only | `a7997d8` |
+| #175 gate tri-estado | `2d0862c` |
+| #176 matriz fail-closed writers | `3fcb36f` |
+| #182 drift-checker FASE C | `54bafed` |
+| #183 wrapper phase-e:preflight + runbook | `b4b6a8b` |
+| #184 golden motor NO-GO | `0e9deb6` |
+| #186 golden degradación loadWorkdayConfig | `394a842` |
+| #164 huella fiel gate de impacto | `1a5e184` |
+
+### Docs
+| PR | `main` tras merge |
+|---|---|
+| #206 snapshot consolidado (este log) | _(último merge)_ |
+
+## Resumen final
+- **`main` avanzó de `078cd67` (#157) a la cabeza integrada** con **34 PRs** (Olas 1–4 + #210 + #206).
+- **CI de la cabeza:** cadena completa (API/Web/Bridge 3 TZ + DB MySQL efímero + Analytics) — el gate `npm audit --audit-level=high` quedó verde tras #210.
+- **Fuera (Ola 5), sin fusionar por bloqueo real:** FASE F (076–080, congelada, GO condicional), firma #198/#199/#201/#203 (081/082), #202 (083 + conflicto FASE E), #191 (dup de #206), #209 (ADR cookies, implementación no autorizada), y **#213 (DevOps)** que queda Draft para revisión/uso de ops.
+- **Invariantes preservadas:** sin activar flags/writers, sin recalcular `daily_summary`, att2000 READ-ONLY, sin migraciones 076–083 aplicadas.
