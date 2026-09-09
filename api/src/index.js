@@ -89,13 +89,22 @@ const server = http.createServer(app);
 // ─── Middleware ─────────────────────────────────────────────────
 app.set('trust proxy', 1); // Nginx reverse proxy
 app.use(helmet());
+// Orígenes permitidos: SIEMPRE desde variables de entorno, nunca hardcodeados.
+// CORS_ORIGINS admite una lista separada por comas (p. ej. producción +
+// staging); FRONTEND_URL se mantiene por compatibilidad con despliegues
+// existentes que sólo la definen a ella. Sin ninguna de las dos, en
+// desarrollo cae a localhost:3000; en producción no se agrega ningún
+// origen por defecto (fail-closed: sin configurar, no hay CORS habilitado).
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
 app.use(cors({
   origin: (origin, callback) => {
     const allowed = [
+      ...corsOrigins,
       process.env.FRONTEND_URL,
       ...(process.env.NODE_ENV !== 'production' ? ['http://localhost:3000'] : []),
-      'http://sishoras.saa.com.py',
-      'https://sishoras.saa.com.py'
     ].filter(Boolean);
     // Permitir requests sin origin (curl, Postman, SSR)
     if (!origin || allowed.includes(origin)) return callback(null, true);
@@ -110,7 +119,15 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
+
+// Ver api/src/utils/logRedaction.js: evita que el JWT (?access_token=... en
+// descargas GET, o un futuro header Authorization) quede en texto plano en
+// los logs de acceso de morgan.
+const { urlToken, redactSensitiveLogLine } = require('./utils/logRedaction');
+morgan.token('url', urlToken);
+app.use(morgan('combined', {
+  stream: { write: msg => logger.info(redactSensitiveLogLine(msg.trim())) },
+}));
 
 // Rate limiting global
 app.use(rateLimit({
