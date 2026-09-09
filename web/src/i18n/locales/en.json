@@ -65,6 +65,8 @@
     "ingresos": "Hiring / Offboarding",
     "lactancia": "Maternity / Nursing",
     "departments": "Departments",
+    "companies": "Companies",
+    "cost_centers": "Cost centers",
     "users": "Users",
     "audit": "Audit log",
     "settings": "Settings",

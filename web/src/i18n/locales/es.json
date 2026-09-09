@@ -65,6 +65,8 @@
     "ingresos": "Ingresos / Egresos",
     "lactancia": "Maternidad / Lactancia",
     "departments": "Departamentos",
+    "companies": "Empresas",
+    "cost_centers": "Centros de costo",
     "users": "Usuarios",
     "audit": "Auditoría",
     "settings": "Configuración",
