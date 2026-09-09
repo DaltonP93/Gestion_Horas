@@ -187,9 +187,17 @@ Firma PAdES (PR #203): `SIGNING_MODE`, `HTML2PDF_URL`, `PADES_SIGNER_URL`,
 
 ## 10. Migraciones
 
-`database/init.sql` (bootstrap ~001) + `database/migrations/002…075`. Faltan `001` y `058`
-(hueco de numeración; init.sql cubre 001). 072–075 (FASE C/E) **no aplicadas en prod**:
-gate NO-GO hasta backup + auditoría + autorización.
+`database/init.sql` (bootstrap ~001) + `database/migrations/002…080`. Faltan `001` y `058`
+(hueco de numeración; init.sql cubre 001). **076–080 (FASE F) están en `main` desde `d88fe09`** pero
+**NO aplicadas en prod**. 072–075 (FASE C/E) tampoco aplicadas en prod.
+
+> **Autorización del propietario (2026-09-09): aplicar `072–080` juntas en prod.** Pendiente de
+> ejecución por **ops** (no lo hace este agente: sin acceso a la BD de prod). Procedimiento en
+> `deploy/RUNBOOK-migraciones-076-080.md` (preflight `--status`, backup obligatorio, `migrate`,
+> verificación, rollback). El runner es forward-only y aplica todo lo pendiente en orden; 072–075
+> son aditivas e inertes (writers de jornada en OFF), por eso van con 076–080 sin drift. **Aplicar
+> el esquema NO activa multiempresa** (writers `*_WRITE_ENABLED` siguen en `false`; activarlos es
+> otro paso con su propia autorización). 081/082/083 (firma/consola) **no** están en `main`.
 
 ## 11. Decisiones arquitectónicas vigentes
 
