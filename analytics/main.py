@@ -30,8 +30,9 @@ engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=3600)
 # ─── App ──────────────────────────────────────────────────────────
 app = FastAPI(title="Analytics Service — Asistencia", version="1.0.0")
 
-# CORS: restringir a orígenes conocidos (configurable vía ALLOWED_ORIGINS, CSV)
-_default_origins = "http://sishoras.saa.com.py,https://sishoras.saa.com.py,http://localhost:3000"
+# CORS: restringir a orígenes conocidos (configurable vía ALLOWED_ORIGINS, CSV).
+# El dominio de producción se configura por entorno, no se hardcodea en el repo.
+_default_origins = "http://localhost:3000"
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()]
 
 app.add_middleware(

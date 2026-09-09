@@ -1,8 +1,9 @@
 'use client'
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Calendar, Plane, Stethoscope, Heart, Baby, Users as UsersIcon, AlertTriangle, Plus, X, CheckCircle2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Calendar, Plane, Stethoscope, Heart, Baby, Users as UsersIcon, AlertTriangle, Plus, X, CheckCircle2, Download } from 'lucide-react'
 import { api } from '@/lib/api'
+import { downloadCsv } from '@/lib/csvExport'
 import { useI18n } from '@/i18n/I18nProvider'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 
@@ -394,6 +395,15 @@ function SaldosTab({ deptsData, canManage }: { deptsData: any; canManage: boolea
   }
   useEffect(() => { load() }, [year, deptId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  function exportCsv() {
+    if (!rows.length) return
+    downloadCsv(
+      `vacaciones-saldos_${year}.csv`,
+      ['Código', 'Empleado', 'Departamento', 'Antigüedad (años)', 'Derecho', 'Asignado', 'Ajuste', 'Tomado', 'Disponible', 'Conteo'],
+      rows.map(r => [r.code, r.name, r.department || '', r.antiguedad_years, r.entitlement, r.assigned, r.adjustment || 0, r.taken, r.available, dayType === 'corridos' ? 'corridos' : 'hábiles']),
+    )
+  }
+
   async function saveBalance() {
     if (!edit) return
     try {
@@ -420,6 +430,10 @@ function SaldosTab({ deptsData, canManage }: { deptsData: any; canManage: boolea
           <option value="">Todos los departamentos</option>
           {(deptsData || []).map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
+        <button onClick={exportCsv} disabled={!rows.length}
+          className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm flex items-center gap-2 disabled:opacity-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+          <Download size={15} /> Exportar CSV
+        </button>
         <span className="text-xs text-slate-400 dark:text-white/30 ml-auto">Conteo: días {dayType === 'corridos' ? 'corridos' : 'hábiles'}</span>
       </div>
 
