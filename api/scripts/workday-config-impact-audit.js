@@ -17,12 +17,20 @@
  *   node scripts/workday-config-impact-audit.js --from 2025-01-01 --to 2025-12-31 --require-no-impact
  *
  * No contiene operaciones SQL de escritura y no importa ningún módulo ATT2000.
+ *
+ * La lógica pura de comparación (`signature`, `sameRows`, `validDate`) se
+ * exporta para poder verificarla con datos sintéticos sin abrir una base: el
+ * `main()` con acceso a MySQL sólo corre cuando el archivo se invoca como CLI.
  */
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+
+// `workdayEngine` es un módulo PURO (no abre conexiones al requerirlo); lo
+// usan tanto `validDate` como el `main()`.
+const engine = require('../src/services/workdayEngine');
 
 function cargarEnv(argv) {
   if (argv.includes('--no-env')) return;
@@ -33,39 +41,46 @@ function cargarEnv(argv) {
   if (fs.existsSync(file)) require('dotenv').config({ path: file, override: true });
 }
 
-const argv = process.argv.slice(2);
-cargarEnv(argv);
-
-const { sequelize } = require('../src/config/database');
-const engine = require('../src/services/workdayEngine');
-const { loadWorkdayConfig } = require('../src/services/workdayConfig');
-
-function arg(name) {
+function arg(argv, name) {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : null;
 }
-
-const from = arg('--from');
-const to = arg('--to');
-const employeeId = arg('--employee-id') ? Number(arg('--employee-id')) : null;
-const employeeCode = arg('--employee') || arg('--employee-code');
-const deptId = arg('--dept') ? Number(arg('--dept')) : null;
-const asJson = argv.includes('--json');
-const requireNoImpact = argv.includes('--require-no-impact');
-const chunk = Math.max(1, Math.min(200, Number(arg('--chunk') || 50)));
 
 function validDate(s) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''))
     && engine.toWall(`${s} 00:00:00`) !== null;
 }
 
+/**
+ * Huella de una jornada calculada, para decidir si la configuración la cambió.
+ *
+ * Tiene que incluir TODO lo que la configuración puede mover y que aguas abajo
+ * termina en `daily_summary`, no sólo la geometría de los tramos:
+ *
+ * - `segments` usa los campos REALES que expone el motor (`in`/`out`, hora de
+ *   pared, y `minutes`). La versión anterior leía `s.in_ts`/`s.out_ts`, que el
+ *   motor nunca produce: quedaban `undefined` en las dos ramas y la huella no
+ *   comparaba las horas de los tramos.
+ * - `worked_minutes` y `break_minutes` son la diferencia típica al configurar:
+ *   un descanso fijo no cambia `segment_minutes` (la suma cruda entrada→salida)
+ *   pero SÍ los minutos trabajados. Sin ellos, cargar una jornada con descanso
+ *   descontado se reportaba como "sin cambio" y el gate `--require-no-impact`
+ *   daba GO cuando en realidad `daily_summary` cambiaría.
+ * - `calculation_mode` y `non_working_kind` distinguen fallback de configurado y
+ *   marcan los días no laborables que la turnera puede introducir.
+ */
 function signature(j) {
   return JSON.stringify({
     work_date: j.work_date,
+    calculation_mode: j.calculation_mode,
+    non_working_kind: j.non_working_kind ?? null,
     segment_minutes: j.segment_minutes,
+    worked_minutes: j.worked_minutes,
+    break_minutes: j.break_minutes,
     segments: (j.segments || []).map((s) => ({
-      in: s.in_ts,
-      out: s.out_ts,
+      in: s.in,
+      out: s.out,
+      minutes: s.minutes,
     })),
   });
 }
@@ -87,7 +102,19 @@ function sameRows(a, b) {
   return true;
 }
 
-async function main() {
+async function main(argv) {
+  const { sequelize } = require('../src/config/database');
+  const { loadWorkdayConfig } = require('../src/services/workdayConfig');
+
+  const from = arg(argv, '--from');
+  const to = arg(argv, '--to');
+  const employeeId = arg(argv, '--employee-id') ? Number(arg(argv, '--employee-id')) : null;
+  const employeeCode = arg(argv, '--employee') || arg(argv, '--employee-code');
+  const deptId = arg(argv, '--dept') ? Number(arg(argv, '--dept')) : null;
+  const asJson = argv.includes('--json');
+  const requireNoImpact = argv.includes('--require-no-impact');
+  const chunk = Math.max(1, Math.min(200, Number(arg(argv, '--chunk') || 50)));
+
   if (!validDate(from) || !validDate(to) || from > to) {
     throw new Error('--from/--to deben ser fechas válidas YYYY-MM-DD y from <= to');
   }
@@ -228,11 +255,22 @@ async function main() {
   }
 }
 
-main()
-  .catch((err) => {
-    console.error('Audit falló:', err.message);
-    process.exitCode = 2;
-  })
-  .finally(async () => {
-    try { await sequelize.close(); } catch {}
-  });
+// Sólo abre base y lee argumentos cuando se corre como CLI. Al requerirlo desde
+// un test, el módulo expone únicamente su lógica pura, sin tocar MySQL.
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  cargarEnv(argv);
+  main(argv)
+    .catch((err) => {
+      console.error('Audit falló:', err.message);
+      process.exitCode = 2;
+    })
+    .finally(async () => {
+      try {
+        const { sequelize } = require('../src/config/database');
+        await sequelize.close();
+      } catch {}
+    });
+}
+
+module.exports = { validDate, signature, rowsBySignature, sameRows };
