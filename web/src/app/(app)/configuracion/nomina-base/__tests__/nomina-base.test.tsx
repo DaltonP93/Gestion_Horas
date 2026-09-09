@@ -37,6 +37,15 @@ function baseGet(url: string) {
   if (url === '/api/payroll-base/periods') return Promise.resolve({ data: { data: PERIODS } })
   if (url === '/api/payroll-base/integrations') return Promise.resolve({ data: { data: [] } })
   if (url === '/api/payroll-base/concepts') return Promise.resolve({ data: { data: CONCEPTS } })
+  if (url === '/api/payroll-base/analytics/headcount') {
+    return Promise.resolve({ data: { official: false, by_status: { active: 42, suspended: 1 }, active: 42, concepts: { earnings: 3, deductions: 2 } } })
+  }
+  if (url.endsWith('/snapshot')) {
+    return Promise.resolve({ data: {
+      official: false, created_at: '2026-03-05T10:00:00Z',
+      snapshot: { period: { id: 2, code: '2026-02' }, headcount: { active: 40 }, active_concepts: { earnings: 3, deductions: 2 }, official: false },
+    } })
+  }
   if (url.endsWith('/preview')) {
     return Promise.resolve({ data: {
       official: false,
@@ -95,6 +104,24 @@ test('lista los conceptos versionados y aclara que la pista de fórmula no se ev
   expect(await screen.findByText('Salario básico')).toBeInTheDocument()
   expect(screen.getByText('BASICO')).toBeInTheDocument()
   expect(screen.getByText(/sólo descriptiva; nunca se evalúa/i)).toBeInTheDocument()
+})
+
+test('muestra el panel de headcount agregado (sin PII)', async () => {
+  render(<NominaBasePage />)
+  expect(await screen.findByText('Headcount (agregado, sin PII)')).toBeInTheDocument()
+  const activos = screen.getByText('Activos').closest('div')!
+  expect(within(activos).getByText('42')).toBeInTheDocument()
+})
+
+test('un período cerrado ofrece ver la evidencia de cierre (snapshot)', async () => {
+  render(<NominaBasePage />)
+  await screen.findByText('Marzo 2026')
+  // Sólo la fila cerrada (Febrero) ofrece "Evidencia".
+  await userEvent.click(screen.getByRole('button', { name: /Evidencia/ }))
+  const dialog = await screen.findByRole('dialog')
+  expect(within(dialog).getByText(/Evidencia de cierre/i)).toBeInTheDocument()
+  expect(within(dialog).getByText('2026-02')).toBeInTheDocument()
+  expect(within(dialog).getByText('40')).toBeInTheDocument()
 })
 
 test('crear concepto: el 409 de duplicado muestra el mensaje del server', async () => {

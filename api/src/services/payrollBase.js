@@ -157,6 +157,24 @@ async function conceptCounts(transaction = undefined) {
 }
 
 /**
+ * Evidencia de cierre: devuelve el snapshot AGREGADO persistido al cerrar el
+ * período (sin PII: sólo conteos). Sólo lectura. Devuelve null si el período no
+ * tiene snapshot (no está cerrado o aún no se generó).
+ */
+async function getSnapshot(periodId) {
+  const [rows] = await sequelize.query(
+    'SELECT snapshot_json, created_at FROM payroll_period_snapshots WHERE period_id = ? LIMIT 1',
+    { replacements: [periodId] },
+  );
+  if (!rows.length) return null;
+  let snapshot = rows[0].snapshot_json;
+  if (typeof snapshot === 'string') {
+    try { snapshot = JSON.parse(snapshot); } catch { snapshot = null; }
+  }
+  return { created_at: rows[0].created_at, snapshot };
+}
+
+/**
  * Previsualización SANDBOX. Devuelve un resumen AGREGADO explícitamente marcado
  * como NO OFICIAL. No calcula montos ni liquidación: hacerlo requeriría fuente
  * normativa verificable y aprobación humana.
@@ -260,5 +278,6 @@ module.exports = {
   headcount,
   conceptCounts,
   computePreview,
+  getSnapshot,
   transition,
 };

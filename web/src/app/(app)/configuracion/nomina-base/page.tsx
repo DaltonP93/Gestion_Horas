@@ -15,7 +15,7 @@
  * RR.HH. ven las acciones (el permiso real lo impone la API).
  */
 import { useEffect, useMemo, useState } from 'react'
-import { DollarSign, AlertTriangle, Plus, Eye, ArrowRight, Lock, X, CheckCircle } from 'lucide-react'
+import { DollarSign, AlertTriangle, Plus, Eye, ArrowRight, Lock, X, CheckCircle, Users, FileCheck } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 
@@ -29,6 +29,8 @@ interface Preview {
   headcount: { by_status: Record<string, number>; active: number }
   active_concepts: { earnings: number; deductions: number }
 }
+interface Headcount { official: boolean; by_status: Record<string, number>; active: number; concepts: { earnings: number; deductions: number } }
+interface Snapshot { official: boolean; created_at: string; snapshot: any }
 
 const STATUS_LABEL: Record<string, string> = { draft: 'Borrador', preview: 'Previsualización', locked: 'Bloqueado', closed: 'Cerrado' }
 const STATUS_CLS: Record<string, string> = {
@@ -73,18 +75,35 @@ export default function NominaBasePage() {
   const [concept, setConcept] = useState({ ...emptyConcept })
   const [conceptErr, setConceptErr] = useState<string | null>(null)
 
+  const [headcount, setHeadcount] = useState<Headcount | null>(null)
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
+  const [snapshotBusy, setSnapshotBusy] = useState(false)
+  const [snapshotOpen, setSnapshotOpen] = useState(false)
+
   async function load() {
     setLoading(true); setError('')
     try {
-      const [p, i, c] = await Promise.all([
+      const [p, i, c, h] = await Promise.all([
         api.get('/api/payroll-base/periods').then(r => (r.data?.data ?? []) as Period[]),
         api.get('/api/payroll-base/integrations').then(r => (r.data?.data ?? []) as Integration[]).catch(() => [] as Integration[]),
         api.get('/api/payroll-base/concepts').then(r => (r.data?.data ?? []) as Concept[]).catch(() => [] as Concept[]),
+        api.get('/api/payroll-base/analytics/headcount').then(r => r.data as Headcount).catch(() => null),
       ])
-      setPeriods(p); setIntegrations(i); setConcepts(c)
+      setPeriods(p); setIntegrations(i); setConcepts(c); setHeadcount(h)
     } catch (e: any) {
       setError(e?.response?.data?.error || e?.message || 'Error al cargar')
     } finally { setLoading(false) }
+  }
+
+  async function openSnapshot(p: Period) {
+    setSnapshotOpen(true); setSnapshot(null); setSnapshotBusy(true)
+    try {
+      const data = await api.get(`/api/payroll-base/periods/${p.id}/snapshot`).then(r => r.data as Snapshot)
+      setSnapshot(data)
+    } catch (e: any) {
+      setFeedback(e?.response?.status === 404 ? 'Este período no tiene evidencia de cierre.' : (e?.response?.data?.error || 'No se pudo cargar la evidencia.'))
+      setSnapshotOpen(false)
+    } finally { setSnapshotBusy(false) }
   }
   useEffect(() => { load() }, [])
   useEffect(() => {
@@ -209,6 +228,36 @@ export default function NominaBasePage() {
       )}
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-3 py-2">{error}</div>}
 
+      {/* Headcount agregado (sin PII) */}
+      {headcount && (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 dark:bg-white/[0.04] dark:border-white/[0.06]">
+          <div className="flex items-center gap-2 mb-3">
+            <Users size={16} className="text-slate-500" />
+            <h2 className="text-sm font-semibold text-slate-700 dark:text-white/70">Headcount (agregado, sin PII)</h2>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-xl bg-emerald-50 p-3 dark:bg-emerald-500/10">
+              <p className="text-[11px] uppercase tracking-wide text-emerald-700/70 dark:text-emerald-300/70">Activos</p>
+              <p className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">{headcount.active}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-white/[0.03]">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-white/40">Conceptos ingreso</p>
+              <p className="text-2xl font-bold text-slate-700 dark:text-white/80">{headcount.concepts?.earnings ?? 0}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-white/[0.03]">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-white/40">Conceptos deducción</p>
+              <p className="text-2xl font-bold text-slate-700 dark:text-white/80">{headcount.concepts?.deductions ?? 0}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-3 dark:bg-white/[0.03]">
+              <p className="text-[11px] uppercase tracking-wide text-slate-400 dark:text-white/40">Otros estados</p>
+              <p className="text-sm font-medium text-slate-600 dark:text-white/70 mt-1">
+                {Object.entries(headcount.by_status || {}).filter(([k]) => k !== 'active').map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showForm && (
         <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-5 space-y-3 dark:border-white/[0.08] dark:bg-white/[0.02]">
           <h2 className="text-sm font-semibold text-slate-700 dark:text-white/80">Nuevo período (nace en borrador)</h2>
@@ -288,6 +337,12 @@ export default function NominaBasePage() {
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 dark:border-white/[0.08] dark:text-white/60 dark:hover:bg-white/[0.04]">
                           <Eye size={12} /> Preview
                         </button>
+                        {p.status === 'closed' && (
+                          <button onClick={() => openSnapshot(p)} title="Evidencia de cierre (snapshot)"
+                            className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/20 dark:text-emerald-300 dark:hover:bg-emerald-500/[0.06]">
+                            <FileCheck size={12} /> Evidencia
+                          </button>
+                        )}
                         {nexts.map(to => (
                           <button key={to} onClick={() => transition(p, to)} disabled={busy}
                             title={`Pasar a ${STATUS_LABEL[to] || to}`}
@@ -332,6 +387,35 @@ export default function NominaBasePage() {
                   <div className="flex justify-between"><dt className="text-slate-500 dark:text-white/50">Conceptos activos (ingresos)</dt><dd className="font-mono text-slate-800 dark:text-white/90">{preview.active_concepts.earnings}</dd></div>
                   <div className="flex justify-between"><dt className="text-slate-500 dark:text-white/50">Conceptos activos (deducciones)</dt><dd className="font-mono text-slate-800 dark:text-white/90">{preview.active_concepts.deductions}</dd></div>
                 </dl>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {snapshotOpen && (
+        <div role="dialog" aria-modal="true" aria-labelledby="snapshot-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setSnapshotOpen(false)}>
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 space-y-4 dark:bg-[#0d0d0f]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 id="snapshot-title" className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <FileCheck size={18} className="text-emerald-600" /> Evidencia de cierre
+              </h3>
+              <button aria-label="Cerrar" onClick={() => setSnapshotOpen(false)} className="p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"><X size={18} /></button>
+            </div>
+            {snapshotBusy && <p className="text-sm text-slate-400 dark:text-white/30">Cargando…</p>}
+            {snapshot && (
+              <>
+                <p className="text-xs text-slate-400 dark:text-white/30">
+                  Snapshot agregado (sin PII) persistido al cerrar el período{snapshot.created_at ? ` · ${String(snapshot.created_at).slice(0, 10)}` : ''}.
+                </p>
+                <dl className="space-y-2 text-sm">
+                  <div className="flex justify-between"><dt className="text-slate-500 dark:text-white/50">Período</dt><dd className="font-medium text-slate-800 dark:text-white/90">{snapshot.snapshot?.period?.code ?? '—'}</dd></div>
+                  <div className="flex justify-between"><dt className="text-slate-500 dark:text-white/50">Empleados activos</dt><dd className="font-mono text-slate-800 dark:text-white/90">{snapshot.snapshot?.headcount?.active ?? '—'}</dd></div>
+                  <div className="flex justify-between"><dt className="text-slate-500 dark:text-white/50">Conceptos (ingresos / deducciones)</dt><dd className="font-mono text-slate-800 dark:text-white/90">{snapshot.snapshot?.active_concepts?.earnings ?? 0} / {snapshot.snapshot?.active_concepts?.deductions ?? 0}</dd></div>
+                </dl>
+                <p className="text-[11px] text-slate-400 dark:text-white/30">Evidencia inmutable de sólo lectura. NO es una liquidación oficial.</p>
               </>
             )}
           </div>
