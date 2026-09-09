@@ -21,10 +21,16 @@ services:
     networks:
       - asistencia_net
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # TCP autenticado (-h 127.0.0.1 fuerza TCP, no el socket): sólo pasa cuando
+      # mysqld ya sirve la instancia real. `mysqladmin ping` daba falsos positivos
+      # durante el init de docker-entrypoint (responde antes de aplicar init.sql),
+      # y `depends_on: service_healthy` arrancaba api/analytics/migrate contra una
+      # base a medio inicializar. $$MYSQL_ROOT_PASSWORD lo resuelve el contenedor.
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" -e 'SELECT 1' >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   # ─── Redis (Pub/Sub + Cache) ──────────────────────────────────
   redis:
