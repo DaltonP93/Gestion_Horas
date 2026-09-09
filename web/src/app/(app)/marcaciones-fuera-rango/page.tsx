@@ -1,8 +1,9 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
-import { AlertTriangle, Save, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
+import { AlertTriangle, Save, ArrowDownLeft, ArrowUpRight, Download } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
+import { downloadCsv } from '@/lib/csvExport'
 
 interface Row {
   employee_id: number; code: string; name: string; department: string
@@ -32,6 +33,15 @@ export default function MarcasFueraRangoPage() {
   }, [from, to])
 
   useEffect(() => { load() }, [load])
+
+  function exportCsv() {
+    if (!rows.length) return
+    downloadCsv(
+      `marcaciones-fuera-rango_${from}_${to}.csv`,
+      ['Fecha', 'Código', 'Empleado', 'Departamento', 'Horario entrada', 'Horario salida', 'Marcó entrada', 'Marcó salida', 'Min antes', 'Min después'],
+      rows.map(r => [r.date, r.code, r.name, r.department, r.check_in, r.check_out, r.first_in, r.last_out, r.early_min, r.late_out_min]),
+    )
+  }
 
   async function saveThresholds() {
     if (!canConfig) return
@@ -95,6 +105,10 @@ export default function MarcasFueraRangoPage() {
             <label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Hasta</label>
             <input type="date" value={to} onChange={e => setTo(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" />
           </div>
+          <button onClick={exportCsv} disabled={!rows.length}
+            className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm flex items-center gap-2 disabled:opacity-50 dark:border-white/[0.08] dark:text-white/70 dark:hover:bg-white/[0.04]">
+            <Download size={15} /> Exportar CSV
+          </button>
         </div>
       </section>
 

@@ -4,6 +4,7 @@
  * Escritura: admin / hr / gth.
  */
 const router = require('express').Router();
+const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
@@ -32,7 +33,7 @@ router.post('/', authorize('admin', 'hr', 'gth'), async (req, res) => {
        ON DUPLICATE KEY UPDATE name = VALUES(name), type = VALUES(type), active = 1`,
       { replacements: [name, date, type] }
     );
-    res.status(201).json({ id: r.insertId || null });
+    res.status(201).json({ id: insertId(r) || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
