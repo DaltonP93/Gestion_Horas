@@ -6,15 +6,21 @@ let io;
 
 function initSocket(server) {
   // Construir lista de orígenes permitidos: permite http y https del mismo dominio
+  // El dominio de producción se toma de FRONTEND_URL (o CORS_ORIGINS, CSV)
+  // desde el entorno — nunca hardcodeado en el repo. En producción, FRONTEND_URL
+  // apunta al dominio real y sus variantes http/https quedan permitidas.
   const rawOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const extra = (process.env.CORS_ORIGINS || '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
   const allowedOrigins = Array.from(new Set([
     rawOrigin,
     rawOrigin.replace(/^http:\/\//,  'https://'),
     rawOrigin.replace(/^https:\/\//, 'http://'),
     'http://localhost:3000',
     'https://localhost:3000',
-    'http://sishoras.saa.com.py',
-    'https://sishoras.saa.com.py',
+    ...extra,
   ]));
 
   io = new Server(server, {
@@ -32,7 +38,7 @@ function initSocket(server) {
     const token = socket.handshake.auth.token;
     if (!token) return next(new Error('Token requerido'));
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
       socket.user = decoded;
       next();
     } catch {

@@ -426,6 +426,7 @@ async function leerMarcajesLote(employeeIds, ventana) {
 
 module.exports = {
   isEngineSummaryWriteEnabled,
+  isStatus074Enabled,
   resolveSummary,
   resolveSummaryBatchForDate,
   statusParaDb,

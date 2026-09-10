@@ -25,6 +25,7 @@ const logger = require('./config/logger');
 const authRoutes       = require('./routes/auth');
 const employeeRoutes   = require('./routes/employees');
 const employeeDocumentsRoutes = require('./routes/employeeDocuments');
+const payslipRoutes    = require('./routes/payslip');
 const attendanceRoutes = require('./routes/attendance');
 const deviceRoutes     = require('./routes/devices');
 const scheduleRoutes   = require('./routes/schedules');
@@ -32,6 +33,7 @@ const shiftRoutes      = require('./routes/shifts');
 const overtimeRoutes   = require('./routes/overtime');
 const reportRoutes     = require('./routes/reports');
 const legalRoutes      = require('./routes/legal');
+const legalPayslipsRoutes = require('./routes/legalPayslips');
 const legalDataRoutes  = require('./routes/legalData');
 const analyticsProxyRoutes = require('./routes/analytics');
 const permissionRoutes = require('./routes/permissions');
@@ -62,6 +64,7 @@ const reportsBuilderRoutes  = require('./routes/reportsBuilder');
 const kpiGoalsRoutes        = require('./routes/kpiGoals');
 const employeeNotesRoutes   = require('./routes/employeeNotes');
 const catalogsRoutes        = require('./routes/catalogs');
+const monthlyApprovalsRoutes = require('./routes/monthlyApprovals');
 const paymentTypesRoutes    = require('./routes/paymentTypes');
 const jobTitlesRoutes       = require('./routes/jobTitles');
 const approvalsSlaRoutes    = require('./routes/approvalsSla');
@@ -80,8 +83,15 @@ const rulesRoutes           = require('./routes/rules');
 const contractsRoutes       = require('./routes/contracts');
 const lactanciaRoutes       = require('./routes/lactancia');
 const workdayConfigurationRoutes = require('./routes/workdayConfiguration');
+const companiesRoutes       = require('./routes/companies');
+const costCentersRoutes     = require('./routes/costCenters');
+const candidatesRoutes      = require('./routes/candidates');
+const assignmentsRoutes     = require('./routes/assignments');
+const laborCalendarsRoutes  = require('./routes/laborCalendars');
+const payrollBaseRoutes     = require('./routes/payrollBase');
 const swaggerUi    = require('swagger-ui-express');
 const swaggerSpec  = require('./config/swagger');
+const { requestId } = require('./middleware/requestId');
 
 const app = express();
 const server = http.createServer(app);
@@ -89,13 +99,26 @@ const server = http.createServer(app);
 // ─── Middleware ─────────────────────────────────────────────────
 app.set('trust proxy', 1); // Nginx reverse proxy
 app.use(helmet());
+// Correlation id por request (FASE F1): etiqueta la request y expone
+// X-Correlation-Id para trazar auditoría/logs. Va temprano para que todo,
+// incluida la auditoría de login, quede correlacionado.
+app.use(requestId);
+// Orígenes permitidos: SIEMPRE desde variables de entorno, nunca hardcodeados.
+// CORS_ORIGINS admite una lista separada por comas (p. ej. producción +
+// staging); FRONTEND_URL se mantiene por compatibilidad con despliegues
+// existentes que sólo la definen a ella. Sin ninguna de las dos, en
+// desarrollo cae a localhost:3000; en producción no se agrega ningún
+// origen por defecto (fail-closed: sin configurar, no hay CORS habilitado).
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
 app.use(cors({
   origin: (origin, callback) => {
     const allowed = [
+      ...corsOrigins,
       process.env.FRONTEND_URL,
       ...(process.env.NODE_ENV !== 'production' ? ['http://localhost:3000'] : []),
-      'http://sishoras.saa.com.py',
-      'https://sishoras.saa.com.py'
     ].filter(Boolean);
     // Permitir requests sin origin (curl, Postman, SSR)
     if (!origin || allowed.includes(origin)) return callback(null, true);
@@ -110,7 +133,15 @@ app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
+
+// Ver api/src/utils/logRedaction.js: evita que el JWT (?access_token=... en
+// descargas GET, o un futuro header Authorization) quede en texto plano en
+// los logs de acceso de morgan.
+const { urlToken, redactSensitiveLogLine } = require('./utils/logRedaction');
+morgan.token('url', urlToken);
+app.use(morgan('combined', {
+  stream: { write: msg => logger.info(redactSensitiveLogLine(msg.trim())) },
+}));
 
 // Rate limiting global
 app.use(rateLimit({
@@ -143,13 +174,18 @@ const authLimiter = rateLimit({
 app.use('/api/auth/login', loginLimiter);
 app.use('/api/auth',        authLimiter, authRoutes);
 app.use('/api/employees/:id/documents', employeeDocumentsRoutes);
+app.use('/api/employees/:id/payslip', payslipRoutes);
 app.use('/api/employees',   employeeRoutes);
 app.use('/api/attendance',  attendanceRoutes);
 app.use('/api/devices',     deviceRoutes);
 app.use('/api/schedules',   scheduleRoutes);
 app.use('/api/shifts',      shiftRoutes);
 app.use('/api/overtime',    overtimeRoutes);
+// Se monta ANTES de /api/reports para que /monthly/approvals no dependa del
+// orden de rutas dentro de reports.js (evita solapamiento con el PR #196).
+app.use('/api/reports/monthly/approvals', monthlyApprovalsRoutes);
 app.use('/api/reports',     reportRoutes);
+app.use('/api/legal/payslips', legalPayslipsRoutes);
 app.use('/api/legal',       legalRoutes);
 app.use('/api/legal-data',  legalDataRoutes);
 app.use('/api/analytics',   analyticsProxyRoutes);
@@ -168,6 +204,12 @@ app.use('/api/me',             meRoutes);
 app.use('/api/audit',          auditRoutes);
 app.use('/api/holidays',       holidayRoutes);
 app.use('/api/branches',       branchRoutes);
+app.use('/api/companies',      companiesRoutes);
+app.use('/api/cost-centers',   costCentersRoutes);
+app.use('/api/candidates',     candidatesRoutes);
+app.use('/api/assignments',    assignmentsRoutes);
+app.use('/api/labor-calendars', laborCalendarsRoutes);
+app.use('/api/payroll-base',   payrollBaseRoutes);
 app.use('/api/justifications', justificationsBulk);
 app.use('/api/executive',      executiveRoutes);
 app.use('/api/self-checkin',   selfCheckinRoutes);
@@ -263,6 +305,13 @@ async function start() {
     // Conectar MySQL
     await sequelize.authenticate();
     logger.info('✅ MySQL conectado');
+
+    // Preflight de seguridad (H1): en producción, no arrancar si un admin
+    // conserva la contraseña demo por defecto de init.sql. FAIL-CLOSED: también
+    // bloquea si la verificación no puede completarse (error de consulta/tabla/
+    // permiso → DEFAULT_ADMIN_CHECK_UNAVAILABLE). Un fallo aborta con exit(1).
+    const { assertNoDefaultAdminCredential } = require('./config/securityPreflight');
+    await assertNoDefaultAdminCredential({ sequelize });
 
     // Inicializar Socket.io
     initSocket(server);

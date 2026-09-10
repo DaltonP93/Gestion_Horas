@@ -13,7 +13,7 @@ import {
   CalendarRange, BarChart2, FileText, TrendingUp, DollarSign, Cake, Plane, PiggyBank,
   Megaphone, GraduationCap, ClipboardList, Star, FileSignature, Baby, UserCheck,
   Building2, Shield, SlidersHorizontal, Settings, RefreshCw, Server, Activity,
-  UserCircle2, QrCode, Home, UsersRound, UserCog, Sparkles, HeartHandshake, Target, Wrench,
+  UserCircle2, QrCode, Home, UsersRound, UserCog, Sparkles, HeartHandshake, Target, Wrench, UserPlus,
   type LucideIcon,
 } from 'lucide-react'
 import { useCurrentUser, hasRole, isSuperAdmin, type Role } from '@/lib/useCurrentUser'
@@ -58,6 +58,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'gestion-personal', label: 'Gestión de personal', icon: UsersRound, desc: 'Empleados, asistencia, permisos e incidencias.',
     items: [
       { href: '/empleados',   icon: Users,        i18nKey: 'nav.employees',   desc: 'Alta, edición y baja de empleados.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'empleados', color: 'bg-cyan-500' },
+      { href: '/candidatos',  icon: UserPlus,     i18nKey: 'nav.candidates',  desc: 'Postulantes y conversión a empleado.', roles: ['admin','gth','hr'], module: 'candidatos', color: 'bg-cyan-600' },
       { href: '/asistencia',  icon: Clock,        i18nKey: 'nav.attendance',  desc: 'Marcaciones del día con detalle.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'asistencia', color: 'bg-emerald-500' },
       { href: '/permisos',    icon: Calendar,     i18nKey: 'nav.permissions', desc: 'Gestión de permisos y ausencias.', roles: ['admin','gth','hr','coordinator','manager','gestor','supervisor'], module: 'permisos', color: 'bg-amber-500' },
       { href: '/aprobaciones',icon: CheckSquare,  i18nKey: 'nav.approvals',   desc: 'Aprobar o rechazar solicitudes.', roles: ['admin','gth','hr','coordinator','manager'], module: 'aprobaciones', color: 'bg-green-600' },
@@ -107,6 +108,10 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'administracion', label: 'Administración', icon: Wrench, desc: 'Configuración, usuarios, auditoría y sistema.',
     items: [
       { href: '/departamentos', icon: Building2,        i18nKey: 'nav.departments', desc: 'Áreas y departamentos.', roles: ['admin','gth'], module: 'departamentos', color: 'bg-slate-600' },
+      { href: '/configuracion/empresas', icon: Building2, i18nKey: 'nav.companies', desc: 'Empresas (personas jurídicas empleadoras).', roles: ['admin','gth'], module: 'empresas', color: 'bg-slate-600' },
+      { href: '/configuracion/centros-costo', icon: PiggyBank, i18nKey: 'nav.cost_centers', desc: 'Centros de costo por empresa.', roles: ['admin','gth'], module: 'centros_costo', color: 'bg-amber-600' },
+      { href: '/configuracion/calendario-laboral', icon: CalendarRange, i18nKey: 'nav.labor_calendar', desc: 'Calendarios laborales y días efectivos.', roles: ['admin','gth'], module: 'calendario', color: 'bg-indigo-600' },
+      { href: '/configuracion/nomina-base', icon: DollarSign, i18nKey: 'nav.payroll_base', desc: 'Base de nómina (sandbox no oficial).', roles: ['admin','gth','hr'], module: 'nomina', color: 'bg-green-600' },
       { href: '/usuarios',      icon: Shield,           i18nKey: 'nav.users',       desc: 'Usuarios del sistema y roles.', roles: ['admin','gth'], module: 'usuarios', color: 'bg-blue-600' },
       { href: '/auditoria',     icon: FileText,         i18nKey: 'nav.audit',       desc: 'Registro de acciones (audit log).', roles: ['admin','gth'], module: 'auditoria', color: 'bg-amber-600' },
       { href: '/configuracion/reglas', icon: SlidersHorizontal, i18nKey: 'nav.rules', desc: 'Motor de reglas parametrizable.', roles: ['admin','gth'], module: 'reglas', color: 'bg-violet-600' },
