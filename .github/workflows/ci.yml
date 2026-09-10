@@ -271,6 +271,10 @@ jobs:
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/init.sql
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/012_audit_events.sql
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/015_branches.sql
+          # 033 crea system_settings (fuente de verdad); la 083 (FASE E) la usa con
+          # INSERT IGNORE. Como esta job BASELINEA hasta 071 (033 no se ejecuta), hay
+          # que sembrar su esquema aquí, igual que 012/015/067, o 083 fallaría.
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/033_audit_fulltext.sql
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/067_employee_documents.sql
       - name: Baseline SÓLO hasta 071 (072→ se aplican de verdad)
         run: node scripts/migrate.js --baseline=071_repair_external_hr_sources.sql
