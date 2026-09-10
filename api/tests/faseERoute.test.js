@@ -22,7 +22,6 @@ const mockSvc = {
   getStatus: jest.fn(async () => ({ read_only: true, migrations: [] })),
   getImpact: jest.fn(async () => ({ read_only: true, rows_differ: 0 })),
   listBatches: jest.fn(async () => []),
-  applyMigrations: jest.fn(() => ({ ok: true, upto: '075', exit_code: 0 })),
   setForwardEnabled: jest.fn(async (v) => ({ forward_db_setting: v })),
   recalcApply: jest.fn(async () => ({ batch_id: 'B1', period: {}, scope: {}, employees: 1, rows_backed_up: 1, rows_written: 1 })),
   restoreBatch: jest.fn(async () => ({ batch_id: 'B1', rows_restored: 1, rows_deleted: 0 })),
@@ -76,10 +75,10 @@ function runRoute(method, path, { user, body = {}, query = {} } = {}) {
 const SUPER = { id: 1, role: 'super_admin', username: 'root' };
 const ADMIN = { id: 2, role: 'admin', username: 'adm' };
 
+// /migrations/apply se retiró (migraciones = paso de OPS). /forward/disable ya
+// NO se gatea con el master-flag: es el FRENO DE EMERGENCIA (se prueba aparte).
 const MUTATING = [
-  ['post', '/migrations/apply', { confirm: 'APLICAR MIGRACIONES', backup_confirmed: true }],
   ['post', '/forward/enable', { confirm: 'ACTIVAR MOTOR', backup_confirmed: true }],
-  ['post', '/forward/disable', {}],
   ['post', '/recalc/apply', { confirm: 'RECALCULAR', backup_confirmed: true, from: '2025-01-01', to: '2025-01-31' }],
   ['post', '/recalc/restore', { confirm: 'RESTAURAR', batch_id: 'B1' }],
 ];
@@ -105,6 +104,13 @@ describe('(b) master-flag OFF → toda acción mutante es 503', () => {
     const res = await runRoute(method, path, { user: SUPER, body });
     expect(res.statusCode).toBe(503);
     expect(res.body.code).toBe('FASE_E_ACTIVATION_DISABLED');
+  });
+
+  test('[P2] forward/disable (freno de emergencia) SÍ funciona con master-flag OFF', async () => {
+    const res = await runRoute('post', '/forward/disable', { user: SUPER, body: {} });
+    expect(res.statusCode).toBe(200);
+    expect(mockSvc.setForwardEnabled).toHaveBeenCalledWith(false);
+    expect(res.body.emergency_reversal).toBe(true);
   });
 
   test('la solo-lectura /status SÍ funciona con master-flag OFF', async () => {

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
-  ArrowLeft, ShieldAlert, RefreshCw, Database, ToggleLeft, ToggleRight,
+  ArrowLeft, ShieldAlert, RefreshCw, ToggleLeft, ToggleRight,
   PlayCircle, RotateCcw, CheckCircle2, XCircle, Lock, AlertTriangle,
 } from 'lucide-react'
 import { api } from '@/lib/api'
@@ -29,6 +29,32 @@ type Status = {
     workday_config_write_env: boolean
   }
   go_no_go: { schema_ready: boolean; forward_ready_to_flip: boolean; note: string }
+}
+
+// Contrato EXACTO que devuelve el dry-run del backend (getImpact). El backend ya
+// NO devuelve `stored`/`motor` por celda (eso filtraba estados y PII innecesaria):
+// entrega conteos agregados, las fechas de spillover fuera del rango pedido, el
+// `plan_digest` que el apply exigirá (paridad P1-F) y ejemplos con SÓLO los
+// nombres de los campos que cambiarían (`changed_fields`), sin valores.
+type ImpactExample = {
+  employee_id: number
+  date: string
+  outside_requested_range: boolean
+  existed: 0 | 1
+  changed_fields: string[]
+}
+type Impact = {
+  read_only: boolean
+  period: { from: string; to: string }
+  scope: { kind: string; id: number | null }
+  employees: number
+  cells_evaluated: number
+  rows_differ: number
+  rows_new: number
+  rows_differ_outside_range: number
+  dates_outside_range: string[]
+  plan_digest: string | null
+  examples: ImpactExample[]
 }
 
 function errMsg(e: any): string {
@@ -71,12 +97,11 @@ export default function ActivacionMotorPage() {
 
   // Estado del asistente.
   const [backupConfirmed, setBackupConfirmed] = useState(false)
-  const [confMig, setConfMig] = useState('')
   const [confFwd, setConfFwd] = useState('')
   const [confRecalc, setConfRecalc] = useState('')
   const [confRestore, setConfRestore] = useState('')
   const [range, setRange] = useState({ from: '', to: '', scope_kind: 'all', scope_id: '' })
-  const [impact, setImpact] = useState<any>(null)
+  const [impact, setImpact] = useState<Impact | null>(null)
   const [batches, setBatches] = useState<any[]>([])
   const [restoreId, setRestoreId] = useState('')
   const [busy, setBusy] = useState('')
@@ -124,12 +149,9 @@ export default function ActivacionMotorPage() {
         from: range.from, to: range.to, scope_kind: range.scope_kind,
         scope_id: range.scope_id ? Number(range.scope_id) : null,
       })
-      setImpact(r.data)
+      setImpact(r.data as Impact)
     } catch (e: any) { setErr(errMsg(e)) } finally { setBusy('') }
   }
-
-  const pendingEngine = (status?.migrations || []).filter(m =>
-    m.filename !== '083_fase_e_activation_console.sql' && !m.recorded)
 
   return (
     <div className="max-w-4xl space-y-5 p-6">
@@ -212,29 +234,12 @@ export default function ActivacionMotorPage() {
         </label>
       </Card>
 
-      {/* Paso 2 — Migraciones */}
-      <Card n={2} title="Aplicar migraciones del motor (hasta 075)" disabled={!mutableEnabled(true)}
-        subtitle="Corre el runner real acotado con --upto=075. No arrastra 083 ni posteriores.">
-        {pendingEngine.length === 0
-          ? <p className="text-sm text-emerald-600">No hay migraciones del motor pendientes.</p>
-          : <div className="mb-3 text-sm text-slate-600 dark:text-slate-300">
-              Pendientes que se aplicarían:
-              <ul className="ml-4 mt-1 list-disc font-mono text-xs">{pendingEngine.map(m => <li key={m.filename}>{m.filename}</li>)}</ul>
-            </div>}
-        <div className="flex flex-wrap items-center gap-2">
-          <input value={confMig} onChange={e => setConfMig(e.target.value)} placeholder='Escribí: APLICAR MIGRACIONES'
-            className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:bg-slate-900 dark:border-slate-600" />
-          <button
-            disabled={!mutableEnabled(confMig === 'APLICAR MIGRACIONES') || busy !== ''}
-            onClick={() => run('/api/fase-e/migrations/apply', { confirm: confMig, backup_confirmed: backupConfirmed }, 'Migraciones aplicadas.')}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
-            <Database size={14} /> Aplicar migraciones
-          </button>
-        </div>
-      </Card>
+      {/* Las migraciones del esquema (072→083) NO se aplican desde esta consola:
+          son un paso de OPS separado (scripts/ops-migrate.sh, usuario admin por
+          socket). El preflight de arriba sólo LEE su estado. */}
 
-      {/* Paso 3 — Activación hacia adelante */}
-      <Card n={3} title="Activar el motor hacia adelante (reversible)" disabled={!masterOn}
+      {/* Paso 2 — Activación hacia adelante */}
+      <Card n={2} title="Activar el motor hacia adelante (reversible)" disabled={!masterOn}
         subtitle="Flip del setting fase_e_forward_enabled. El env kill-switch de ops debe estar en true además.">
         <div className="mb-3 flex flex-wrap gap-1.5">
           <Pill ok={!!status?.gates.forward_env_kill_switch}>env kill-switch (ops)</Pill>
@@ -262,8 +267,8 @@ export default function ActivacionMotorPage() {
         </div>
       </Card>
 
-      {/* Paso 4 — Recálculo histórico acotado */}
-      <Card n={4} title="Recálculo histórico acotado (reversible)"
+      {/* Paso 3 — Recálculo histórico acotado */}
+      <Card n={3} title="Recálculo histórico acotado (reversible)"
         subtitle="Dry-run → preview → confirmación tipeada. Respalda cada fila antes de sobrescribirla.">
         <div className="grid gap-2 sm:grid-cols-4">
           <input type="date" value={range.from} onChange={e => setRange({ ...range, from: e.target.value })}
@@ -290,15 +295,39 @@ export default function ActivacionMotorPage() {
           <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm dark:bg-slate-900">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <div><div className="text-xs text-slate-400">Empleados</div><div className="font-semibold">{impact.employees}</div></div>
-              <div><div className="text-xs text-slate-400">Filas evaluadas</div><div className="font-semibold">{impact.rows_evaluated}</div></div>
+              <div><div className="text-xs text-slate-400">Celdas evaluadas</div><div className="font-semibold">{impact.cells_evaluated}</div></div>
               <div><div className="text-xs text-slate-400">Diferirían</div><div className="font-semibold text-amber-600">{impact.rows_differ}</div></div>
               <div><div className="text-xs text-slate-400">Filas nuevas</div><div className="font-semibold">{impact.rows_new}</div></div>
             </div>
-            {impact.examples?.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-auto text-xs">
-                <div className="text-slate-400">Ejemplos (sin PII):</div>
-                {impact.examples.slice(0, 20).map((ex: any, i: number) => (
-                  <div key={i} className="font-mono">emp {ex.employee_id} · {ex.date}: {ex.stored?.status ?? '∅'} → {ex.motor.status} ({ex.stored?.worked_minutes ?? 0}→{ex.motor.worked_minutes}m)</div>
+            {/* Spillover: el escritor por fecha toca {d-1, d}, así que el recálculo
+                puede cambiar celdas FUERA del rango pedido. Se muestra explícito. */}
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              <span className="text-slate-400">Fuera del rango pedido:</span>
+              <span>
+                <b className={impact.rows_differ_outside_range > 0 ? 'text-amber-600' : ''}>{impact.rows_differ_outside_range}</b> celda(s) diferirían
+              </span>
+              {impact.dates_outside_range.length > 0 && (
+                <span className="font-mono text-slate-500 dark:text-slate-400" data-testid="dates-outside-range">
+                  ({impact.dates_outside_range.join(', ')})
+                </span>
+              )}
+            </div>
+            {impact.plan_digest && (
+              <div className="mt-1 font-mono text-[10px] text-slate-400" data-testid="plan-digest">
+                plan_digest: {impact.plan_digest.slice(0, 12)}…
+              </div>
+            )}
+            {impact.examples.length > 0 && (
+              <div className="mt-2 max-h-40 overflow-auto text-xs" data-testid="impact-examples">
+                <div className="text-slate-400">Ejemplos (sin PII — sólo campos que cambiarían):</div>
+                {impact.examples.slice(0, 20).map((ex, i) => (
+                  <div key={i} className="font-mono">
+                    emp {ex.employee_id} · {ex.date}
+                    {ex.outside_requested_range && <span className="ml-1 text-amber-600">(fuera de rango)</span>}
+                    {' '}· {ex.existed ? 'actualiza' : 'crea'}
+                    {' · '}
+                    {ex.changed_fields.length > 0 ? ex.changed_fields.join(', ') : '—'}
+                  </div>
                 ))}
               </div>
             )}
@@ -306,11 +335,14 @@ export default function ActivacionMotorPage() {
               <input value={confRecalc} onChange={e => setConfRecalc(e.target.value)} placeholder='Escribí: RECALCULAR'
                 className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:bg-slate-900 dark:border-slate-600" />
               <button
-                disabled={!mutableEnabled(confRecalc === 'RECALCULAR') || busy !== ''}
+                disabled={!mutableEnabled(confRecalc === 'RECALCULAR') || !impact.plan_digest || busy !== ''}
                 onClick={() => run('/api/fase-e/recalc/apply', {
                   confirm: confRecalc, backup_confirmed: backupConfirmed,
                   from: range.from, to: range.to, scope_kind: range.scope_kind,
                   scope_id: range.scope_id ? Number(range.scope_id) : null,
+                  // [P1-F] paridad exacta: el apply reconstruye el plan y aborta con
+                  // PLAN_CHANGED si el digest del dry-run ya no coincide.
+                  plan_digest: impact.plan_digest,
                 }, 'Recálculo aplicado con respaldo.')}
                 className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-40">
                 <PlayCircle size={14} /> Aplicar recálculo (con respaldo)
@@ -321,8 +353,8 @@ export default function ActivacionMotorPage() {
         )}
       </Card>
 
-      {/* Paso 5 — Restore */}
-      <Card n={5} title="Restaurar un lote (rollback)" subtitle="Repone el estado previo por batch_id. Reversible.">
+      {/* Paso 4 — Restore */}
+      <Card n={4} title="Restaurar un lote (rollback)" subtitle="Repone el estado previo por batch_id. Reversible.">
         <button onClick={loadBatches} className="mb-3 inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200">
           <RefreshCw size={14} /> Refrescar lotes
         </button>

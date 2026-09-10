@@ -42,12 +42,17 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
+// DB_SOCKET permite correr las migraciones vía SOCKET con un usuario ADMIN de
+// MySQL (auth por unix_socket, sin password en config): así OPS aplica las
+// migraciones que crean rutinas/triggers (073/082) sin conceder CREATE ROUTINE
+// al usuario runtime de la API. Sin DB_SOCKET, se usa TCP (host/port) como antes.
 const DB = {
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '3306', 10),
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'asistencia',
+  socketPath: process.env.DB_SOCKET || undefined,
 };
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', 'database', 'migrations');
@@ -111,7 +116,10 @@ function outOfOrderPending(pendingFiles, doneFiles) {
 
 function applyWithMysqlClient(file) {
   const full = path.join(MIGRATIONS_DIR, file);
-  const args = ['-h', DB.host, '-P', String(DB.port), '-u', DB.user, DB.database];
+  // Socket admin (OPS) o TCP (runtime). El socket usa auth unix_socket: sin password.
+  const args = DB.socketPath
+    ? ['--socket', DB.socketPath, '-u', DB.user, DB.database]
+    : ['-h', DB.host, '-P', String(DB.port), '-u', DB.user, DB.database];
   const res = spawnSync('mysql', args, {
     input: fs.readFileSync(full),
     env: { ...process.env, MYSQL_PWD: DB.password }, // evita exponer la clave en argv

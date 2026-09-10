@@ -40,6 +40,7 @@
 -- fuera al aplicar sólo las migraciones del motor hasta 075.
 --
 -- ROLLBACK:
+--   DROP TABLE IF EXISTS fase_e_console_lock;
 --   DROP TABLE IF EXISTS daily_summary_backup;
 --   DROP TABLE IF EXISTS daily_summary_recalc_batch;
 --   DELETE FROM system_settings WHERE key_name = 'fase_e_forward_enabled';
@@ -63,13 +64,15 @@ CREATE TABLE IF NOT EXISTS daily_summary_recalc_batch (
   scope_id       INT          NULL,                   -- department_id o employee_id según scope_kind
   -- Máquina de estados del lote. NUNCA se marca 'applied' antes de que el motor
   -- termine; un fallo intermedio deja 'failed' (con el respaldo completo, para
-  -- que el RESTORE deshaga lo parcial). El RESTORE pasa por 'restoring' y sólo
-  -- llega a 'restored' si se procesaron TODAS las filas respaldadas.
+  -- que el RESTORE deshaga lo parcial). El RESTORE es TRANSACCIONAL (todo o nada)
+  -- y REINTENTABLE: sólo llega a 'restored' al commitear; un fallo parcial hace
+  -- rollback y el lote queda restaurable (no se persiste 'restoring').
   status         ENUM('prepared','applying','applied','failed','restoring','restored')
                  NOT NULL DEFAULT 'prepared',
   employees      INT          NOT NULL DEFAULT 0,     -- empleados en alcance
   rows_backed_up INT          NOT NULL DEFAULT 0,     -- filas respaldadas antes de escribir
   rows_written   INT          NOT NULL DEFAULT 0,     -- filas escritas por el motor
+  plan_digest    CHAR(64)     NULL,                   -- sha256 del plan validado (paridad dry-run/apply)
   created_by     INT          NULL,                   -- user_id que ejecutó el recálculo
   created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   restored_by    INT          NULL,
@@ -98,22 +101,27 @@ CREATE TABLE IF NOT EXISTS daily_summary_backup (
   notes            TEXT         NULL,
   row_json         JSON         NULL,
   backed_up_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_batch       (batch_id),
-  INDEX idx_batch_emp_d (batch_id, employee_id, date)
+  -- Una sola fila de respaldo por celda dentro de un lote: hace el backup
+  -- idempotente y evita huérfanos duplicados si un INSERT se reintenta.
+  UNIQUE KEY uq_batch_cell (batch_id, employee_id, date),
+  INDEX idx_batch       (batch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 4. Lock ÚNICO de operaciones mutantes de la consola (recalc/restore).
---    Exclusión mutua: sólo una operación por vez. La toma/libera una UPDATE
---    condicional atómica (independiente de la conexión), con TTL que
---    auto-recupera si un proceso murió sin liberar. Aditiva, una sola fila.
+-- 4. Lock ÚNICO de operaciones mutantes de la consola, CON PROPIEDAD.
+--    Exclusión mutua con token + lease: quien toma el lock genera un lock_token
+--    propio; SÓLO con ese token se renueva (heartbeat) o se libera. Así una
+--    operación vieja NUNCA libera el lock de otra. El lease auto-recupera si un
+--    proceso murió (se puede re-tomar cuando lease_expires_at < NOW()). El
+--    heartbeat renueva el lease para operaciones más largas que el lease inicial.
 CREATE TABLE IF NOT EXISTS fase_e_console_lock (
-  id          TINYINT      NOT NULL PRIMARY KEY,       -- fila única (1)
-  held        TINYINT(1)   NOT NULL DEFAULT 0,
-  operation   VARCHAR(32)  NULL,                        -- 'recalc' | 'restore'
-  held_by     INT          NULL,                        -- user_id que la tomó
-  acquired_at DATETIME     NULL
+  id               TINYINT     NOT NULL PRIMARY KEY,    -- fila única (1)
+  lock_token       CHAR(36)    NULL,                    -- NULL = libre; UUID del dueño actual
+  operation        VARCHAR(32) NULL,                    -- 'recalc' | 'restore'
+  held_by          INT         NULL,                    -- user_id que la tomó
+  acquired_at      DATETIME    NULL,
+  lease_expires_at DATETIME    NULL                     -- el lock es re-tomable si esto < NOW()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-INSERT IGNORE INTO fase_e_console_lock (id, held) VALUES (1, 0);
+INSERT IGNORE INTO fase_e_console_lock (id, lock_token) VALUES (1, NULL);
 
 SELECT 'Migración 083 (PROPUESTA, aditiva): consola FASE E — fase_e_forward_enabled + respaldo/lotes de recálculo + lock' AS info;

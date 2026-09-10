@@ -21,11 +21,14 @@
  *   GET  /batches           lotes de recálculo (para RESTORE)
  *
  * MUTANTE (doble compuerta + confirmación tipeada):
- *   POST /migrations/apply  corre el runner real acotado a 075
- *   POST /forward/enable     flip del setting fase_e_forward_enabled → true
- *   POST /forward/disable    flip → false (reversa segura)
- *   POST /recalc/apply       recálculo histórico acotado, con respaldo previo
+ *   POST /forward/enable     flip del setting fase_e_forward_enabled → true (GO/NO-GO backend)
+ *   POST /recalc/apply       recálculo histórico acotado, con respaldo previo + plan_digest
  *   POST /recalc/restore     restaura un lote por batch_id
+ * FRENO DE EMERGENCIA (sólo RBAC, SIN master-flag):
+ *   POST /forward/disable    flip → false (apagar es siempre seguro)
+ *
+ * Las MIGRACIONES ya NO se aplican por HTTP: son un paso de OPS por socket admin
+ * (scripts/ops-migrate.sh). El runtime de la API no ejecuta migraciones.
  *
  * El PRIMER click real en producción lo da el dueño: nada acá activa nada por sí
  * solo. No conoce ATT2000. Auditoría SIN PII (ids/acciones/rango/batch/counts).
@@ -100,15 +103,17 @@ router.get('/status', asyncHandler(async (req, res) => {
   res.json({ ok: true, ...status });
 }));
 
+// [P1-B] scope_kind se pasa TAL CUAL (sin `|| 'all'`): el servicio rechaza
+// cualquier valor que no sea exactamente all|department|employee.
 router.post('/impact', asyncHandler(async (req, res) => {
   const { from, to, scope_kind, scope_id } = req.body || {};
-  const report = await svc.getImpact({ from, to, scopeKind: scope_kind || 'all', scopeId: scope_id ?? null });
+  const report = await svc.getImpact({ from, to, scopeKind: scope_kind, scopeId: scope_id ?? null });
   res.json({ ok: true, ...report });
 }));
 
 router.post('/recalc/dryrun', asyncHandler(async (req, res) => {
   const { from, to, scope_kind, scope_id } = req.body || {};
-  const report = await svc.getImpact({ from, to, scopeKind: scope_kind || 'all', scopeId: scope_id ?? null });
+  const report = await svc.getImpact({ from, to, scopeKind: scope_kind, scopeId: scope_id ?? null });
   res.json({ ok: true, dry_run: true, ...report });
 }));
 
@@ -117,23 +122,9 @@ router.get('/batches', asyncHandler(async (req, res) => {
   res.json({ ok: true, batches });
 }));
 
-// ─── MUTANTE: migraciones (runner real, acotado a 075) ───────────────────
-router.post('/migrations/apply',
-  requireActivation,
-  requireBackupConfirmed,
-  requireTypedConfirm('APLICAR MIGRACIONES'),
-  asyncHandler(async (req, res) => {
-    // applyMigrations corre el runner en un PROCESO HIJO de forma asíncrona: no
-    // bloquea el event loop de la API mientras aplica.
-    const result = await svc.applyMigrations();
-    auditLog(req, 'fase_e.migrations.apply', { upto: result.upto, ok: result.ok, exit_code: result.exit_code });
-    const status = await svc.getStatus();
-    res.status(result.ok ? 200 : 500).json({
-      ok: result.ok, result, migrations: status.migrations,
-      backup_confirmation: 'operator_declared',
-    });
-  }),
-);
+// NOTA: las MIGRACIONES ya NO se aplican por HTTP. Es un paso de OPS separado
+// (scripts/ops-migrate.sh) con un usuario admin de MySQL por socket; el usuario
+// runtime de la API no tiene CREATE ROUTINE/TRIGGER ni ejecuta migraciones.
 
 // ─── MUTANTE: activación hacia adelante (reversible con un click) ─────────
 router.post('/forward/enable',
@@ -147,12 +138,16 @@ router.post('/forward/enable',
   }),
 );
 
+// [P2] FRENO DE EMERGENCIA: apagar el escritor hacia adelante NO se gatea con el
+// master-flag. requireActivation bloqueaba el disable cuando FASE_E_ACTIVATION_ENABLED
+// estaba en false, pero ese flag NO forma parte del writer gate — y justo se
+// necesita apagar cuando el master-flag ya se apagó pero el setting de BD quedó en
+// true. Sólo RBAC super_admin (global). Apagar siempre es la dirección segura.
 router.post('/forward/disable',
-  requireActivation, // reversa segura: sólo master-flag, sin backup/typed-confirm
   asyncHandler(async (req, res) => {
     const state = await svc.setForwardEnabled(false);
     auditLog(req, 'fase_e.forward.disable', state);
-    res.json({ ok: true, ...state });
+    res.json({ ok: true, ...state, emergency_reversal: true });
   }),
 );
 
@@ -162,10 +157,12 @@ router.post('/recalc/apply',
   requireBackupConfirmed,
   requireTypedConfirm('RECALCULAR'),
   asyncHandler(async (req, res) => {
-    const { from, to, scope_kind, scope_id } = req.body || {};
+    const { from, to, scope_kind, scope_id, plan_digest } = req.body || {};
+    // [P1-B] scope_kind explícito (sin `|| 'all'`). [P1-F] plan_digest del dry-run
+    // previo: recalcApply reconstruye el plan y responde PLAN_CHANGED si difiere.
     const result = await svc.recalcApply({
-      from, to, scopeKind: scope_kind || 'all', scopeId: scope_id ?? null,
-      userId: req.user?.id || null,
+      from, to, scopeKind: scope_kind, scopeId: scope_id ?? null,
+      userId: req.user?.id || null, planDigestExpected: plan_digest ?? null,
     });
     auditLog(req, 'fase_e.recalc.apply', {
       batch_id: result.batch_id, period: result.period, scope: result.scope,
