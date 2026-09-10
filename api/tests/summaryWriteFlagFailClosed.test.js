@@ -52,10 +52,14 @@ describe('dispatcher operativo consulta el flag (cae a legacy con OFF)', () => {
   const ctrl = fs.readFileSync(path.join(__dirname, '..', 'src', 'controllers', 'attendanceController.js'), 'utf8');
   const sched = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'scheduler.js'), 'utf8');
 
-  test('el recalc del controller gatea en isEngineSummaryWriteEnabled()', () => {
-    expect(ctrl).toMatch(/isEngineSummaryWriteEnabled\(\)/);
+  // FASE E (consola) endurece el gate del camino operativo: pasa del kill-switch
+  // simple (env) a la DOBLE COMPUERTA isEngineForwardWriteEnabled() = env kill-switch
+  // AND setting de BD `fase_e_forward_enabled`. Sigue siendo fail-closed (env OFF
+  // corto-circuita sin tocar la BD) y más estricto; con OFF cae a legacy igual.
+  test('el recalc del controller gatea en la doble compuerta isEngineForwardWriteEnabled()', () => {
+    expect(ctrl).toMatch(/isEngineForwardWriteEnabled\(\)/);
   });
-  test('el scheduler gatea el camino de motor en isEngineSummaryWriteEnabled()', () => {
-    expect(sched).toMatch(/isEngineSummaryWriteEnabled\(\)/);
+  test('el scheduler gatea el camino de motor en la doble compuerta isEngineForwardWriteEnabled()', () => {
+    expect(sched).toMatch(/isEngineForwardWriteEnabled\(\)/);
   });
 });
