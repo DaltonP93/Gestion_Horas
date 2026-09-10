@@ -471,6 +471,7 @@ module.exports = {
   isForwardSettingEnabled,
   isEngineForwardWriteEnabled,
   FORWARD_SETTING_KEY,
+  isStatus074Enabled,
   resolveSummary,
   resolveSummaryBatchForDate,
   statusParaDb,

@@ -171,14 +171,19 @@ describe('snapshot puro', () => {
 
 describe('createHistory', () => {
   test('crea bajo lock, valida solapamiento y persiste snapshot completo', async () => {
-    sequelize.query.mockImplementation(async (sql) => {
+    sequelize.query.mockImplementation(async (sql, options) => {
       if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
       if (/RELEASE_LOCK/.test(sql)) return [[]];
       if (/SELECT id FROM employees/.test(sql)) return [[{ id: 1 }]];
       if (/FROM employee_schedule_history/.test(sql) && /FOR UPDATE/.test(sql) && /valid_from/.test(sql)) return [[]];
       if (/FROM schedules/.test(sql)) return [[schedule]];
-      if (/INSERT INTO employee_schedule_history/.test(sql)) return [{ insertId: 77 }];
-      if (/WHERE id = \? LIMIT 1/.test(sql)) return [[{
+      // Forma REAL del INSERT crudo: [insertId, affectedRows] (números), no {insertId}.
+      if (/INSERT INTO employee_schedule_history/.test(sql)) return [77, 1];
+      // El SELECT de relectura sólo devuelve la fila si recibe el id verdadero (77):
+      // así, si el servicio leyera `result.insertId` (undefined) no encontraría nada.
+      if (/WHERE id = \? LIMIT 1/.test(sql)) {
+        if (options?.replacements?.[0] !== 77) return [[]];
+        return [[{
         id: 77,
         employee_id: 1,
         schedule_id: 7,
@@ -198,7 +203,8 @@ describe('createHistory', () => {
         work_days: '2,3,4,5,6',
         snapshot_version: 1,
         snapshot_source: 'schedule_snapshot',
-      }]];
+        }]];
+      }
       return [[]];
     });
 

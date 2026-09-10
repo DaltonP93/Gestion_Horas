@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────────
+# deploy/signing — Servicios de firma digital PAdES para SisHoras
+#
+# Levanta los DOS servicios que usa la firma del reporte mensual:
+#   - html2pdf      : renderiza HTML -> PDF   (puerto interno 3000)
+#   - pades-signer  : aplica firma PAdES al PDF (puerto interno 3000)
+#
+# El backend de SisHoras (api/) los consume vía el adaptador
+# `api/src/services/signing/padesSigner.js` (PR de firma PAdES), configurado
+# por variables de entorno. Ver deploy/signing/README.md para el runbook.
+#
+# ⚠️ PLACEHOLDERS A COMPLETAR (marcados con TODO):
+#   1. La IMAGEN o el BUILD de cada servicio. En tu otro servidor las imágenes
+#      son `html2pdf-html2pdf` y `pades-signer-pades-signer`, construidas
+#      localmente por compose — NO están en un registry público. Copiá la
+#      definición real desde Portainer (Stacks -> html2pdf / pades-signer ->
+#      "Editor") reemplazando los bloques `image:`/`build:` de abajo.
+#   2. El CERTIFICADO de firma de pades-signer (montado como volumen o secreto).
+#   3. Las variables de cada servicio, según su documentación.
+#
+# NO poner certificados, llaves ni contraseñas en este archivo ni en el repo:
+# usar un archivo .env local (deploy/signing/.env, gitignored) o secretos del
+# orquestador.
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  html2pdf:
+    # TODO: reemplazar por tu imagen/build real (ver Portainer -> Stack html2pdf).
+    #   image: <tu-imagen-html2pdf>
+    # o, si se construye desde código:
+    #   build: ./html2pdf
+    image: ${HTML2PDF_IMAGE:-html2pdf:local}
+    container_name: sishoras-html2pdf
+    restart: unless-stopped
+    # Puerto de host 3002 -> 3000 del contenedor, igual que en tu otro servidor.
+    ports:
+      - "127.0.0.1:${HTML2PDF_HOST_PORT:-3002}:3000"
+    networks:
+      - signing
+    # TODO: variables propias del servicio (según su README).
+    # env_file:
+    #   - ./html2pdf.env
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  pades-signer:
+    # TODO: reemplazar por tu imagen/build real (ver Portainer -> Stack pades-signer).
+    image: ${PADES_SIGNER_IMAGE:-pades-signer:local}
+    container_name: sishoras-pades-signer
+    restart: unless-stopped
+    # Puerto de host 3001 -> 3000 del contenedor, igual que en tu otro servidor.
+    ports:
+      - "127.0.0.1:${PADES_SIGNER_HOST_PORT:-3001}:3000"
+    networks:
+      - signing
+    # El firmador PAdES necesita un certificado/llave. Montarlo como volumen de
+    # solo lectura (o como secreto del orquestador). NUNCA versionar el cert.
+    volumes:
+      - ${PADES_CERT_DIR:-./certs}:/certs:ro
+    # TODO: variables del servicio (ruta del cert, passphrase por secreto, etc.).
+    # env_file:
+    #   - ./pades-signer.env
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  signing:
+    # Si el backend de SisHoras corre en Docker en el MISMO host, unilo a esta
+    # red (external) para alcanzarlos por nombre: http://html2pdf:3000 /
+    # http://pades-signer:3000. Si SisHoras corre fuera de Docker, alcanzalos
+    # por host: http://127.0.0.1:3002 / http://127.0.0.1:3001.
+    name: sishoras-signing
+    driver: bridge

@@ -4,9 +4,9 @@
 
 ```
 Relojes ZKTeco (3)
-  10.0.0.160  Reloj Comedor
-  10.0.0.162  Reloj Gerencia
-  10.0.0.161  Reloj Lavadero
+  10.x.x.11  Reloj Ejemplo 1
+  10.x.x.12  Reloj Ejemplo 2
+  10.x.x.13  Reloj Ejemplo 3
         ↓
 ZKTeco Fingerprint Attendance System V2011
         ↓
@@ -75,7 +75,7 @@ node inspect-att2000.js
 ```
 
 El script preguntará:
-- Servidor: `sqlserver.example.internal` (o su IP en la red, ej: 10.0.0.X)
+- Servidor: `sqlserver.example.internal` (o su IP en la red, ej: 10.x.x.x)
 - Usuario: `sa`
 - Contraseña: la del sa
 
@@ -93,7 +93,7 @@ copy .env.example .env
 Edita `.env` con los datos del SQL Server:
 ```
 # SQL Server att2000 (SOLO LECTURA)
-ATT_HOST=sqlserver.example.internal     # o la IP del servidor, ej: 10.0.0.50
+ATT_HOST=sqlserver.example.internal     # o la IP del servidor, ej: 10.x.x.x
 ATT_PORT=1433
 ATT_USER=sishoras_integration
 ATT_PASSWORD=<CONFIGURAR_SOLO_EN_API_ENV>
