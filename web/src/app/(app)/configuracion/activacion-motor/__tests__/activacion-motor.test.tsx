@@ -147,3 +147,25 @@ test('la consola ya no ofrece aplicar migraciones desde HTTP', async () => {
   expect(screen.queryByRole('button', { name: /aplicar migraciones/i })).not.toBeInTheDocument()
   expect(screen.queryByText(/APLICAR MIGRACIONES/)).not.toBeInTheDocument()
 })
+
+test('[P2] el freno de emergencia (Desactivar) es pulsable con el master-flag APAGADO', async () => {
+  // status con master-flag OFF: sólo el freno de emergencia debe poder pulsarse.
+  const STATUS_OFF = { ...STATUS, gates: { ...STATUS.gates, master_flag_enabled: false } }
+  apiGet.mockImplementation((url: string) => {
+    if (url === '/api/fase-e/status') return Promise.resolve({ data: STATUS_OFF })
+    if (url === '/api/fase-e/batches') return Promise.resolve({ data: { batches: [] } })
+    return Promise.reject(new Error('unexpected GET ' + url))
+  })
+
+  render(<ActivacionMotorPage />)
+  await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/fase-e/status'))
+
+  // Activar está deshabilitado (requiere master-flag); Desactivar NO.
+  const activar = screen.getByRole('button', { name: /^activar$/i })
+  expect(activar).toBeDisabled()
+  const desactivar = screen.getByRole('button', { name: /desactivar/i })
+  expect(desactivar).toBeEnabled()
+
+  await userEvent.click(desactivar)
+  await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/fase-e/forward/disable', {}))
+})

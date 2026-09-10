@@ -451,6 +451,29 @@ async function resolveSummaryBatchForDate(employeeIds, date, opts = {}) {
   return { rowsByEmployee };
 }
 
+/**
+ * [P1-F] Aplica filas del motor YA RESUELTAS, SIN recomputarlas.
+ *
+ * Es la primitiva que la consola de FASE E usa para escribir EXACTAMENTE el plan
+ * que previamente resolvió y validó con plan_digest, sin un segundo
+ * `resolveSummaryBatchForDate(..., {apply:true})` que releería datos vivos y
+ * podría persistir algo distinto del preview.
+ *
+ * Reutiliza el ÚNICO escritor real (`escribirFilas`) con TODA su semántica: status
+ * null → borrar/preservar justificación, preservación de justificación manual en
+ * día vacío, los 8 campos mutables y el lock por fecha (last-write-wins). NO
+ * duplica ni una línea de SQL del writer. Las `rows` deben ser las filas engine
+ * tal como las devolvió `resolveSummary*` (con `status` engine, `workday_count`,
+ * `first_in`, `last_out`, minutos y `notes`).
+ *
+ * @param {number} employeeId
+ * @param {Array}  rows        filas engine ya resueltas (el plan validado).
+ * @param {object} [opts]      `reconcileOnly` (Set de fechas), igual que escribirFilas.
+ */
+async function applyResolvedRows(employeeId, rows, opts = {}) {
+  await escribirFilas(employeeId, rows, opts);
+}
+
 /** Marcajes wall-clock de VARIOS empleados en la ventana. */
 async function leerMarcajesLote(employeeIds, ventana) {
   const marcas = employeeIds.map(() => '?').join(',');
@@ -474,6 +497,7 @@ module.exports = {
   isStatus074Enabled,
   resolveSummary,
   resolveSummaryBatchForDate,
+  applyResolvedRows,
   statusParaDb,
   anchorDateISO,
   shiftDate,

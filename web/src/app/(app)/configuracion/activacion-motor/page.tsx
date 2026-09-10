@@ -182,7 +182,11 @@ export default function ActivacionMotorPage() {
           <b>Master-flag {masterOn ? 'ACTIVO' : 'apagado'}.</b>{' '}
           {masterOn
             ? 'Las acciones mutantes están habilitadas en el backend. Procedé con doble confirmación.'
-            : 'Todas las acciones mutantes responden 503. Sólo el preflight/impacto funciona. Para activar, el dueño exporta FASE_E_ACTIVATION_ENABLED=true y recarga el proceso, en el momento exacto de la activación.'}
+            : 'Las acciones mutantes de ACTIVACIÓN responden 503; sólo funcionan el preflight/impacto. '
+              + 'Para activar, el dueño exporta FASE_E_ACTIVATION_ENABLED=true y recarga el proceso, en el momento exacto de la activación. '}
+          {!masterOn && (
+            <b>El FRENO DE EMERGENCIA (Desactivar el motor) SÍ funciona con el master-flag apagado: apagar es siempre seguro.</b>
+          )}
         </div>
       </div>
 
@@ -238,8 +242,10 @@ export default function ActivacionMotorPage() {
           son un paso de OPS separado (scripts/ops-migrate.sh, usuario admin por
           socket). El preflight de arriba sólo LEE su estado. */}
 
-      {/* Paso 2 — Activación hacia adelante */}
-      <Card n={2} title="Activar el motor hacia adelante (reversible)" disabled={!masterOn}
+      {/* Paso 2 — Activación hacia adelante. El card NO se atenúa con el master-flag
+          porque contiene el FRENO DE EMERGENCIA, que debe verse habilitado siempre;
+          el botón Activar tiene su propio gate por master-flag + confirmaciones. */}
+      <Card n={2} title="Activar el motor hacia adelante (reversible)"
         subtitle="Flip del setting fase_e_forward_enabled. El env kill-switch de ops debe estar en true además.">
         <div className="mb-3 flex flex-wrap gap-1.5">
           <Pill ok={!!status?.gates.forward_env_kill_switch}>env kill-switch (ops)</Pill>
@@ -258,13 +264,24 @@ export default function ActivacionMotorPage() {
             className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
             <ToggleRight size={14} /> Activar
           </button>
+          {/* [P2] FRENO DE EMERGENCIA: apagar el escritor hacia adelante NO se gatea
+              con el master-flag (el backend /forward/disable tampoco). Debe poder
+              pulsarse siendo super_admin aunque el master esté apagado — justo se
+              necesita cuando el master ya se apagó pero el setting de BD quedó en
+              true. Sólo se deshabilita mientras hay una operación en curso. */}
           <button
-            disabled={!masterOn || busy !== ''}
-            onClick={() => run('/api/fase-e/forward/disable', {}, 'Motor desactivado (reversa segura).')}
+            disabled={busy !== ''}
+            onClick={() => run('/api/fase-e/forward/disable', {}, 'Motor desactivado (freno de emergencia).')}
+            title="Freno de emergencia: apaga el escritor hacia adelante. Funciona aunque el master-flag esté apagado."
             className="inline-flex items-center gap-2 rounded-lg bg-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-300 disabled:opacity-40 dark:bg-slate-700 dark:text-slate-200">
-            <ToggleLeft size={14} /> Desactivar
+            <ToggleLeft size={14} /> Desactivar (freno de emergencia)
           </button>
         </div>
+        {!masterOn && (
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Con el master-flag apagado, sólo el <b>freno de emergencia</b> (Desactivar) está habilitado; Activar requiere master-flag.
+          </p>
+        )}
       </Card>
 
       {/* Paso 3 — Recálculo histórico acotado */}

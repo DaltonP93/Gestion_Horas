@@ -16,10 +16,11 @@
  *   node api/scripts/migrate.js --status           # lista estado, no aplica
  *   node api/scripts/migrate.js --upto=<archivo>
  *          # aplica (ejecuta de verdad) SÓLO las pendientes con nombre <= ese
- *          # archivo, en orden. Las más nuevas quedan sin tocar. Lo usa la
- *          # consola de FASE E para aplicar el conjunto del motor hasta 075 sin
- *          # arrastrar migraciones posteriores (p. ej. 083).
- *          # Ej: --upto=075_workday_configuration_phase_c.sql
+ *          # archivo, en orden. Las más nuevas quedan sin tocar. Lo usa el paso
+ *          # de OPS (scripts/ops-migrate.sh) para aplicar hasta 083 sin arrastrar
+ *          # migraciones futuras (084+). La consola de FASE E NO aplica
+ *          # migraciones por HTTP: 083 se aplica por OPS, no desde la web.
+ *          # Ej: --upto=083_fase_e_activation_console.sql
  *
  * Gate raíz (integridad de numeración): antes de aplicar, el runner rechaza
  * (exit 1) si hay números de migración DUPLICADOS en disco, o si una migración
@@ -35,8 +36,13 @@
  *          # Ej: --baseline=039_fix_attendance_source_selfcheckin.sql
  *
  * Requiere: cliente `mysql` en el PATH y las variables DB_* del entorno.
+ *
+ * MIGRATE_NO_DOTENV=1 desactiva la carga de `api/.env`. El paso de OPS
+ * (scripts/ops-migrate.sh) lo usa para que el .env de la API NO pueda aportar la
+ * contraseña runtime ni mezclar identidades: OPS provee un entorno admin
+ * SANEADO y EXPLÍCITO (DB_* propios; DB_PASSWORD vacío en auth por socket).
  */
-require('dotenv').config();
+if (process.env.MIGRATE_NO_DOTENV !== '1') require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');

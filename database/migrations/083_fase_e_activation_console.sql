@@ -34,10 +34,13 @@
 --   hace nada.
 -- - No conoce ATT2000: no la referencia de ninguna forma.
 --
--- ESTADO: PROPUESTA. NO ejecutada en producción. Se aplica DESDE la consola de
--- FASE E, tras confirmar backup y bajo la doble compuerta (RBAC super_admin +
--- master-flag FASE_E_ACTIVATION_ENABLED). El runner acotado (`--upto`) la deja
--- fuera al aplicar sólo las migraciones del motor hasta 075.
+-- ESTADO: PROPUESTA. NO ejecutada en producción. Se aplica como paso de OPS
+-- (scripts/ops-migrate.sh, usuario admin de MySQL por socket) — NO desde la
+-- consola de FASE E: la consola ya NO aplica migraciones por HTTP y el runtime de
+-- la API no tiene CREATE ROUTINE/TRIGGER. OPS corre el runner acotado con
+-- `--upto=083_fase_e_activation_console.sql` (hasta 083, sin arrastrar futuras),
+-- con backup previo (ver deploy/RUNBOOK-migraciones-fase-e-ops.md). Activar el
+-- writer es OTRO paso (flags), no esta migración.
 --
 -- ROLLBACK:
 --   DROP TABLE IF EXISTS fase_e_console_lock;
@@ -119,7 +122,12 @@ CREATE TABLE IF NOT EXISTS fase_e_console_lock (
   operation        VARCHAR(32) NULL,                    -- 'recalc' | 'restore'
   held_by          INT         NULL,                    -- user_id que la tomó
   acquired_at      DATETIME    NULL,
-  lease_expires_at DATETIME    NULL                     -- el lock es re-tomable si esto < NOW()
+  lease_expires_at DATETIME    NULL,                    -- el lock es re-tomable si esto < NOW()
+  -- Contador monótono que el heartbeat SIEMPRE incrementa. Hace que la fila
+  -- CAMBIE cuando el WHERE (id + lock_token) machea, así affectedRows distingue
+  -- MATCHED (renovado, >=1) de LOST (token robado, 0) sin falsos negativos cuando
+  -- el heartbeat cae en el mismo segundo (lease_expires_at idéntico).
+  heartbeat_seq    BIGINT      NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 INSERT IGNORE INTO fase_e_console_lock (id, lock_token) VALUES (1, NULL);

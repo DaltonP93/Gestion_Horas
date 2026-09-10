@@ -31,11 +31,17 @@ const CONSOLE_MIGRATION = '083_fase_e_activation_console.sql';
 
 const MAX_RANGE_DAYS = 366;      // cota dura del recálculo/impacto
 const EMP_CHUNK = 500;           // lote de empleados por consulta
-const BACKUP_CHUNK = 200;        // filas por INSERT de respaldo
+// filas por INSERT de respaldo. Configurable (entero >= 1) SÓLO para poder forzar
+// múltiples chunks reales con pocos datos en los tests de integración; el default
+// de producción es 200.
+const BACKUP_CHUNK = Math.max(1, Math.floor(Number(process.env.FASE_E_BACKUP_CHUNK) || 200));
 const CONSOLE_LOCK_ID = 1;       // fila única del lock
-// [P1-C] duración del lease; el heartbeat lo renueva. Configurable (entero >= 1)
+// [P1-C] duración del lease; el supervisor lo renueva. Configurable (entero >= 1)
 // para poder ejercer expiración/heartbeat en segundos en tests de integración.
 const LOCK_LEASE_SEC = Math.max(1, Math.floor(Number(process.env.FASE_E_LOCK_LEASE_SEC) || 120));
+// [P1-F] versión del digest canónico del plan. Bumpear si cambia la forma del
+// canónico (invalida digests viejos → PLAN_CHANGED, que es lo correcto).
+const PLAN_DIGEST_VERSION = 'fase-e-plan/v2';
 
 // scope_kind admitidos, EXACTOS. Cualquier otro valor se rechaza (nunca "all").
 const VALID_SCOPES = new Set(['all', 'department', 'employee']);
@@ -260,7 +266,8 @@ async function loadExistingRows(ids, fromDate, toDate) {
       `SELECT employee_id, DATE_FORMAT(date,'%Y-%m-%d') AS date,
               DATE_FORMAT(first_in,'%Y-%m-%d %H:%i:%s') AS first_in,
               DATE_FORMAT(last_out,'%Y-%m-%d %H:%i:%s') AS last_out,
-              worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes
+              worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes,
+              justification, justification_type
          FROM daily_summary
         WHERE employee_id IN (${chunk.map(() => '?').join(',')}) AND date >= ? AND date <= ?`,
       { replacements: [...chunk, fromDate, toDate] },
@@ -271,31 +278,50 @@ async function loadExistingRows(ids, fromDate, toDate) {
 }
 
 /**
+ * [P1-F] Semántica de OPERACIÓN por celda, derivada de la fila engine. Va en el
+ * digest para que el plan valide no sólo QUÉ se escribe sino CÓMO:
+ *   · reconcile_null → status inconfigurable: el writer BORRA la fila (o preserva
+ *     la justificación manual), nunca inserta;
+ *   · write_empty    → día sin jornada (workday_count 0): la justificación manual
+ *     puede ganar sobre el estado calculado;
+ *   · write_worked   → día con jornada real: gana el estado trabajado.
+ */
+function opForRow(row) {
+  const status = workdaySummary.statusParaDb(row.status);
+  if (status == null) return 'reconcile_null';
+  if ((row.workday_count || 0) === 0) return 'write_empty';
+  return 'write_worked';
+}
+
+/**
  * [P1-F] Construye el PLAN FINAL por celda con semántica LAST-WRITE-WINS.
  * El escritor por fecha toca {d-1, d}, así que una celda puede computarse en dos
  * ventanas (como primaria de X y como d-1 de X+1). Iterando las fechas en orden
  * ascendente, la ÚLTIMA computación gana — igual que el motor al aplicar en ese
- * mismo orden. Devuelve el plan (Map celda→fila normalizada), las existentes y
- * las celdas con su diff/outsideRange para el reporte. NO escribe.
+ * mismo orden. Devuelve el plan (Map celda→{ row engine, norm target }), las
+ * filas previas existentes y las celdas con su diff/outsideRange para el reporte.
+ * NO escribe. Conserva la FILA ENGINE completa (status engine, workday_count,
+ * minutos, notas) para que el apply la escriba EXACTAMENTE sin recomputar.
  */
 async function buildPlan(ids, from, to) {
   const spanFrom = workdaySummary.shiftDate(from, -1);
   const existing = await loadExistingRows(ids, spanFrom, to);
-  const plan = new Map();       // key → fila normalizada FINAL (last-write-wins)
+  const plan = new Map();       // key → { row (engine), norm (target normalizado) }
   for (const d of eachDate(from, to)) {
     const { rowsByEmployee } = await workdaySummary.resolveSummaryBatchForDate(ids, d, { apply: false });
     for (const [emp, rows] of rowsByEmployee) {
       for (const row of rows) {
-        plan.set(`${emp}|${row.date}`, motorRowNormalized(row)); // overwrite = last-write-wins
+        // overwrite = last-write-wins; se guarda la fila engine cruda + su target.
+        plan.set(`${emp}|${row.date}`, { row, norm: motorRowNormalized(row) });
       }
     }
   }
   const cells = [];
-  for (const [key, finalRow] of plan) {
+  for (const [key, { norm }] of plan) {
     const [empStr, date] = key.split('|');
     const stored = existing.get(key);
     const s = storedRowNormalized(stored);
-    const changed = s ? MUTABLE_FIELDS.filter((f) => (finalRow[f] ?? null) !== (s[f] ?? null)) : MUTABLE_FIELDS.slice();
+    const changed = s ? MUTABLE_FIELDS.filter((f) => (norm[f] ?? null) !== (s[f] ?? null)) : MUTABLE_FIELDS.slice();
     cells.push({
       emp: Number(empStr), date,
       existed: stored ? 1 : 0,
@@ -307,15 +333,62 @@ async function buildPlan(ids, from, to) {
   return { plan, existing, cells };
 }
 
-/** [P1-F] Huella estable del plan final (sha256 sobre celdas ordenadas). */
-function planDigest(plan) {
-  const keys = [...plan.keys()].sort();
-  const h = crypto.createHash('sha256');
-  for (const k of keys) {
-    const r = plan.get(k);
-    h.update(`${k}|${MUTABLE_FIELDS.map((f) => `${f}=${r[f] ?? ''}`).join('&')}\n`);
+/**
+ * [P1-F] Agrupa las filas ENGINE del plan por empleado (ordenadas por fecha) para
+ * pasárselas al escritor (applyResolvedRows). Escribir cada celda UNA sola vez con
+ * su fila last-write-wins produce el MISMO estado final que el motor al aplicar
+ * fecha-por-fecha, sin un segundo recálculo desde datos vivos.
+ */
+function planRowsByEmployee(plan) {
+  const byEmp = new Map();
+  for (const [key, { row }] of plan) {
+    const emp = Number(key.split('|')[0]);
+    const arr = byEmp.get(emp) || [];
+    arr.push(row);
+    byEmp.set(emp, arr);
   }
-  return h.digest('hex');
+  for (const arr of byEmp.values()) arr.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return byEmp;
+}
+
+/**
+ * [P1-F] Representación CANÓNICA y VERSIONADA del plan. Cubre: versión, rango,
+ * scope, empleados en alcance, y por celda: clave, existencia y estado PREVIO,
+ * estado OBJETIVO, workday_count y la semántica de operación. Así el digest cambia
+ * (→ PLAN_CHANGED) si driftean los datos de asistencia/config (cambia el target),
+ * el estado previo de daily_summary (cambia prev/existencia) o el alcance.
+ */
+function canonicalPlan({ from, to, scopeKind, scopeId, ids, plan, existing }) {
+  const cells = [...plan.keys()].sort().map((key) => {
+    const { row, norm } = plan.get(key);
+    const stored = existing.get(key);
+    const prev = storedRowNormalized(stored);
+    return {
+      k: key,
+      existed: existing.has(key) ? 1 : 0,
+      wc: Number(row.workday_count || 0),
+      op: opForRow(row),
+      prev: prev ? MUTABLE_FIELDS.map((f) => prev[f] ?? null) : null,
+      // La preservación de justificación del writer hace que el estado escrito
+      // dependa de justification/justification_type del estado previo; incluirlos
+      // en el digest hace que un cambio de justificación tras el preview también
+      // dispare PLAN_CHANGED (no se escribe algo distinto de lo previsualizado).
+      just: stored ? [stored.justification_type ?? null, stored.justification != null ? 1 : 0] : null,
+      target: MUTABLE_FIELDS.map((f) => norm[f] ?? null),
+    };
+  });
+  return {
+    v: PLAN_DIGEST_VERSION,
+    range: { from, to },
+    scope: { kind: scopeKind, id: scopeId ?? null },
+    employees: [...new Set((ids || []).map(Number))].sort((a, b) => a - b),
+    cells,
+  };
+}
+
+/** [P1-F] Huella estable del plan (sha256 sobre el JSON canónico versionado). */
+function planDigest(canon) {
+  return crypto.createHash('sha256').update(JSON.stringify(canon)).digest('hex');
 }
 
 /**
@@ -331,9 +404,12 @@ async function getImpact({ from, to, scopeKind, scopeId = null, maxExamples = 50
     employees: ids.length, cells_evaluated: 0, rows_differ: 0, rows_new: 0,
     rows_differ_outside_range: 0, dates_outside_range: [], plan_digest: null, examples: [],
   };
-  if (!ids.length) { report.plan_digest = planDigest(new Map()); return report; }
-  const { plan, cells } = await buildPlan(ids, from, to);
-  report.plan_digest = planDigest(plan);
+  if (!ids.length) {
+    report.plan_digest = planDigest(canonicalPlan({ from, to, scopeKind, scopeId, ids, plan: new Map(), existing: new Map() }));
+    return report;
+  }
+  const { plan, existing, cells } = await buildPlan(ids, from, to);
+  report.plan_digest = planDigest(canonicalPlan({ from, to, scopeKind, scopeId, ids, plan, existing }));
   const outside = new Set();
   for (const c of cells) {
     report.cells_evaluated++;
@@ -370,11 +446,19 @@ async function acquireConsoleLock(operation, userId) {
   if (!affected) throw conflict('Otra operación de consola FASE E (recalc/restore) está en curso.', 'CONSOLE_BUSY');
   return token;
 }
-/** Renueva el lease. affectedRows=0 → perdimos la propiedad (lease vencido y robado). */
+/**
+ * Renueva el lease. Distingue MATCHED de LOST de forma robusta [P1-C]:
+ * el UPDATE SIEMPRE incrementa `heartbeat_seq`, así que la fila CAMBIA cuando el
+ * WHERE machea (somos dueños) → affectedRows>=1; y es 0 sólo si el token ya no es
+ * el nuestro (lease vencido y robado). Esto evita el falso LOCK_LOST cuando el
+ * heartbeat cae en el MISMO segundo (lease_expires_at idéntico daría 0 filas
+ * "cambiadas" con sólo tocar la fecha). affectedRows=0 → LOCK_LOST.
+ */
 async function heartbeatConsoleLock(token) {
   const [res] = await sequelize.query(
     `UPDATE fase_e_console_lock
-        SET lease_expires_at = (NOW() + INTERVAL ${LOCK_LEASE_SEC} SECOND)
+        SET lease_expires_at = (NOW() + INTERVAL ${LOCK_LEASE_SEC} SECOND),
+            heartbeat_seq = heartbeat_seq + 1
       WHERE id = ? AND lock_token = ?`,
     { replacements: [CONSOLE_LOCK_ID, token] },
   );
@@ -389,6 +473,51 @@ async function releaseConsoleLock(token) {
       WHERE id = ? AND lock_token = ?`,
     { replacements: [CONSOLE_LOCK_ID, token] },
   );
+}
+
+/**
+ * [P1-C] SUPERVISOR de lease: renueva el lock en segundo plano cada TTL/3 (como
+ * máximo), desde inmediatamente después del acquire hasta el `finally`, cubriendo
+ * TODA la operación (buildPlan, backup, apply/restore). Si el heartbeat detecta
+ * LOCK_LOST (token robado tras vencer el lease), el supervisor:
+ *   · marca la pérdida y DEJA DE RENOVAR (no vuelve a tocar la fila del nuevo dueño);
+ *   · guarda el error para que el hilo principal lo observe con assertAlive() y
+ *     ABORTE antes de cualquier escritura nueva.
+ * Un fallo TRANSITORIO del heartbeat (no LOCK_LOST) no se interpreta como pérdida:
+ * se saltea ese tick y se reintenta en el siguiente (el lease aún tiene margen);
+ * si la base sigue caída, el lease vence, otro roba el lock y el próximo heartbeat
+ * devuelve 0 → LOCK_LOST real.
+ */
+function startLeaseSupervisor(token) {
+  const intervalMs = Math.max(250, Math.floor((LOCK_LEASE_SEC * 1000) / 3));
+  let lost = false;
+  let lostError = null;
+  let stopped = false;
+  let timer = null;
+
+  const schedule = () => {
+    if (stopped || lost) return;
+    timer = setTimeout(tick, intervalMs);
+    if (timer && typeof timer.unref === 'function') timer.unref(); // no mantener vivo el proceso
+  };
+  const tick = async () => {
+    if (stopped || lost) return;
+    try {
+      await heartbeatConsoleLock(token);
+    } catch (e) {
+      if (e && e.code === 'LOCK_LOST') { lost = true; lostError = e; return; } // no reprogramar
+      // transitorio: no declarar pérdida; reintentar en el próximo tick.
+    }
+    schedule();
+  };
+  schedule();
+
+  return {
+    stop() { stopped = true; if (timer) clearTimeout(timer); },
+    isLost() { return lost; },
+    /** Lanza LOCK_LOST si el lease se perdió. Se llama ANTES de cada escritura. */
+    assertAlive() { if (lost) throw lostError || conflict('El lock de consola se perdió.', 'LOCK_LOST'); },
+  };
 }
 
 async function assertNoOverlap(from, to) {
@@ -426,12 +555,18 @@ async function setForwardEnabled(enabled) {
 
 // ─── recálculo histórico acotado, REVERSIBLE ─────────────────────────────
 /**
- * Secuencia fail-safe:
- *   0. validación + GO/NO-GO + lock(token) + no-overlap;
- *   1. buildPlan + verificación de plan_digest (PLAN_CHANGED si drifteó) [P1-F];
- *   2. BACKUP ATÓMICO: header 'prepared' + todas las filas de backup + conteo en
- *      UNA transacción (todo o nada) [P1-D]; verificación mecánica del conteo;
- *   3. 'applying'; motor aplica fecha por fecha (heartbeat del lock por fecha);
+ * Secuencia fail-safe [P1-D/P1-F/P1-C]:
+ *   0. validación + GO/NO-GO + scope estricto + lock(token) + SUPERVISOR de lease
+ *      (renueva en 2º plano toda la operación) + no-overlap;
+ *   1. buildPlan UNA sola vez (motor apply:false = LECTURA) → filas engine + prev;
+ *      digest CANÓNICO versionado (rango/scope/empleados/celda/prev/existencia/
+ *      target/op). Falta digest → PLAN_DIGEST_REQUIRED; drift de asistencia/config
+ *      O del estado previo de daily_summary → PLAN_CHANGED, ANTES de escribir;
+ *   2. BACKUP ATÓMICO del MISMO `existing` validado: header 'prepared' + todas las
+ *      filas de backup en UNA transacción (todo o nada); verificación de conteo;
+ *   3. 'applying'; se ESCRIBE EXACTAMENTE el plan validado con el ÚNICO escritor
+ *      (applyResolvedRows → escribirFilas), SIN un segundo recálculo desde datos
+ *      vivos; assertAlive() antes de cada empleado corta si se perdió el lease;
  *   4. 'applied' (sólo al terminar). Error en 2–3 → 'failed' con backup completo.
  */
 async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null, planDigestExpected = null }) {
@@ -442,21 +577,28 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
   if (!ids.length) {
     return { batch_id: null, status: 'noop', employees: 0, rows_backed_up: 0, rows_written: 0, note: 'Sin empleados en alcance' };
   }
+  // [P1-F] el digest del dry-run es OBLIGATORIO (se exige antes de tomar el lock).
+  if (!planDigestExpected) throw badRequest('Falta plan_digest del dry-run previo.', 'PLAN_DIGEST_REQUIRED');
+
   const token = await acquireConsoleLock('recalc', userId);
+  const lease = startLeaseSupervisor(token); // [P1-C] renovación en 2º plano
   const batchId = crypto.randomUUID();
   let headerCommitted = false;
   try {
     await assertNoOverlap(from, to);
 
-    // 1. plan + digest (paridad exacta con el dry-run).
+    // 1. plan (una sola vez) + digest canónico (paridad exacta con el dry-run).
     const { plan, existing, cells } = await buildPlan(ids, from, to);
-    const digest = planDigest(plan);
-    if (!planDigestExpected) throw badRequest('Falta plan_digest del dry-run previo.', 'PLAN_DIGEST_REQUIRED');
+    const digest = planDigest(canonicalPlan({ from, to, scopeKind, scopeId, ids, plan, existing }));
     if (planDigestExpected !== digest) {
-      throw conflict('El plan cambió desde el dry-run (datos de asistencia distintos). Volvé a previsualizar.', 'PLAN_CHANGED');
+      throw conflict(
+        'El plan cambió desde el dry-run (asistencia/config o el estado previo de daily_summary difieren). Volvé a previsualizar.',
+        'PLAN_CHANGED',
+      );
     }
+    lease.assertAlive();
 
-    // 2. BACKUP ATÓMICO en una transacción: header + backups + conteo.
+    // 2. BACKUP ATÓMICO en una transacción: header + backups (del MISMO `existing`).
     const t = await sequelize.transaction();
     try {
       await sequelize.query(
@@ -508,19 +650,26 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
       throw conflict(`Respaldo incompleto (${cnt?.n} vs ${cells.length}); no se escribe daily_summary.`, 'BACKUP_COUNT_MISMATCH');
     }
 
-    // 3. 'applying' + motor por fecha (heartbeat para no perder el lock en operaciones largas).
+    // 3. 'applying' + ESCRIBIR EXACTAMENTE EL PLAN VALIDADO (sin segundo recálculo).
+    //    Se usa el ÚNICO escritor (applyResolvedRows → escribirFilas) sobre las
+    //    filas engine capturadas en buildPlan. assertAlive() aborta si el lease se
+    //    perdió, ANTES de tocar daily_summary del empleado siguiente.
     await sequelize.query("UPDATE daily_summary_recalc_batch SET status = 'applying' WHERE batch_id = ?", { replacements: [batchId] });
-    for (const d of eachDate(from, to)) {
-      await heartbeatConsoleLock(token);
-      await workdaySummary.resolveSummaryBatchForDate(ids, d, { apply: true });
+    const rowsByEmp = planRowsByEmployee(plan);
+    let rowsWritten = 0;
+    for (const [emp, engineRows] of rowsByEmp) {
+      lease.assertAlive();
+      await workdaySummary.applyResolvedRows(emp, engineRows);
+      rowsWritten += engineRows.length;
     }
 
-    // 4. 'applied' (todo terminó).
-    await sequelize.query("UPDATE daily_summary_recalc_batch SET status = 'applied', rows_written = ? WHERE batch_id = ?", { replacements: [cells.length, batchId] });
+    // 4. 'applied' (todo terminó). rows_written = celdas del plan aplicadas por el
+    //    escritor (upsert o reconciliación) = cells.length; semántica documentada.
+    await sequelize.query("UPDATE daily_summary_recalc_batch SET status = 'applied', rows_written = ? WHERE batch_id = ?", { replacements: [rowsWritten, batchId] });
     return {
       batch_id: batchId, status: 'applied', period: { from, to },
       scope: { kind: scopeKind, id: scopeId ?? null }, employees: ids.length,
-      rows_backed_up: cells.length, rows_written: cells.length, plan_digest: digest,
+      rows_backed_up: cells.length, rows_written: rowsWritten, plan_digest: digest,
       dates_outside_range: [...new Set(cells.filter((c) => c.outsideRange).map((c) => c.date))].sort(),
       backup_confirmation: 'operator_declared',
     };
@@ -535,7 +684,8 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
     }
     throw err;
   } finally {
-    await releaseConsoleLock(token);
+    lease.stop();               // [P1-C] cerrar el supervisor limpiamente
+    await releaseConsoleLock(token); // sólo libera NUESTRO token: nunca el del nuevo dueño
   }
 }
 
@@ -549,6 +699,7 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
  */
 async function restoreBatch({ batchId, userId = null }) {
   const token = await acquireConsoleLock('restore', userId);
+  const lease = startLeaseSupervisor(token); // [P1-C] renovación en 2º plano
   try {
     const [[batch]] = await sequelize.query(
       'SELECT batch_id, status, rows_backed_up FROM daily_summary_recalc_batch WHERE batch_id = ? LIMIT 1',
@@ -574,6 +725,7 @@ async function restoreBatch({ batchId, userId = null }) {
     );
 
     // TODO-o-NADA: reposición + marca final en una transacción. Reintentable.
+    lease.assertAlive();
     const t = await sequelize.transaction();
     let restored = 0; let deleted = 0;
     try {
@@ -608,7 +760,8 @@ async function restoreBatch({ batchId, userId = null }) {
     }
     return { batch_id: batchId, status: 'restored', rows_restored: restored, rows_deleted: deleted };
   } finally {
-    await releaseConsoleLock(token);
+    lease.stop();               // [P1-C] cerrar el supervisor limpiamente
+    await releaseConsoleLock(token); // sólo libera NUESTRO token
   }
 }
 
@@ -632,7 +785,8 @@ module.exports = {
   restoreBatch,
   listBatches,
   // exportados para pruebas / referencia
-  evalGoNoGo, assertGoNoGo, buildPlan, planDigest, isRealCivilDate,
-  acquireConsoleLock, heartbeatConsoleLock, releaseConsoleLock,
-  MAX_RANGE_DAYS, LOCK_LEASE_SEC, REQUIRED_MIGRATIONS, CONSOLE_MIGRATION, VALID_SCOPES, MUTABLE_FIELDS,
+  evalGoNoGo, assertGoNoGo, buildPlan, planDigest, canonicalPlan, planRowsByEmployee, opForRow, isRealCivilDate,
+  acquireConsoleLock, heartbeatConsoleLock, releaseConsoleLock, startLeaseSupervisor,
+  MAX_RANGE_DAYS, LOCK_LEASE_SEC, BACKUP_CHUNK, PLAN_DIGEST_VERSION,
+  REQUIRED_MIGRATIONS, CONSOLE_MIGRATION, VALID_SCOPES, MUTABLE_FIELDS,
 };

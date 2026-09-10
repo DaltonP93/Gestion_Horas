@@ -1,13 +1,17 @@
 /**
  * faseEConsoleService.test.js — lógica de la consola de FASE E (mockeada).
  *
- * Las pruebas REALES de lock (concurrencia/expiración/heartbeat>TTL), backup
- * atómico y restore transaccional/reintentable viven en tests/it/faseEConsole.it.test.js
- * (MySQL efímero, IT_DB=1). Acá se cubre la lógica pura/mockeada:
+ * Las pruebas REALES de lock supervisado (concurrencia/expiración/heartbeat>TTL),
+ * backup atómico vía recalcApply y restore transaccional/reintentable viven en
+ * tests/it/faseEConsole.it.test.js (MySQL efímero, IT_DB=1). Acá se cubre la
+ * lógica pura/mockeada:
  *   · scope_kind estricto: "", null, false, 0, undefined → INVALID_SCOPE sin
  *     consultar empleados ni escribir;
- *   · paridad dry-run/apply: getImpact devuelve plan_digest; recalcApply exige el
- *     digest y responde PLAN_CHANGED si difiere; multi-fecha last-write-wins;
+ *   · [P1-F] paridad dry-run/apply con digest CANÓNICO: getImpact devuelve
+ *     plan_digest; recalcApply exige el digest, ESCRIBE EL PLAN VALIDADO con el
+ *     ÚNICO escritor (applyResolvedRows) y NUNCA recomputa (apply:true) el motor;
+ *     drift de asistencia/config O del estado previo → PLAN_CHANGED;
+ *   · multi-fecha last-write-wins estable;
  *   · dry-run compara los 8 campos mutables + reporta fuera de rango;
  *   · fecha civil real (rechaza 2025-02-30);
  *   · GO/NO-GO backend en forward/enable y recalc/apply;
@@ -22,9 +26,15 @@ jest.mock('../src/config/database', () => {
 });
 
 const mockResolveBatch = jest.fn();
+const mockApplyResolved = jest.fn(async () => {});
 jest.mock('../src/services/workdaySummaryService', () => {
   const actual = jest.requireActual('../src/services/workdaySummaryService');
-  return { ...actual, resolveSummaryBatchForDate: (...a) => mockResolveBatch(...a) };
+  return {
+    ...actual,
+    resolveSummaryBatchForDate: (...a) => mockResolveBatch(...a),
+    // [P1-F] la primitiva que la consola usa para escribir el plan validado.
+    applyResolvedRows: (...a) => mockApplyResolved(...a),
+  };
 });
 
 const { sequelize } = require('../src/config/database');
@@ -34,10 +44,12 @@ beforeEach(() => {
   sequelize.query.mockReset();
   sequelize.transaction.mockClear();
   mockResolveBatch.mockReset();
+  mockApplyResolved.mockReset();
+  mockApplyResolved.mockImplementation(async () => {});
 });
 
 function motorRow(date, over = {}) {
-  return { date, first_in: null, last_out: null, worked_minutes: 480, break_minutes: 0, late_minutes: 0, overtime_minutes: 0, status: 'present', notes: null, ...over };
+  return { date, first_in: null, last_out: null, worked_minutes: 480, break_minutes: 0, late_minutes: 0, overtime_minutes: 0, status: 'present', notes: null, workday_count: 1, ...over };
 }
 
 function installQueryMock(cfg = {}) {
@@ -70,7 +82,7 @@ function installQueryMock(cfg = {}) {
     if (/COUNT\(\*\) AS n FROM employee_schedule_history/i.test(sql)) return [[{ n: 0 }]];
     // lock con token
     if (/UPDATE fase_e_console_lock/i.test(sql) && /SET lock_token = \?/i.test(sql)) { events.push('lock.acquire'); return [{ affectedRows: c.lockAcquired ? 1 : 0 }]; }
-    if (/UPDATE fase_e_console_lock/i.test(sql) && /SET lease_expires_at/i.test(sql)) { events.push('lock.heartbeat'); return [{ affectedRows: c.heartbeatOk ? 1 : 0 }]; }
+    if (/UPDATE fase_e_console_lock/i.test(sql) && /heartbeat_seq = heartbeat_seq \+ 1/i.test(sql)) { events.push('lock.heartbeat'); return [{ affectedRows: c.heartbeatOk ? 1 : 0 }]; }
     if (/UPDATE fase_e_console_lock/i.test(sql) && /SET lock_token = NULL/i.test(sql)) { events.push('lock.release'); return [{ affectedRows: 1 }]; }
     if (/FROM employees WHERE status = 'active'/i.test(sql)) return [c.employees];
     if (/FROM employees WHERE department_id/i.test(sql)) return [c.employees];
@@ -92,14 +104,23 @@ function installQueryMock(cfg = {}) {
   return { c, events };
 }
 
+/** Motor mock read-only (apply:false); si alguien pide apply:true, lo marca. */
+function motorReadOnly(rowsFor) {
+  return async (_ids, d, opts) => {
+    if (opts && opts.apply === true) throw new Error('SEGUNDO_RECALCULO_PROHIBIDO'); // apply:true nunca debe ocurrir
+    return { rowsByEmployee: rowsFor(d) };
+  };
+}
+
 describe('[P1-B] scope estricto — nunca cae a all', () => {
   test.each([['""', ''], ['null', null], ['false', false], ['0', 0], ['undefined', undefined], ['"garbage"', 'garbage']])(
     'recalcApply con scope %s → INVALID_SCOPE sin consultar empleados ni escribir', async (_label, val) => {
       installQueryMock();
       await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: val, planDigestExpected: 'x' }))
         .rejects.toMatchObject({ code: 'INVALID_SCOPE' });
-      // no consultó empleados, no tomó lock, no llamó al motor
+      // no consultó empleados, no tomó lock, no llamó al motor ni al escritor
       expect(mockResolveBatch).not.toHaveBeenCalled();
+      expect(mockApplyResolved).not.toHaveBeenCalled();
       const q = sequelize.query.mock.calls.map((cc) => cc[0]).join('\n');
       expect(/FROM employees/i.test(q)).toBe(false);
       expect(/SET lock_token = \?/i.test(q)).toBe(false);
@@ -110,14 +131,12 @@ describe('[P1-B] scope estricto — nunca cae a all', () => {
   });
 });
 
-describe('[P1-F] paridad dry-run/apply con plan_digest', () => {
-  test('el digest del dry-run habilita el apply; un digest viejo → PLAN_CHANGED', async () => {
+describe('[P1-F] paridad dry-run/apply con digest canónico', () => {
+  test('el digest del dry-run habilita el apply; digest viejo → PLAN_CHANGED; falta → PLAN_DIGEST_REQUIRED', async () => {
+    const rowsFor = (d) => new Map([[1, [motorRow(d)]]]);
     const setup = () => installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
     setup();
-    mockResolveBatch.mockImplementation(async (_ids, d, opts) => {
-      if (opts && opts.apply) return { rowsByEmployee: new Map() };
-      return { rowsByEmployee: new Map([[1, [motorRow(d)]]]) };
-    });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
     const imp = await svc.getImpact({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all' });
     expect(typeof imp.plan_digest).toBe('string');
     expect(imp.plan_digest).toHaveLength(64);
@@ -136,60 +155,103 @@ describe('[P1-F] paridad dry-run/apply con plan_digest', () => {
       .rejects.toMatchObject({ code: 'PLAN_DIGEST_REQUIRED' });
   });
 
-  test('multi-fecha: una celda en dos ventanas con resultados distintos → last-write-wins estable', async () => {
-    // Al evaluar 2025-01-10, el motor toca 01-09 y 01-10 (worked 100).
-    // Al evaluar 2025-01-11, toca 01-10 (worked 999, distinto!) y 01-11.
-    // buildPlan itera ascendente → gana la 2ª computación de (1,01-10): 999.
+  test('apply ESCRIBE el plan validado con el escritor y NUNCA recomputa (apply:true)', async () => {
+    const rowsFor = (d) => new Map([[1, [motorRow(d, { worked_minutes: 321 })]]]);
     installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
-    mockResolveBatch.mockImplementation(async (_ids, d, opts) => {
-      if (opts && opts.apply) return { rowsByEmployee: new Map() };
-      if (d === '2025-01-10') return { rowsByEmployee: new Map([[1, [motorRow('2025-01-09', { worked_minutes: 50 }), motorRow('2025-01-10', { worked_minutes: 100 })]]]) };
-      return { rowsByEmployee: new Map([[1, [motorRow('2025-01-10', { worked_minutes: 999 }), motorRow('2025-01-11', { worked_minutes: 70 })]]]) };
-    });
-    const { plan } = await svc.buildPlan([1], '2025-01-10', '2025-01-11');
-    expect(plan.get('1|2025-01-10').worked_minutes).toBe(999); // last-write-wins
-    const d1 = svc.planDigest(plan);
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const imp = await svc.getImpact({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all' });
+
+    installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const out = await svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: imp.plan_digest });
+
+    expect(out.status).toBe('applied');
+    // el motor SÓLO se llamó en modo lectura (apply:false); jamás apply:true.
+    expect(mockResolveBatch.mock.calls.every((cc) => !(cc[2] && cc[2].apply === true))).toBe(true);
+    // se escribió exactamente el plan (una fila para el empleado 1) con la primitiva.
+    expect(mockApplyResolved).toHaveBeenCalledTimes(1);
+    const [emp, rows] = mockApplyResolved.mock.calls[0];
+    expect(emp).toBe(1);
+    expect(rows).toEqual([expect.objectContaining({ date: '2025-01-10', worked_minutes: 321 })]);
+    expect(out.rows_written).toBe(1);
+  });
+
+  test('[P1-F] drift del ESTADO PREVIO de daily_summary entre dry-run y apply → PLAN_CHANGED, sin escribir', async () => {
+    const rowsFor = (d) => new Map([[1, [motorRow(d)]]]);
+    // dry-run con daily_summary vacío.
+    installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const imp = await svc.getImpact({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all' });
+
+    // apply con una fila previa NUEVA (alguien editó daily_summary): el prev cambia
+    // → el digest canónico difiere → PLAN_CHANGED antes de escribir.
+    installQueryMock({ employees: [{ id: 1 }], storedRows: [
+      { employee_id: 1, date: '2025-01-10', first_in: null, last_out: null, worked_minutes: 10, break_minutes: 0, late_minutes: 0, overtime_minutes: 0, status: 'present', notes: null },
+    ] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: imp.plan_digest }))
+      .rejects.toMatchObject({ code: 'PLAN_CHANGED' });
+    expect(mockApplyResolved).not.toHaveBeenCalled();
+  });
+
+  test('multi-fecha: una celda en dos ventanas con resultados distintos → last-write-wins estable', async () => {
+    installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly((d) => {
+      if (d === '2025-01-10') return new Map([[1, [motorRow('2025-01-09', { worked_minutes: 50 }), motorRow('2025-01-10', { worked_minutes: 100 })]]]);
+      return new Map([[1, [motorRow('2025-01-10', { worked_minutes: 999 }), motorRow('2025-01-11', { worked_minutes: 70 })]]]);
+    }));
+    const { plan, existing } = await svc.buildPlan([1], '2025-01-10', '2025-01-11');
+    expect(plan.get('1|2025-01-10').norm.worked_minutes).toBe(999); // last-write-wins
+    expect(plan.get('1|2025-01-10').row.worked_minutes).toBe(999);  // fila engine conservada
+    const canon = svc.canonicalPlan({ from: '2025-01-10', to: '2025-01-11', scopeKind: 'all', scopeId: null, ids: [1], plan, existing });
+    const d1 = svc.planDigest(canon);
     // reconstruir con el mismo mock → mismo digest (estable)
-    const { plan: plan2 } = await svc.buildPlan([1], '2025-01-10', '2025-01-11');
-    expect(svc.planDigest(plan2)).toBe(d1);
+    const { plan: plan2, existing: ex2 } = await svc.buildPlan([1], '2025-01-10', '2025-01-11');
+    const d2 = svc.planDigest(svc.canonicalPlan({ from: '2025-01-10', to: '2025-01-11', scopeKind: 'all', scopeId: null, ids: [1], plan: plan2, existing: ex2 }));
+    expect(d2).toBe(d1);
+  });
+
+  test('[P1-F] el digest cambia si cambia el alcance de empleados', async () => {
+    const rowsFor = (d) => new Map([[1, [motorRow(d)]], [2, [motorRow(d)]]]);
+    installQueryMock({ employees: [{ id: 1 }, { id: 2 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const { plan, existing } = await svc.buildPlan([1, 2], '2025-01-10', '2025-01-10');
+    const dTwo = svc.planDigest(svc.canonicalPlan({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', scopeId: null, ids: [1, 2], plan, existing }));
+    const dOne = svc.planDigest(svc.canonicalPlan({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', scopeId: null, ids: [1], plan, existing }));
+    expect(dOne).not.toBe(dTwo); // el conjunto de empleados forma parte del digest
   });
 });
 
 describe('[P1-D/estados] recalcApply — backup antes de escribir + máquina de estados', () => {
-  test('prepared→applying→applied; heartbeat del lock; backup en transacción', async () => {
-    const motor = async (_ids, d, opts) => {
-      if (opts && opts.apply) return { rowsByEmployee: new Map() };
-      return { rowsByEmployee: new Map([[1, [motorRow(d)]]]) };
-    };
-    // 1º dry-run para obtener el digest (mock sin registro de eventos).
+  test('prepared→applying→(escritura del plan)→applied; backup en transacción; release al final', async () => {
+    const rowsFor = (d) => new Map([[1, [motorRow(d)]]]);
     installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
-    mockResolveBatch.mockImplementation(motor);
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
     const imp = await svc.getImpact({ from: '2025-01-10', to: '2025-01-11', scopeKind: 'all' });
-    // 2º apply con un mock nuevo que registra el orden de eventos.
+
     const events = [];
     installQueryMock({ events, employees: [{ id: 1 }], storedRows: [] });
-    mockResolveBatch.mockImplementation(async (_ids, d, opts) => {
-      if (opts && opts.apply) { events.push('apply'); return { rowsByEmployee: new Map() }; }
-      return { rowsByEmployee: new Map([[1, [motorRow(d)]]]) };
-    });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    mockApplyResolved.mockImplementation(async () => { events.push('write'); });
     const out = await svc.recalcApply({ from: '2025-01-10', to: '2025-01-11', scopeKind: 'all', planDigestExpected: imp.plan_digest });
     expect(out.status).toBe('applied');
-    // header y backup ocurren en transacción, ANTES del primer apply.
-    expect(events.indexOf('header.prepared')).toBeLessThan(events.indexOf('apply'));
-    expect(events.indexOf('backup')).toBeLessThan(events.indexOf('apply'));
-    expect(events.indexOf('status.applying')).toBeLessThan(events.indexOf('apply'));
-    expect(events.indexOf('status.applied')).toBeGreaterThan(events.lastIndexOf('apply'));
-    // se usó transacción y hubo heartbeat por fecha.
+    // header y backup ocurren en transacción, ANTES de la primera escritura del plan.
+    expect(events.indexOf('header.prepared')).toBeLessThan(events.indexOf('write'));
+    expect(events.indexOf('backup')).toBeLessThan(events.indexOf('write'));
+    expect(events.indexOf('status.applying')).toBeLessThan(events.indexOf('write'));
+    expect(events.indexOf('status.applied')).toBeGreaterThan(events.lastIndexOf('write'));
     expect(sequelize.transaction).toHaveBeenCalled();
-    expect(events.filter((e) => e === 'lock.heartbeat').length).toBeGreaterThanOrEqual(1);
+    // el lock se libera al final (el heartbeat es un supervisor de 2º plano, se
+    // prueba en IT — no dispara en un test rápido).
     expect(events[events.length - 1]).toBe('lock.release');
   });
 
   test('lock ocupado → CONSOLE_BUSY (unidad; el caso real está en IT)', async () => {
     installQueryMock({ lockAcquired: false, employees: [{ id: 1 }] });
-    mockResolveBatch.mockResolvedValue({ rowsByEmployee: new Map() });
+    mockResolveBatch.mockImplementation(motorReadOnly((d) => new Map([[1, [motorRow(d)]]])));
     await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
       .rejects.toMatchObject({ code: 'CONSOLE_BUSY' });
+    expect(mockApplyResolved).not.toHaveBeenCalled();
   });
 
   test('esquema incompleto (074) → NO_GO; rango/fecha inválidos rechazados', async () => {
@@ -257,9 +319,7 @@ describe('[P1-A datos] dry-run: 8 campos + fuera de rango', () => {
     installQueryMock({ employees: [{ id: 1 }], storedRows: [
       { employee_id: 1, date: '2025-01-10', first_in: null, last_out: null, worked_minutes: 480, break_minutes: 30, late_minutes: 0, overtime_minutes: 60, status: 'present', notes: 'viejo' },
     ] });
-    mockResolveBatch.mockImplementation(async (_ids, d) => ({
-      rowsByEmployee: new Map([[1, [motorRow('2025-01-09'), motorRow('2025-01-10', { break_minutes: 0, overtime_minutes: 0, notes: null })]]]),
-    }));
+    mockResolveBatch.mockImplementation(motorReadOnly((d) => new Map([[1, [motorRow('2025-01-09'), motorRow('2025-01-10', { break_minutes: 0, overtime_minutes: 0, notes: null })]]])));
     const rep = await svc.getImpact({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all' });
     expect(rep.cells_evaluated).toBe(2);
     expect(rep.dates_outside_range).toContain('2025-01-09');

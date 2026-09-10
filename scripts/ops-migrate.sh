@@ -9,6 +9,14 @@
 # auth unix_socket (sin password), o con credenciales admin PROVISTAS EN EL
 # MOMENTO por variables de entorno — NUNCA guardadas en PM2/API.
 #
+# ACOTADO a 083: aplica SÓLO hasta 083_fase_e_activation_console.sql (--upto), NO
+# arrastra migraciones futuras (084+) que pudieran aparecer en el repo. La
+# verificación de idempotencia usa el MISMO límite.
+#
+# ENTORNO ADMIN SANEADO: se invoca a migrate.js con MIGRATE_NO_DOTENV=1 para que
+# api/.env NO pueda inyectar la contraseña runtime ni mezclar identidades; OPS
+# pasa DB_* explícitos. En auth por SOCKET, DB_PASSWORD se fuerza VACÍO.
+#
 # Uso (por socket admin, recomendado en el server):
 #   DB_SOCKET=/var/run/mysqld/mysqld.sock DB_USER=root DB_NAME=asistencia \
 #     sudo -E bash scripts/ops-migrate.sh
@@ -22,27 +30,38 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DB_NAME="${DB_NAME:-asistencia}"
-export DB_NAME
+UPTO="083_fase_e_activation_console.sql"   # tope duro: no arrastrar migraciones futuras
 
-# El cliente mysql toma la clave de MYSQL_PWD (evita exponerla en argv). Con
-# socket admin no hace falta password.
-if [ -n "${DB_PASSWORD:-}" ]; then export MYSQL_PWD="$DB_PASSWORD"; fi
+# ── Entorno admin SANEADO y EXPLÍCITO para migrate.js ─────────────────────────
+# MIGRATE_NO_DOTENV=1 evita que api/.env aporte la password runtime o mezcle
+# identidades. Se exportan sólo las DB_* que OPS definió.
+DB_NAME="${DB_NAME:-asistencia}"
+DB_USER="${DB_USER:-root}"
+export MIGRATE_NO_DOTENV=1 DB_NAME DB_USER
 
 if [ -n "${DB_SOCKET:-}" ]; then
-  MYSQL=(mysql --socket="$DB_SOCKET" -u "${DB_USER:-root}" "$DB_NAME")
-  echo "→ Conexión ADMIN por SOCKET: $DB_SOCKET (usuario ${DB_USER:-root})"
+  # Auth por socket (unix_socket): SIN password. Se fuerza DB_PASSWORD vacío para
+  # que ni el entorno ni api/.env aporten una clave que mezcle identidades.
+  export DB_SOCKET DB_PASSWORD=""
+  unset MYSQL_PWD || true
+  MYSQL=(mysql --socket="$DB_SOCKET" -u "$DB_USER" "$DB_NAME")
+  echo "→ Conexión ADMIN por SOCKET: $DB_SOCKET (usuario $DB_USER, sin password)"
 else
-  MYSQL=(mysql -h "${DB_HOST:-127.0.0.1}" -P "${DB_PORT:-3306}" -u "${DB_USER:-root}" "$DB_NAME")
-  echo "→ Conexión ADMIN por TCP: ${DB_HOST:-127.0.0.1}:${DB_PORT:-3306} (usuario ${DB_USER:-root})"
+  # TCP: credenciales admin efímeras del shell (no de PM2/API).
+  DB_HOST="${DB_HOST:-127.0.0.1}"; DB_PORT="${DB_PORT:-3306}"
+  export DB_HOST DB_PORT
+  if [ -n "${DB_PASSWORD:-}" ]; then export DB_PASSWORD MYSQL_PWD="$DB_PASSWORD"; fi
+  MYSQL=(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" "$DB_NAME")
+  echo "→ Conexión ADMIN por TCP: $DB_HOST:$DB_PORT (usuario $DB_USER)"
 fi
 
 echo "== 1) Preflight: migraciones pendientes (read-only) =="
 ( cd "$ROOT/api" && node scripts/migrate.js --status )
 
-echo "== 2) Aplicar migraciones pendientes (forward-only, en orden) =="
-# migrate.js hereda DB_* / DB_SOCKET del entorno.
-if ( cd "$ROOT/api" && node scripts/migrate.js ); then
+echo "== 2) Aplicar migraciones pendientes ACOTADO a $UPTO (forward-only, en orden) =="
+# migrate.js hereda DB_*/DB_SOCKET/MIGRATE_NO_DOTENV del entorno. --upto acota el
+# tope: nunca aplica más allá de 083.
+if ( cd "$ROOT/api" && node scripts/migrate.js --upto="$UPTO" ); then
   APPLY_EXIT=0
 else
   APPLY_EXIT=$?
@@ -73,7 +92,7 @@ for m in \
 done
 [ "$MISSING" -eq 0 ] || { echo "❌ Faltan migraciones de 072→083." >&2; exit 1; }
 
-echo "== 4) Re-aplicar = no-op (idempotencia) =="
-( cd "$ROOT/api" && node scripts/migrate.js | tail -1 )
+echo "== 4) Re-aplicar ACOTADO a $UPTO = no-op (idempotencia, MISMO límite) =="
+( cd "$ROOT/api" && node scripts/migrate.js --upto="$UPTO" | tail -1 )
 
-echo "✅ Migraciones 072→083 aplicadas y verificadas (exit 0)."
+echo "✅ Migraciones 072→083 aplicadas y verificadas (exit 0). Nada por encima de $UPTO se tocó."

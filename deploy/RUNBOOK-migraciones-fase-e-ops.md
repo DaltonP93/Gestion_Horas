@@ -38,11 +38,17 @@ DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=admin DB_PASSWORD='***' DB_NAME=asistenci
 ```
 `ops-migrate.sh`:
 1. `migrate.js --status` (read-only) — muestra pendientes.
-2. Aplica pendientes (forward-only, en orden) y **verifica el `exit` real** del
-   runner; aborta si != 0.
+2. Aplica pendientes **ACOTADO a `--upto=083_fase_e_activation_console.sql`**
+   (forward-only, en orden) y **verifica el `exit` real** del runner; aborta si
+   != 0. **No arrastra migraciones futuras (084+).**
 3. **Valida explícitamente 072→083 registradas** (`schema_migrations`),
    incluida **082 antes de 083**.
-4. Re-aplica = **no-op** (idempotencia).
+4. Re-aplica **con el mismo `--upto=083`** = **no-op** (idempotencia).
+
+**Entorno admin saneado:** el script invoca a `migrate.js` con
+`MIGRATE_NO_DOTENV=1`, así `api/.env` **no** puede aportar la contraseña runtime
+ni mezclar identidades; OPS pasa `DB_*` explícitos. En auth por **socket**,
+`DB_PASSWORD` se fuerza **vacío** (sólo `unix_socket`).
 
 ## Verificación manual (opcional)
 ```bash
