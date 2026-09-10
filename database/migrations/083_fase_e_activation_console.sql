@@ -61,7 +61,12 @@ CREATE TABLE IF NOT EXISTS daily_summary_recalc_batch (
   to_date        DATE         NOT NULL,
   scope_kind     ENUM('all','department','employee') NOT NULL DEFAULT 'all',
   scope_id       INT          NULL,                   -- department_id o employee_id según scope_kind
-  status         ENUM('applied','restored') NOT NULL DEFAULT 'applied',
+  -- Máquina de estados del lote. NUNCA se marca 'applied' antes de que el motor
+  -- termine; un fallo intermedio deja 'failed' (con el respaldo completo, para
+  -- que el RESTORE deshaga lo parcial). El RESTORE pasa por 'restoring' y sólo
+  -- llega a 'restored' si se procesaron TODAS las filas respaldadas.
+  status         ENUM('prepared','applying','applied','failed','restoring','restored')
+                 NOT NULL DEFAULT 'prepared',
   employees      INT          NOT NULL DEFAULT 0,     -- empleados en alcance
   rows_backed_up INT          NOT NULL DEFAULT 0,     -- filas respaldadas antes de escribir
   rows_written   INT          NOT NULL DEFAULT 0,     -- filas escritas por el motor
@@ -97,4 +102,18 @@ CREATE TABLE IF NOT EXISTS daily_summary_backup (
   INDEX idx_batch_emp_d (batch_id, employee_id, date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-SELECT 'Migración 083 (PROPUESTA, aditiva): consola FASE E — fase_e_forward_enabled + respaldo/lotes de recálculo' AS info;
+-- 4. Lock ÚNICO de operaciones mutantes de la consola (recalc/restore).
+--    Exclusión mutua: sólo una operación por vez. La toma/libera una UPDATE
+--    condicional atómica (independiente de la conexión), con TTL que
+--    auto-recupera si un proceso murió sin liberar. Aditiva, una sola fila.
+CREATE TABLE IF NOT EXISTS fase_e_console_lock (
+  id          TINYINT      NOT NULL PRIMARY KEY,       -- fila única (1)
+  held        TINYINT(1)   NOT NULL DEFAULT 0,
+  operation   VARCHAR(32)  NULL,                        -- 'recalc' | 'restore'
+  held_by     INT          NULL,                        -- user_id que la tomó
+  acquired_at DATETIME     NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO fase_e_console_lock (id, held) VALUES (1, 0);
+
+SELECT 'Migración 083 (PROPUESTA, aditiva): consola FASE E — fase_e_forward_enabled + respaldo/lotes de recálculo + lock' AS info;

@@ -71,11 +71,19 @@ function requireTypedConfirm(expected) {
   };
 }
 
-// Confirmación explícita de BACKUP verificable antes de cualquier sobrescritura.
+// Confirmación explícita de BACKUP antes de cualquier sobrescritura.
+//
+// IMPORTANTE (declaración vs verificación): backup_confirmed=true es una
+// DECLARACIÓN DEL OPERADOR de que tomó un backup verificable — NO es una
+// verificación automática de que exista un backup válido. El sistema no
+// comprueba el backup por su cuenta (salvo que se implemente evidencia real:
+// p.ej. validar un mysqldump firmado). Para no dar falsa seguridad, la respuesta
+// de los pasos mutantes marca `backup_confirmation: 'operator_declared'`.
 function requireBackupConfirmed(req, res, next) {
   if (req.body?.backup_confirmed !== true) {
     return res.status(400).json({
-      error: 'Debés confirmar un backup verificable (backup_confirmed=true) antes de este paso.',
+      error: 'Debés declarar que tomaste un backup verificable (backup_confirmed=true) antes de este paso. '
+        + 'Es una declaración del operador, no una verificación automática del sistema.',
       code: 'BACKUP_CONFIRMATION_REQUIRED',
     });
   }
@@ -115,10 +123,15 @@ router.post('/migrations/apply',
   requireBackupConfirmed,
   requireTypedConfirm('APLICAR MIGRACIONES'),
   asyncHandler(async (req, res) => {
-    const result = svc.applyMigrations();
+    // applyMigrations corre el runner en un PROCESO HIJO de forma asíncrona: no
+    // bloquea el event loop de la API mientras aplica.
+    const result = await svc.applyMigrations();
     auditLog(req, 'fase_e.migrations.apply', { upto: result.upto, ok: result.ok, exit_code: result.exit_code });
     const status = await svc.getStatus();
-    res.status(result.ok ? 200 : 500).json({ ok: result.ok, result, migrations: status.migrations });
+    res.status(result.ok ? 200 : 500).json({
+      ok: result.ok, result, migrations: status.migrations,
+      backup_confirmation: 'operator_declared',
+    });
   }),
 );
 
@@ -130,7 +143,7 @@ router.post('/forward/enable',
   asyncHandler(async (req, res) => {
     const state = await svc.setForwardEnabled(true);
     auditLog(req, 'fase_e.forward.enable', state);
-    res.json({ ok: true, ...state });
+    res.json({ ok: true, ...state, backup_confirmation: 'operator_declared' });
   }),
 );
 
