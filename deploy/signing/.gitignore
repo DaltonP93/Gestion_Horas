@@ -1,0 +1,13 @@
+# Nunca versionar secretos ni configuración local de los servicios de firma.
+.env
+certs/
+*.pem
+*.p12
+*.pfx
+*.key
+*.crt
+*.env
+!.env.example
+
+# Imágenes exportadas con docker save (enormes, nunca al repo)
+*.tar
