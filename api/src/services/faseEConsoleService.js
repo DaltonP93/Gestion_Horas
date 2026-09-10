@@ -20,6 +20,10 @@
 const crypto = require('crypto');
 const { sequelize } = require('../config/database');
 const workdaySummary = require('./workdaySummaryService');
+// [B1] La consola comparte con el writer operativo EL MISMO lock por fecha
+// (GET_LOCK 'sishoras:recalc:<fecha>'), para que la re-lectura del estado previo,
+// el backup y la escritura sean atómicos frente al escritor operativo.
+const { keyFor: recalcKeyFor } = require('./recalcLock');
 
 const REQUIRED_MIGRATIONS = [
   '072_employee_schedule_history.sql',
@@ -39,12 +43,24 @@ const CONSOLE_LOCK_ID = 1;       // fila única del lock
 // [P1-C] duración del lease; el supervisor lo renueva. Configurable (entero >= 1)
 // para poder ejercer expiración/heartbeat en segundos en tests de integración.
 const LOCK_LEASE_SEC = Math.max(1, Math.floor(Number(process.env.FASE_E_LOCK_LEASE_SEC) || 120));
-// [P1-F] versión del digest canónico del plan. Bumpear si cambia la forma del
-// canónico (invalida digests viejos → PLAN_CHANGED, que es lo correcto).
-const PLAN_DIGEST_VERSION = 'fase-e-plan/v2';
+// [P1-F/B3] versión del digest canónico del plan. Bumpear si cambia la forma del
+// canónico (invalida digests viejos → PLAN_CHANGED, que es lo correcto). v3: el
+// target es el resultado EFECTIVO del writer (no el crudo del motor) + categoría.
+const PLAN_DIGEST_VERSION = 'fase-e-plan/v3';
+// [B1] timeout (s) para tomar el lock por fecha compartido con el writer.
+const DATE_LOCK_TIMEOUT_S = 10;
 
 // scope_kind admitidos, EXACTOS. Cualquier otro valor se rechaza (nunca "all").
 const VALID_SCOPES = new Set(['all', 'department', 'employee']);
+
+// [B5] Barreras deterministas SÓLO para pruebas de integración: puntos donde un
+// test puede interponer una acción concurrente (mutar daily_summary, robar el
+// lease) de forma reproducible, sin sleeps ni mocks de affectedRows. En
+// producción nadie las registra, así que son no-ops (una búsqueda en objeto).
+const _hooks = Object.create(null);
+async function _hook(name, ctx) { const fn = _hooks[name]; if (fn) await fn(ctx); }
+function _setTestHook(name, fn) { _hooks[name] = fn; }
+function _clearTestHooks() { for (const k of Object.keys(_hooks)) delete _hooks[k]; }
 
 // Columnas MUTABLES que el escritor del motor puede cambiar (las que respalda y
 // restaura el batch, las que el dry-run compara y las que forman el plan_digest).
@@ -224,39 +240,6 @@ function validateRange(from, to) {
   if (rangeDays(from, to) > MAX_RANGE_DAYS) throw badRequest(`El rango excede el máximo de ${MAX_RANGE_DAYS} días`, 'RANGE_TOO_WIDE');
 }
 
-// ─── normalización + diff de los 8 campos mutables ───────────────────────
-function motorRowNormalized(row) {
-  return {
-    first_in: row.first_in || null,
-    last_out: row.last_out || null,
-    worked_minutes: Number(row.worked_minutes || 0),
-    break_minutes: Number(row.break_minutes || 0),
-    late_minutes: Number(row.late_minutes || 0),
-    overtime_minutes: Number(row.overtime_minutes || 0),
-    status: workdaySummary.statusParaDb(row.status),
-    notes: row.notes || null,
-  };
-}
-function storedRowNormalized(r) {
-  if (!r) return null;
-  return {
-    first_in: r.first_in || null,
-    last_out: r.last_out || null,
-    worked_minutes: Number(r.worked_minutes || 0),
-    break_minutes: Number(r.break_minutes || 0),
-    late_minutes: Number(r.late_minutes || 0),
-    overtime_minutes: Number(r.overtime_minutes || 0),
-    status: r.status || null,
-    notes: r.notes || null,
-  };
-}
-function diffMutableFields(motorRow, storedRow) {
-  const m = motorRowNormalized(motorRow);
-  const s = storedRowNormalized(storedRow);
-  if (!s) return { differs: true, changed: MUTABLE_FIELDS.slice() };
-  const changed = MUTABLE_FIELDS.filter((f) => (m[f] ?? null) !== (s[f] ?? null));
-  return { differs: changed.length > 0, changed };
-}
 
 async function loadExistingRows(ids, fromDate, toDate) {
   const map = new Map();
@@ -278,54 +261,80 @@ async function loadExistingRows(ids, fromDate, toDate) {
 }
 
 /**
- * [P1-F] Semántica de OPERACIÓN por celda, derivada de la fila engine. Va en el
- * digest para que el plan valide no sólo QUÉ se escribe sino CÓMO:
- *   · reconcile_null → status inconfigurable: el writer BORRA la fila (o preserva
- *     la justificación manual), nunca inserta;
- *   · write_empty    → día sin jornada (workday_count 0): la justificación manual
- *     puede ganar sobre el estado calculado;
- *   · write_worked   → día con jornada real: gana el estado trabajado.
+ * [B3] Resultado EFECTIVO por celda usando la MISMA función pura del writer.
+ * Devuelve la operación efectiva, la categoría (inserted/updated/deleted/
+ * unchanged) y el estado EFECTIVO persistido (los 8 campos o null si se borra).
+ * Así el preview/digest anuncian exactamente lo que el writer escribirá — nunca un
+ * cambio de status que el writer luego preserva por una justificación manual.
  */
-function opForRow(row) {
-  const status = workdaySummary.statusParaDb(row.status);
-  if (status == null) return 'reconcile_null';
-  if ((row.workday_count || 0) === 0) return 'write_empty';
-  return 'write_worked';
+function effectiveForCell(engineRow, storedRow) {
+  const eff = workdaySummary.effectiveDailySummary(engineRow, storedRow, { reconcileOnly: false });
+  const category = workdaySummary.classifyEffective(eff, storedRow);
+  let effState = null;
+  if (eff.action === 'insert' || eff.action === 'update') effState = eff.row;
+  else if (eff.action === 'noop') effState = storedRow ? normalizeStoredForWrite(storedRow) : null;
+  // 'delete' → effState = null (la fila deja de existir).
+  return { eff, category, effState };
 }
+/** Normaliza una fila previa a los 8 campos efectivos (para diff/target). */
+function normalizeStoredForWrite(storedRow) {
+  if (!storedRow) return null;
+  return {
+    first_in: storedRow.first_in || null, last_out: storedRow.last_out || null,
+    worked_minutes: Number(storedRow.worked_minutes || 0), break_minutes: Number(storedRow.break_minutes || 0),
+    overtime_minutes: Number(storedRow.overtime_minutes || 0), late_minutes: Number(storedRow.late_minutes || 0),
+    notes: storedRow.notes || null, status: storedRow.status || null,
+  };
+}
+/** Los 8 campos efectivos como array ordenado (para el target del digest). */
+function effStateArray(effState) {
+  if (!effState) return null;
+  return WRITE_ORDER.map((f) => effState[f] ?? null);
+}
+const WRITE_ORDER = ['first_in', 'last_out', 'worked_minutes', 'break_minutes', 'overtime_minutes', 'late_minutes', 'notes', 'status'];
 
 /**
  * [P1-F] Construye el PLAN FINAL por celda con semántica LAST-WRITE-WINS.
  * El escritor por fecha toca {d-1, d}, así que una celda puede computarse en dos
  * ventanas (como primaria de X y como d-1 de X+1). Iterando las fechas en orden
- * ascendente, la ÚLTIMA computación gana — igual que el motor al aplicar en ese
- * mismo orden. Devuelve el plan (Map celda→{ row engine, norm target }), las
- * filas previas existentes y las celdas con su diff/outsideRange para el reporte.
- * NO escribe. Conserva la FILA ENGINE completa (status engine, workday_count,
- * minutos, notas) para que el apply la escriba EXACTAMENTE sin recomputar.
+ * ascendente, la ÚLTIMA computación gana. Devuelve el plan (Map celda→{ row engine,
+ * eff, category, effState }), las filas previas existentes y las celdas con su
+ * diff/outsideRange para el reporte. NO escribe. Conserva la FILA ENGINE completa
+ * y el RESULTADO EFECTIVO (para digest/preview idénticos a la escritura).
  */
 async function buildPlan(ids, from, to) {
   const spanFrom = workdaySummary.shiftDate(from, -1);
   const existing = await loadExistingRows(ids, spanFrom, to);
-  const plan = new Map();       // key → { row (engine), norm (target normalizado) }
+  const plan = new Map();       // key → { row (engine) }
   for (const d of eachDate(from, to)) {
     const { rowsByEmployee } = await workdaySummary.resolveSummaryBatchForDate(ids, d, { apply: false });
     for (const [emp, rows] of rowsByEmployee) {
       for (const row of rows) {
-        // overwrite = last-write-wins; se guarda la fila engine cruda + su target.
-        plan.set(`${emp}|${row.date}`, { row, norm: motorRowNormalized(row) });
+        plan.set(`${emp}|${row.date}`, { row }); // overwrite = last-write-wins
       }
     }
   }
+  // Resuelve el efecto EFECTIVO por celda contra el estado previo del snapshot.
+  for (const [key, entry] of plan) {
+    const stored = existing.get(key) || null;
+    const { eff, category, effState } = effectiveForCell(entry.row, stored);
+    entry.eff = eff; entry.category = category; entry.effState = effState;
+  }
   const cells = [];
-  for (const [key, { norm }] of plan) {
+  for (const [key, entry] of plan) {
     const [empStr, date] = key.split('|');
     const stored = existing.get(key);
-    const s = storedRowNormalized(stored);
-    const changed = s ? MUTABLE_FIELDS.filter((f) => (norm[f] ?? null) !== (s[f] ?? null)) : MUTABLE_FIELDS.slice();
+    const prev = normalizeStoredForWrite(stored);
+    // changed_fields = diferencia entre el estado EFECTIVO y el previo.
+    let changed;
+    if (entry.eff.action === 'delete') changed = prev ? WRITE_ORDER.slice() : [];
+    else if (!prev) changed = entry.effState ? WRITE_ORDER.slice() : [];
+    else changed = WRITE_ORDER.filter((f) => (entry.effState?.[f] ?? null) !== (prev[f] ?? null));
     cells.push({
       emp: Number(empStr), date,
       existed: stored ? 1 : 0,
-      differs: !s || changed.length > 0,
+      category: entry.category,
+      differs: entry.category !== 'unchanged',
       changed,
       outsideRange: date < from || date > to,
     });
@@ -334,47 +343,45 @@ async function buildPlan(ids, from, to) {
 }
 
 /**
- * [P1-F] Agrupa las filas ENGINE del plan por empleado (ordenadas por fecha) para
- * pasárselas al escritor (applyResolvedRows). Escribir cada celda UNA sola vez con
- * su fila last-write-wins produce el MISMO estado final que el motor al aplicar
- * fecha-por-fecha, sin un segundo recálculo desde datos vivos.
+ * [B1] Agrupa las celdas del plan por FECHA (todas las empleados de esa fecha),
+ * en orden ascendente. El apply toma el lock de cada fecha (compartido con el
+ * writer operativo) y procesa todas sus celdas bajo ese lock.
  */
-function planRowsByEmployee(plan) {
-  const byEmp = new Map();
-  for (const [key, { row }] of plan) {
-    const emp = Number(key.split('|')[0]);
-    const arr = byEmp.get(emp) || [];
-    arr.push(row);
-    byEmp.set(emp, arr);
+function planCellsByDate(plan, existing) {
+  const byDate = new Map();
+  for (const [key, entry] of plan) {
+    const [empStr, date] = key.split('|');
+    const arr = byDate.get(date) || [];
+    arr.push({ emp: Number(empStr), date, engineRow: entry.row, digestedStored: existing.get(key) || null });
+    byDate.set(date, arr);
   }
-  for (const arr of byEmp.values()) arr.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  return byEmp;
+  return new Map([...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
 }
 
 /**
- * [P1-F] Representación CANÓNICA y VERSIONADA del plan. Cubre: versión, rango,
- * scope, empleados en alcance, y por celda: clave, existencia y estado PREVIO,
- * estado OBJETIVO, workday_count y la semántica de operación. Así el digest cambia
- * (→ PLAN_CHANGED) si driftean los datos de asistencia/config (cambia el target),
- * el estado previo de daily_summary (cambia prev/existencia) o el alcance.
+ * [P1-F/B3] Representación CANÓNICA y VERSIONADA del plan. Cubre: versión, rango,
+ * scope, empleados, y por celda: clave, existencia, estado PREVIO (8 campos +
+ * justificación), estado OBJETIVO EFECTIVO (lo que el writer persistirá, o null si
+ * borra), categoría, workday_count. El digest cambia (→ PLAN_CHANGED) si driftean
+ * asistencia/config (cambia el efectivo), el estado previo de daily_summary
+ * (incluida la justificación) o el alcance.
  */
 function canonicalPlan({ from, to, scopeKind, scopeId, ids, plan, existing }) {
   const cells = [...plan.keys()].sort().map((key) => {
-    const { row, norm } = plan.get(key);
+    const entry = plan.get(key);
     const stored = existing.get(key);
-    const prev = storedRowNormalized(stored);
+    const prev = normalizeStoredForWrite(stored);
     return {
       k: key,
       existed: existing.has(key) ? 1 : 0,
-      wc: Number(row.workday_count || 0),
-      op: opForRow(row),
-      prev: prev ? MUTABLE_FIELDS.map((f) => prev[f] ?? null) : null,
-      // La preservación de justificación del writer hace que el estado escrito
-      // dependa de justification/justification_type del estado previo; incluirlos
-      // en el digest hace que un cambio de justificación tras el preview también
-      // dispare PLAN_CHANGED (no se escribe algo distinto de lo previsualizado).
+      wc: Number(entry.row.workday_count || 0),
+      cat: entry.category,
+      prev: prev ? WRITE_ORDER.map((f) => prev[f] ?? null) : null,
+      // Justificación previa: el estado efectivo depende de ella, así que un
+      // cambio de justificación tras el preview también dispara PLAN_CHANGED.
       just: stored ? [stored.justification_type ?? null, stored.justification != null ? 1 : 0] : null,
-      target: MUTABLE_FIELDS.map((f) => norm[f] ?? null),
+      // Estado OBJETIVO EFECTIVO (lo que el writer escribirá), no el crudo del motor.
+      target: effStateArray(entry.effState),
     };
   });
   return {
@@ -415,13 +422,15 @@ async function getImpact({ from, to, scopeKind, scopeId = null, maxExamples = 50
     report.cells_evaluated++;
     if (c.outsideRange) outside.add(c.date);
     if (c.differs) {
+      // 'differs' = el resultado EFECTIVO muta el estado previo (no un diff crudo
+      // del motor que el writer luego preservaría).
       report.rows_differ++;
-      if (!c.existed) report.rows_new++;
+      if (c.category === 'inserted') report.rows_new++;
       if (c.outsideRange) report.rows_differ_outside_range++;
       if (report.examples.length < maxExamples) {
         report.examples.push({
           employee_id: c.emp, date: c.date, outside_requested_range: c.outsideRange,
-          existed: c.existed, changed_fields: c.changed,
+          existed: c.existed, category: c.category, changed_fields: c.changed,
         });
       }
     }
@@ -553,21 +562,63 @@ async function setForwardEnabled(enabled) {
   };
 }
 
+// ─── [B2] fencing DB-side del lease ──────────────────────────────────────
+/**
+ * Verificación DB-SIDE del token vigente. Corre en una conexión APARTE (sin la
+ * transacción del apply/restore) para ver el ÚLTIMO valor committeado de
+ * lock_token: así detecta un robo del lease aunque nuestra transacción esté en
+ * REPEATABLE READ. Se llama INMEDIATAMENTE antes de cada escritura y antes de la
+ * marca final; si el token ya no es el nuestro → LOCK_LOST (la transacción activa
+ * hace rollback). No depende del flag JS del supervisor.
+ */
+async function assertLeaseHeldDb(token) {
+  const [rows] = await sequelize.query('SELECT lock_token FROM fase_e_console_lock WHERE id = ?', { replacements: [CONSOLE_LOCK_ID] });
+  if (!rows[0] || rows[0].lock_token !== token) {
+    throw conflict('El lock de consola se perdió (token vigente distinto). Escritura abortada.', 'LOCK_LOST');
+  }
+}
+
+// ─── [B1] lock por FECHA compartido con el writer operativo ──────────────
+async function acquireDateLock(t, date) {
+  const [rows] = await sequelize.query('SELECT GET_LOCK(?, ?) AS ok', { replacements: [recalcKeyFor(date), DATE_LOCK_TIMEOUT_S], transaction: t });
+  const ok = Array.isArray(rows) && rows[0] ? rows[0].ok : null;
+  if (Number(ok) !== 1) throw conflict(`No se pudo tomar el lock de la fecha ${date} (GET_LOCK=${ok}).`, 'DATE_LOCK_BUSY');
+}
+async function releaseDateLock(t, date) {
+  await sequelize.query('SELECT RELEASE_LOCK(?)', { replacements: [recalcKeyFor(date)], transaction: t }).catch(() => {});
+}
+
+/** Compara dos estados previos (8 campos + justificación + existencia). */
+const PREV_CMP_FIELDS = ['first_in', 'last_out', 'worked_minutes', 'break_minutes', 'overtime_minutes', 'late_minutes', 'notes', 'status'];
+function sameStoredState(a, b) {
+  const na = normalizeStoredForWrite(a);
+  const nb = normalizeStoredForWrite(b);
+  if (!na && !nb) return true;
+  if (!na || !nb) return false;
+  if (!PREV_CMP_FIELDS.every((f) => (na[f] ?? null) === (nb[f] ?? null))) return false;
+  // justificación (de la que depende el estado efectivo)
+  const ja = [a.justification_type ?? null, a.justification != null ? 1 : 0];
+  const jb = [b.justification_type ?? null, b.justification != null ? 1 : 0];
+  return ja[0] === jb[0] && ja[1] === jb[1];
+}
+
 // ─── recálculo histórico acotado, REVERSIBLE ─────────────────────────────
 /**
- * Secuencia fail-safe [P1-D/P1-F/P1-C]:
- *   0. validación + GO/NO-GO + scope estricto + lock(token) + SUPERVISOR de lease
- *      (renueva en 2º plano toda la operación) + no-overlap;
- *   1. buildPlan UNA sola vez (motor apply:false = LECTURA) → filas engine + prev;
- *      digest CANÓNICO versionado (rango/scope/empleados/celda/prev/existencia/
- *      target/op). Falta digest → PLAN_DIGEST_REQUIRED; drift de asistencia/config
- *      O del estado previo de daily_summary → PLAN_CHANGED, ANTES de escribir;
- *   2. BACKUP ATÓMICO del MISMO `existing` validado: header 'prepared' + todas las
- *      filas de backup en UNA transacción (todo o nada); verificación de conteo;
- *   3. 'applying'; se ESCRIBE EXACTAMENTE el plan validado con el ÚNICO escritor
- *      (applyResolvedRows → escribirFilas), SIN un segundo recálculo desde datos
- *      vivos; assertAlive() antes de cada empleado corta si se perdió el lease;
- *   4. 'applied' (sólo al terminar). Error en 2–3 → 'failed' con backup completo.
+ * Secuencia fail-safe [B1/B2/B3/P1-*]:
+ *   0. validación + GO/NO-GO + scope estricto + lock(token) + SUPERVISOR de lease;
+ *   1. buildPlan (motor apply:false = LECTURA) + digest CANÓNICO versionado; drift
+ *      vs el dry-run → PLAN_CHANGED (antes de tocar la base);
+ *   2. UNA SOLA TRANSACCIÓN todo-o-nada. Por FECHA (orden ascendente): se toma el
+ *      GET_LOCK de la fecha COMPARTIDO con el writer operativo; por cada celda,
+ *      bajo el lock: fence DB-side del lease → RE-LECTURA `FOR UPDATE` del estado
+ *      previo (última versión committeada) → VERIFICACIÓN vs el prev digestado
+ *      (drift → PLAN_CHANGED) → BACKUP de ESE prev validado → escritura EFECTIVA
+ *      (misma función pura del writer) → conteo por categoría. El backup y la
+ *      escritura de una celda ocurren consecutivos bajo el mismo lock+row-lock: el
+ *      prev validado es EXACTAMENTE el respaldado y el sobrescrito, sin ventana.
+ *   3. fence final + header 'applied' con conteos → commit. Cualquier fallo (drift,
+ *      lease perdido, error) → ROLLBACK TOTAL: no hay header, ni backup, ni
+ *      escrituras; daily_summary intacto y el rango libre (estado recuperable).
  */
 async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null, planDigestExpected = null }) {
   validateRange(from, to);
@@ -575,7 +626,7 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
   // [P1-B] scope estricto ANTES de tomar lock o escribir.
   const ids = await resolveEmployeeIds(scopeKind, scopeId);
   if (!ids.length) {
-    return { batch_id: null, status: 'noop', employees: 0, rows_backed_up: 0, rows_written: 0, note: 'Sin empleados en alcance' };
+    return { batch_id: null, status: 'noop', employees: 0, rows_backed_up: 0, rows_written: 0, cells_processed: 0, rows_inserted: 0, rows_updated: 0, rows_deleted: 0, rows_unchanged: 0, note: 'Sin empleados en alcance' };
   }
   // [P1-F] el digest del dry-run es OBLIGATORIO (se exige antes de tomar el lock).
   if (!planDigestExpected) throw badRequest('Falta plan_digest del dry-run previo.', 'PLAN_DIGEST_REQUIRED');
@@ -583,7 +634,6 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
   const token = await acquireConsoleLock('recalc', userId);
   const lease = startLeaseSupervisor(token); // [P1-C] renovación en 2º plano
   const batchId = crypto.randomUUID();
-  let headerCommitted = false;
   try {
     await assertNoOverlap(from, to);
 
@@ -591,115 +641,127 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
     const { plan, existing, cells } = await buildPlan(ids, from, to);
     const digest = planDigest(canonicalPlan({ from, to, scopeKind, scopeId, ids, plan, existing }));
     if (planDigestExpected !== digest) {
-      throw conflict(
-        'El plan cambió desde el dry-run (asistencia/config o el estado previo de daily_summary difieren). Volvé a previsualizar.',
-        'PLAN_CHANGED',
-      );
+      throw conflict('El plan cambió desde el dry-run (asistencia/config o el estado previo de daily_summary difieren). Volvé a previsualizar.', 'PLAN_CHANGED');
     }
     lease.assertAlive();
+    await assertLeaseHeldDb(token); // fence antes de entrar a la transacción de escritura
+    // [B5] barrera determinista: permite a un test mutar daily_summary EXACTAMENTE
+    // tras validar el digest y antes de backup/write (la re-lectura FOR UPDATE bajo
+    // el lock lo detectará → PLAN_CHANGED). Inerte en producción.
+    await _hook('afterDigest', { from, to });
 
-    // 2. BACKUP ATÓMICO en una transacción: header + backups (del MISMO `existing`).
-    const t = await sequelize.transaction();
-    try {
+    const counts = { cells_processed: 0, rows_backed_up: 0, rows_inserted: 0, rows_updated: 0, rows_deleted: 0, rows_unchanged: 0 };
+    const cellsByDate = planCellsByDate(plan, existing);
+
+    // 2. UNA transacción todo-o-nada.
+    await sequelize.transaction(async (t) => {
+      for (const [date, dateCells] of cellsByDate) {
+        await acquireDateLock(t, date); // lock compartido con el writer operativo
+        try {
+          for (const cell of dateCells) {
+            // fence DB-side del lease antes de leer/respaldar la celda.
+            lease.assertAlive();
+            await assertLeaseHeldDb(token);
+            // re-lectura FOR UPDATE (última committeada) + verificación bajo el lock.
+            const current = await workdaySummary.readDailySummaryRow(t, cell.emp, date);
+            if (!sameStoredState(current, cell.digestedStored)) {
+              throw conflict('El estado previo de daily_summary cambió bajo el lock desde el dry-run. Volvé a previsualizar.', 'PLAN_CHANGED');
+            }
+            // BACKUP del prev EXACTO validado (== current == digestado) + lo aplicado.
+            const eff = workdaySummary.effectiveDailySummary(cell.engineRow, current, { reconcileOnly: false });
+            const category = workdaySummary.classifyEffective(eff, current);
+            const appliedState = (eff.action === 'insert' || eff.action === 'update') ? eff.row : null;
+            await backupOneCell(t, batchId, cell.emp, date, current, appliedState);
+            counts.rows_backed_up++;
+            // [B5] barrera entre backup y write (la fila está FOR-UPDATE-lockeada).
+            await _hook('beforeCellWrite', { emp: cell.emp, date });
+            // [B2] fence DB-side INMEDIATAMENTE antes de la escritura efectiva.
+            lease.assertAlive();
+            await assertLeaseHeldDb(token);
+            await workdaySummary.applyEffectiveWrite(t, cell.emp, date, eff);
+            counts.cells_processed++;
+            counts[`rows_${category}`]++;
+          }
+        } finally {
+          await releaseDateLock(t, date);
+        }
+      }
+      // fence final antes de persistir el header 'applied'.
+      lease.assertAlive();
+      await assertLeaseHeldDb(token);
+      const rowsWritten = counts.rows_inserted + counts.rows_updated + counts.rows_deleted;
       await sequelize.query(
         `INSERT INTO daily_summary_recalc_batch
-           (batch_id, from_date, to_date, scope_kind, scope_id, status, employees, rows_backed_up, rows_written, plan_digest, created_by)
-         VALUES (?, ?, ?, ?, ?, 'prepared', ?, ?, 0, ?, ?)`,
-        { replacements: [batchId, from, to, scopeKind, scopeId ?? null, ids.length, cells.length, digest, userId ?? null], transaction: t },
+           (batch_id, from_date, to_date, scope_kind, scope_id, status, employees, rows_backed_up,
+            cells_processed, rows_inserted, rows_updated, rows_deleted, rows_unchanged, rows_written, plan_digest, created_by)
+         VALUES (?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        { replacements: [batchId, from, to, scopeKind, scopeId ?? null, ids.length, counts.rows_backed_up,
+          counts.cells_processed, counts.rows_inserted, counts.rows_updated, counts.rows_deleted, counts.rows_unchanged, rowsWritten, digest, userId ?? null], transaction: t },
       );
-      const buffer = [];
-      const flush = async () => {
-        if (!buffer.length) return;
-        const flat = [];
-        for (const b of buffer) {
-          flat.push(batchId, b.emp, b.date, b.existed, b.first_in, b.last_out,
-            b.worked_minutes, b.break_minutes, b.late_minutes, b.overtime_minutes, b.status, b.notes, b.row_json);
-        }
-        const ph = buffer.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?)').join(',');
-        await sequelize.query(
-          `INSERT INTO daily_summary_backup
-             (batch_id, employee_id, date, existed, first_in, last_out, worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes, row_json)
-           VALUES ${ph}`,
-          { replacements: flat, transaction: t },
-        );
-        buffer.length = 0;
-      };
-      for (const cell of cells) {
-        const cur = existing.get(`${cell.emp}|${cell.date}`);
-        buffer.push({
-          emp: cell.emp, date: cell.date, existed: cur ? 1 : 0,
-          first_in: cur?.first_in ?? null, last_out: cur?.last_out ?? null,
-          worked_minutes: cur?.worked_minutes ?? null, break_minutes: cur?.break_minutes ?? null,
-          late_minutes: cur?.late_minutes ?? null, overtime_minutes: cur?.overtime_minutes ?? null,
-          status: cur?.status ?? null, notes: cur?.notes ?? null,
-          row_json: cur ? JSON.stringify(cur) : null,
-        });
-        if (buffer.length >= BACKUP_CHUNK) await flush();
-      }
-      await flush();
-      await t.commit();
-    } catch (e) {
-      await t.rollback(); // [P1-D] fallo en cualquier chunk → NO deja header ni backups huérfanos, ni bloquea el rango.
-      throw e;
-    }
-    headerCommitted = true;
+    });
 
-    // Verificación mecánica del conteo ANTES de escribir daily_summary [P1-D].
-    const [[cnt]] = await sequelize.query('SELECT COUNT(*) AS n FROM daily_summary_backup WHERE batch_id = ?', { replacements: [batchId] });
-    if (Number(cnt?.n || 0) !== cells.length) {
-      throw conflict(`Respaldo incompleto (${cnt?.n} vs ${cells.length}); no se escribe daily_summary.`, 'BACKUP_COUNT_MISMATCH');
-    }
-
-    // 3. 'applying' + ESCRIBIR EXACTAMENTE EL PLAN VALIDADO (sin segundo recálculo).
-    //    Se usa el ÚNICO escritor (applyResolvedRows → escribirFilas) sobre las
-    //    filas engine capturadas en buildPlan. assertAlive() aborta si el lease se
-    //    perdió, ANTES de tocar daily_summary del empleado siguiente.
-    await sequelize.query("UPDATE daily_summary_recalc_batch SET status = 'applying' WHERE batch_id = ?", { replacements: [batchId] });
-    const rowsByEmp = planRowsByEmployee(plan);
-    let rowsWritten = 0;
-    for (const [emp, engineRows] of rowsByEmp) {
-      lease.assertAlive();
-      await workdaySummary.applyResolvedRows(emp, engineRows);
-      rowsWritten += engineRows.length;
-    }
-
-    // 4. 'applied' (todo terminó). rows_written = celdas del plan aplicadas por el
-    //    escritor (upsert o reconciliación) = cells.length; semántica documentada.
-    await sequelize.query("UPDATE daily_summary_recalc_batch SET status = 'applied', rows_written = ? WHERE batch_id = ?", { replacements: [rowsWritten, batchId] });
     return {
       batch_id: batchId, status: 'applied', period: { from, to },
       scope: { kind: scopeKind, id: scopeId ?? null }, employees: ids.length,
-      rows_backed_up: cells.length, rows_written: rowsWritten, plan_digest: digest,
+      rows_backed_up: counts.rows_backed_up,
+      cells_processed: counts.cells_processed,
+      rows_inserted: counts.rows_inserted, rows_updated: counts.rows_updated,
+      rows_deleted: counts.rows_deleted, rows_unchanged: counts.rows_unchanged,
+      rows_written: counts.rows_inserted + counts.rows_updated + counts.rows_deleted,
+      plan_digest: digest,
       dates_outside_range: [...new Set(cells.filter((c) => c.outsideRange).map((c) => c.date))].sort(),
       backup_confirmation: 'operator_declared',
     };
-  } catch (err) {
-    if (headerCommitted) {
-      try {
-        await sequelize.query(
-          "UPDATE daily_summary_recalc_batch SET status = 'failed' WHERE batch_id = ? AND status IN ('prepared','applying')",
-          { replacements: [batchId] },
-        );
-      } catch { /* no enmascarar el error original */ }
-    }
-    throw err;
   } finally {
     lease.stop();               // [P1-C] cerrar el supervisor limpiamente
     await releaseConsoleLock(token); // sólo libera NUESTRO token: nunca el del nuevo dueño
   }
 }
 
+/** [B1] Respalda UNA celda (prev validado bajo el lock) dentro de la transacción. */
+async function backupOneCell(t, batchId, emp, date, current, appliedState) {
+  await sequelize.query(
+    `INSERT INTO daily_summary_backup
+       (batch_id, employee_id, date, existed, first_in, last_out, worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes, row_json, applied_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    { replacements: [
+      batchId, emp, date, current ? 1 : 0,
+      current?.first_in ?? null, current?.last_out ?? null,
+      current?.worked_minutes ?? null, current?.break_minutes ?? null,
+      current?.late_minutes ?? null, current?.overtime_minutes ?? null,
+      current?.status ?? null, current?.notes ?? null,
+      current ? JSON.stringify(current) : null,
+      appliedState ? JSON.stringify(appliedState) : null,
+    ], transaction: t },
+  );
+}
+
+/** ¿La fila actual sigue siendo lo que ESTE lote aplicó? (para no pisar un cambio
+ *  legítimo concurrente posterior al apply). `appliedJson` = 8 campos que escribimos
+ *  (o null = la habíamos borrado / no dejamos fila). */
+function currentMatchesApplied(current, appliedJson) {
+  const cur = normalizeStoredForWrite(current);
+  if (appliedJson == null) return cur == null; // esperábamos SIN fila
+  if (!cur) return false;                        // esperábamos una fila y no está
+  return WRITE_ORDER.every((f) => (cur[f] ?? null) === (appliedJson[f] ?? null));
+}
+
 /**
- * RESTORE por batch_id, RECUPERABLE [P1-E].
- *   · Exclusión mutua con propiedad (lock token).
+ * RESTORE por batch_id, RECUPERABLE y SEGURO [B1/B2/P1-E].
+ *   · Exclusión mutua (console lock con token) + SUPERVISOR de lease.
  *   · Verifica COUNT(backup)==rows_backed_up antes de tocar nada.
- *   · TODA la reposición + la marca 'restored'/restored_at ocurren en UNA
- *     transacción: si algo falla, ROLLBACK deja daily_summary y el batch intactos
- *     (estado restaurable) → REINTENTABLE, nunca bloqueado en 'restoring'.
+ *   · UNA SOLA TRANSACCIÓN todo-o-nada. Por FECHA: GET_LOCK compartido con el
+ *     writer; por celda, bajo el lock: fence DB-side del lease → RE-LECTURA
+ *     FOR UPDATE. Si la celda YA NO tiene lo que este lote aplicó (cambio legítimo
+ *     concurrente), se SALTA (no se pisa) y se cuenta como skipped; si no, se repone
+ *     el estado previo respaldado (upsert) o se borra (existed=0).
+ *   · La marca 'restored'/restored_at ocurre dentro de la misma transacción. Un
+ *     fallo (incl. pérdida del lease) → ROLLBACK TOTAL: daily_summary y el lote
+ *     intactos (restaurable) → REINTENTABLE, nunca bloqueado en 'restoring'.
  */
 async function restoreBatch({ batchId, userId = null }) {
   const token = await acquireConsoleLock('restore', userId);
-  const lease = startLeaseSupervisor(token); // [P1-C] renovación en 2º plano
+  const lease = startLeaseSupervisor(token);
   try {
     const [[batch]] = await sequelize.query(
       'SELECT batch_id, status, rows_backed_up FROM daily_summary_recalc_batch WHERE batch_id = ? LIMIT 1',
@@ -719,49 +781,60 @@ async function restoreBatch({ batchId, userId = null }) {
       `SELECT employee_id, DATE_FORMAT(date,'%Y-%m-%d') AS date, existed,
               DATE_FORMAT(first_in,'%Y-%m-%d %H:%i:%s') AS first_in,
               DATE_FORMAT(last_out,'%Y-%m-%d %H:%i:%s') AS last_out,
-              worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes
-         FROM daily_summary_backup WHERE batch_id = ?`,
+              worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes, applied_json
+         FROM daily_summary_backup WHERE batch_id = ? ORDER BY date`,
       { replacements: [batchId] },
     );
+    // agrupar por fecha para tomar el lock compartido por fecha.
+    const byDate = new Map();
+    for (const b of rows) { const a = byDate.get(b.date) || []; a.push(b); byDate.set(b.date, a); }
 
-    // TODO-o-NADA: reposición + marca final en una transacción. Reintentable.
-    lease.assertAlive();
-    const t = await sequelize.transaction();
-    let restored = 0; let deleted = 0;
-    try {
-      for (const b of rows) {
-        if (b.existed) {
-          await sequelize.query(
-            `INSERT INTO daily_summary
-               (employee_id, date, first_in, last_out, worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-               first_in = VALUES(first_in), last_out = VALUES(last_out),
-               worked_minutes = VALUES(worked_minutes), break_minutes = VALUES(break_minutes),
-               late_minutes = VALUES(late_minutes), overtime_minutes = VALUES(overtime_minutes),
-               status = VALUES(status), notes = VALUES(notes)`,
-            { replacements: [b.employee_id, b.date, b.first_in, b.last_out, b.worked_minutes, b.break_minutes, b.late_minutes, b.overtime_minutes, b.status, b.notes], transaction: t },
-          );
-          restored++;
-        } else {
-          await sequelize.query('DELETE FROM daily_summary WHERE employee_id = ? AND date = ?', { replacements: [b.employee_id, b.date], transaction: t });
-          deleted++;
+    const counts = { rows_restored: 0, rows_deleted: 0, rows_skipped: 0 };
+    await sequelize.transaction(async (t) => {
+      for (const [date, dateRows] of [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+        await acquireDateLock(t, date);
+        try {
+          for (const b of dateRows) {
+            lease.assertAlive();
+            await assertLeaseHeldDb(token);
+            const current = await workdaySummary.readDailySummaryRow(t, b.employee_id, date);
+            const applied = typeof b.applied_json === 'string' ? JSON.parse(b.applied_json) : b.applied_json;
+            if (!currentMatchesApplied(current, applied)) { counts.rows_skipped++; continue; } // cambio concurrente → no pisar
+            // [B5] barrera + [B2] fence DB-side INMEDIATAMENTE antes de la escritura.
+            await _hook('restoreBeforeCellWrite', { emp: b.employee_id, date });
+            lease.assertAlive();
+            await assertLeaseHeldDb(token);
+            if (b.existed) {
+              await sequelize.query(
+                `INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, break_minutes, late_minutes, overtime_minutes, status, notes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE first_in = VALUES(first_in), last_out = VALUES(last_out),
+                   worked_minutes = VALUES(worked_minutes), break_minutes = VALUES(break_minutes),
+                   late_minutes = VALUES(late_minutes), overtime_minutes = VALUES(overtime_minutes),
+                   status = VALUES(status), notes = VALUES(notes)`,
+                { replacements: [b.employee_id, date, b.first_in, b.last_out, b.worked_minutes, b.break_minutes, b.late_minutes, b.overtime_minutes, b.status, b.notes], transaction: t },
+              );
+              counts.rows_restored++;
+            } else {
+              await sequelize.query('DELETE FROM daily_summary WHERE employee_id = ? AND date = ?', { replacements: [b.employee_id, date], transaction: t });
+              counts.rows_deleted++;
+            }
+          }
+        } finally {
+          await releaseDateLock(t, date);
         }
       }
-      // restored_at sólo al finalizar correctamente, dentro de la misma transacción.
+      lease.assertAlive();
+      await assertLeaseHeldDb(token);
       await sequelize.query(
         "UPDATE daily_summary_recalc_batch SET status = 'restored', restored_by = ?, restored_at = NOW() WHERE batch_id = ?",
         { replacements: [userId ?? null, batchId], transaction: t },
       );
-      await t.commit();
-    } catch (e) {
-      await t.rollback(); // fallo parcial → nada cambia; el batch queda restaurable y REINTENTABLE.
-      throw e;
-    }
-    return { batch_id: batchId, status: 'restored', rows_restored: restored, rows_deleted: deleted };
+    });
+    return { batch_id: batchId, status: 'restored', rows_restored: counts.rows_restored, rows_deleted: counts.rows_deleted, rows_skipped: counts.rows_skipped };
   } finally {
-    lease.stop();               // [P1-C] cerrar el supervisor limpiamente
-    await releaseConsoleLock(token); // sólo libera NUESTRO token
+    lease.stop();
+    await releaseConsoleLock(token);
   }
 }
 
@@ -769,7 +842,8 @@ async function listBatches({ limit = 100 } = {}) {
   const lim = Math.max(1, Math.min(500, Number(limit) || 100));
   const [rows] = await sequelize.query(
     `SELECT batch_id, DATE_FORMAT(from_date,'%Y-%m-%d') AS from_date, DATE_FORMAT(to_date,'%Y-%m-%d') AS to_date,
-            scope_kind, scope_id, status, employees, rows_backed_up, rows_written, plan_digest,
+            scope_kind, scope_id, status, employees, rows_backed_up,
+            cells_processed, rows_inserted, rows_updated, rows_deleted, rows_unchanged, rows_written, plan_digest,
             created_by, created_at, restored_by, restored_at
        FROM daily_summary_recalc_batch ORDER BY created_at DESC LIMIT ${lim}`,
   );
@@ -785,8 +859,11 @@ module.exports = {
   restoreBatch,
   listBatches,
   // exportados para pruebas / referencia
-  evalGoNoGo, assertGoNoGo, buildPlan, planDigest, canonicalPlan, planRowsByEmployee, opForRow, isRealCivilDate,
-  acquireConsoleLock, heartbeatConsoleLock, releaseConsoleLock, startLeaseSupervisor,
-  MAX_RANGE_DAYS, LOCK_LEASE_SEC, BACKUP_CHUNK, PLAN_DIGEST_VERSION,
-  REQUIRED_MIGRATIONS, CONSOLE_MIGRATION, VALID_SCOPES, MUTABLE_FIELDS,
+  evalGoNoGo, assertGoNoGo, buildPlan, planDigest, canonicalPlan, planCellsByDate,
+  effectiveForCell, normalizeStoredForWrite, sameStoredState, currentMatchesApplied, isRealCivilDate,
+  acquireConsoleLock, heartbeatConsoleLock, releaseConsoleLock, startLeaseSupervisor, assertLeaseHeldDb,
+  MAX_RANGE_DAYS, LOCK_LEASE_SEC, BACKUP_CHUNK, PLAN_DIGEST_VERSION, DATE_LOCK_TIMEOUT_S,
+  REQUIRED_MIGRATIONS, CONSOLE_MIGRATION, VALID_SCOPES, MUTABLE_FIELDS, WRITE_ORDER,
+  // [B5] barreras deterministas SÓLO para IT (inertes en producción).
+  _setTestHook, _clearTestHooks,
 };

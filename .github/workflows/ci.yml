@@ -216,17 +216,18 @@ jobs:
 
       # IT REALES de la consola FASE E contra este MySQL 8 efímero (esquema
       # completo + schema_migrations poblado por el runner). Ejercen recalcApply/
-      # restoreBatch COMPLETOS: backup atómico (fallo en 2º chunk → rollback sin
-      # huérfanos ni escrituras), paridad P1-F (apply sin 2º recálculo; TOCTOU y
-      # drift de estado previo → PLAN_CHANGED), y el lease SUPERVISADO (heartbeat
-      # inmediato mismo segundo, expiración/robo, operación > TTL). Sin IT_DB=1
-      # estas suites se saltan (así el resto de jobs no las corren).
+      # restoreBatch COMPLETOS con BARRERAS deterministas: [B1] co-lock por fecha +
+      # FOR UPDATE (mutación tras el digest → PLAN_CHANGED; writer concurrente
+      # serializado, sin pisar), [B2] fencing DB-side del lease (robo durante apply
+      # y a mitad del restore → LOCK_LOST + rollback total, sin liberar al nuevo
+      # dueño), backup atómico (fallo inyectado → rollback total), [B3] target
+      # EFECTIVO (justificación preservada) y [B4] conteos reales insert/update/
+      # delete/unchanged. Sin IT_DB=1 estas suites se saltan.
       - name: IT reales FASE E (IT_DB=1, MySQL 8 efímero)
         run: npx jest tests/it/faseEConsole.it.test.js --runInBand
         env:
           IT_DB: '1'
           FASE_E_LOCK_LEASE_SEC: '3'
-          FASE_E_BACKUP_CHUNK: '2'
 
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el

@@ -166,7 +166,9 @@ router.post('/recalc/apply',
     });
     auditLog(req, 'fase_e.recalc.apply', {
       batch_id: result.batch_id, period: result.period, scope: result.scope,
-      employees: result.employees, rows_backed_up: result.rows_backed_up, rows_written: result.rows_written,
+      employees: result.employees, rows_backed_up: result.rows_backed_up,
+      cells_processed: result.cells_processed, rows_inserted: result.rows_inserted,
+      rows_updated: result.rows_updated, rows_deleted: result.rows_deleted, rows_unchanged: result.rows_unchanged,
     });
     res.json({ ok: true, ...result });
   }),

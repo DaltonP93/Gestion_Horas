@@ -74,7 +74,13 @@ CREATE TABLE IF NOT EXISTS daily_summary_recalc_batch (
                  NOT NULL DEFAULT 'prepared',
   employees      INT          NOT NULL DEFAULT 0,     -- empleados en alcance
   rows_backed_up INT          NOT NULL DEFAULT 0,     -- filas respaldadas antes de escribir
-  rows_written   INT          NOT NULL DEFAULT 0,     -- filas escritas por el motor
+  -- Conteos INEQUÍVOCOS del efecto real sobre daily_summary (no un length):
+  cells_processed INT         NOT NULL DEFAULT 0,     -- celdas del plan aplicadas
+  rows_inserted  INT          NOT NULL DEFAULT 0,     -- filas nuevas creadas
+  rows_updated   INT          NOT NULL DEFAULT 0,     -- filas existentes que cambiaron
+  rows_deleted   INT          NOT NULL DEFAULT 0,     -- filas borradas (reconcile)
+  rows_unchanged INT          NOT NULL DEFAULT 0,     -- celdas cuyo resultado no mutó nada
+  rows_written   INT          NOT NULL DEFAULT 0,     -- compat: inserted+updated+deleted (mutaciones reales)
   plan_digest    CHAR(64)     NULL,                   -- sha256 del plan validado (paridad dry-run/apply)
   created_by     INT          NULL,                   -- user_id que ejecutó el recálculo
   created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -103,6 +109,11 @@ CREATE TABLE IF NOT EXISTS daily_summary_backup (
   status           VARCHAR(32)  NULL,
   notes            TEXT         NULL,
   row_json         JSON         NULL,
+  -- Estado que el recálculo ESCRIBIÓ en esta celda (los 8 campos efectivos, o
+  -- NULL si la borró). Permite que el RESTORE detecte un cambio LEGÍTIMO
+  -- concurrente posterior al apply: si la fila actual ya no coincide con lo que
+  -- escribimos, el restore la SALTA (no pisa el cambio ajeno) en vez de revertir.
+  applied_json     JSON         NULL,
   backed_up_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   -- Una sola fila de respaldo por celda dentro de un lote: hace el backup
   -- idempotente y evita huérfanos duplicados si un INSERT se reintenta.

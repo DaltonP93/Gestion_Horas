@@ -41,6 +41,8 @@ type ImpactExample = {
   date: string
   outside_requested_range: boolean
   existed: 0 | 1
+  // categoría del efecto REAL del writer (no un diff crudo del motor).
+  category?: 'inserted' | 'updated' | 'deleted' | 'unchanged'
   changed_fields: string[]
 }
 type Impact = {
@@ -136,9 +138,17 @@ export default function ActivacionMotorPage() {
     setBusy(path); setErr(''); setNotice('')
     try {
       const r = await api.post(path, body)
-      setNotice(`${ok} ${r.data?.batch_id ? `(batch ${r.data.batch_id})` : ''}`)
+      const d = r.data || {}
+      // Conteos inequívocos cuando el backend los devuelve (recalc/apply, restore).
+      let detail = d.batch_id ? `(batch ${d.batch_id})` : ''
+      if (d.cells_processed != null) {
+        detail += ` — ${d.cells_processed} celdas: +${d.rows_inserted} nuevas · ~${d.rows_updated} modificadas · −${d.rows_deleted} borradas · =${d.rows_unchanged} sin cambio`
+      } else if (d.rows_restored != null) {
+        detail += ` — restauradas ${d.rows_restored}, borradas ${d.rows_deleted}${d.rows_skipped ? `, ${d.rows_skipped} salteadas (cambio concurrente)` : ''}`
+      }
+      setNotice(`${ok} ${detail}`)
       await loadStatus(); await loadBatches()
-      return r.data
+      return d
     } catch (e: any) { setErr(errMsg(e)); return null } finally { setBusy('') }
   }
 
@@ -341,7 +351,7 @@ export default function ActivacionMotorPage() {
                   <div key={i} className="font-mono">
                     emp {ex.employee_id} · {ex.date}
                     {ex.outside_requested_range && <span className="ml-1 text-amber-600">(fuera de rango)</span>}
-                    {' '}· {ex.existed ? 'actualiza' : 'crea'}
+                    {' · '}{({ inserted: 'crea', updated: 'modifica', deleted: 'borra', unchanged: 'sin cambio' } as any)[ex.category || ''] || (ex.existed ? 'actualiza' : 'crea')}
                     {' · '}
                     {ex.changed_fields.length > 0 ? ex.changed_fields.join(', ') : '—'}
                   </div>
@@ -378,7 +388,7 @@ export default function ActivacionMotorPage() {
         <div className="max-h-48 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 text-slate-500 dark:bg-slate-900">
-              <tr><th className="p-2">batch_id</th><th className="p-2">rango</th><th className="p-2">alcance</th><th className="p-2">filas</th><th className="p-2">estado</th></tr>
+              <tr><th className="p-2">batch_id</th><th className="p-2">rango</th><th className="p-2">alcance</th><th className="p-2" title="nuevas / modificadas / borradas / sin cambio">+ / ~ / − / =</th><th className="p-2">estado</th></tr>
             </thead>
             <tbody>
               {batches.length === 0 && <tr><td colSpan={5} className="p-3 text-center text-slate-400">Sin lotes.</td></tr>}
@@ -387,7 +397,9 @@ export default function ActivacionMotorPage() {
                   <td className="p-2 font-mono">{b.batch_id.slice(0, 8)}…</td>
                   <td className="p-2">{b.from_date}→{b.to_date}</td>
                   <td className="p-2">{b.scope_kind}{b.scope_id ? ` #${b.scope_id}` : ''}</td>
-                  <td className="p-2">{b.rows_written}</td>
+                  <td className="p-2 font-mono" title={`${b.cells_processed ?? 0} celdas procesadas`}>
+                    +{b.rows_inserted ?? 0} / ~{b.rows_updated ?? 0} / −{b.rows_deleted ?? 0} / ={b.rows_unchanged ?? 0}
+                  </td>
                   <td className="p-2">{b.status === 'restored'
                     ? <span className="text-slate-400">restaurado</span>
                     : <button onClick={() => setRestoreId(b.batch_id)} className="text-indigo-600 hover:underline">seleccionar</button>}</td>
