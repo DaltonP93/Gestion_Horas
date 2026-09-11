@@ -464,3 +464,78 @@ jobs:
         run: bash scripts/ops-migrate.sh
       - name: B) verificar forma reconciliada tras la actualización
         run: /tmp/check_shape.sh
+
+  # [P1-F] Integración REAL de la firma PAdES: levanta html2pdf + pades-signer por
+  # Docker (deploy/signing/test-stack, un stack COMPATIBLE de PRUEBA — NO las
+  # imágenes del dueño) con un certificado .p12 de prueba, firma de verdad y
+  # verifica CRIPTOGRÁFICAMENTE el PDF resultante + el PIN del certificado. Job
+  # OBLIGATORIO: IT_SIGNING=1 y se falla si el IT quedara skipped (numPending>0).
+  signing-it:
+    name: Firma PAdES — integración REAL (html2pdf + pades-signer + cert de prueba)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - name: Instalar deps de la API
+        working-directory: api
+        run: npm ci || npm install
+      - name: node_modules del stack de prueba (host; el build los copia sin red)
+        run: bash deploy/signing/test-stack/prepare.sh
+      - name: Generar certificado .p12 de prueba
+        run: bash deploy/signing/test-stack/gen-cert.sh
+      - name: Levantar html2pdf + pades-signer (Docker)
+        working-directory: deploy/signing/test-stack
+        run: docker compose up --build -d
+      - name: Esperar health de ambos servicios
+        run: |
+          set -e
+          for port in 3012 3011; do
+            ok=0
+            for i in $(seq 1 40); do
+              if curl -sf "http://127.0.0.1:$port/health" >/dev/null; then ok=1; break; fi
+              sleep 2
+            done
+            if [ "$ok" != "1" ]; then
+              echo "❌ el servicio en :$port no respondió /health"
+              (cd deploy/signing/test-stack && docker compose logs || true)
+              exit 1
+            fi
+          done
+          echo "✓ html2pdf(:3012) y pades-signer(:3011) sanos"
+      - name: Fingerprint SHA-256 del cert real → PIN
+        id: fp
+        run: |
+          FP=$(openssl x509 -in deploy/signing/test-stack/certs/cert.pem -noout -fingerprint -sha256 \
+                | sed 's/.*=//; s/://g' | tr 'A-F' 'a-f')
+          test -n "$FP"
+          echo "fp=$FP" >> "$GITHUB_OUTPUT"
+      - name: IT firma REAL (IT_SIGNING=1) + asserción de que NO quedó skipped
+        working-directory: api
+        env:
+          IT_SIGNING: '1'
+          SIGNING_MODE: pades_local
+          HTML2PDF_URL: http://127.0.0.1:3012
+          PADES_SIGNER_URL: http://127.0.0.1:3011
+          HTML2PDF_SHARED_SECRET: render-test-secret
+          PADES_SIGNER_SHARED_SECRET: sign-test-secret
+          SIGNING_ALLOWED_HOSTS: 127.0.0.1
+          PADES_TRUSTED_CERT_SHA256: ${{ steps.fp.outputs.fp }}
+        run: |
+          set -e
+          npx jest tests/it/signing.it.test.js --runInBand --forceExit \
+            --json --outputFile=/tmp/it-signing.json
+          node -e '
+            const r = require("/tmp/it-signing.json");
+            if (r.numTotalTests < 2) { console.error("IT firma: NO corrió (¿skipped?) total=" + r.numTotalTests); process.exit(1); }
+            if (r.numPendingTests > 0) { console.error("IT firma: hay tests skipped=" + r.numPendingTests); process.exit(1); }
+            if (r.success !== true || r.numFailedTests > 0) { console.error("IT firma: con fallos"); process.exit(1); }
+            console.log("✓ IT firma REAL: " + r.numPassedTests + " passed, 0 skipped");
+          '
+      - name: Bajar el stack
+        if: always()
+        working-directory: deploy/signing/test-stack
+        run: docker compose down -v

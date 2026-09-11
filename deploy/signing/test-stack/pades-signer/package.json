@@ -1,0 +1,16 @@
+{
+  "name": "pades-signer-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servicio de PRUEBA pades-signer (contrato /sign) que firma PAdES real con un .p12 de prueba.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "comment": "[P1-F] versiones EXACTAS (sin ^) para instalaciones reproducibles del stack de prueba.",
+  "dependencies": {
+    "@signpdf/placeholder-plain": "3.2.4",
+    "@signpdf/signer-p12": "3.2.4",
+    "@signpdf/signpdf": "3.2.4",
+    "express": "4.21.2",
+    "multer": "2.0.1"
+  }
+}

@@ -26,6 +26,7 @@
 
 const crypto = require('crypto');
 const { sequelize } = require('../config/database');
+const { civilMonthRange } = require('../utils/civilDate');
 const {
   roleForState,
   nextApprovedState,
@@ -45,6 +46,39 @@ async function canUserActOn(user, approval) {
     approval_state: approval.status,
     department_id: approval.department_id,
   });
+}
+
+// Roles con visibilidad GLOBAL de los reportes mensuales (RR.HH./administración).
+const GLOBAL_READ_ROLES = ['gth', 'admin', 'super_admin'];
+
+/**
+ * [SEGURIDAD/BOLA] Autorización de OBJETO para LEER/descargar el reporte firmado
+ * de un período. Es el "modelo vigente" del circuito de aprobación:
+ *   - gth / admin / super_admin → acceso GLOBAL (cualquier período/depto).
+ *   - coordinator → sólo los departamentos donde es `departments.coordinator_id`.
+ *   - manager     → sólo los departamentos donde es `departments.manager_id`.
+ *   - período org-wide (department_id = null) → SÓLO roles globales.
+ *   - cualquier otro rol / departamento fuera de alcance → false (la ruta → 403).
+ * No enumera: sin autorización no se revela ni se genera el documento.
+ */
+async function canReadApproval(user, approval) {
+  if (!user || !user.role) return false;
+  if (GLOBAL_READ_ROLES.includes(user.role)) return true;
+
+  const deptId = approval ? approval.department_id : null;
+  // Un período org-wide (sin departamento) sólo lo ven los roles globales.
+  if (deptId == null) return false;
+
+  if (user.role !== 'coordinator' && user.role !== 'manager') return false;
+
+  const [[dept]] = await sequelize.query(
+    'SELECT coordinator_id, manager_id FROM departments WHERE id = ? LIMIT 1',
+    { replacements: [deptId] }
+  );
+  if (!dept) return false;
+  if (user.role === 'coordinator') return dept.coordinator_id === user.id;
+  if (user.role === 'manager') return dept.manager_id === user.id;
+  return false;
 }
 
 /**
@@ -132,8 +166,10 @@ function stable(v) {
 async function computeReportIntegrity({ year, month, department_id }) {
   const y = Number(year);
   const m = Number(month);
-  const dateFrom = `${y}-${String(m).padStart(2, '0')}-01`;
-  const dateTo = new Date(y, m, 0).toISOString().split('T')[0];
+  // [P1-E] Rango civil invariante a la TZ del proceso (mismo cálculo que usa el
+  // resumen del PDF, derivado de estas MISMAS filas): en Asia/Tokyo el viejo
+  // `new Date(y,m,0).toISOString()` perdía el último día del mes.
+  const { dateFrom, dateTo } = civilMonthRange(y, m);
 
   const params = [dateFrom, dateTo];
   let deptFilter = '';
@@ -174,6 +210,56 @@ async function computeReportIntegrity({ year, month, department_id }) {
 
   const hash = crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
   return { hash, canonical, rows };
+}
+
+/**
+ * [P1-A snapshot único / anti-TOCTOU] Deriva el RESUMEN por empleado (la tabla
+ * del PDF) a partir de EXACTAMENTE las mismas filas canónicas que produjeron el
+ * `integrity_hash` (las que devuelve `computeReportIntegrity`). Así el contenido
+ * renderizado y firmado proviene del MISMO snapshot que se validó contra el
+ * hash: NO hay una segunda lectura independiente de `daily_summary` que pueda
+ * cambiar entre la validación y el render.
+ *
+ * Reproduce EN MEMORIA la agregación que antes hacía el SELECT ... GROUP BY del
+ * PDF (misma semántica: LEFT JOIN → un empleado sin marcaciones aparece una vez
+ * con ceros; days_present = present|late; days_late = late; days_absent = absent;
+ * sumas de minutos). Las filas vienen ordenadas por código de empleado.
+ *
+ * @param {Array<object>} rows filas `{ employee_code, date, status, worked_minutes,
+ *                              late_minutes, overtime_minutes, ... }` de la fuente canónica.
+ * @returns {Array<object>} `[{ code, days_present, days_late, days_absent,
+ *                            total_worked_minutes, total_late_minutes, total_overtime_minutes }]`
+ */
+function summarizeCanonicalRows(rows) {
+  const byCode = new Map();
+  const order = [];
+  for (const r of rows || []) {
+    const code = r.employee_code;
+    if (code == null) continue;
+    let agg = byCode.get(code);
+    if (!agg) {
+      agg = {
+        code,
+        days_present: 0,
+        days_late: 0,
+        days_absent: 0,
+        total_worked_minutes: 0,
+        total_late_minutes: 0,
+        total_overtime_minutes: 0,
+      };
+      byCode.set(code, agg);
+      order.push(code);
+    }
+    // Un empleado sin marcaciones llega con status/minutos en null (LEFT JOIN):
+    // no incrementa contadores ni sumas, pero igual figura (con ceros).
+    if (r.status === 'present' || r.status === 'late') agg.days_present += 1;
+    if (r.status === 'late') agg.days_late += 1;
+    if (r.status === 'absent') agg.days_absent += 1;
+    if (r.worked_minutes != null) agg.total_worked_minutes += Number(r.worked_minutes) || 0;
+    if (r.late_minutes != null) agg.total_late_minutes += Number(r.late_minutes) || 0;
+    if (r.overtime_minutes != null) agg.total_overtime_minutes += Number(r.overtime_minutes) || 0;
+  }
+  return order.map((code) => byCode.get(code));
 }
 
 /**
@@ -224,7 +310,9 @@ async function getInboxFor(user) {
 module.exports = {
   STATES,
   OPEN_STATES,
+  GLOBAL_READ_ROLES,
   canUserActOn,
+  canReadApproval,
   computeNeeds,
   initialStatus,
   resolveDepartment,
@@ -232,5 +320,6 @@ module.exports = {
   roleForState,
   nextApprovedState,
   computeReportIntegrity,
+  summarizeCanonicalRows,
   getInboxFor,
 };

@@ -1,5 +1,5 @@
 const {
-  parseCivilDate, civilDateISO, addDaysUTC, dayOfWeekUTC, todayInCompanyTZ,
+  parseCivilDate, civilDateISO, addDaysUTC, dayOfWeekUTC, todayInCompanyTZ, civilMonthRange,
 } = require('../src/utils/civilDate');
 
 describe('civilDate.parseCivilDate', () => {
@@ -59,6 +59,24 @@ describe('civilDate.dayOfWeekUTC', () => {
   });
   test('2026-08-02 (dom) → 0', () => {
     expect(dayOfWeekUTC(parseCivilDate('2026-08-02'))).toBe(0);
+  });
+});
+
+describe('civilDate.civilMonthRange [P1-E] (invariante a TZ)', () => {
+  test('agosto: 01 → 31 (mes de 31 días)', () => {
+    expect(civilMonthRange(2026, 8)).toEqual({ dateFrom: '2026-08-01', dateTo: '2026-08-31' });
+  });
+  test('febrero bisiesto 2024: 01 → 29', () => {
+    expect(civilMonthRange(2024, 2)).toEqual({ dateFrom: '2024-02-01', dateTo: '2024-02-29' });
+  });
+  test('febrero no bisiesto 2026: 01 → 28', () => {
+    expect(civilMonthRange(2026, 2)).toEqual({ dateFrom: '2026-02-01', dateTo: '2026-02-28' });
+  });
+  test('diciembre: 01 → 31', () => {
+    expect(civilMonthRange(2026, 12)).toEqual({ dateFrom: '2026-12-01', dateTo: '2026-12-31' });
+  });
+  test('acepta year/month como string', () => {
+    expect(civilMonthRange('2026', '02')).toEqual({ dateFrom: '2026-02-01', dateTo: '2026-02-28' });
   });
 });
 
