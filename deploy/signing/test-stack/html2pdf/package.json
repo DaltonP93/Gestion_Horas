@@ -5,8 +5,9 @@
   "description": "Servicio de PRUEBA html2pdf (contrato /pdf) para la integración de firma PAdES.",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
+  "comment": "[P1-F] versiones EXACTAS (sin ^) para instalaciones reproducibles del stack de prueba.",
   "dependencies": {
-    "express": "^4.21.2",
-    "pdfkit": "^0.15.0"
+    "express": "4.21.2",
+    "pdfkit": "0.15.0"
   }
 }

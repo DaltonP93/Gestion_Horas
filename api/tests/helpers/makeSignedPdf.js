@@ -17,19 +17,34 @@
 
 const forge = require('node-forge');
 
-/** Genera un par de llaves + certificado autofirmado de prueba. */
-function makeTestCert(commonName = 'SisHoras Reporte Mensual (test)') {
+/** SHA-256 (hex) del DER del certificado (mismo cálculo que el verificador). */
+function certFingerprintSha256(cert) {
+  const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+  const md = forge.md.sha256.create();
+  md.update(der);
+  return md.digest().toHex();
+}
+
+/**
+ * Genera un par de llaves + certificado autofirmado de prueba.
+ * @param {string} [commonName]
+ * @param {object} [opts]
+ * @param {Date}   [opts.notBefore]  vigencia desde (default: hace 1h).
+ * @param {Date}   [opts.notAfter]   vigencia hasta (default: en 24h).
+ * @param {string} [opts.serialNumber] serial hex (default '01').
+ */
+function makeTestCert(commonName = 'SisHoras Reporte Mensual (test)', opts = {}) {
   const keys = forge.pki.rsa.generateKeyPair(2048);
   const cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
-  cert.serialNumber = '01';
-  cert.validity.notBefore = new Date(Date.now() - 3600e3);
-  cert.validity.notAfter = new Date(Date.now() + 24 * 3600e3);
+  cert.serialNumber = opts.serialNumber || '01';
+  cert.validity.notBefore = opts.notBefore || new Date(Date.now() - 3600e3);
+  cert.validity.notAfter = opts.notAfter || new Date(Date.now() + 24 * 3600e3);
   const attrs = [{ name: 'commonName', value: commonName }];
   cert.setSubject(attrs);
   cert.setIssuer(attrs);
   cert.sign(keys.privateKey, forge.md.sha256.create());
-  return { keys, cert, commonName };
+  return { keys, cert, commonName, certSha256: certFingerprintSha256(cert) };
 }
 
 /**
@@ -37,10 +52,18 @@ function makeTestCert(commonName = 'SisHoras Reporte Mensual (test)') {
  * @param {object} [opts]
  * @param {string} [opts.commonName]  CN del certificado firmante.
  * @param {string} [opts.body]        texto de relleno del PDF.
- * @returns {{ signedPdf: Buffer, commonName: string }}
+ * @param {Date}   [opts.notBefore]   vigencia del cert desde (para tests de vencimiento).
+ * @param {Date}   [opts.notAfter]    vigencia del cert hasta (para tests de vencimiento).
+ * @param {string} [opts.serialNumber] serial del cert (para tests de identidad).
+ * @returns {{ signedPdf: Buffer, commonName: string, certSha256: string }}
  */
-function makeSignedPdf({ commonName, body = 'Reporte mensual de asistencia' } = {}) {
-  const { keys, cert, commonName: cn } = makeTestCert(commonName);
+function makeSignedPdf({
+  commonName, body = 'Reporte mensual de asistencia', notBefore, notAfter, serialNumber,
+  digestAlgorithm = forge.pki.oids.sha256,
+} = {}) {
+  const {
+    keys, cert, commonName: cn, certSha256,
+  } = makeTestCert(commonName, { notBefore, notAfter, serialNumber });
   const HEXW = 8000; // ancho del hueco hex de /Contents
 
   const pre = Buffer.from(
@@ -70,7 +93,7 @@ function makeSignedPdf({ commonName, body = 'Reporte mensual de asistencia' } = 
   p7.addSigner({
     key: keys.privateKey,
     certificate: cert,
-    digestAlgorithm: forge.pki.oids.sha256,
+    digestAlgorithm,
     authenticatedAttributes: [
       { type: forge.pki.oids.contentType, value: forge.pki.oids.data },
       { type: forge.pki.oids.messageDigest },
@@ -84,7 +107,18 @@ function makeSignedPdf({ commonName, body = 'Reporte mensual de asistencia' } = 
   hex += '0'.repeat(HEXW - hex.length);
   Buffer.from(hex, 'latin1').copy(pdf, hexStart);
 
-  return { signedPdf: pdf, commonName: cn };
+  // `certSha256` AUTORITATIVO: el fingerprint tal como lo calcula el verificador
+  // sobre el DER EMBEBIDO en ESTE PDF (lo que un test debe pinear). No se usa el
+  // `certSha256` del cert fresco (forge no re-serializa idéntico tras el
+  // round-trip por DER), sino el que ve el verificador de su propia salida.
+  let embeddedCertSha256 = null;
+  try {
+    // require perezoso para evitar ciclos al cargar el helper.
+    embeddedCertSha256 = require('../../src/services/signing/verifyPdfSignature')
+      .verifyPdfSignature(pdf).signerCertSha256;
+  } catch (_e) { embeddedCertSha256 = null; }
+
+  return { signedPdf: pdf, commonName: cn, certSha256: embeddedCertSha256 };
 }
 
 module.exports = { makeSignedPdf, makeTestCert };

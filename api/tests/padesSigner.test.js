@@ -35,13 +35,17 @@ const PDF = () => Buffer.from('%PDF-1.4 fake\n%%EOF');
 // Un %PDF sin firma criptográfica real: el adaptador NUNCA debe declararlo pades_local.
 const SIGNED = () => Buffer.from('%PDF-1.4 signed\n%%EOF');
 
-// Config completa de pades_local para los tests de camino feliz.
+// Config completa de pades_local para los tests de camino feliz. [P1-D] incluye
+// un PIN presente (64 hex). Los tests que verifican una firma REAL sobreescriben
+// el pin con el fingerprint del cert de esa firma.
+const DUMMY_PIN = '0'.repeat(64);
 const FULL = {
   SIGNING_MODE: 'pades_local',
   HTML2PDF_URL: 'http://html2pdf:8000',
   PADES_SIGNER_URL: 'http://pades:9000',
   HTML2PDF_SHARED_SECRET: 'render-secret',
   PADES_SIGNER_SHARED_SECRET: 'sign-secret',
+  PADES_TRUSTED_CERT_SHA256: DUMMY_PIN,
 };
 
 const OLD_ENV = process.env;
@@ -205,9 +209,10 @@ describe('signReportDocument', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  test('pades_local con FIRMA REAL verificable: html2pdf → pades-signer → pades_local + verificado', async () => {
-    Object.assign(process.env, FULL, { SIGNING_PROVIDER_NAME: 'pades-local' });
-    const { signedPdf } = makeSignedPdf({ commonName: 'SisHoras Test Cert' }); // firma PKCS#7 REAL
+  test('pades_local con FIRMA REAL verificable + PIN correcto: html2pdf → pades-signer → pades_local + verificado', async () => {
+    const { signedPdf, certSha256 } = makeSignedPdf({ commonName: 'SisHoras Test Cert' }); // firma PKCS#7 REAL
+    // [P1-D] el pin debe coincidir con el cert de ESTA firma.
+    Object.assign(process.env, FULL, { SIGNING_PROVIDER_NAME: 'pades-local', PADES_TRUSTED_CERT_SHA256: certSha256 });
     axios.post
       .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: PDF() })       // html2pdf
       .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: signedPdf });  // pades-signer
@@ -217,7 +222,7 @@ describe('signReportDocument', () => {
 
     expect(r.mode).toBe('pades_local');
     expect(r.provider).toBe('pades-local');
-    expect(r.signatureInfo).toEqual(expect.objectContaining({ verified: true, digestAlg: 'sha256' }));
+    expect(r.signatureInfo).toEqual(expect.objectContaining({ verified: true, digestAlg: 'sha256', pinned: true }));
     expect(fallbackPdf).not.toHaveBeenCalled();
     expect(axios.post).toHaveBeenCalledTimes(2);
     expect(axios.post.mock.calls[0][0]).toBe('http://html2pdf:8000/pdf');
@@ -227,6 +232,29 @@ describe('signReportDocument', () => {
     // [SSRF] ambas requests con maxRedirects:0
     expect(axios.post.mock.calls[0][2].maxRedirects).toBe(0);
     expect(axios.post.mock.calls[1][2].maxRedirects).toBe(0);
+  });
+
+  test('[P1-D] pades_local SIN pin (PADES_TRUSTED_CERT_SHA256): fail-closed a simple ANTES de la red', async () => {
+    Object.assign(process.env, FULL);
+    delete process.env.PADES_TRUSTED_CERT_SHA256; // sin pin
+    const fallbackPdf = jest.fn(() => PDF());
+    const r = await pades.signReportDocument({ html: '<html>x</html>', fallbackPdf });
+    expect(r.mode).toBe('simple');
+    expect(r.note).toBe(pades.DEGRADE_REASONS.MISSING_PIN);
+    expect(axios.post).not.toHaveBeenCalled(); // ni siquiera se contacta a los servicios
+  });
+
+  test('[P1-D] firma REAL pero cert NO coincide con el pin → NO pades_local (PIN_MISMATCH)', async () => {
+    const { signedPdf } = makeSignedPdf({ commonName: 'Otro Firmante' }); // fp aleatorio ≠ DUMMY_PIN
+    Object.assign(process.env, FULL); // pin = DUMMY_PIN (no coincide)
+    axios.post
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: PDF() })
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: signedPdf });
+    const fallbackPdf = jest.fn(() => PDF());
+    const r = await pades.signReportDocument({ html: '<html>x</html>', fallbackPdf });
+    expect(r.mode).toBe('simple');
+    expect(r.note).toBe(pades.DEGRADE_REASONS.PIN_MISMATCH);
+    expect(fallbackPdf).toHaveBeenCalled(); // se sirve el fallback, no la firma "de otro"
   });
 
   test('[SEGURIDAD] pades-signer devuelve un %PDF SIN firma válida → NO pades_local (degrada a simple/UNVERIFIED)', async () => {

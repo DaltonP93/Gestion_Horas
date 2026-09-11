@@ -138,16 +138,53 @@ HTML2PDF_URL=...                 # según A o B (sin el /pdf; el adaptador lo ag
 PADES_SIGNER_URL=...             # según A o B (sin el /sign; el adaptador lo agrega)
 HTML2PDF_SHARED_SECRET=...       # = SHARED_SECRET del contenedor html2pdf
 PADES_SIGNER_SHARED_SECRET=...   # = SHARED_SECRET del contenedor pades-signer
+PADES_TRUSTED_CERT_SHA256=...    # PIN: fingerprint SHA-256 del cert REAL de firma
 SIGNING_TIMEOUT_MS=15000
 SIGNING_PROVIDER_NAME=pades-local
+SIGNING_ALLOWED_HOSTS=           # opcional: hosts internos extra permitidos (coma-sep)
 # Overrides opcionales (los defaults ya coinciden con el contrato real):
 # HTML2PDF_PATH=/pdf             HTML2PDF_AUTH_HEADER=x-render-key   HTML2PDF_HTML_FIELD=html
 # PADES_SIGNER_PATH=/sign        PADES_SIGNER_AUTH_HEADER=x-sign-key PADES_FILE_FIELD=file
 ```
 
-Fail-closed: con `SIGNING_MODE` ausente, sin ambas URLs **o sin ambos secretos**,
-el backend queda en modo `simple` (sello + hash de integridad) y **nunca** afirma
-que firmó. Recién con todo configurado aplica la firma real.
+El **PIN** (`PADES_TRUSTED_CERT_SHA256`) es el fingerprint SHA-256 del certificado
+REAL con el que firma `pades-signer`. Se obtiene del `.p12` o del `.pem`:
+
+```bash
+# Desde el certificado en PEM:
+openssl x509 -in cert.pem -noout -fingerprint -sha256 | sed 's/.*=//; s/://g'
+# Desde el .p12 (extrae el cert y calcula el fingerprint):
+openssl pkcs12 -in firma.p12 -clcerts -nokeys -passin pass:*** \
+  | openssl x509 -noout -fingerprint -sha256 | sed 's/.*=//; s/://g'
+```
+
+Fail-closed: con `SIGNING_MODE` ausente, sin ambas URLs, **sin ambos secretos** o
+**sin el PIN**, el backend queda en modo `simple` (sello + hash de integridad) y
+**nunca** afirma que firmó. Además, aunque la firma sea criptográficamente válida,
+si el certificado del firmante **no coincide** con el PIN el backend degrada a
+`simple` (`PADES_CERT_PIN_MISMATCH`): nunca se afirma PAdES contra un certificado
+que no es el de confianza. Recién con todo configurado y el PIN correcto aplica la
+firma real.
+
+### 3.5. Validar las imágenes y el certificado REALES antes de activar `pades_local`
+
+> El job de CI `signing-it` y `tests/it/signing.it.test.js` ejercen un stack
+> **COMPATIBLE de PRUEBA** (`deploy/signing/test-stack/`), **no** las imágenes del
+> dueño ni el certificado real. Antes de encender `pades_local` en un entorno real,
+> validar las imágenes/cert REALES:
+
+1. Levantar los servicios reales (§1) y correr el **smoke test** (§4) → confirma
+   contrato, headers y `401` sin secreto.
+2. Firmar un PDF de prueba real (`smoke-test.sh /tmp/firmado.pdf`) y **verificar la
+   firma** contra el PIN calculado arriba:
+   ```bash
+   # el fingerprint del cert que quedó embebido en el PDF firmado debe == PIN
+   openssl pkcs7 -inform DER -in <(pdfsig -dump /tmp/firmado.pdf 2>/dev/null) ... # o un verificador PAdES
+   ```
+   Alternativa práctica: setear `PADES_TRUSTED_CERT_SHA256` y descargar el reporte
+   firmado desde la app (paso siguiente): si el cert no coincide con el PIN, el
+   header `X-Signature-Mode` saldrá `simple` con nota `PADES_CERT_PIN_MISMATCH`.
+3. Sólo si (1) y (2) pasan, activar `SIGNING_MODE=pades_local` con el PIN correcto.
 
 > El certificado `.p12` y su passphrase viven **dentro** del contenedor
 > `pades-signer` (variables `P12_PATH` / `P12_PASSWORD` y el volumen `./certs`).

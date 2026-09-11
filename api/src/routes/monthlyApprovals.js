@@ -414,12 +414,20 @@ router.get('/:id/signed-pdf', asyncHandler(async (req, res) => {
     return res.status(409).json({ error: 'El documento firmado sólo está disponible cuando el período está aprobado', status: row.status });
   }
 
-  // [INTEGRIDAD fail-closed] Recalcular el hash actual y compararlo con el
-  // firmado. Si los datos subyacentes cambiaron desde la firma, NO se firma ni
-  // se genera el documento y NO se persiste nada: se responde 409. Nunca se
-  // manda a firmar (html2pdf/pades-signer) un reporte cuyo contenido ya no
-  // coincide con lo que se aprobó.
-  const { hash: currentHash } = await svc.computeReportIntegrity({
+  // [INTEGRIDAD fail-closed + P1-A snapshot único / anti-TOCTOU] Se lee la
+  // fuente canónica UNA sola vez (`computeReportIntegrity` → `{ hash, rows }`),
+  // se recalcula el hash y se compara con el firmado. Si los datos subyacentes
+  // cambiaron desde la firma, NO se firma ni se genera el documento y NO se
+  // persiste nada: se responde 409. Nunca se manda a firmar (html2pdf/pades-
+  // signer) un reporte cuyo contenido ya no coincide con lo aprobado.
+  //
+  // Clave anti-TOCTOU: el RESUMEN del PDF se DERIVA de esas MISMAS `rows`
+  // (summarizeCanonicalRows), sin una segunda lectura independiente de
+  // `daily_summary`. Así, el contenido renderizado y firmado proviene
+  // EXACTAMENTE del snapshot que produjo el hash validado: aunque
+  // `daily_summary` cambie después de esta lectura, el documento firmado sigue
+  // siendo el snapshot aprobado (o, si cambió antes, se corta con 409).
+  const { hash: currentHash, rows: canonicalRows } = await svc.computeReportIntegrity({
     year: row.year, month: row.month, department_id: row.department_id,
   });
   if (currentHash !== row.integrity_hash) {
@@ -439,27 +447,9 @@ router.get('/:id/signed-pdf', asyncHandler(async (req, res) => {
     { replacements: [id] }
   );
 
-  // Totales por empleado para la tabla resumen del documento.
-  const dateFrom = `${row.year}-${String(row.month).padStart(2, '0')}-01`;
-  const dateTo = new Date(row.year, row.month, 0).toISOString().split('T')[0];
-  const params = [dateFrom, dateTo];
-  let deptFilter = '';
-  if (row.department_id != null) { deptFilter = 'AND e.department_id = ?'; params.push(row.department_id); }
-  const [summary] = await sequelize.query(`
-    SELECT
-      e.code,
-      COUNT(CASE WHEN ds.status IN ('present','late') THEN 1 END) AS days_present,
-      COUNT(CASE WHEN ds.status = 'late'   THEN 1 END)            AS days_late,
-      COUNT(CASE WHEN ds.status = 'absent' THEN 1 END)            AS days_absent,
-      SUM(ds.worked_minutes)   AS total_worked_minutes,
-      SUM(ds.late_minutes)     AS total_late_minutes,
-      SUM(ds.overtime_minutes) AS total_overtime_minutes
-    FROM employees e
-    LEFT JOIN daily_summary ds ON e.id = ds.employee_id AND ds.date BETWEEN ? AND ?
-    WHERE e.status = 'active' ${deptFilter}
-    GROUP BY e.id
-    ORDER BY e.code
-  `, { replacements: params });
+  // Totales por empleado para la tabla resumen del documento, derivados de las
+  // MISMAS filas canónicas que produjeron el hash validado (sin re-leer la BD).
+  const summary = svc.summarizeCanonicalRows(canonicalRows);
 
   const ctx = { row, events, summary, verified };
 

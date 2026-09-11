@@ -8,17 +8,90 @@
  *   - un %PDF sin firma, un no-PDF y un buffer vacío → valid:false con razón.
  */
 
-const { verifyPdfSignature, REASONS, _extractSignature } = require('../src/services/signing/verifyPdfSignature');
+const forge = require('node-forge');
+const {
+  verifyPdfSignature, REASONS, ALLOWED_DIGESTS, _extractSignature, _findSignerCert,
+} = require('../src/services/signing/verifyPdfSignature');
 const { makeSignedPdf } = require('./helpers/makeSignedPdf');
 
 describe('verifyPdfSignature', () => {
-  test('firma REAL válida → valid:true, sha256, CN del firmante', () => {
-    const { signedPdf, commonName } = makeSignedPdf({ commonName: 'Firmante Prueba SA' });
+  test('firma REAL válida → valid:true, sha256, CN + fingerprint + serial del firmante', () => {
+    const { signedPdf, commonName, certSha256 } = makeSignedPdf({ commonName: 'Firmante Prueba SA' });
     const r = verifyPdfSignature(signedPdf);
     expect(r.valid).toBe(true);
     expect(r.reason).toBeNull();
     expect(r.digestAlg).toBe('sha256');
     expect(r.signerSubjectCN).toBe(commonName);
+    // [P1-D] fingerprint SHA-256 (64 hex) del cert firmante, coincide con el helper.
+    expect(r.signerCertSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(r.signerCertSha256).toBe(certSha256);
+    expect(r.signerSerial).toBe('1');
+    expect(r.notAfter instanceof Date).toBe(true);
+  });
+
+  // ── [P1-B] cobertura TOTAL del ByteRange ─────────────────────────────────
+  test('[P1-B] agregar contenido NO firmado al final → BYTERANGE_INCOMPLETE', () => {
+    const { signedPdf } = makeSignedPdf();
+    // Un PDF firmado válido, con bytes extra al final (incremental update SIN
+    // nueva firma): c+d ya no llega al último byte → se rechaza.
+    const appended = Buffer.concat([signedPdf, Buffer.from('\n% payload no firmado agregado\n')]);
+    const r = verifyPdfSignature(appended);
+    expect(r.valid).toBe(false);
+    expect(r.reason).toBe(REASONS.BYTERANGE_INCOMPLETE);
+  });
+
+  test('[P1-B] ByteRange que no arranca en 0 → BYTERANGE_INCOMPLETE', () => {
+    // ByteRange con a≠0 sobre un PDF cualquiera (no cubre desde el byte 0).
+    const pdf = Buffer.from('%PDF-1.4\n/ByteRange [5 10 20 8]/Contents <00>\ncola\n%%EOF');
+    expect(verifyPdfSignature(pdf).reason).toBe(REASONS.BYTERANGE_INCOMPLETE);
+  });
+
+  // ── [P1-C] algoritmos fail-closed ────────────────────────────────────────
+  test('[P1-C] ALLOWED_DIGESTS: sha256/384/512 permitidos; sha1/md5 NO', () => {
+    const names = Object.values(ALLOWED_DIGESTS);
+    expect(names).toEqual(expect.arrayContaining(['sha256', 'sha384', 'sha512']));
+    expect(names).not.toContain('sha1');
+    expect(names).not.toContain('md5');
+    // sha1 OID y md5 OID NO están en el mapa.
+    expect(ALLOWED_DIGESTS['1.3.14.3.2.26']).toBeUndefined(); // sha1
+  });
+
+  test('[P1-C] firma con digest NO permitido (sha1) → UNSUPPORTED_DIGEST (sin fallback a sha256)', () => {
+    const { signedPdf } = makeSignedPdf({ digestAlgorithm: forge.pki.oids.sha1 });
+    const r = verifyPdfSignature(signedPdf);
+    expect(r.valid).toBe(false);
+    expect(r.reason).toBe(REASONS.UNSUPPORTED_DIGEST);
+  });
+
+  // ── [P1-D] identidad del firmante ────────────────────────────────────────
+  test('[P1-D] certificado VENCIDO → CERT_EXPIRED', () => {
+    const { signedPdf } = makeSignedPdf({
+      notBefore: new Date(Date.now() - 2 * 86400e3),
+      notAfter: new Date(Date.now() - 86400e3), // venció ayer
+    });
+    expect(verifyPdfSignature(signedPdf).reason).toBe(REASONS.CERT_EXPIRED);
+  });
+
+  test('[P1-D] certificado AÚN NO vigente → CERT_NOT_YET_VALID', () => {
+    const { signedPdf } = makeSignedPdf({
+      notBefore: new Date(Date.now() + 86400e3), // empieza mañana
+      notAfter: new Date(Date.now() + 2 * 86400e3),
+    });
+    expect(verifyPdfSignature(signedPdf).reason).toBe(REASONS.CERT_NOT_YET_VALID);
+  });
+
+  test('[P1-D] el firmante se asocia por issuer/serial: un serial que no matchea → sin cert', () => {
+    // Se parsea un PDF firmado real y se altera el serial buscado del SignerInfo:
+    // findSignerCert ya no encuentra un cert que coincida por issuer+serial.
+    const { signedPdf } = makeSignedPdf();
+    const ext = _extractSignature(signedPdf);
+    const asn1 = forge.asn1.fromDer(forge.util.createBuffer(ext.signature.toString('binary')));
+    const p7 = forge.pkcs7.messageFromAsn1(asn1);
+    const rc = p7.rawCapture;
+    // match real:
+    expect(_findSignerCert(p7, rc)).not.toBeNull();
+    // serial que no existe entre los certs embebidos → null.
+    expect(_findSignerCert(p7, { ...rc, serial: forge.util.hexToBytes('7f7f7f') })).toBeNull();
   });
 
   test('contenido manipulado tras firmar → DIGEST_MISMATCH', () => {

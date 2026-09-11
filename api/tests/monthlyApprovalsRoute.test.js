@@ -267,14 +267,12 @@ describe('GET /:id/signed-pdf', () => {
 
     sequelize.query
       .mockResolvedValueOnce([[{ id: 1, year: 2026, month: 8, department_id: 7, status: 'approved', signed_by: 9, signed_at: '2026-09-01 10:00:00', integrity_hash: hash }]]) // SELECT approval
-      .mockResolvedValueOnce([dailyRows])                                  // computeReportIntegrity
+      .mockResolvedValueOnce([dailyRows])                                  // computeReportIntegrity (única lectura de daily_summary)
       .mockResolvedValueOnce([[                                            // events
         { actor_user_id: 5, actor_role: 'coordinator', action: 'approve', to_state: 'level1_ok', at: '2026-08-31 09:00:00' },
         { actor_user_id: 9, actor_role: 'gth', action: 'sign', to_state: 'approved', at: '2026-09-01 10:00:00' },
-      ]])
-      .mockResolvedValueOnce([[                                            // summary
-        { code: 'E001', days_present: 20, days_late: 1, days_absent: 0, total_worked_minutes: 9600, total_late_minutes: 15, total_overtime_minutes: 120 },
       ]]);
+    // [P1-A] NO hay 4ª query de summary: el resumen se deriva de dailyRows.
 
     // Modo por defecto (simple): el handler arma el PDF con pdfkit y lo envía
     // con res.send(buffer). Sin SIGNING_MODE no hay red.

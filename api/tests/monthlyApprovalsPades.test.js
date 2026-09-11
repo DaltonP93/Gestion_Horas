@@ -59,18 +59,16 @@ function mkRes() {
 const dailyRows = [
   { employee_code: 'E001', date: '2026-08-01', status: 'present', first_in: '08:00:00', last_out: '17:00:00', worked_minutes: 480, late_minutes: 0, overtime_minutes: 0 },
 ];
-const summaryRows = [
-  { code: 'E001', days_present: 20, days_late: 1, days_absent: 0, total_worked_minutes: 9600, total_late_minutes: 15, total_overtime_minutes: 120 },
-];
 
 function primeReadQueries(hash) {
+  // [P1-A] Ya NO hay una segunda lectura de daily_summary: el resumen se deriva
+  // de las filas de computeReportIntegrity. Sólo 3 queries: approval, hash, events.
   sequelize.query
     .mockResolvedValueOnce([[{ id: 1, year: 2026, month: 8, department_id: 7, status: 'approved', signed_by: 9, signed_at: '2026-09-01 10:00:00', integrity_hash: hash }]]) // SELECT approval
-    .mockResolvedValueOnce([dailyRows]) // computeReportIntegrity
+    .mockResolvedValueOnce([dailyRows]) // computeReportIntegrity (única lectura de daily_summary)
     .mockResolvedValueOnce([[          // events
       { actor_user_id: 9, actor_role: 'gth', action: 'sign', to_state: 'approved', at: '2026-09-01 10:00:00' },
-    ]])
-    .mockResolvedValueOnce([summaryRows]); // summary
+    ]]);
 }
 
 beforeEach(() => { jest.clearAllMocks(); sequelize.query.mockReset(); });
@@ -105,6 +103,11 @@ test('[READ-ONLY] pades_local: envía el PDF firmado y marca el modo, SIN persis
   const writes = sequelize.query.mock.calls.filter(([s]) => /^\s*(UPDATE|INSERT|DELETE)\b/i.test(s));
   expect(writes).toEqual([]);
   expect(sequelize.transaction).not.toHaveBeenCalled();
+
+  // [P1-A] snapshot único: daily_summary se lee EXACTAMENTE una vez (dentro de
+  // computeReportIntegrity). El resumen del PDF se deriva de esas mismas filas.
+  const dsReads = sequelize.query.mock.calls.filter(([s]) => /daily_summary/i.test(s));
+  expect(dsReads).toHaveLength(1);
 });
 
 test('[READ-ONLY] dos descargas consecutivas NO ejecutan ningún write (idempotente)', async () => {

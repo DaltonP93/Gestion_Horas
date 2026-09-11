@@ -53,6 +53,11 @@
  *   SIGNING_TIMEOUT_MS         Timeout por request HTTP (default 15000).
  *   SIGNING_PROVIDER_NAME      Etiqueta NO-PII que se guarda como
  *                              signature_provider (default 'pades-local').
+ *   PADES_TRUSTED_CERT_SHA256  [P1-D] Fingerprint SHA-256 (hex, 64 chars; se
+ *                              toleran `:`/espacios) del certificado del FIRMANTE
+ *                              esperado. pades_local EXIGE este pin: sin él, o si
+ *                              el cert firmante no coincide, se degrada a 'simple'
+ *                              (nunca se afirma PAdES contra un cert desconocido).
  *
  * ── FAIL-CLOSED ────────────────────────────────────────────────────────
  *   - SIGNING_MODE ausente/desconocido  → 'simple' (default).
@@ -102,11 +107,27 @@ const DEGRADE_REASONS = Object.freeze({
   MISSING_URLS: 'PADES_URLS_MISSING',       // pades_local pero faltan URLs
   URLS_NOT_LOCAL: 'PADES_URLS_NOT_LOCAL',   // pades_local pero una URL no es local/privada permitida
   MISSING_SECRETS: 'PADES_SECRETS_MISSING', // pades_local pero faltan secretos
+  MISSING_PIN: 'PADES_TRUSTED_CERT_MISSING', // pades_local pero falta PADES_TRUSTED_CERT_SHA256
   HTML2PDF_FAILED: 'HTML2PDF_FAILED',       // html2pdf no respondió/erró
   SIGN_FAILED: 'PADES_SIGN_FAILED',         // pades-signer no respondió/erró
   EMPTY_RESULT: 'PADES_EMPTY_RESULT',       // respuesta sin PDF utilizable
   UNVERIFIED: 'PADES_SIGNATURE_UNVERIFIED', // el PDF devuelto NO tiene una firma válida verificable
+  PIN_MISMATCH: 'PADES_CERT_PIN_MISMATCH',  // la firma verifica pero el cert NO coincide con el pin
 });
+
+/**
+ * [P1-D] Normaliza un fingerprint SHA-256 de certificado: minúsculas, sólo hex
+ * (se toleran `:`, espacios y prefijos como `sha256:`). Vacío si no hay 64 hex.
+ */
+function normalizeFingerprint(v) {
+  const hex = String(v == null ? '' : v).toLowerCase().replace(/[^0-9a-f]/g, '');
+  return hex.length === 64 ? hex : '';
+}
+
+/** [P1-D] Fingerprint del certificado de confianza esperado (pin), desde env. */
+function trustedCertFromEnv(env = process.env) {
+  return normalizeFingerprint(env.PADES_TRUSTED_CERT_SHA256);
+}
 
 /** Defaults del contrato real de los servicios del dueño. */
 const DEFAULTS = Object.freeze({
@@ -223,6 +244,7 @@ function resolveSigningConfig(env = process.env) {
     degradedReason,
     html2pdfUrl: '',
     padesUrl: '',
+    trustedCertSha256: '',
   });
 
   if (requested !== SIGNING_MODES.PADES_LOCAL) {
@@ -250,12 +272,19 @@ function resolveSigningConfig(env = process.env) {
   const padesSecret = (env.PADES_SIGNER_SHARED_SECRET || '').trim();
   if (!html2pdfSecret || !padesSecret) return simple(DEGRADE_REASONS.MISSING_SECRETS);
 
+  // [P1-D] Fail-closed: pades_local exige PIN del certificado del firmante
+  // (PADES_TRUSTED_CERT_SHA256). Sin pin no se puede afirmar la IDENTIDAD del
+  // firmante → 'simple' ANTES de tocar la red (no se firma "contra cualquiera").
+  const trustedCertSha256 = trustedCertFromEnv(env);
+  if (!trustedCertSha256) return simple(DEGRADE_REASONS.MISSING_PIN);
+
   return {
     requestedMode: SIGNING_MODES.PADES_LOCAL,
     effectiveMode: SIGNING_MODES.PADES_LOCAL,
     degradedReason: null,
     html2pdfUrl,
     padesUrl,
+    trustedCertSha256,
   };
 }
 
@@ -494,10 +523,29 @@ async function signReportDocument({ html, fallbackPdf, meta = {} } = {}) {
     return degrade(DEGRADE_REASONS.UNVERIFIED);
   }
 
-  logger.info('Reporte mensual firmado con firma local (firma verificada criptográficamente)', {
+  // [P1-D] PINNING: la firma verifica criptográficamente, pero además el
+  // certificado del FIRMANTE debe coincidir con el pin de confianza
+  // (PADES_TRUSTED_CERT_SHA256). Si no coincide, NO se afirma pades_local: un
+  // atacante que firme con OTRO certificado (aunque sea válido) no debe pasar.
+  // NO se registra el fingerprint completo: sólo un prefijo corto (traza NO-PII).
+  const actualFp = String(verification.signerCertSha256 || '');
+  if (actualFp !== cfg.trustedCertSha256) {
+    logger.error('El certificado del firmante NO coincide con el pin de confianza; firma simple interna', {
+      signing_reason: DEGRADE_REASONS.PIN_MISMATCH,
+      // prefijos cortos, nunca el fingerprint completo:
+      expected_fp_prefix: cfg.trustedCertSha256.slice(0, 8),
+      actual_fp_prefix: actualFp.slice(0, 8),
+    });
+    return degrade(DEGRADE_REASONS.PIN_MISMATCH);
+  }
+
+  logger.info('Reporte mensual firmado con firma local (firma verificada criptográficamente + pin OK)', {
     signing_mode: SIGNING_MODES.PADES_LOCAL,
     signature_provider: providerLabel(),
     digest_alg: verification.digestAlg,
+    pin_ok: true,
+    // sólo un prefijo corto del fingerprint, nunca el completo:
+    signer_fp_prefix: actualFp.slice(0, 8),
   });
   return {
     pdf: signed.signedPdf,
@@ -507,6 +555,7 @@ async function signReportDocument({ html, fallbackPdf, meta = {} } = {}) {
       verified: true,
       digestAlg: verification.digestAlg,
       signerSubjectCN: verification.signerSubjectCN,
+      pinned: true,
     },
     note: null,
   };
@@ -520,6 +569,8 @@ module.exports = {
   isPadesActive,
   isLocalTarget,
   looksLikePdf,
+  normalizeFingerprint,
+  trustedCertFromEnv,
   providerLabel,
   renderHtmlToPdf,
   signPdf,
