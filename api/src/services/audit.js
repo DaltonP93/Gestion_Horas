@@ -42,6 +42,16 @@ const ALLOWED_DETAIL_KEYS = new Set([
   // Conteos y métricas.
   'count', 'total', 'size', 'closed', 'closed_other_sessions', 'affected',
   'employees_updated', 'devices',
+  // Métricas granulares del recálculo/restore de FASE E (consola de activación).
+  // Son conteos puros (enteros): celdas del plan procesadas, filas por categoría
+  // de efecto real sobre daily_summary, respaldadas, escritas, restauradas y
+  // omitidas por cambio concurrente, y la cantidad de empleados en alcance. El
+  // guardián de valores (isSafeScalar) sólo deja pasar números finitos, así que
+  // no pueden transportar PII; se agregan para que la auditoría de la consola
+  // registre el efecto exacto de cada apply/restore (antes se descartaban).
+  'employees', 'cells_processed', 'rows_backed_up', 'rows_written',
+  'rows_inserted', 'rows_updated', 'rows_deleted', 'rows_unchanged',
+  'rows_restored', 'rows_skipped',
   // Banderas y enums cortos, no-PII. `reason` se admite pero el guardián de
   // valores sólo deja pasar la variante enum (sin espacios): 'bad_password' sí,
   // "Renuncia voluntaria" no.

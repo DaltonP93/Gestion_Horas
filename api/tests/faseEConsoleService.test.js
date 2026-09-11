@@ -56,7 +56,7 @@ function installQueryMock(cfg = {}) {
   const c = {
     employees: [{ id: 1 }, { id: 2 }],
     storedRows: [],           // filas previas de daily_summary (snapshot)
-    migrationsRecorded: ['072_employee_schedule_history.sql', '073_workday_profile_and_overlap_guard.sql', '074_daily_summary_status_unknown.sql', '075_workday_configuration_phase_c.sql', '083_fase_e_activation_console.sql'],
+    migrationsRecorded: ['072_employee_schedule_history.sql', '073_workday_profile_and_overlap_guard.sql', '074_daily_summary_status_unknown.sql', '075_workday_configuration_phase_c.sql', '083_fase_e_activation_console.sql', '084_fase_e_console_shape_reconcile.sql'],
     has074: true,
     tablesExist: { schema_migrations: true, daily_summary: true, daily_summary_recalc_batch: true, daily_summary_backup: true, fase_e_console_lock: true, employee_schedule_history: true },
     lockAcquired: true,
@@ -78,6 +78,30 @@ function installQueryMock(cfg = {}) {
       const set = new Set(c.migrationsRecorded);
       return [p.filter((f) => set.has(f)).map((f) => ({ filename: f }))];
     }
+    // [R5-4] verificación de FORMA del esquema de consola: COLUMNS/STATISTICS por
+    // tabla (parametrizadas TABLE_NAME=?). Devuelven la forma COMPLETA por defecto;
+    // cfg.shapeOmitColumns/shapeOmitIndexes permiten simular una 083 vieja (NO-GO).
+    if (/INFORMATION_SCHEMA\.COLUMNS/i.test(sql) && /TABLE_NAME = \?/i.test(sql) && /COLUMN_NAME AS name/i.test(sql)) {
+      const spec = svc.REQUIRED_CONSOLE_SHAPE[p[0]];
+      if (!spec) return [[]];
+      const omit = new Set((c.shapeOmitColumns && c.shapeOmitColumns[p[0]]) || []);
+      const rows = spec.columns.filter((col) => !omit.has(col)).map((col) => {
+        const vals = spec.enums && spec.enums[col];
+        let type = 'int';
+        if (vals) {
+          const kept = omit.has(`enum:${col}`) ? vals.filter((v) => v !== 'restored_with_conflicts') : vals;
+          type = `enum(${kept.map((v) => `'${v}'`).join(',')})`;
+        }
+        return { name: col, type };
+      });
+      return [rows];
+    }
+    if (/INFORMATION_SCHEMA\.STATISTICS/i.test(sql) && /TABLE_NAME = \?/i.test(sql)) {
+      const spec = svc.REQUIRED_CONSOLE_SHAPE[p[0]];
+      if (!spec) return [[]];
+      const omit = new Set((c.shapeOmitIndexes && c.shapeOmitIndexes[p[0]]) || []);
+      return [spec.indexes.filter((ix) => !omit.has(ix)).map((ix) => ({ name: ix }))];
+    }
     if (/INFORMATION_SCHEMA\.COLUMNS/i.test(sql) && /daily_summary/i.test(sql)) {
       return [[{ type: c.has074 ? "enum('present','absent','late','weekend','holiday','permission','non_working','unconfigured')" : "enum('present','absent','late','weekend','holiday','permission')" }]];
     }
@@ -86,7 +110,12 @@ function installQueryMock(cfg = {}) {
     if (/UPDATE fase_e_console_lock/i.test(sql) && /SET lock_token = \?/i.test(sql)) { events.push('lock.acquire'); if (c.lockAcquired) heldToken = p[0]; return [{ affectedRows: c.lockAcquired ? 1 : 0 }]; }
     if (/UPDATE fase_e_console_lock/i.test(sql) && /heartbeat_seq = heartbeat_seq \+ 1/i.test(sql)) { events.push('lock.heartbeat'); return [{ affectedRows: 1 }]; }
     if (/UPDATE fase_e_console_lock/i.test(sql) && /SET lock_token = NULL/i.test(sql)) { events.push('lock.release'); heldToken = null; return [{ affectedRows: 1 }]; }
-    if (/SELECT lock_token FROM fase_e_console_lock/i.test(sql)) { events.push('lease.fence'); return [[{ lock_token: c.stolen ? 'OTRO' : heldToken }]]; }
+    // [R5-1] fence del lease: per-cell (conexión aparte) y final in-tx (FOR UPDATE);
+    // ambos leen lock_token + alive (lease vigente). cfg.stolen roba el token; cfg.leaseExpired vence el lease.
+    if (/SELECT lock_token, \(lease_expires_at/i.test(sql) && /FROM fase_e_console_lock/i.test(sql)) {
+      events.push(/FOR UPDATE/i.test(sql) ? 'lease.fence.tx' : 'lease.fence');
+      return [[{ lock_token: c.stolen ? 'OTRO' : heldToken, alive: c.leaseExpired ? 0 : 1 }]];
+    }
     // locks por fecha compartidos
     if (/GET_LOCK/i.test(sql)) { events.push('date.lock'); return [[{ ok: 1 }]]; }
     if (/RELEASE_LOCK/i.test(sql)) { events.push('date.release'); return [[{}]]; }
@@ -105,7 +134,7 @@ function installQueryMock(cfg = {}) {
     if (/COUNT\(\*\) AS n FROM daily_summary_backup/i.test(sql)) return [[{ n: c.backupCount != null ? c.backupCount : (backupInserted || c.backupRows.length) }]];
     if (/SELECT batch_id, status, rows_backed_up FROM daily_summary_recalc_batch/i.test(sql)) return [c.batchRecord ? [c.batchRecord] : []];
     if (/FROM daily_summary_backup WHERE batch_id/i.test(sql)) return [c.backupRows];
-    if (/UPDATE daily_summary_recalc_batch SET status = 'restored'/i.test(sql)) { events.push('restored'); return [{ affectedRows: 1 }]; }
+    if (/UPDATE daily_summary_recalc_batch SET status = \?/i.test(sql)) { events.push('restored'); return [{ affectedRows: 1 }]; }
     if (/INSERT INTO daily_summary\b/i.test(sql)) { events.push('ds.upsert'); return [{ affectedRows: 1 }]; }
     if (/UPDATE daily_summary SET/i.test(sql)) { events.push('ds.update'); return [{ affectedRows: 1 }]; }
     if (/DELETE FROM daily_summary\b/i.test(sql)) { events.push('ds.delete'); return [{ affectedRows: 1 }]; }
@@ -301,6 +330,8 @@ describe('[P1-E/B1] restore validado', () => {
     const out = await svc.restoreBatch({ batchId: 'B1' });
     expect(out.rows_skipped).toBe(1);
     expect(out.rows_restored).toBe(0);
+    // [R5-3] omitió filas por cambio concurrente → estado EXPLÍCITO, no 'restored'.
+    expect(out.status).toBe('restored_with_conflicts');
   });
   test('lote ya restaurado / inexistente / no restaurable', async () => {
     installQueryMock({ batchRecord: { batch_id: 'B1', status: 'restored', rows_backed_up: 0 } });
@@ -332,6 +363,97 @@ describe('isRealCivilDate [P2]', () => {
     expect(svc.isRealCivilDate('2025-01-31')).toBe(true);
     expect(svc.isRealCivilDate('2025-02-30')).toBe(false);
     expect(svc.isRealCivilDate('2025-13-01')).toBe(false);
+  });
+});
+
+describe('[R5-4] GO/NO-GO: forma completa del esquema de consola', () => {
+  test('falta rows_skipped en recalc_batch → NO_GO', async () => {
+    installQueryMock({ shapeOmitColumns: { daily_summary_recalc_batch: ['rows_skipped'] } });
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
+      .rejects.toMatchObject({ code: 'NO_GO_SCHEMA_INCOMPLETE' });
+  });
+  test("falta el valor 'restored_with_conflicts' del ENUM status → NO_GO", async () => {
+    installQueryMock({ shapeOmitColumns: { daily_summary_recalc_batch: ['enum:status'] } });
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
+      .rejects.toMatchObject({ code: 'NO_GO_SCHEMA_INCOMPLETE' });
+  });
+  test('falta el índice único uq_batch_cell → NO_GO', async () => {
+    installQueryMock({ shapeOmitIndexes: { daily_summary_backup: ['uq_batch_cell'] } });
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
+      .rejects.toMatchObject({ code: 'NO_GO_SCHEMA_INCOMPLETE' });
+  });
+  test('falta la migración 084 registrada → NO_GO', async () => {
+    installQueryMock({ migrationsRecorded: ['072_employee_schedule_history.sql', '073_workday_profile_and_overlap_guard.sql', '074_daily_summary_status_unknown.sql', '075_workday_configuration_phase_c.sql', '083_fase_e_activation_console.sql'] });
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
+      .rejects.toMatchObject({ code: 'NO_GO_SCHEMA_INCOMPLETE' });
+  });
+  test('esquema completo (083+084 y toda la forma) → GO (no NO_GO)', async () => {
+    installQueryMock({ employees: [] }); // GO pasa; corta luego por "sin empleados"
+    const out = await svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' });
+    expect(out.status).toBe('noop');
+  });
+});
+
+describe('[R5-1] fence atómico: lease vencido + FOR UPDATE final', () => {
+  const rowsFor = (d) => new Map([[1, [motorRow(d)]]]);
+  test('lease VENCIDO con token sin cambiar → LEASE_EXPIRED antes de escribir (sin header)', async () => {
+    installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const imp = await svc.getImpact({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all' });
+    const m = installQueryMock({ employees: [{ id: 1 }], storedRows: [], leaseExpired: true });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: imp.plan_digest }))
+      .rejects.toMatchObject({ code: 'LEASE_EXPIRED' });
+    expect(m.events).not.toContain('header');
+  });
+  test('el fence FINAL antes del header es in-tx (FOR UPDATE): emite lease.fence.tx justo antes de header', async () => {
+    installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const imp = await svc.getImpact({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all' });
+    const { events } = installQueryMock({ employees: [{ id: 1 }], storedRows: [] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    const out = await svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: imp.plan_digest });
+    expect(out.status).toBe('applied');
+    const iTx = events.indexOf('lease.fence.tx');
+    const iHeader = events.indexOf('header');
+    expect(iTx).toBeGreaterThanOrEqual(0);
+    expect(iHeader).toBe(iTx + 1); // fence atómico inmediatamente antes del header, sin ventana
+  });
+});
+
+describe('[R5-2] cotas fail-closed de empleados/celdas', () => {
+  const rowsFor = (d) => new Map([[1, [motorRow(d)]]]);
+  afterEach(() => { delete process.env.FASE_E_MAX_EMPLOYEES; delete process.env.FASE_E_MAX_CELLS; });
+
+  test('empleados POR ENCIMA del umbral → TOO_MANY_EMPLOYEES, sin tomar lock ni escribir', async () => {
+    process.env.FASE_E_MAX_EMPLOYEES = '1';
+    installQueryMock({ employees: [{ id: 1 }, { id: 2 }] });
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
+      .rejects.toMatchObject({ code: 'TOO_MANY_EMPLOYEES' });
+    const q = sequelize.query.mock.calls.map((cc) => cc[0]).join('\n');
+    expect(/SET lock_token = \?/i.test(q)).toBe(false);
+    expect(/INSERT INTO daily_summary/i.test(q)).toBe(false);
+  });
+  test('empleados EN el umbral → pasa la cota (falla luego por PLAN_CHANGED, no por cota)', async () => {
+    process.env.FASE_E_MAX_EMPLOYEES = '2';
+    installQueryMock({ employees: [{ id: 1 }, { id: 2 }] });
+    mockResolveBatch.mockImplementation(motorReadOnly(rowsFor));
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'nope' }))
+      .rejects.toMatchObject({ code: 'PLAN_CHANGED' });
+  });
+  test('celdas POR ENCIMA del umbral → TOO_MANY_CELLS, sin tomar lock', async () => {
+    process.env.FASE_E_MAX_CELLS = '1'; // 1 empleado × (1 día + 1 spillover) = 2 > 1
+    installQueryMock({ employees: [{ id: 1 }] });
+    await expect(svc.recalcApply({ from: '2025-01-10', to: '2025-01-10', scopeKind: 'all', planDigestExpected: 'x' }))
+      .rejects.toMatchObject({ code: 'TOO_MANY_CELLS' });
+    const q = sequelize.query.mock.calls.map((cc) => cc[0]).join('\n');
+    expect(/SET lock_token = \?/i.test(q)).toBe(false);
+  });
+  test('restore por encima del umbral de celdas → TOO_MANY_CELLS, sin transacción', async () => {
+    process.env.FASE_E_MAX_CELLS = '1';
+    const { events } = installQueryMock({ batchRecord: { batch_id: 'B1', status: 'applied', rows_backed_up: 2 }, backupCount: 2 });
+    await expect(svc.restoreBatch({ batchId: 'B1' })).rejects.toMatchObject({ code: 'TOO_MANY_CELLS' });
+    expect(events).not.toContain('restored');
   });
 });
 

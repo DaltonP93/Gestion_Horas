@@ -96,6 +96,20 @@ describeIT('FASE E — IT lock/lease', () => {
     expect(row.lock_token).toBe(t2);
     await svc.releaseConsoleLock(t2);
   });
+
+  test('[R5-1] fence atómico: lease VENCIDO con el MISMO token → LEASE_EXPIRED (per-cell e in-tx), determinista', async () => {
+    // Determinista: SIN supervisor. Tomamos el lock y forzamos el lease al pasado
+    // dejando el token INTACTO (nadie lo robó, sólo venció). Ambos fences deben
+    // abortar por LEASE_EXPIRED: el per-cell (conexión aparte) y el in-tx FOR UPDATE.
+    const token = await svc.acquireConsoleLock('recalc', 1);
+    await q('UPDATE fase_e_console_lock SET lease_expires_at = (NOW() - INTERVAL 10 SECOND) WHERE id=1');
+    const [[row]] = await q('SELECT lock_token FROM fase_e_console_lock WHERE id=1');
+    expect(row.lock_token).toBe(token); // token SIN cambiar
+    await expect(svc.assertLeaseHeldDb(token)).rejects.toMatchObject({ code: 'LEASE_EXPIRED' });
+    await expect(sequelize.transaction((t) => svc.assertLeaseHeldTx(t, token)))
+      .rejects.toMatchObject({ code: 'LEASE_EXPIRED' });
+    await svc.releaseConsoleLock(token);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -226,6 +240,59 @@ describeIT('FASE E — IT recalcApply (co-lock, fence, barreras)', () => {
     const [[bn]] = await q('SELECT COUNT(*) AS n FROM daily_summary WHERE employee_id=? AND date=?', [EMP_B, D0]);
     expect(Number(bn.n)).toBe(0); // la fila sin justificación se borró
   });
+
+  test('[R5-1] robo del lease TRAS el último fence externo, ANTES del commit (beforeFinalFence) → LOCK_LOST, ROLLBACK total', async () => {
+    // El fence FINAL es in-tx (FOR UPDATE) e inmediatamente previo al commit: no hay
+    // ventana. La barrera roba el token DESPUÉS de todos los fences per-cell (últimos
+    // chequeos externos) y de escribir las celdas, y ANTES del fence atómico final.
+    await seedEmployee(EMP_A); await seedPunches(EMP_A, D0);
+    const imp = await dryRun(EMP_A);
+    svc._setTestHook('beforeFinalFence', async () => {
+      svc._clearTestHooks();
+      await q("UPDATE fase_e_console_lock SET lock_token='THIEF' WHERE id=1"); // robo antes del commit
+    });
+    await expect(svc.recalcApply({ from: D0, to: D0, scopeKind: 'employee', scopeId: EMP_A, userId: 1, planDigestExpected: imp.plan_digest }))
+      .rejects.toMatchObject({ code: 'LOCK_LOST' });
+    // ROLLBACK total: ninguna escritura de las celdas committeó, ni el header.
+    const [[h]] = await q("SELECT COUNT(*) AS n FROM daily_summary_recalc_batch WHERE scope_kind='employee' AND scope_id=?", [EMP_A]);
+    const [[d]] = await q('SELECT COUNT(*) AS n FROM daily_summary WHERE employee_id=?', [EMP_A]);
+    const [[k]] = await q('SELECT COUNT(*) AS n FROM daily_summary_backup WHERE employee_id=?', [EMP_A]);
+    expect(Number(h.n)).toBe(0); expect(Number(d.n)).toBe(0); expect(Number(k.n)).toBe(0);
+    // no liberó el token del ladrón.
+    const [[lk]] = await q('SELECT lock_token FROM fase_e_console_lock WHERE id=1');
+    expect(lk.lock_token).toBe('THIEF');
+    await q("UPDATE fase_e_console_lock SET lock_token=NULL WHERE id=1");
+  });
+
+  test('[R5-2] cota de celdas — PLAN por ENCIMA del umbral → TOO_MANY_CELLS, sin escribir nada', async () => {
+    await seedEmployee(EMP_A); await seedPunches(EMP_A, D0);
+    const imp = await dryRun(EMP_A);
+    const prev = process.env.FASE_E_MAX_CELLS;
+    process.env.FASE_E_MAX_CELLS = '1'; // 1 empleado × (1 día + 1 spillover) = 2 > 1
+    try {
+      await expect(svc.recalcApply({ from: D0, to: D0, scopeKind: 'employee', scopeId: EMP_A, userId: 1, planDigestExpected: imp.plan_digest }))
+        .rejects.toMatchObject({ code: 'TOO_MANY_CELLS' });
+    } finally { if (prev === undefined) delete process.env.FASE_E_MAX_CELLS; else process.env.FASE_E_MAX_CELLS = prev; }
+    // fail-closed: sin lote, sin backup, sin daily_summary, lock libre.
+    const [[h]] = await q("SELECT COUNT(*) AS n FROM daily_summary_recalc_batch WHERE scope_kind='employee' AND scope_id=?", [EMP_A]);
+    const [[d]] = await q('SELECT COUNT(*) AS n FROM daily_summary WHERE employee_id=?', [EMP_A]);
+    expect(Number(h.n)).toBe(0); expect(Number(d.n)).toBe(0);
+    const [[lk]] = await q('SELECT lock_token FROM fase_e_console_lock WHERE id=1');
+    expect(lk.lock_token).toBeNull();
+  });
+
+  test('[R5-2] cota de celdas — plan EN el umbral → aplica normalmente', async () => {
+    await seedEmployee(EMP_A); await seedPunches(EMP_A, D0);
+    const imp = await dryRun(EMP_A);
+    const prev = process.env.FASE_E_MAX_CELLS;
+    process.env.FASE_E_MAX_CELLS = '2'; // exactamente 2 celdas (D0 + spillover) → dentro de la cota
+    let out;
+    try {
+      out = await svc.recalcApply({ from: D0, to: D0, scopeKind: 'employee', scopeId: EMP_A, userId: 1, planDigestExpected: imp.plan_digest });
+    } finally { if (prev === undefined) delete process.env.FASE_E_MAX_CELLS; else process.env.FASE_E_MAX_CELLS = prev; }
+    expect(out.status).toBe('applied');
+    expect(out.cells_processed).toBe(2);
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -266,14 +333,29 @@ describeIT('FASE E — IT restoreBatch (seguro, fence)', () => {
     expect(Number(d.n)).toBe(0); // volvió al estado previo (sin filas)
   });
 
-  test('cambio legítimo concurrente tras el apply → el restore lo SALTA (no lo pisa)', async () => {
+  test('[R5-3] cambio concurrente tras el apply → SKIP + estado restored_with_conflicts persistido (no restored)', async () => {
     const out = await applyBatch();
     // alguien edita una celda aplicada DESPUÉS del apply.
     await q('UPDATE daily_summary SET worked_minutes = 555 WHERE employee_id=? AND date=?', [EMP_A, D0]);
     const r = await svc.restoreBatch({ batchId: out.batch_id });
     expect(r.rows_skipped).toBeGreaterThanOrEqual(1);
+    // [R5-3] el lote NO se marca 'restored' completo: estado EXPLÍCITO + rows_skipped persistido.
+    expect(r.status).toBe('restored_with_conflicts');
+    const [[b]] = await q('SELECT status, rows_skipped FROM daily_summary_recalc_batch WHERE batch_id=?', [out.batch_id]);
+    expect(b.status).toBe('restored_with_conflicts');
+    expect(Number(b.rows_skipped)).toBe(r.rows_skipped);
     // la celda cambiada sigue con el valor concurrente (no se pisó).
     const [[row]] = await q('SELECT worked_minutes FROM daily_summary WHERE employee_id=? AND date=?', [EMP_A, D0]);
     expect(Number(row.worked_minutes)).toBe(555);
+  });
+
+  test('restore SIN conflictos → restored (limpio), rows_skipped=0 persistido', async () => {
+    const out = await applyBatch();
+    const r = await svc.restoreBatch({ batchId: out.batch_id });
+    expect(r.status).toBe('restored');
+    expect(r.rows_skipped).toBe(0);
+    const [[b]] = await q('SELECT status, rows_skipped FROM daily_summary_recalc_batch WHERE batch_id=?', [out.batch_id]);
+    expect(b.status).toBe('restored');
+    expect(Number(b.rows_skipped)).toBe(0);
   });
 });

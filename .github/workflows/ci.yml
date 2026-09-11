@@ -200,6 +200,29 @@ jobs:
             grep -qx "$col" /tmp/webhooks_cols.txt || (echo "❌ falta columna $col en webhooks" && exit 1)
           done
 
+      - name: Migración 084 idempotente + forma de consola FASE E reconciliada
+        # [R5-4] 084 reconcilia la forma de las tablas de la consola. Reejecutarla
+        # directo (como en una recuperación manual) no debe fallar (idempotente), y
+        # la forma exigida por el GO/NO-GO (rows_skipped + ENUM restored_with_conflicts
+        # + applied_json + heartbeat_seq) debe estar presente.
+        run: |
+          set -e
+          mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/migrations/084_fase_e_console_shape_reconcile.sql
+          mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/migrations/084_fase_e_console_shape_reconcile.sql
+          ENUMT=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+            "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_recalc_batch' AND COLUMN_NAME='status'")
+          echo "status ENUM: $ENUMT"
+          echo "$ENUMT" | grep -q "restored_with_conflicts" || (echo "❌ falta el estado restored_with_conflicts" && exit 1)
+          for pair in "daily_summary_recalc_batch:rows_skipped" "daily_summary_backup:applied_json" "fase_e_console_lock:heartbeat_seq"; do
+            T="${pair%%:*}"; C="${pair##*:}"
+            N=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+              "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='$T' AND COLUMN_NAME='$C'")
+            [ "$N" = "1" ] || (echo "❌ falta $T.$C tras 084" && exit 1)
+          done
+          UQ=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_backup' AND INDEX_NAME='uq_batch_cell'")
+          [ "$UQ" -ge "1" ] || (echo "❌ falta el índice único uq_batch_cell" && exit 1)
+
       - name: Reaplicar migrate = no-op (idempotencia del runner completo)
         run: |
           set -e
@@ -222,7 +245,13 @@ jobs:
       # y a mitad del restore → LOCK_LOST + rollback total, sin liberar al nuevo
       # dueño), backup atómico (fallo inyectado → rollback total), [B3] target
       # EFECTIVO (justificación preservada) y [B4] conteos reales insert/update/
-      # delete/unchanged. Sin IT_DB=1 estas suites se saltan.
+      # delete/unchanged. [R5-1] fence ATÓMICO in-tx: lease vencido con token sin
+      # cambiar → LEASE_EXPIRED (per-cell e in-tx) y robo tras el último fence externo
+      # antes del commit (beforeFinalFence) → LOCK_LOST + rollback total (sin ventana).
+      # [R5-2] cota de celdas fail-closed (por encima → TOO_MANY_CELLS sin escribir; en
+      # el umbral → aplica). [R5-3] restore con cambio concurrente → restored_with_conflicts
+      # + rows_skipped persistido. Todo con BARRERAS deterministas (sin sleeps en los
+      # casos críticos). Sin IT_DB=1 estas suites se saltan.
       - name: IT reales FASE E (IT_DB=1, MySQL 8 efímero)
         run: npx jest tests/it/faseEConsole.it.test.js --runInBand
         env:

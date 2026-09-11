@@ -32,8 +32,52 @@ const REQUIRED_MIGRATIONS = [
   '075_workday_configuration_phase_c.sql',
 ];
 const CONSOLE_MIGRATION = '083_fase_e_activation_console.sql';
+// [R5-4] 084 reconcilia IDEMPOTENTEMENTE la forma de las tablas de la consola a
+// la versión actual (rows_skipped + ENUM 'restored_with_conflicts' + conteos/
+// applied_json/heartbeat_seq/índices) para una 083 aplicada antes con otra forma.
+// NO se edita 083: el runner llavea por nombre y no la reaplicaría.
+const CONSOLE_MIGRATION_RECONCILE = '084_fase_e_console_shape_reconcile.sql';
+const CONSOLE_MIGRATIONS = [CONSOLE_MIGRATION, CONSOLE_MIGRATION_RECONCILE];
+
+// [R5-4] FORMA de esquema EXIGIDA por la consola actual. El GO/NO-GO verifica
+// TODAS estas columnas, valores de ENUM e índices — no sólo que las tablas
+// existan — para que una 083 aplicada con una forma vieja (sin 084) sea NO-GO
+// hasta reconciliarse. Es la fuente de verdad de "qué necesita el código".
+const REQUIRED_CONSOLE_SHAPE = {
+  daily_summary_recalc_batch: {
+    columns: ['batch_id', 'from_date', 'to_date', 'scope_kind', 'scope_id', 'status',
+      'employees', 'rows_backed_up', 'cells_processed', 'rows_inserted', 'rows_updated',
+      'rows_deleted', 'rows_unchanged', 'rows_written', 'rows_skipped', 'plan_digest',
+      'created_by', 'created_at', 'restored_by', 'restored_at'],
+    enums: { status: ['prepared', 'applying', 'applied', 'failed', 'restoring', 'restored', 'restored_with_conflicts'] },
+    indexes: ['idx_status', 'idx_created_at'],
+  },
+  daily_summary_backup: {
+    columns: ['id', 'batch_id', 'employee_id', 'date', 'existed', 'first_in', 'last_out',
+      'worked_minutes', 'break_minutes', 'late_minutes', 'overtime_minutes', 'status',
+      'notes', 'row_json', 'applied_json', 'backed_up_at'],
+    enums: {},
+    indexes: ['uq_batch_cell', 'idx_batch'],
+  },
+  fase_e_console_lock: {
+    columns: ['id', 'lock_token', 'operation', 'held_by', 'acquired_at', 'lease_expires_at', 'heartbeat_seq'],
+    enums: {},
+    indexes: [],
+  },
+};
 
 const MAX_RANGE_DAYS = 366;      // cota dura del recálculo/impacto
+// [R5-2] Cotas DURAS fail-closed del tamaño de una operación mutante, ADEMÁS del
+// rango (MAX_RANGE_DAYS). Se verifican ANTES de tomar el lock y ANTES de escribir:
+// si el alcance/plan las supera, se devuelve un error explícito y NO se escribe
+// nada (ni backup ni daily_summary ni header). Evitan una transacción ilimitada
+// (miles de empleados × cientos de días) que mantendría locks y respaldaría un
+// volumen enorme en un solo commit. Se leen del entorno en cada llamada (no como
+// constante de carga) para poder ejercer umbrales chicos, deterministas, en tests.
+//   · FASE_E_MAX_EMPLOYEES  → empleados en alcance (default 2000)
+//   · FASE_E_MAX_CELLS      → celdas del plan a escribir, incl. spillover (default 200000)
+function maxApplyEmployees() { return Math.max(1, Math.floor(Number(process.env.FASE_E_MAX_EMPLOYEES) || 2000)); }
+function maxApplyCells() { return Math.max(1, Math.floor(Number(process.env.FASE_E_MAX_CELLS) || 200000)); }
 const EMP_CHUNK = 500;           // lote de empleados por consulta
 // filas por INSERT de respaldo. Configurable (entero >= 1) SÓLO para poder forzar
 // múltiples chunks reales con pocos datos en los tests de integración; el default
@@ -118,9 +162,9 @@ async function tableExists(name) {
 
 async function migrationStatus() {
   if (!(await tableExists('schema_migrations'))) {
-    return [...REQUIRED_MIGRATIONS, CONSOLE_MIGRATION].map((filename) => ({ filename, recorded: false }));
+    return [...REQUIRED_MIGRATIONS, ...CONSOLE_MIGRATIONS].map((filename) => ({ filename, recorded: false }));
   }
-  const wanted = [...REQUIRED_MIGRATIONS, CONSOLE_MIGRATION];
+  const wanted = [...REQUIRED_MIGRATIONS, ...CONSOLE_MIGRATIONS];
   const [rows] = await sequelize.query(
     `SELECT filename FROM schema_migrations WHERE filename IN (${wanted.map(() => '?').join(',')})`,
     { replacements: wanted },
@@ -140,22 +184,67 @@ async function dailyStatusHas074() {
   return type.includes("'non_working'") && type.includes("'unconfigured'");
 }
 
+/**
+ * [R5-4] Verificación de FORMA del esquema de la consola: comprueba que cada
+ * tabla exista y tenga TODAS las columnas, valores de ENUM e índices que exige
+ * `REQUIRED_CONSOLE_SHAPE`. Es MÁS estricto que "las tablas existen": detecta una
+ * 083 aplicada con una forma vieja (p. ej. sin `rows_skipped`, sin el estado
+ * 'restored_with_conflicts', sin `applied_json`, sin `heartbeat_seq` o sin el
+ * índice único por celda) → NO-GO hasta aplicar la 084 de reconciliación.
+ * Devuelve { ok, missing:[...] } con detalle legible de lo que falta.
+ */
+async function schemaShapeStatus() {
+  const missing = [];
+  for (const [table, spec] of Object.entries(REQUIRED_CONSOLE_SHAPE)) {
+    if (!(await tableExists(table))) { missing.push(`tabla ${table}`); continue; }
+    const [cols] = await sequelize.query(
+      `SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type
+         FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+      { replacements: [table] },
+    );
+    const typeByCol = new Map(cols.map((c) => [String(c.name), String(c.type || '')]));
+    for (const col of spec.columns) {
+      if (!typeByCol.has(col)) missing.push(`${table}.${col}`);
+    }
+    for (const [col, values] of Object.entries(spec.enums || {})) {
+      const type = typeByCol.get(col) || '';
+      for (const v of values) {
+        if (!type.includes(`'${v}'`)) missing.push(`${table}.${col} ENUM '${v}'`);
+      }
+    }
+    if (spec.indexes && spec.indexes.length) {
+      const [idx] = await sequelize.query(
+        `SELECT DISTINCT INDEX_NAME AS name
+           FROM INFORMATION_SCHEMA.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+        { replacements: [table] },
+      );
+      const idxNames = new Set(idx.map((i) => String(i.name)));
+      for (const ix of spec.indexes) {
+        if (!idxNames.has(ix)) missing.push(`${table} índice ${ix}`);
+      }
+    }
+  }
+  return { ok: missing.length === 0, missing };
+}
+
 /** [P1] GO/NO-GO real del esquema. `assert` lanza 409 si falta algo. */
 async function evalGoNoGo() {
   const migrations = await migrationStatus();
   const engineOk = REQUIRED_MIGRATIONS.every((m) => migrations.find((x) => x.filename === m)?.recorded);
-  const consoleOk = Boolean(migrations.find((x) => x.filename === CONSOLE_MIGRATION)?.recorded);
+  const consoleOk = CONSOLE_MIGRATIONS.every((m) => migrations.find((x) => x.filename === m)?.recorded);
   const has074 = await dailyStatusHas074();
-  const backupReady =
-    (await tableExists('daily_summary_recalc_batch')) &&
-    (await tableExists('daily_summary_backup')) &&
-    (await tableExists('fase_e_console_lock'));
+  // [R5-4] "backup listo" ahora significa la FORMA COMPLETA (columnas + ENUM +
+  // índices), no sólo que las tablas existan: una 083 vieja sin 084 es NO-GO.
+  const shape = await schemaShapeStatus();
+  const backupReady = shape.ok;
   const missing = [];
   if (!engineOk) missing.push('migraciones 072–075 registradas');
   if (!has074) missing.push("ENUM 074 en daily_summary.status ('non_working'/'unconfigured')");
-  if (!consoleOk) missing.push('migración de consola 083 registrada');
-  if (!backupReady) missing.push('tablas de consola (recalc_batch/backup/console_lock)');
-  return { ok: missing.length === 0, engineOk, consoleOk, has074, backupReady, missing };
+  if (!consoleOk) missing.push('migraciones de consola 083 + 084 registradas');
+  if (!shape.ok) missing.push(`forma de esquema de consola incompleta (${shape.missing.join(', ')})`);
+  return { ok: missing.length === 0, engineOk, consoleOk, has074, backupReady, shapeOk: shape.ok, shapeMissing: shape.missing, missing };
 }
 async function assertGoNoGo(context) {
   const g = await evalGoNoGo();
@@ -194,6 +283,11 @@ async function getStatus() {
     console_migration_applied: g.consoleOk,
     daily_summary_status_has_074: g.has074,
     backup_tables_ready: g.backupReady,
+    // [R5-4] detalle de la forma de esquema exigida (columnas/ENUM/índices que faltan).
+    console_schema_shape_ok: g.shapeOk,
+    console_schema_shape_missing: g.shapeMissing,
+    // [R5-2] cotas fail-closed vigentes de una operación mutante.
+    limits: { max_employees: maxApplyEmployees(), max_cells: maxApplyCells(), max_range_days: MAX_RANGE_DAYS },
     employee_schedule_history: { exists: historyExists, rows: historyRows },
     gates,
     go_no_go: {
@@ -238,6 +332,35 @@ function validateRange(from, to) {
   }
   if (from > to) throw badRequest('from debe ser <= to', 'INVALID_RANGE');
   if (rangeDays(from, to) > MAX_RANGE_DAYS) throw badRequest(`El rango excede el máximo de ${MAX_RANGE_DAYS} días`, 'RANGE_TOO_WIDE');
+}
+
+/**
+ * [R5-2] Cota DURA de empleados, ANTES de tomar el lock o construir el plan.
+ * Fail-closed: si el alcance supera el límite se aborta sin tocar nada.
+ */
+function assertEmployeeBound(count) {
+  const max = maxApplyEmployees();
+  if (count > max) {
+    throw badRequest(
+      `El alcance tiene ${count} empleados y supera el máximo de ${max} por operación. Acotá el alcance (departamento/empleado) o el rango.`,
+      'TOO_MANY_EMPLOYEES',
+    );
+  }
+}
+/**
+ * [R5-2] Cota DURA de CELDAS de una operación (recálculo o restore). `count` es el
+ * número de celdas que se escribirían; en el pre-chequeo del apply es la cota
+ * superior `empleados × (días + spillover)`, y tras `buildPlan` es el tamaño EXACTO
+ * del plan. Fail-closed: se aborta sin escribir nada.
+ */
+function assertCellBound(count, { estimate = false } = {}) {
+  const max = maxApplyCells();
+  if (count > max) {
+    throw badRequest(
+      `La operación abarca ${estimate ? '~' : ''}${count} celdas y supera el máximo de ${max} por operación. Acotá el alcance o el rango.`,
+      'TOO_MANY_CELLS',
+    );
+  }
 }
 
 
@@ -562,19 +685,60 @@ async function setForwardEnabled(enabled) {
   };
 }
 
-// ─── [B2] fencing DB-side del lease ──────────────────────────────────────
+// ─── [B2/R5-1] fencing DB-side del lease ──────────────────────────────────
 /**
- * Verificación DB-SIDE del token vigente. Corre en una conexión APARTE (sin la
- * transacción del apply/restore) para ver el ÚLTIMO valor committeado de
- * lock_token: así detecta un robo del lease aunque nuestra transacción esté en
- * REPEATABLE READ. Se llama INMEDIATAMENTE antes de cada escritura y antes de la
- * marca final; si el token ya no es el nuestro → LOCK_LOST (la transacción activa
- * hace rollback). No depende del flag JS del supervisor.
+ * [B2] Fence PER-CELL en conexión APARTE (autocommit): lee el ÚLTIMO valor
+ * committeado de `lock_token` y `lease_expires_at` (fuera de la transacción del
+ * apply/restore, para no quedar atrapado en el snapshot REPEATABLE READ). Aborta
+ * (LOCK_LOST) si el token ya no es el nuestro y [R5-1] también si el lease VENCIÓ
+ * aunque el token no haya cambiado (`lease_expires_at < NOW()` → LEASE_EXPIRED):
+ * un lease vencido es tan inválido como uno robado, y el supervisor pudo no
+ * haberlo renovado. Es best-effort (hay ventana hasta el commit), y por eso la
+ * marca FINAL usa el fence ATÓMICO in-tx de abajo, sin ventana.
  */
 async function assertLeaseHeldDb(token) {
-  const [rows] = await sequelize.query('SELECT lock_token FROM fase_e_console_lock WHERE id = ?', { replacements: [CONSOLE_LOCK_ID] });
-  if (!rows[0] || rows[0].lock_token !== token) {
+  const [rows] = await sequelize.query(
+    `SELECT lock_token, (lease_expires_at IS NOT NULL AND lease_expires_at >= NOW()) AS alive
+       FROM fase_e_console_lock WHERE id = ?`,
+    { replacements: [CONSOLE_LOCK_ID] },
+  );
+  const row = rows[0];
+  if (!row || row.lock_token !== token) {
     throw conflict('El lock de consola se perdió (token vigente distinto). Escritura abortada.', 'LOCK_LOST');
+  }
+  if (Number(row.alive) !== 1) {
+    throw conflict('El lease del lock de consola venció (lease_expires_at < NOW()). Escritura abortada.', 'LEASE_EXPIRED');
+  }
+}
+
+/**
+ * [R5-1] Fence ATÓMICO dentro de la transacción de escritura. `SELECT ... FOR
+ * UPDATE` sobre la fila del lock DENTRO de `t`: valida `lock_token` == nuestro
+ * token Y `lease_expires_at >= NOW()`, y —clave— DEJA LA FILA BLOQUEADA por `t`
+ * hasta el COMMIT/ROLLBACK. Desde este fence hasta el commit NO existe ventana:
+ * un ladrón (`acquireConsoleLock`, un UPDATE con `lease_expires_at < NOW()`) queda
+ * BLOQUEADO en la fila y no puede robar el lease antes de que committeemos. Se usa
+ * como el ÚLTIMO fence, inmediatamente antes de persistir la marca final (header
+ * 'applied' / status de restore), de modo que sólo committeamos si en ese instante
+ * —sin ventana— seguimos siendo dueños de un lease vigente.
+ *
+ * Como la lectura ocurre recién acá (no antes en la transacción), ve el valor
+ * committeado más reciente de `lease_expires_at` (incluidas las renovaciones del
+ * heartbeat), así que en operaciones largas NO da un falso LEASE_EXPIRED: el
+ * supervisor mantiene el lease vigente y este fence lee ese valor fresco.
+ */
+async function assertLeaseHeldTx(t, token) {
+  const [rows] = await sequelize.query(
+    `SELECT lock_token, (lease_expires_at IS NOT NULL AND lease_expires_at >= NOW()) AS alive
+       FROM fase_e_console_lock WHERE id = ? FOR UPDATE`,
+    { replacements: [CONSOLE_LOCK_ID], transaction: t },
+  );
+  const row = rows[0];
+  if (!row || row.lock_token !== token) {
+    throw conflict('El lock de consola se perdió (token vigente distinto al committear). Escritura abortada.', 'LOCK_LOST');
+  }
+  if (Number(row.alive) !== 1) {
+    throw conflict('El lease del lock de consola venció antes del commit (lease_expires_at < NOW()). Escritura abortada.', 'LEASE_EXPIRED');
   }
 }
 
@@ -630,6 +794,11 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
   }
   // [P1-F] el digest del dry-run es OBLIGATORIO (se exige antes de tomar el lock).
   if (!planDigestExpected) throw badRequest('Falta plan_digest del dry-run previo.', 'PLAN_DIGEST_REQUIRED');
+  // [R5-2] cotas fail-closed ANTES de tomar el lock/construir el plan: empleados y
+  // la cota superior de celdas (empleados × (días + 1 spillover)). Si se supera,
+  // se aborta sin tomar lock, sin buildPlan y sin escribir absolutamente nada.
+  assertEmployeeBound(ids.length);
+  assertCellBound(ids.length * (rangeDays(from, to) + 1), { estimate: true });
 
   const token = await acquireConsoleLock('recalc', userId);
   const lease = startLeaseSupervisor(token); // [P1-C] renovación en 2º plano
@@ -639,6 +808,9 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
 
     // 1. plan (una sola vez) + digest canónico (paridad exacta con el dry-run).
     const { plan, existing, cells } = await buildPlan(ids, from, to);
+    // [R5-2] cota EXACTA de celdas del plan (garantía dura antes de cualquier
+    // escritura; la cota superior pre-lock ya la acota, esto la vuelve exacta).
+    assertCellBound(plan.size);
     const digest = planDigest(canonicalPlan({ from, to, scopeKind, scopeId, ids, plan, existing }));
     if (planDigestExpected !== digest) {
       throw conflict('El plan cambió desde el dry-run (asistencia/config o el estado previo de daily_summary difieren). Volvé a previsualizar.', 'PLAN_CHANGED');
@@ -686,9 +858,14 @@ async function recalcApply({ from, to, scopeKind, scopeId = null, userId = null,
           await releaseDateLock(t, date);
         }
       }
-      // fence final antes de persistir el header 'applied'.
+      // [R5-1] barrera determinista: permite a un test robar el lease EXACTAMENTE
+      // tras el último fence externo (per-cell) y ANTES del fence atómico final,
+      // para probar que el fence in-tx FOR UPDATE cierra la ventana. Inerte en prod.
+      await _hook('beforeFinalFence', { from, to });
+      // [R5-1] fence ATÓMICO final: valida token + lease vigente y BLOQUEA la fila
+      // del lock hasta el COMMIT (sin ventana entre este fence y el commit).
       lease.assertAlive();
-      await assertLeaseHeldDb(token);
+      await assertLeaseHeldTx(t, token);
       const rowsWritten = counts.rows_inserted + counts.rows_updated + counts.rows_deleted;
       await sequelize.query(
         `INSERT INTO daily_summary_recalc_batch
@@ -776,6 +953,11 @@ async function restoreBatch({ batchId, userId = null }) {
     if (actual !== Number(batch.rows_backed_up)) {
       throw conflict(`Respaldo incompleto: ${actual} vs ${batch.rows_backed_up} registradas. No se restaura.`, 'BACKUP_COUNT_MISMATCH');
     }
+    // [R5-2] cota DURA de celdas también en el restore: se verifica ANTES de abrir
+    // la transacción de escritura, así un lote anómalamente grande no dispara una
+    // transacción ilimitada. Un lote creado por el apply ya respeta la cota, pero
+    // esto lo garantiza fail-closed con independencia de cómo se creó el respaldo.
+    assertCellBound(actual);
 
     const [rows] = await sequelize.query(
       `SELECT employee_id, DATE_FORMAT(date,'%Y-%m-%d') AS date, existed,
@@ -790,6 +972,7 @@ async function restoreBatch({ batchId, userId = null }) {
     for (const b of rows) { const a = byDate.get(b.date) || []; a.push(b); byDate.set(b.date, a); }
 
     const counts = { rows_restored: 0, rows_deleted: 0, rows_skipped: 0 };
+    let finalStatus = 'restored';
     await sequelize.transaction(async (t) => {
       for (const [date, dateRows] of [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
         await acquireDateLock(t, date);
@@ -824,14 +1007,22 @@ async function restoreBatch({ batchId, userId = null }) {
           await releaseDateLock(t, date);
         }
       }
+      // [R5-1] barrera + fence ATÓMICO final: roba-antes-del-commit se prueba acá;
+      // el FOR UPDATE bloquea la fila del lock hasta el commit (sin ventana).
+      await _hook('restoreBeforeFinalFence', { batchId });
       lease.assertAlive();
-      await assertLeaseHeldDb(token);
+      await assertLeaseHeldTx(t, token);
+      // [R5-3] Si el restore OMITIÓ filas por un cambio LEGÍTIMO concurrente, el
+      // lote NO quedó completamente revertido: se marca con un estado EXPLÍCITO
+      // 'restored_with_conflicts' (no 'restored') y se PERSISTE rows_skipped, para
+      // que quede registrado que la reversión fue parcial.
+      finalStatus = counts.rows_skipped > 0 ? 'restored_with_conflicts' : 'restored';
       await sequelize.query(
-        "UPDATE daily_summary_recalc_batch SET status = 'restored', restored_by = ?, restored_at = NOW() WHERE batch_id = ?",
-        { replacements: [userId ?? null, batchId], transaction: t },
+        'UPDATE daily_summary_recalc_batch SET status = ?, rows_skipped = ?, restored_by = ?, restored_at = NOW() WHERE batch_id = ?',
+        { replacements: [finalStatus, counts.rows_skipped, userId ?? null, batchId], transaction: t },
       );
     });
-    return { batch_id: batchId, status: 'restored', rows_restored: counts.rows_restored, rows_deleted: counts.rows_deleted, rows_skipped: counts.rows_skipped };
+    return { batch_id: batchId, status: finalStatus, rows_restored: counts.rows_restored, rows_deleted: counts.rows_deleted, rows_skipped: counts.rows_skipped };
   } finally {
     lease.stop();
     await releaseConsoleLock(token);
@@ -843,7 +1034,7 @@ async function listBatches({ limit = 100 } = {}) {
   const [rows] = await sequelize.query(
     `SELECT batch_id, DATE_FORMAT(from_date,'%Y-%m-%d') AS from_date, DATE_FORMAT(to_date,'%Y-%m-%d') AS to_date,
             scope_kind, scope_id, status, employees, rows_backed_up,
-            cells_processed, rows_inserted, rows_updated, rows_deleted, rows_unchanged, rows_written, plan_digest,
+            cells_processed, rows_inserted, rows_updated, rows_deleted, rows_unchanged, rows_written, rows_skipped, plan_digest,
             created_by, created_at, restored_by, restored_at
        FROM daily_summary_recalc_batch ORDER BY created_at DESC LIMIT ${lim}`,
   );
@@ -859,11 +1050,14 @@ module.exports = {
   restoreBatch,
   listBatches,
   // exportados para pruebas / referencia
-  evalGoNoGo, assertGoNoGo, buildPlan, planDigest, canonicalPlan, planCellsByDate,
+  evalGoNoGo, assertGoNoGo, schemaShapeStatus, buildPlan, planDigest, canonicalPlan, planCellsByDate,
   effectiveForCell, normalizeStoredForWrite, sameStoredState, currentMatchesApplied, isRealCivilDate,
-  acquireConsoleLock, heartbeatConsoleLock, releaseConsoleLock, startLeaseSupervisor, assertLeaseHeldDb,
+  acquireConsoleLock, heartbeatConsoleLock, releaseConsoleLock, startLeaseSupervisor,
+  assertLeaseHeldDb, assertLeaseHeldTx,
   MAX_RANGE_DAYS, LOCK_LEASE_SEC, BACKUP_CHUNK, PLAN_DIGEST_VERSION, DATE_LOCK_TIMEOUT_S,
-  REQUIRED_MIGRATIONS, CONSOLE_MIGRATION, VALID_SCOPES, MUTABLE_FIELDS, WRITE_ORDER,
+  maxApplyEmployees, maxApplyCells,
+  REQUIRED_MIGRATIONS, CONSOLE_MIGRATION, CONSOLE_MIGRATION_RECONCILE, CONSOLE_MIGRATIONS,
+  REQUIRED_CONSOLE_SHAPE, VALID_SCOPES, MUTABLE_FIELDS, WRITE_ORDER,
   // [B5] barreras deterministas SÓLO para IT (inertes en producción).
   _setTestHook, _clearTestHooks,
 };
