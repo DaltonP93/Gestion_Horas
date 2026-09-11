@@ -38,9 +38,10 @@
 -- (scripts/ops-migrate.sh, usuario admin de MySQL por socket) — NO desde la
 -- consola de FASE E: la consola ya NO aplica migraciones por HTTP y el runtime de
 -- la API no tiene CREATE ROUTINE/TRIGGER. OPS corre el runner acotado con
--- `--upto=083_fase_e_activation_console.sql` (hasta 083, sin arrastrar futuras),
--- con backup previo (ver deploy/RUNBOOK-migraciones-fase-e-ops.md). Activar el
--- writer es OTRO paso (flags), no esta migración.
+-- `--upto=084_fase_e_console_shape_reconcile.sql` (hasta 084, sin arrastrar
+-- futuras): el servicio EXIGE 083 Y la 084 de reconciliación de forma. Con backup
+-- previo (ver deploy/RUNBOOK-migraciones-fase-e-ops.md). Activar el writer es OTRO
+-- paso (flags), no esta migración.
 --
 -- ROLLBACK:
 --   DROP TABLE IF EXISTS fase_e_console_lock;

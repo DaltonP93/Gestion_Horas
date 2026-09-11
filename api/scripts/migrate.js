@@ -17,10 +17,11 @@
  *   node api/scripts/migrate.js --upto=<archivo>
  *          # aplica (ejecuta de verdad) SÓLO las pendientes con nombre <= ese
  *          # archivo, en orden. Las más nuevas quedan sin tocar. Lo usa el paso
- *          # de OPS (scripts/ops-migrate.sh) para aplicar hasta 083 sin arrastrar
- *          # migraciones futuras (084+). La consola de FASE E NO aplica
- *          # migraciones por HTTP: 083 se aplica por OPS, no desde la web.
- *          # Ej: --upto=083_fase_e_activation_console.sql
+ *          # de OPS (scripts/ops-migrate.sh) para aplicar hasta 084 sin arrastrar
+ *          # migraciones futuras (085+). La consola de FASE E NO aplica
+ *          # migraciones por HTTP: 083 + 084 se aplican por OPS, no desde la web
+ *          # (el servicio EXIGE ambas: GO/NO-GO de forma completa).
+ *          # Ej: --upto=084_fase_e_console_shape_reconcile.sql
  *
  * Gate raíz (integridad de numeración): antes de aplicar, el runner rechaza
  * (exit 1) si hay números de migración DUPLICADOS en disco, o si una migración

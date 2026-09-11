@@ -4,14 +4,18 @@
 # API (paso de OPS). El runtime de la API NO tiene CREATE ROUTINE/TRIGGER y ya NO
 # aplica migraciones por HTTP (se retiró /api/fase-e/migrations/apply).
 #
-# Las migraciones 073 (función/trigger) y 082 (procedimiento) crean rutinas, así
-# que las corre OPS con un usuario ADMIN de MySQL. Preferentemente por SOCKET con
+# Las migraciones 073 (función/trigger), 082 (procedimiento) y 084 (procedimiento)
+# crean rutinas, así que las corre OPS con un usuario ADMIN de MySQL que tenga —al
+# menos temporalmente— privilegio CREATE ROUTINE. Preferentemente por SOCKET con
 # auth unix_socket (sin password), o con credenciales admin PROVISTAS EN EL
-# MOMENTO por variables de entorno — NUNCA guardadas en PM2/API.
+# MOMENTO por variables de entorno — NUNCA guardadas en PM2/API. La 084 usa un
+# procedimiento efímero (mig_084_apply) que se crea y se DROPea dentro del propio
+# archivo para reconciliar de forma idempotente la forma de las tablas de la consola.
 #
-# ACOTADO a 083: aplica SÓLO hasta 083_fase_e_activation_console.sql (--upto), NO
-# arrastra migraciones futuras (084+) que pudieran aparecer en el repo. La
-# verificación de idempotencia usa el MISMO límite.
+# ACOTADO a 084: aplica SÓLO hasta 084_fase_e_console_shape_reconcile.sql (--upto),
+# NO arrastra migraciones futuras (085+) que pudieran aparecer en el repo. El
+# servicio de la consola EXIGE 083 Y 084 (GO/NO-GO de forma completa), por eso el
+# tope es 084 y no 083. La verificación de idempotencia usa el MISMO límite.
 #
 # ENTORNO ADMIN SANEADO: se invoca a migrate.js con MIGRATE_NO_DOTENV=1 para que
 # api/.env NO pueda inyectar la contraseña runtime ni mezclar identidades; OPS
@@ -30,7 +34,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UPTO="083_fase_e_activation_console.sql"   # tope duro: no arrastrar migraciones futuras
+UPTO="084_fase_e_console_shape_reconcile.sql"   # tope duro: no arrastrar migraciones futuras (085+)
 
 # ── Entorno admin SANEADO y EXPLÍCITO para migrate.js ─────────────────────────
 # MIGRATE_NO_DOTENV=1 evita que api/.env aporte la password runtime o mezcle
@@ -60,7 +64,7 @@ echo "== 1) Preflight: migraciones pendientes (read-only) =="
 
 echo "== 2) Aplicar migraciones pendientes ACOTADO a $UPTO (forward-only, en orden) =="
 # migrate.js hereda DB_*/DB_SOCKET/MIGRATE_NO_DOTENV del entorno. --upto acota el
-# tope: nunca aplica más allá de 083.
+# tope: nunca aplica más allá de 084.
 if ( cd "$ROOT/api" && node scripts/migrate.js --upto="$UPTO" ); then
   APPLY_EXIT=0
 else
@@ -72,7 +76,7 @@ if [ "$APPLY_EXIT" -ne 0 ]; then
   exit "$APPLY_EXIT"
 fi
 
-echo "== 3) Validar explícitamente 072→083 registradas =="
+echo "== 3) Validar explícitamente 072→084 registradas (exactamente 1 entrada c/u) =="
 MISSING=0
 for m in \
   072_employee_schedule_history.sql \
@@ -86,13 +90,26 @@ for m in \
   080_payroll_base.sql \
   081_monthly_report_approvals.sql \
   082_monthly_report_pades_metadata.sql \
-  083_fase_e_activation_console.sql ; do
+  083_fase_e_activation_console.sql \
+  084_fase_e_console_shape_reconcile.sql ; do
   N=$("${MYSQL[@]}" -N -B -e "SELECT COUNT(*) FROM schema_migrations WHERE filename='$m'")
-  if [ "$N" != "1" ]; then echo "   ❌ FALTA $m"; MISSING=1; else echo "   ✓ $m"; fi
+  # Debe estar registrada EXACTAMENTE una vez: 0 = falta; >1 = duplicada (anómalo).
+  if [ "$N" != "1" ]; then echo "   ❌ $m registrada $N veces (esperado 1)"; MISSING=1; else echo "   ✓ $m"; fi
 done
-[ "$MISSING" -eq 0 ] || { echo "❌ Faltan migraciones de 072→083." >&2; exit 1; }
+[ "$MISSING" -eq 0 ] || { echo "❌ Faltan/duplicadas migraciones de 072→084." >&2; exit 1; }
 
-echo "== 4) Re-aplicar ACOTADO a $UPTO = no-op (idempotencia, MISMO límite) =="
+echo "== 4) Verificar que NO se aplicó ninguna migración por ENCIMA del tope ($UPTO) =="
+# El servicio exige 083+084 pero el tope NO debe arrastrar 085+. Si en el repo
+# hubiera migraciones posteriores al tope, no deben figurar en schema_migrations.
+ABOVE=$("${MYSQL[@]}" -N -B -e "SELECT COUNT(*) FROM schema_migrations WHERE filename > '$UPTO'")
+if [ "$ABOVE" != "0" ]; then
+  echo "   ❌ Hay $ABOVE migración(es) por encima del tope $UPTO aplicadas (no debería)." >&2
+  "${MYSQL[@]}" -N -B -e "SELECT filename FROM schema_migrations WHERE filename > '$UPTO' ORDER BY filename" >&2
+  exit 1
+fi
+echo "   ✓ nada por encima de $UPTO"
+
+echo "== 5) Re-aplicar ACOTADO a $UPTO = no-op (idempotencia, MISMO límite) =="
 ( cd "$ROOT/api" && node scripts/migrate.js --upto="$UPTO" | tail -1 )
 
-echo "✅ Migraciones 072→083 aplicadas y verificadas (exit 0). Nada por encima de $UPTO se tocó."
+echo "✅ Migraciones 072→084 aplicadas y verificadas (exit 0). Nada por encima de $UPTO se tocó."
