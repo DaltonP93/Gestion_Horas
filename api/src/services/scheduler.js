@@ -519,7 +519,7 @@ async function bulkRecalcDailySummary(date) {
   // no puede quedar un job/cron recalculando con la matemática vieja mientras el
   // camino operativo usa el motor. Con el flag OFF (default) se conserva el SQL
   // legacy como rollback.
-  if (workdaySummary.isEngineSummaryWriteEnabled()) {
+  if (await workdaySummary.isEngineForwardWriteEnabled()) {
     return bulkRecalcViaEngine(date);
   }
   return legacyBulkRecalcDailySummary(date);
@@ -670,8 +670,10 @@ async function materializeAbsents(date) {
   // recálculo por el motor, que DELIBERADAMENTE deja sin fila un día
   // `unconfigured` (sin evidencia de ausencia). materializeAbsents usa el
   // horario ACTUAL y fabricaría 'absent' sobre esos días, justo lo que el motor
-  // evitó, así que en el camino nuevo NO corre.
-  if (workdaySummary.isEngineSummaryWriteEnabled()) return 0;
+  // evitó, así que en el camino nuevo NO corre. Se evalúa la MISMA compuerta
+  // doble que el recálculo (env Y setting de BD): si el motor no está realmente
+  // escribiendo, la materialización legacy debe seguir corriendo.
+  if (await workdaySummary.isEngineForwardWriteEnabled()) return 0;
   let n = 0;
   // Bajo el mismo lock por fecha: nunca choca con un recálculo del mismo día.
   await withDayRecalcLock(date, async (t) => {

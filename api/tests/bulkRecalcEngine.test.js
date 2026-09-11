@@ -13,7 +13,10 @@ jest.mock('../src/config/logger', () => ({ info() {}, warn() {}, error() {} }));
 
 const mockBatch = jest.fn(async () => ({ rowsByEmployee: new Map() }));
 jest.mock('../src/services/workdaySummaryService', () => ({
-  isEngineSummaryWriteEnabled: () => true, // flag ON para este test
+  isEngineSummaryWriteEnabled: () => true, // env kill-switch ON para este test
+  // Compuerta combinada (env AND setting de BD) ON: es la que consulta el
+  // scheduler para decidir el camino motor vs legacy.
+  isEngineForwardWriteEnabled: async () => true,
   resolveSummaryBatchForDate: (...a) => mockBatch(...a),
   shiftDate: (d, n) => `${d}#${n}`, // no importa el valor exacto para este test
 }));

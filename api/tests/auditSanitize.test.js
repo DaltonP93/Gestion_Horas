@@ -89,6 +89,27 @@ describe('sanitizeDetails: conserva datos estructurales no-PII', () => {
     expect(out).toEqual({ username: 'jperez', code: 'EMP-0042', from: 'active', to: 'inactive' });
   });
 
+  test('[R5-5] métricas granulares del recálculo/restore FASE E se conservan', () => {
+    // Conteos puros del apply/restore de la consola: antes se descartaban por no
+    // estar en la allowlist; ahora se registran (son enteros, sin PII posible).
+    const out = JSON.parse(sanitizeDetails({
+      employees: 12, cells_processed: 340, rows_backed_up: 340, rows_written: 15,
+      rows_inserted: 10, rows_updated: 3, rows_deleted: 2, rows_unchanged: 325,
+      rows_restored: 8, rows_skipped: 4,
+    }));
+    expect(out).toEqual({
+      employees: 12, cells_processed: 340, rows_backed_up: 340, rows_written: 15,
+      rows_inserted: 10, rows_updated: 3, rows_deleted: 2, rows_unchanged: 325,
+      rows_restored: 8, rows_skipped: 4,
+    });
+  });
+
+  test('[R5-5] las métricas granulares sólo aceptan números (el guardián poda no-números)', () => {
+    // Un valor no numérico bajo una clave de métrica no pasa el guardián de valores.
+    const out = sanitizeDetails({ rows_inserted: 'DROP TABLE', cells_processed: 5 });
+    expect(JSON.parse(out)).toEqual({ cells_processed: 5 });
+  });
+
   test('el guardián de valores PODA PII aun bajo claves allowlisted', () => {
     // username como email (@), from/to con nombre completo (espacio/acento):
     // la clave está permitida pero el valor NO pasa SAFE_STRING_RE.

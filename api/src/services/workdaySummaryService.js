@@ -52,9 +52,51 @@ const { loadWorkdayConfig } = require('./workdayConfig');
 const { withDayRecalcLock } = require('./recalcLock');
 const { dbDateISO } = require('../utils/dbTime');
 
-/** ¿Está habilitada la escritura de daily_summary por el motor nuevo? */
+/**
+ * Cerrojo de OPERACIONES (env): kill-switch del escritor hacia adelante del
+ * motor. Sólo el string exacto 'true' habilita. Es la mitad que ops controla
+ * sin tocar la base y que no se puede togglear desde un request.
+ */
 function isEngineSummaryWriteEnabled() {
   return process.env.WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED === 'true';
+}
+
+/** Clave del segundo cerrojo (BD) del escritor hacia adelante (migración 083). */
+const FORWARD_SETTING_KEY = 'fase_e_forward_enabled';
+
+/**
+ * Cerrojo de APLICACIÓN (BD): el setting que la consola de FASE E flipea de
+ * forma controlada y reversible con un click, sin reiniciar el proceso.
+ *
+ * Fail-closed: cualquier valor que no sea exactamente 'true' —fila ausente,
+ * NULL, 'false', '1', o un error de lectura— cuenta como DESHABILITADO. La
+ * tabla system_settings puede no existir todavía (083 sin aplicar): ahí también
+ * devuelve false sin propagar el error, porque "aún no migrado" debe ser
+ * fail-closed, no una excepción que rompa el recálculo operativo.
+ */
+async function isForwardSettingEnabled() {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT value FROM system_settings WHERE key_name = ? LIMIT 1`,
+      { replacements: [FORWARD_SETTING_KEY] },
+    );
+    return String(rows[0]?.value ?? '') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compuerta REAL del escritor hacia adelante: exige AMBOS cerrojos.
+ *   env kill-switch === 'true'  AND  setting de BD === 'true'
+ *
+ * Con cualquiera de los dos en false, el recálculo operativo conserva su camino
+ * LEGACY (comportamiento actual intacto). El env sigue siendo el kill-switch de
+ * ops; el setting de BD es el flip controlado de la consola.
+ */
+async function isEngineForwardWriteEnabled() {
+  if (!isEngineSummaryWriteEnabled()) return false; // corto-circuito sin tocar BD
+  return isForwardSettingEnabled();
 }
 
 /** Fecha civil (wall-clock) de la marca ancla, en aritmética sin zona. */
@@ -191,166 +233,174 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
   return { rows, affectedDates };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [B3] SEMÁNTICA DE ESCRITURA — FUNCIÓN PURA COMPARTIDA
+//
+// `effectiveDailySummary` es la ÚNICA fuente de verdad de QUÉ persiste el writer
+// para un par (fila engine, fila previa guardada). La usan por igual el WRITER
+// (escribirFilas / la consola de FASE E) y el PREVIEW/DIGEST, para que el preview
+// anuncie EXACTAMENTE lo que se escribirá — nunca un cambio de status que el
+// writer luego preserva por una justificación manual.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Los 8 campos mutables persistidos (el orden es el del INSERT/UPDATE). */
+const WRITE_FIELDS = ['first_in', 'last_out', 'worked_minutes', 'break_minutes', 'overtime_minutes', 'late_minutes', 'notes', 'status'];
+
+/** ¿La fila previa tiene una JUSTIFICACIÓN MANUAL (que el motor no conoce)? */
+function hasManualJustification(storedRow) {
+  return !!storedRow && (storedRow.justification != null || storedRow.justification_type != null);
+}
+/** Estado DERIVADO de una justificación manual: injustificada → absent; resto → permission. */
+function derivedJustificationStatus(storedRow) {
+  return String(storedRow?.justification_type || '') === 'injustificada' ? 'absent' : 'permission';
+}
+
 /**
- * Escribe las filas de UN empleado en daily_summary, cada una bajo su lock.
+ * [B3] Resultado EFECTIVO que el writer persistirá para (engineRow, storedRow).
+ * Devuelve { action: 'insert'|'update'|'delete'|'noop', row? } con la fila EXACTA
+ * (los 8 campos) que quedaría en daily_summary. Reproduce, en JS puro, la
+ * semántica que antes vivía en el SQL (status null → borrar o preservar la
+ * justificación con minutos en cero; día vacío con justificación manual → estado
+ * derivado; reconcileOnly nunca inserta).
+ */
+function effectiveDailySummary(engineRow, storedRow, opts = {}) {
+  const reconcileOnly = opts.reconcileOnly === true;
+  const status = statusParaDb(engineRow.status);
+  if (status == null) {
+    // unconfigured: sin evidencia de jornada. Una fila con justificación manual
+    // sobrevive con su estado derivado y minutos en cero; el resto se borra.
+    if (!storedRow) return { action: 'noop' };
+    // Reconcile: la fila justificada NUNCA se recrea si desapareció (updateOnly).
+    if (hasManualJustification(storedRow)) {
+      return {
+        action: 'update', updateOnly: true,
+        row: { first_in: null, last_out: null, worked_minutes: 0, break_minutes: 0, overtime_minutes: 0, late_minutes: 0, notes: null, status: derivedJustificationStatus(storedRow) },
+      };
+    }
+    return { action: 'delete' };
+  }
+  // ¿día SIN jornada real? Sólo ahí una justificación manual gana sobre el status.
+  const esDiaVacio = (engineRow.workday_count || 0) === 0;
+  const effStatus = (esDiaVacio && hasManualJustification(storedRow)) ? derivedJustificationStatus(storedRow) : status;
+  const row = {
+    first_in: engineRow.first_in || null,
+    last_out: engineRow.last_out || null,
+    worked_minutes: engineRow.worked_minutes || 0,
+    break_minutes: engineRow.break_minutes || 0,
+    overtime_minutes: engineRow.overtime_minutes || 0,
+    late_minutes: engineRow.late_minutes || 0,
+    notes: engineRow.notes || null,
+    status: effStatus,
+  };
+  // reconcileOnly (anchorDate+1): jamás inserta una fila nueva; sólo actualiza la
+  // existente (updateOnly). Sin fila previa → noop.
+  if (reconcileOnly) return storedRow ? { action: 'update', updateOnly: true, row } : { action: 'noop' };
+  return { action: storedRow ? 'update' : 'insert', row };
+}
+
+/** Normaliza una fila guardada a los 8 campos, para comparar / clasificar. */
+function normalizeStoredForWrite(storedRow) {
+  if (!storedRow) return null;
+  return {
+    first_in: storedRow.first_in || null,
+    last_out: storedRow.last_out || null,
+    worked_minutes: Number(storedRow.worked_minutes || 0),
+    break_minutes: Number(storedRow.break_minutes || 0),
+    overtime_minutes: Number(storedRow.overtime_minutes || 0),
+    late_minutes: Number(storedRow.late_minutes || 0),
+    notes: storedRow.notes || null,
+    status: storedRow.status || null,
+  };
+}
+
+/**
+ * Clasifica el efecto de aplicar `eff` sobre `storedRow`, para conteos
+ * inequívocos: 'inserted' | 'updated' | 'deleted' | 'unchanged'. Un 'update' cuyo
+ * resultado sea idéntico al estado previo cuenta como 'unchanged' (no muta nada).
+ */
+function classifyEffective(eff, storedRow) {
+  if (eff.action === 'insert') return 'inserted';
+  if (eff.action === 'delete') return storedRow ? 'deleted' : 'unchanged';
+  if (eff.action === 'noop') return 'unchanged';
+  // update
+  const s = normalizeStoredForWrite(storedRow);
+  if (!s) return 'updated';
+  const same = WRITE_FIELDS.every((f) => (eff.row[f] ?? null) === (s[f] ?? null));
+  return same ? 'unchanged' : 'updated';
+}
+
+/**
+ * Lee la fila previa de daily_summary para (empleado, fecha) DENTRO de la
+ * transacción/lock del caller. `FOR UPDATE` lee la ÚLTIMA versión committeada y
+ * bloquea la fila: hace que la verificación de estado previo sea real (no de un
+ * snapshot MVCC viejo) y que ningún writer concurrente la cambie hasta el commit.
+ */
+async function readDailySummaryRow(t, employeeId, date) {
+  const [rows] = await sequelize.query(
+    `SELECT DATE_FORMAT(first_in,'%Y-%m-%d %H:%i:%s') AS first_in,
+            DATE_FORMAT(last_out,'%Y-%m-%d %H:%i:%s') AS last_out,
+            worked_minutes, break_minutes, overtime_minutes, late_minutes, notes, status,
+            justification, justification_type
+       FROM daily_summary WHERE employee_id = ? AND date = ? FOR UPDATE`,
+    { replacements: [employeeId, date], transaction: t },
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Aplica el resultado EFECTIVO ya calculado, dentro de la transacción `t` del
+ * caller (que YA sostiene el lock de la fecha). El status/valores vienen resueltos
+ * por `effectiveDailySummary`, así que el SQL es plano (sin CASE): una sola fuente
+ * de semántica. `reconcileOnly` fuerza UPDATE puro (nunca recrea una fila borrada).
+ */
+async function applyEffectiveWrite(t, employeeId, date, eff) {
+  if (eff.action === 'noop') return;
+  if (eff.action === 'delete') {
+    await sequelize.query('DELETE FROM daily_summary WHERE employee_id = ? AND date = ?', { replacements: [employeeId, date], transaction: t });
+    return;
+  }
+  const r = eff.row;
+  // updateOnly (reconcile / status-null justificado): jamás recrea una fila; sólo
+  // actualiza la existente (no-op si desapareció). No usa upsert.
+  if (eff.action === 'update' && eff.updateOnly === true) {
+    await sequelize.query(
+      `UPDATE daily_summary SET first_in = ?, last_out = ?, worked_minutes = ?, break_minutes = ?,
+              overtime_minutes = ?, late_minutes = ?, notes = ?, status = ?
+         WHERE employee_id = ? AND date = ?`,
+      { replacements: [r.first_in, r.last_out, r.worked_minutes, r.break_minutes, r.overtime_minutes, r.late_minutes, r.notes, r.status, employeeId, date], transaction: t },
+    );
+    return;
+  }
+  // insert o update normal: upsert idempotente. La clasificación bajo el lock ya
+  // decidió insert/update; el ON DUPLICATE sólo cubre una carrera imposible.
+  await sequelize.query(
+    `INSERT INTO daily_summary (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, notes, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE first_in = VALUES(first_in), last_out = VALUES(last_out),
+       worked_minutes = VALUES(worked_minutes), break_minutes = VALUES(break_minutes),
+       overtime_minutes = VALUES(overtime_minutes), late_minutes = VALUES(late_minutes),
+       notes = VALUES(notes), status = VALUES(status)`,
+    { replacements: [employeeId, date, r.first_in, r.last_out, r.worked_minutes, r.break_minutes, r.overtime_minutes, r.late_minutes, r.notes, r.status], transaction: t },
+  );
+}
+
+/**
+ * Escribe las filas de UN empleado en daily_summary, cada una bajo su lock de
+ * fecha. Reutiliza la semántica compartida: lee la fila previa (FOR UPDATE),
+ * calcula el resultado EFECTIVO con `effectiveDailySummary` y lo aplica. Así el
+ * writer y el preview comparten exactamente la misma lógica.
  *
  * `opts.reconcileOnly` es un Set de fechas donde NO se puede INSERTAR una fila
- * nueva: sólo se actualiza/borra la que ya exista. Sirve para fechas que la
- * ventana amplió por reconciliación (anchorDate+1) pero a las que la marca del
- * ancla no puede pertenecer; insertar ahí fabricaría un día que nunca existió.
+ * nueva: sólo se actualiza/borra la que ya exista.
  */
 async function escribirFilas(employeeId, rows, opts = {}) {
   const reconcileOnly = opts.reconcileOnly || new Set();
   for (const row of rows) {
     const soloReconciliar = reconcileOnly.has(row.date);
-    const status = statusParaDb(row.status);
-    if (status == null) {
-      // unconfigured: no hay evidencia de jornada para esa fecha. No basta con NO
-      // escribir: si el camino legacy ya dejó una fila (absent/holiday/weekend) y
-      // después se corrige/elimina la config histórica, esa fila fabricada
-      // quedaría visible para siempre. Se RECONCILIA bajo el lock por fecha:
-      //   · una fila con JUSTIFICACIÓN MANUAL sobrevive —es una decisión de
-      //     RR.HH. que el motor no conoce—, con su estado DERIVADO
-      //     (injustificada → 'absent'; otra → 'permission') y sus minutos en cero
-      //     (no hay jornada). Así no se pierde una ausencia ni un permiso manual;
-      //   · las demás filas (automáticas: absent/holiday/weekend o permiso de
-      //     turnera sin justificación) se borran como config obsoleta.
-      await withDayRecalcLock(row.date, async (t) => {
-        await sequelize.query(
-          `UPDATE daily_summary
-             SET status = CASE WHEN COALESCE(justification_type, '') = 'injustificada'
-                               THEN 'absent' ELSE 'permission' END,
-                 first_in = NULL, last_out = NULL,
-                 worked_minutes = 0, break_minutes = 0, overtime_minutes = 0, late_minutes = 0,
-                 notes = NULL
-             WHERE employee_id = ? AND date = ?
-               AND (justification IS NOT NULL OR justification_type IS NOT NULL)`,
-          { replacements: [employeeId, row.date], transaction: t },
-        );
-        await sequelize.query(
-          `DELETE FROM daily_summary
-             WHERE employee_id = ? AND date = ?
-               AND justification IS NULL AND justification_type IS NULL`,
-          { replacements: [employeeId, row.date], transaction: t },
-        );
-      }, { label: `engineRecalcRec:${row.date}:${employeeId}` });
-      continue;
-    }
-    // ¿La fila recalculada tiene una jornada real? Sólo si NO la tiene se
-    // preserva el estado guardado, y SÓLO si es 'permission': un permiso lo
-    // carga una justificación manual que el motor no conoce, así que el motor no
-    // puede pisarlo. En cambio holiday/weekend son AUTOMÁTICOS —el motor los
-    // deriva de la tabla de feriados vigente y de la config—, así que su valor
-    // recalculado es el autoritativo: si se desactiva un feriado o el historial
-    // vuelve laborable un descanso, el estado nuevo (absent) debe ganar, no
-    // quedar congelado sobre una config obsoleta.
-    const esDiaVacio = (row.workday_count || 0) === 0;
-
-    if (soloReconciliar) {
-      // Fecha RECONCILE-ONLY (anchorDate+1): jamás se inserta una fila nueva
-      // —eso fabricaría un día que la marca del ancla no puede haber generado—.
-      // Sólo se ACTUALIZA la fila que ya exista (UPDATE no-op si no hay fila),
-      // con la misma matemática del motor y la misma preservación de la
-      // justificación manual en un día vacío. Si un recalc anterior dejó una
-      // huérfana con actividad y la jornada migró a otra fecha, este UPDATE la
-      // corrige a su estado real (p. ej. absent con minutos en cero) sin duplicar.
-      await withDayRecalcLock(row.date, async (t) => {
-        await sequelize.query(`
-          UPDATE daily_summary SET
-            first_in = ?, last_out = ?,
-            worked_minutes = ?, break_minutes = ?, overtime_minutes = ?, late_minutes = ?,
-            notes = ?,
-            status = CASE
-              WHEN ? = 1 AND (justification IS NOT NULL OR justification_type IS NOT NULL)
-                THEN CASE WHEN COALESCE(justification_type, '') = 'injustificada'
-                          THEN 'absent' ELSE 'permission' END
-              ELSE ?
-            END
-          WHERE employee_id = ? AND date = ?
-        `, {
-          replacements: [
-            row.first_in || null,
-            row.last_out || null,
-            row.worked_minutes || 0,
-            row.break_minutes || 0,
-            row.overtime_minutes || 0,
-            row.late_minutes || 0,
-            row.notes || null,
-            esDiaVacio ? 1 : 0,
-            status,
-            employeeId, row.date,
-          ],
-          transaction: t,
-        });
-      }, { label: `engineRecalcRec:${row.date}:${employeeId}` });
-      continue;
-    }
-
     await withDayRecalcLock(row.date, async (t) => {
-      await sequelize.query(`
-        INSERT INTO daily_summary
-          (employee_id, date, first_in, last_out, worked_minutes, break_minutes, overtime_minutes, late_minutes, notes, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          -- first_in se REEMPLAZA, no se conserva: el motor relee toda la
-          -- ventana, así que su valor es autoritativo. Si una marca migró a la
-          -- jornada anterior y esta fecha queda sin entrada, VALUES(first_in)
-          -- es NULL y debe borrar el first_in legacy; conservarlo dejaría una
-          -- hora de entrada obsoleta con last_out NULL y minutos en cero.
-          first_in       = VALUES(first_in),
-          last_out       = VALUES(last_out),
-          worked_minutes = VALUES(worked_minutes),
-          -- notes conserva la evidencia de fichajes sueltos que ningún bound
-          -- cubre (p. ej. una entrada abierta a las 18:00 tras cerrar a las
-          -- 17:00). El motor es su única fuente en este camino —ningún flujo
-          -- humano escribe daily_summary.notes— así que se REEMPLAZA (NULL
-          -- cuando ya no hay fichaje suelto) para no dejar una nota obsoleta.
-          notes          = VALUES(notes),
-          -- Se materializan TODOS los campos derivados del motor, no sólo
-          -- algunos: dejar break/overtime sin escribir conservaría valores
-          -- legacy obsoletos. En particular un overtime_minutes viejo y
-          -- positivo podría seguir acreditándose en el banco de horas después
-          -- de que el motor lo recalculó en cero (el motor no computa hora
-          -- extra legal: la deja en 0 hasta que exista una política).
-          break_minutes    = VALUES(break_minutes),
-          overtime_minutes = VALUES(overtime_minutes),
-          late_minutes     = VALUES(late_minutes),
-          -- En un día SIN jornada (?=1), una JUSTIFICACIÓN MANUAL cargada por
-          -- RR.HH. gana sobre el estado calculado, con su estado DERIVADO: una
-          -- 'injustificada' es una AUSENCIA (→ 'absent'), cualquier otra es un
-          -- permiso (→ 'permission'). Así no se pierde ni un permiso ni una
-          -- ausencia manual que nómina/reportes legales deben contabilizar. Los
-          -- estados AUTOMÁTICOS (holiday/weekend, permiso de turnera) no tienen
-          -- justificación, así que el motor los recalcula. Con jornada real
-          -- (?=0), el estado trabajado gana.
-          status = CASE
-            WHEN ? = 1 AND (daily_summary.justification IS NOT NULL OR daily_summary.justification_type IS NOT NULL)
-              THEN CASE WHEN COALESCE(daily_summary.justification_type, '') = 'injustificada'
-                        THEN 'absent' ELSE 'permission' END
-            ELSE VALUES(status)
-          END
-      `, {
-        replacements: [
-          employeeId, row.date,
-          row.first_in || null,
-          row.last_out || null,
-          // worked_minutes = PERMANENCIA (presence), que es la semántica
-          // histórica de la columna; el modo por defecto del materializador ya
-          // usa presence. Cambiarla a neto es una decisión de negocio aparte.
-          row.worked_minutes || 0,
-          row.break_minutes || 0,
-          // El motor no computa hora extra legal: siempre 0. Escribirlo limpia
-          // cualquier overtime legacy que quedara colgado.
-          row.overtime_minutes || 0,
-          row.late_minutes || 0,
-          // Evidencia de fichajes sueltos (o NULL): va antes de status para
-          // seguir el orden de columnas del INSERT.
-          row.notes || null,
-          status,
-          esDiaVacio ? 1 : 0,
-        ],
-        transaction: t,
-      });
+      const stored = await readDailySummaryRow(t, employeeId, row.date);
+      const eff = effectiveDailySummary(row, stored, { reconcileOnly: soloReconciliar });
+      await applyEffectiveWrite(t, employeeId, row.date, eff, { reconcileOnly: soloReconciliar });
     }, { label: `engineRecalc:${row.date}:${employeeId}` });
   }
 }
@@ -409,6 +459,29 @@ async function resolveSummaryBatchForDate(employeeIds, date, opts = {}) {
   return { rowsByEmployee };
 }
 
+/**
+ * [P1-F] Aplica filas del motor YA RESUELTAS, SIN recomputarlas.
+ *
+ * Es la primitiva que la consola de FASE E usa para escribir EXACTAMENTE el plan
+ * que previamente resolvió y validó con plan_digest, sin un segundo
+ * `resolveSummaryBatchForDate(..., {apply:true})` que releería datos vivos y
+ * podría persistir algo distinto del preview.
+ *
+ * Reutiliza el ÚNICO escritor real (`escribirFilas`) con TODA su semántica: status
+ * null → borrar/preservar justificación, preservación de justificación manual en
+ * día vacío, los 8 campos mutables y el lock por fecha (last-write-wins). NO
+ * duplica ni una línea de SQL del writer. Las `rows` deben ser las filas engine
+ * tal como las devolvió `resolveSummary*` (con `status` engine, `workday_count`,
+ * `first_in`, `last_out`, minutos y `notes`).
+ *
+ * @param {number} employeeId
+ * @param {Array}  rows        filas engine ya resueltas (el plan validado).
+ * @param {object} [opts]      `reconcileOnly` (Set de fechas), igual que escribirFilas.
+ */
+async function applyResolvedRows(employeeId, rows, opts = {}) {
+  await escribirFilas(employeeId, rows, opts);
+}
+
 /** Marcajes wall-clock de VARIOS empleados en la ventana. */
 async function leerMarcajesLote(employeeIds, ventana) {
   const marcas = employeeIds.map(() => '?').join(',');
@@ -426,10 +499,22 @@ async function leerMarcajesLote(employeeIds, ventana) {
 
 module.exports = {
   isEngineSummaryWriteEnabled,
+  isForwardSettingEnabled,
+  isEngineForwardWriteEnabled,
+  FORWARD_SETTING_KEY,
   isStatus074Enabled,
   resolveSummary,
   resolveSummaryBatchForDate,
+  applyResolvedRows,
   statusParaDb,
   anchorDateISO,
   shiftDate,
+  // [B1/B3] semántica de escritura compartida (writer ↔ preview ↔ consola FASE E)
+  effectiveDailySummary,
+  classifyEffective,
+  readDailySummaryRow,
+  applyEffectiveWrite,
+  hasManualJustification,
+  derivedJustificationStatus,
+  WRITE_FIELDS,
 };

@@ -35,13 +35,21 @@ function conConfig(cfg) {
   mockLoadWorkdayConfig.mockResolvedValue({ forDate: () => cfg, historyFor: () => [] });
 }
 
-/** Programa los marcajes que devolverá la lectura de la ventana. */
-function conMarcajes(rows) {
+/** Programa los marcajes que devolverá la lectura de la ventana. `stored` es un
+ *  mapa fecha→fila previa que devuelve la lectura FOR UPDATE de daily_summary. */
+function conMarcajes(rows, stored = {}) {
   sequelize.query.mockReset();
-  sequelize.query.mockImplementation(async (sql) => {
+  sequelize.query.mockImplementation(async (sql, opts) => {
     if (/FROM attendance_logs/i.test(sql)) return [rows];
     if (/FROM holidays/i.test(sql)) return [[]];
+    // Lectura del estado previo (FOR UPDATE) por (empleado, fecha).
+    if (/FROM daily_summary WHERE employee_id = \? AND date = \? FOR UPDATE/i.test(sql)) {
+      const date = opts?.replacements?.[1];
+      return [stored[date] ? [stored[date]] : []];
+    }
     if (/INSERT INTO daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
+    if (/UPDATE daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
+    if (/DELETE FROM daily_summary/i.test(sql)) return [{ affectedRows: 1 }];
     return [[]];
   });
 }
@@ -123,25 +131,25 @@ describe('resolveSummary — fechas afectadas', () => {
     // Día laborable configurado, marca ordinaria (IN+OUT del martes 10). La
     // ventana incluye el miércoles 11 SÓLO para reconciliar una huérfana previa.
     // Materializarlo como día vacío daría 'absent'; si el writer INSERTARA esa
-    // fila, fabricaría una ausencia FUTURA en KPI/reportes. El 11 debe escribirse
-    // por UPDATE (no-op si no hay fila), nunca por INSERT.
+    // fila, fabricaría una ausencia FUTURA. Sin fila previa el 11 es NOOP; con
+    // una huérfana previa, se ACTUALIZA (nunca INSERT).
     conConfig({ source: 'schedule_history', check_in: '08:00', check_out: '17:00', tolerance_in: 5, work_days: [2, 3, 4, 5, 6] });
+    // El 11 ya tiene una fila huérfana (que un recalc previo materializó).
     conMarcajes([
       { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
       { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
-    ]);
+    ], { '2025-06-11': { worked_minutes: 120, status: 'present', justification: null, justification_type: null } });
     await svc.resolveSummary(1, '2025-06-10 08:00:00', { apply: true });
 
-    // Ningún INSERT apunta al día posterior (2025-06-11). El parámetro de fecha
-    // del INSERT es el segundo replacement.
-    const inserts = sequelize.query.mock.calls.filter((c) => /INSERT INTO daily_summary/i.test(c[0]));
-    expect(inserts.length).toBeGreaterThan(0); // sí inserta el 09 y el 10
-    for (const [, opts] of inserts) {
+    // Ningún upsert (INSERT) apunta al 2025-06-11: replacements[1] es la fecha.
+    const upserts = sequelize.query.mock.calls.filter((c) => /INSERT INTO daily_summary/i.test(c[0]));
+    expect(upserts.length).toBeGreaterThan(0); // sí materializa el 09 y el 10
+    for (const [, opts] of upserts) {
       expect(opts.replacements[1]).not.toBe('2025-06-11');
     }
-    // El 11 se reconcilia por un UPDATE acotado a esa fecha (no-op si no existe).
+    // El 11 se reconcilia por un UPDATE puro acotado a esa fecha.
     const updatePosterior = sequelize.query.mock.calls.find(
-      (c) => /UPDATE daily_summary SET/i.test(c[0]) && c[1].replacements.includes('2025-06-11'),
+      (c) => /^\s*UPDATE daily_summary SET/i.test(c[0]) && c[1].replacements.includes('2025-06-11'),
     );
     expect(updatePosterior).toBeDefined();
   });
@@ -158,25 +166,23 @@ describe('dry-run vs apply', () => {
     expect(insertó).toBe(false);
   });
 
-  test('un día unconfigured RECONCILIA: restaura la justificación manual y borra el resto', async () => {
+  test('un día unconfigured RECONCILIA: restaura la justificación manual (update) y borra el resto (delete)', async () => {
     // Sin marcas y sin config → unconfigured. Una fila con justificación MANUAL
-    // sobrevive con su estado derivado (injustificada→absent, otra→permission);
-    // las filas automáticas (sin justificación) se borran como config obsoleta.
-    conMarcajes([]);
+    // sobrevive con su estado derivado; una sin justificación se borra.
+    // Caso A: fila previa justificada → UPDATE (no DELETE).
+    conMarcajes([], { '2025-06-10': { status: 'holiday', justification: 'X', justification_type: 'medica', worked_minutes: 0 } });
     await svc.resolveSummary(1, '2025-06-10 12:00:00', { apply: true });
-    const upd = sequelize.query.mock.calls.find((c) => /UPDATE daily_summary/i.test(c[0]));
-    const del = sequelize.query.mock.calls.find((c) => /DELETE FROM daily_summary/i.test(c[0]));
-    expect(upd).toBeDefined();
-    // El UPDATE restaura injustificada→absent, resto→permission, sólo si hay
-    // justificación manual.
-    expect(upd[0]).toMatch(/COALESCE\(justification_type, ''\) = 'injustificada'\s*\n?\s*THEN 'absent' ELSE 'permission'/);
-    expect(upd[0]).toMatch(/justification IS NOT NULL OR justification_type IS NOT NULL/);
-    // El DELETE sólo borra filas SIN justificación manual.
-    expect(del).toBeDefined();
-    expect(del[0]).toMatch(/justification IS NULL AND justification_type IS NULL/);
+    const updA = sequelize.query.mock.calls.find((c) => /^\s*UPDATE daily_summary/i.test(c[0]) && c[1].replacements.includes('2025-06-10'));
+    expect(updA).toBeDefined();
+    expect(sequelize.query.mock.calls.some((c) => /DELETE FROM daily_summary/i.test(c[0]))).toBe(false);
     // No inventa una fila para un día sin evidencia.
-    const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
-    expect(insertó).toBe(false);
+    expect(sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]))).toBe(false);
+
+    // Caso B: fila previa SIN justificación → DELETE (config automática obsoleta).
+    conMarcajes([], { '2025-06-10': { status: 'weekend', justification: null, justification_type: null } });
+    await svc.resolveSummary(1, '2025-06-10 12:00:00', { apply: true });
+    const delB = sequelize.query.mock.calls.find((c) => /DELETE FROM daily_summary/i.test(c[0]) && c[1].replacements.includes('2025-06-10'));
+    expect(delB).toBeDefined();
   });
 
   test('apply:true SÍ escribe (bajo el lock por fecha)', async () => {
@@ -187,21 +193,6 @@ describe('dry-run vs apply', () => {
     await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
     const insertó = sequelize.query.mock.calls.some((c) => /INSERT INTO daily_summary/i.test(c[0]));
     expect(insertó).toBe(true);
-  });
-
-  test('el upsert deriva el estado de la justificación manual, no del status compartido', async () => {
-    conMarcajes([
-      { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
-      { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
-    ]);
-    await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
-    const insert = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]))[0];
-    // Una justificación manual gana en un día vacío, con su estado DERIVADO
-    // (injustificada→absent, otra→permission). holiday/weekend son automáticos
-    // (sin justificación) y el motor los recalcula.
-    expect(insert).toMatch(/justification IS NOT NULL OR daily_summary\.justification_type IS NOT NULL/);
-    expect(insert).toMatch(/'injustificada'\s*\n?\s*THEN 'absent' ELSE 'permission'/);
-    expect(insert).not.toMatch(/IN \('holiday','weekend','permission'\)/);
   });
 
   test('un fichaje suelto que ningún bound cubre se conserva en notes (no como cierre)', async () => {
@@ -241,22 +232,68 @@ describe('dry-run vs apply', () => {
   });
 
   test('la preservación de estado se limita a los días SIN jornada', async () => {
-    // La guarda de preservación va condicionada a ?=1: sólo se conserva el
-    // holiday/weekend/permission viejo cuando la fila recalculada NO tiene
-    // jornada. Un domingo ahora laborable con marcas reales no queda 'weekend'.
+    // Con jornada real (present), aunque exista una justificación manual previa,
+    // el estado trabajado GANA (la preservación es sólo para días vacíos).
     conMarcajes([
       { id: 1, timestamp: '2025-06-10 08:00:00', type: 'in' },
       { id: 2, timestamp: '2025-06-10 17:00:00', type: 'out' },
-    ]);
+    ], { '2025-06-10': { status: 'permission', justification: 'X', justification_type: 'permiso', worked_minutes: 0 } });
     await svc.resolveSummary(1, '2025-06-10 17:00:00', { apply: true });
-    const call = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]));
-    const sql = call[0];
-    const repl = call[1].replacements;
-    expect(sql).toMatch(/WHEN \? = 1 AND \(daily_summary\.justification IS NOT NULL/);
-    // La fila del 2025-06-10 SÍ tiene jornada (present) → flag esDiaVacio = 0.
-    // Orden de replacements: …, notes(8), status(9), esDiaVacio(10).
-    expect(repl[9]).toBe('present');   // status calculado
-    expect(repl[10]).toBe(0);          // esDiaVacio: hay jornada, el estado nuevo gana
+    // El upsert del 10 escribe el status calculado 'present' (col status = 10º valor),
+    // no el 'permission' preservado: hay jornada real.
+    const call = sequelize.query.mock.calls.find((c) => /INSERT INTO daily_summary/i.test(c[0]) && c[1].replacements[1] === '2025-06-10');
+    expect(call).toBeDefined();
+    expect(call[1].replacements[9]).toBe('present');
+  });
+});
+
+describe('[B3] effectiveDailySummary — semántica de escritura pura y compartida', () => {
+  const eng = (over = {}) => ({ date: '2025-06-10', first_in: '2025-06-10 08:00:00', last_out: '2025-06-10 17:00:00', worked_minutes: 480, break_minutes: 0, overtime_minutes: 0, late_minutes: 0, notes: null, status: 'present', workday_count: 1, ...over });
+  const justRow = (type) => ({ status: 'x', justification: 'manual', justification_type: type, worked_minutes: 99 });
+
+  test('status null (unconfigured): sin fila → noop; justificada → update a estado derivado y ceros; sin justificación → delete', () => {
+    const r = eng({ status: 'unconfigured' });
+    expect(svc.effectiveDailySummary(r, null).action).toBe('noop');
+    const injust = svc.effectiveDailySummary(r, justRow('injustificada'));
+    expect(injust.action).toBe('update');
+    expect(injust.row.status).toBe('absent');
+    expect(injust.row.worked_minutes).toBe(0);
+    expect(injust.row.first_in).toBeNull();
+    const permiso = svc.effectiveDailySummary(r, justRow('medica'));
+    expect(permiso.row.status).toBe('permission');
+    expect(svc.effectiveDailySummary(r, { status: 'weekend', justification: null, justification_type: null }).action).toBe('delete');
+  });
+
+  test('día vacío (workday_count 0): una justificación manual gana con estado derivado; sin justificación gana el status del motor', () => {
+    const vacio = eng({ workday_count: 0, status: 'absent', worked_minutes: 0, first_in: null, last_out: null });
+    expect(svc.effectiveDailySummary(vacio, justRow('injustificada')).row.status).toBe('absent');
+    expect(svc.effectiveDailySummary(vacio, justRow('permiso')).row.status).toBe('permission');
+    expect(svc.effectiveDailySummary(vacio, null).row.status).toBe('absent'); // status del motor
+  });
+
+  test('día con jornada real: el status trabajado gana aunque haya justificación previa', () => {
+    const eff = svc.effectiveDailySummary(eng(), justRow('permiso'));
+    expect(eff.action).toBe('update'); // había fila
+    expect(eff.row.status).toBe('present'); // NO se preserva el permiso: hay jornada
+  });
+
+  test('insert vs update según exista la fila previa; reconcileOnly nunca inserta', () => {
+    expect(svc.effectiveDailySummary(eng(), null).action).toBe('insert');
+    expect(svc.effectiveDailySummary(eng(), { status: 'present' }).action).toBe('update');
+    expect(svc.effectiveDailySummary(eng(), null, { reconcileOnly: true }).action).toBe('noop');
+    expect(svc.effectiveDailySummary(eng(), { status: 'x' }, { reconcileOnly: true }).action).toBe('update');
+  });
+
+  test('classifyEffective: inserted/updated/deleted/unchanged inequívocos', () => {
+    expect(svc.classifyEffective({ action: 'insert', row: {} }, null)).toBe('inserted');
+    expect(svc.classifyEffective({ action: 'delete' }, { status: 'x' })).toBe('deleted');
+    expect(svc.classifyEffective({ action: 'delete' }, null)).toBe('unchanged');
+    expect(svc.classifyEffective({ action: 'noop' }, null)).toBe('unchanged');
+    const target = { first_in: null, last_out: null, worked_minutes: 480, break_minutes: 0, overtime_minutes: 0, late_minutes: 0, notes: null, status: 'present' };
+    // update que NO cambia nada → unchanged
+    expect(svc.classifyEffective({ action: 'update', row: target }, { ...target })).toBe('unchanged');
+    // update que sí cambia → updated
+    expect(svc.classifyEffective({ action: 'update', row: { ...target, worked_minutes: 999 } }, { ...target })).toBe('updated');
   });
 });
 

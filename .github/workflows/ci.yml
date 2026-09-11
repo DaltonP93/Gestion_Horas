@@ -200,6 +200,29 @@ jobs:
             grep -qx "$col" /tmp/webhooks_cols.txt || (echo "❌ falta columna $col en webhooks" && exit 1)
           done
 
+      - name: Migración 084 idempotente + forma de consola FASE E reconciliada
+        # [R5-4] 084 reconcilia la forma de las tablas de la consola. Reejecutarla
+        # directo (como en una recuperación manual) no debe fallar (idempotente), y
+        # la forma exigida por el GO/NO-GO (rows_skipped + ENUM restored_with_conflicts
+        # + applied_json + heartbeat_seq) debe estar presente.
+        run: |
+          set -e
+          mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/migrations/084_fase_e_console_shape_reconcile.sql
+          mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass asistencia < ../database/migrations/084_fase_e_console_shape_reconcile.sql
+          ENUMT=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+            "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_recalc_batch' AND COLUMN_NAME='status'")
+          echo "status ENUM: $ENUMT"
+          echo "$ENUMT" | grep -q "restored_with_conflicts" || (echo "❌ falta el estado restored_with_conflicts" && exit 1)
+          for pair in "daily_summary_recalc_batch:rows_skipped" "daily_summary_backup:applied_json" "fase_e_console_lock:heartbeat_seq"; do
+            T="${pair%%:*}"; C="${pair##*:}"
+            N=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+              "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='$T' AND COLUMN_NAME='$C'")
+            [ "$N" = "1" ] || (echo "❌ falta $T.$C tras 084" && exit 1)
+          done
+          UQ=$(mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass -N -e \
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_backup' AND INDEX_NAME='uq_batch_cell'")
+          [ "$UQ" -ge "1" ] || (echo "❌ falta el índice único uq_batch_cell" && exit 1)
+
       - name: Reaplicar migrate = no-op (idempotencia del runner completo)
         run: |
           set -e
@@ -213,6 +236,27 @@ jobs:
           OUT=$(node scripts/migrate.js --status)
           echo "$OUT"
           echo "$OUT" | grep -qE '0 pendientes' || (echo "❌ quedaron migraciones pendientes" && exit 1)
+
+      # IT REALES de la consola FASE E contra este MySQL 8 efímero (esquema
+      # completo + schema_migrations poblado por el runner). Ejercen recalcApply/
+      # restoreBatch COMPLETOS con BARRERAS deterministas: [B1] co-lock por fecha +
+      # FOR UPDATE (mutación tras el digest → PLAN_CHANGED; writer concurrente
+      # serializado, sin pisar), [B2] fencing DB-side del lease (robo durante apply
+      # y a mitad del restore → LOCK_LOST + rollback total, sin liberar al nuevo
+      # dueño), backup atómico (fallo inyectado → rollback total), [B3] target
+      # EFECTIVO (justificación preservada) y [B4] conteos reales insert/update/
+      # delete/unchanged. [R5-1] fence ATÓMICO in-tx: lease vencido con token sin
+      # cambiar → LEASE_EXPIRED (per-cell e in-tx) y robo tras el último fence externo
+      # antes del commit (beforeFinalFence) → LOCK_LOST + rollback total (sin ventana).
+      # [R5-2] cota de celdas fail-closed (por encima → TOO_MANY_CELLS sin escribir; en
+      # el umbral → aplica). [R5-3] restore con cambio concurrente → restored_with_conflicts
+      # + rows_skipped persistido. Todo con BARRERAS deterministas (sin sleeps en los
+      # casos críticos). Sin IT_DB=1 estas suites se saltan.
+      - name: IT reales FASE E (IT_DB=1, MySQL 8 efímero)
+        run: npx jest tests/it/faseEConsole.it.test.js --runInBand
+        env:
+          IT_DB: '1'
+          FASE_E_LOCK_LEASE_SEC: '3'
 
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el
@@ -271,6 +315,10 @@ jobs:
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/init.sql
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/012_audit_events.sql
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/015_branches.sql
+          # 033 crea system_settings (fuente de verdad); la 083 (FASE E) la usa con
+          # INSERT IGNORE. Como esta job BASELINEA hasta 071 (033 no se ejecuta), hay
+          # que sembrar su esquema aquí, igual que 012/015/067, o 083 fallaría.
+          mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/033_audit_fulltext.sql
           mysql -h 127.0.0.1 -P 3306 -uroot asistencia < ../database/migrations/067_employee_documents.sql
       - name: Baseline SÓLO hasta 071 (072→ se aplican de verdad)
         run: node scripts/migrate.js --baseline=071_repair_external_hr_sources.sql
@@ -308,3 +356,111 @@ jobs:
           M2=$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot asistencia -e "SELECT COUNT(*) FROM schema_migrations")
           diff /tmp/schema_before.txt /tmp/schema_after.txt && echo "ESQUEMA IDÉNTICO tras reaplicar"
           test "$M1" = "$M2" && echo "schema_migrations sin cambios ($M1)"
+
+  # [OPS-7/8] Ejecuta el PROPIO scripts/ops-migrate.sh (el que corre OPS en el
+  # server) contra un MySQL 8 efímero, no sólo el runner genérico. Cubre:
+  #   · instalación FRESCA (init.sql → ops-migrate.sh) aplica 072→084;
+  #   · 084 registrada EXACTAMENTE una vez; forma completa del esquema; NINGUNA
+  #     migración por encima del tope 084; 2ª ejecución del script = no-op;
+  #   · ACTUALIZACIÓN desde una forma ANTIGUA de 083 (se simula quitando lo que
+  #     agrega 084) → ops-migrate.sh aplica 084 y reconcilia la forma.
+  ops-migrate-fase-e:
+    name: OPS ops-migrate.sh FASE E (fresh + upgrade 083→084)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: asistencia
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: asistencia
+      MYSQL_PWD: root
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - name: Instalar deps de la API (migrate.js usa mysql2/dotenv)
+        working-directory: api
+        run: npm ci || npm install
+      - name: Asegurar cliente mysql
+        run: mysql --version || (sudo apt-get update && sudo apt-get install -y mysql-client-core-8.0 || sudo apt-get install -y default-mysql-client)
+      - name: Esperar a MySQL
+        run: |
+          for i in $(seq 1 30); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -proot --silent; then echo "MySQL listo"; break; fi
+            sleep 2
+          done
+      - name: Permitir rutinas con binlog (073/082/084 crean rutinas)
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -proot -e "SET GLOBAL log_bin_trust_function_creators=1;"
+
+      - name: Definir verificador de forma reutilizable
+        run: |
+          cat > /tmp/check_shape.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          Q(){ mysql -N -B -h 127.0.0.1 -P 3306 -uroot -proot asistencia -e "$1"; }
+          N=$(Q "SELECT COUNT(*) FROM schema_migrations WHERE filename='084_fase_e_console_shape_reconcile.sql'")
+          [ "$N" = "1" ] || { echo "❌ 084 registrada $N veces (esperado 1)"; exit 1; }
+          A=$(Q "SELECT COUNT(*) FROM schema_migrations WHERE filename > '084_fase_e_console_shape_reconcile.sql'")
+          [ "$A" = "0" ] || { echo "❌ $A migración(es) por encima del tope 084"; exit 1; }
+          Q "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_recalc_batch' AND COLUMN_NAME='status'" | grep -q restored_with_conflicts || { echo "❌ falta el estado restored_with_conflicts"; exit 1; }
+          for pair in "daily_summary_recalc_batch:rows_skipped" "daily_summary_backup:applied_json" "fase_e_console_lock:heartbeat_seq"; do
+            T="${pair%%:*}"; C="${pair##*:}"
+            [ "$(Q "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='$T' AND COLUMN_NAME='$C'")" = "1" ] || { echo "❌ falta $T.$C"; exit 1; }
+          done
+          [ "$(Q "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_backup' AND INDEX_NAME='uq_batch_cell'")" -ge "1" ] || { echo "❌ falta el índice único uq_batch_cell"; exit 1; }
+          echo "✓ forma completa + 084 exactamente una vez + nada por encima del tope"
+          SH
+          chmod +x /tmp/check_shape.sh
+
+      # ── FASE A: instalación FRESCA ──────────────────────────────────────────
+      - name: A) init.sql fresco
+        run: mysql -h 127.0.0.1 -P 3306 -uroot -proot asistencia < database/init.sql
+      - name: A) ops-migrate.sh (fresh) — aplica 072→084 y valida
+        run: bash scripts/ops-migrate.sh
+      - name: A) verificar forma tras instalación fresca
+        run: /tmp/check_shape.sh
+      - name: A) 2ª ejecución de ops-migrate.sh = no-op
+        run: |
+          set -e
+          OUT=$(bash scripts/ops-migrate.sh); echo "$OUT"
+          echo "$OUT" | grep -q "Nada por aplicar" || { echo "❌ la 2ª corrida no fue no-op"; exit 1; }
+          /tmp/check_shape.sh
+
+      # ── FASE B: ACTUALIZACIÓN desde una forma ANTIGUA de 083 ─────────────────
+      - name: B) simular 083 aplicada con forma vieja (sin lo que agrega 084)
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -uroot -proot asistencia <<'SQL'
+          ALTER TABLE daily_summary_recalc_batch DROP COLUMN rows_skipped;
+          ALTER TABLE daily_summary_recalc_batch
+            MODIFY COLUMN status ENUM('prepared','applying','applied','failed','restoring','restored') NOT NULL DEFAULT 'prepared';
+          ALTER TABLE daily_summary_backup DROP INDEX uq_batch_cell;
+          ALTER TABLE daily_summary_backup DROP COLUMN applied_json;
+          ALTER TABLE fase_e_console_lock DROP COLUMN heartbeat_seq;
+          DELETE FROM schema_migrations WHERE filename='084_fase_e_console_shape_reconcile.sql';
+          SQL
+      - name: B) confirmar que la forma quedó INCOMPLETA (084 pendiente)
+        run: |
+          set -e
+          test "$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot -proot asistencia -e "SELECT COUNT(*) FROM schema_migrations WHERE filename='084_fase_e_console_shape_reconcile.sql'")" = "0"
+          test "$(mysql -N -B -h 127.0.0.1 -P 3306 -uroot -proot asistencia -e "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_recalc_batch' AND COLUMN_NAME='rows_skipped'")" = "0"
+          echo "✓ forma vieja de 083 simulada (084 pendiente)"
+      - name: B) ops-migrate.sh reconcilia (aplica 084) y valida
+        run: bash scripts/ops-migrate.sh
+      - name: B) verificar forma reconciliada tras la actualización
+        run: /tmp/check_shape.sh

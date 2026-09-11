@@ -14,6 +14,14 @@
  * Uso:
  *   node api/scripts/migrate.js                    # aplica pendientes
  *   node api/scripts/migrate.js --status           # lista estado, no aplica
+ *   node api/scripts/migrate.js --upto=<archivo>
+ *          # aplica (ejecuta de verdad) SÓLO las pendientes con nombre <= ese
+ *          # archivo, en orden. Las más nuevas quedan sin tocar. Lo usa el paso
+ *          # de OPS (scripts/ops-migrate.sh) para aplicar hasta 084 sin arrastrar
+ *          # migraciones futuras (085+). La consola de FASE E NO aplica
+ *          # migraciones por HTTP: 083 + 084 se aplican por OPS, no desde la web
+ *          # (el servicio EXIGE ambas: GO/NO-GO de forma completa).
+ *          # Ej: --upto=084_fase_e_console_shape_reconcile.sql
  *
  * Gate raíz (integridad de numeración): antes de aplicar, el runner rechaza
  * (exit 1) si hay números de migración DUPLICADOS en disco, o si una migración
@@ -29,19 +37,29 @@
  *          # Ej: --baseline=039_fix_attendance_source_selfcheckin.sql
  *
  * Requiere: cliente `mysql` en el PATH y las variables DB_* del entorno.
+ *
+ * MIGRATE_NO_DOTENV=1 desactiva la carga de `api/.env`. El paso de OPS
+ * (scripts/ops-migrate.sh) lo usa para que el .env de la API NO pueda aportar la
+ * contraseña runtime ni mezclar identidades: OPS provee un entorno admin
+ * SANEADO y EXPLÍCITO (DB_* propios; DB_PASSWORD vacío en auth por socket).
  */
-require('dotenv').config();
+if (process.env.MIGRATE_NO_DOTENV !== '1') require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
+// DB_SOCKET permite correr las migraciones vía SOCKET con un usuario ADMIN de
+// MySQL (auth por unix_socket, sin password en config): así OPS aplica las
+// migraciones que crean rutinas/triggers (073/082) sin conceder CREATE ROUTINE
+// al usuario runtime de la API. Sin DB_SOCKET, se usa TCP (host/port) como antes.
 const DB = {
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '3306', 10),
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'asistencia',
+  socketPath: process.env.DB_SOCKET || undefined,
 };
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', 'database', 'migrations');
@@ -105,7 +123,10 @@ function outOfOrderPending(pendingFiles, doneFiles) {
 
 function applyWithMysqlClient(file) {
   const full = path.join(MIGRATIONS_DIR, file);
-  const args = ['-h', DB.host, '-P', String(DB.port), '-u', DB.user, DB.database];
+  // Socket admin (OPS) o TCP (runtime). El socket usa auth unix_socket: sin password.
+  const args = DB.socketPath
+    ? ['--socket', DB.socketPath, '-u', DB.user, DB.database]
+    : ['-h', DB.host, '-P', String(DB.port), '-u', DB.user, DB.database];
   const res = spawnSync('mysql', args, {
     input: fs.readFileSync(full),
     env: { ...process.env, MYSQL_PWD: DB.password }, // evita exponer la clave en argv
@@ -217,15 +238,39 @@ async function main() {
       }
       return;
     }
-    if (pending.length === 0) { console.log('✅ Nada por aplicar.'); return; }
+    // --upto=<archivo>: ejecuta SÓLO las pendientes con nombre <= target (orden
+    // lexicográfico = orden por prefijo numérico), dejando fuera las más nuevas.
+    // A diferencia de --baseline (que sólo marca sin ejecutar), --upto SÍ aplica.
+    const uptoArg = process.argv.find(a => a === '--upto' || a.startsWith('--upto='));
+    let toApply = pending;
+    if (uptoArg) {
+      const target = uptoArg.includes('=') ? uptoArg.split('=')[1].trim() : '';
+      if (!target) {
+        console.error('❌ --upto requiere un archivo objetivo, p. ej.:');
+        console.error('   node scripts/migrate.js --upto=075_workday_configuration_phase_c.sql');
+        process.exit(1);
+      }
+      if (!files.includes(target)) {
+        console.error(`❌ El archivo objetivo de --upto "${target}" no existe en database/migrations/.`);
+        process.exit(1);
+      }
+      const skipped = pending.filter(f => f > target);
+      toApply = pending.filter(f => f <= target);
+      if (skipped.length) {
+        console.log(`   --upto=${target}: ${skipped.length} migración(es) más nueva(s) NO se aplican en esta corrida:`);
+        skipped.forEach(f => console.log(`     - ${f}`));
+      }
+    }
 
-    for (const file of pending) {
+    if (toApply.length === 0) { console.log('✅ Nada por aplicar.'); return; }
+
+    for (const file of toApply) {
       process.stdout.write(`→ Aplicando ${file} ... `);
       applyWithMysqlClient(file);
       await conn.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);
       console.log('OK');
     }
-    console.log(`✅ ${pending.length} migración(es) aplicada(s).`);
+    console.log(`✅ ${toApply.length} migración(es) aplicada(s).`);
   } finally {
     await conn.end();
   }
