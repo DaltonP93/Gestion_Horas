@@ -2,7 +2,7 @@
   "name": "asistencia-dashboard",
   "version": "1.0.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22 <23"
   },
   "private": true,
   "scripts": {

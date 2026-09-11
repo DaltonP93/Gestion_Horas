@@ -33,10 +33,19 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: bridge/package-lock.json
       - run: npm ci || npm install
+      - name: Baseline Node 22 — runtime + engines transitivos
+        # [Baseline Node 22] `npm ci` ya corre con engine-strict (api/bridge/web/.npmrc):
+        # aborta si el Node/npm no satisface los engines de este paquete o de una
+        # dependencia (incl. transitiva). Acá, además, se afirma explícitamente el
+        # major de Node y se deja EVIDENCIA de que ninguna dependencia RUNTIME exige
+        # un Node incompatible (guard legible, complementario a engine-strict).
+        run: |
+          node -e "const M=+process.versions.node.split('.')[0]; if(M!==22){console.error('❌ Node major != 22:',process.version);process.exit(1)}; console.log('✓ Node',process.version)"
+          node ../scripts/ci/check-node-engines.js .
       - name: npm audit (nivel alto)
         run: npm audit --audit-level=high
       - name: Unit tests
@@ -58,10 +67,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - run: npm ci || npm install
+      - name: Baseline Node 22 — runtime + engines transitivos
+        # api usa mssql→tedious/@azure/* que EXIGEN Node >=22. engine-strict (api/.npmrc)
+        # aborta `npm ci` en Node <22; este guard deja la evidencia explícita.
+        run: |
+          node -e "const M=+process.versions.node.split('.')[0]; if(M!==22){console.error('❌ Node major != 22:',process.version);process.exit(1)}; console.log('✓ Node',process.version)"
+          node ../scripts/ci/check-node-engines.js .
       - name: npm audit (nivel alto)
         run: npm audit --audit-level=high
       - name: Syntax check
@@ -81,10 +96,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
       - run: npm ci || npm install
+      - name: Baseline Node 22 — runtime + engines transitivos
+        # engine-strict (web/.npmrc) aborta `npm ci` ante engines incompatibles;
+        # el guard ignora las dependencias OPCIONALES de plataforma (p.ej. binarios
+        # win32/darwin de sharp) igual que npm, y deja evidencia explícita.
+        run: |
+          node -e "const M=+process.versions.node.split('.')[0]; if(M!==22){console.error('❌ Node major != 22:',process.version);process.exit(1)}; console.log('✓ Node',process.version)"
+          node ../scripts/ci/check-node-engines.js .
       - name: npm audit (nivel alto)
         run: npm audit --audit-level=high
       - name: Unit tests
@@ -149,7 +171,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - run: npm ci || npm install
@@ -292,7 +314,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - run: npm ci || npm install
@@ -391,7 +413,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - name: Instalar deps de la API (migrate.js usa mysql2/dotenv)
@@ -477,7 +499,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       - name: Instalar deps de la API

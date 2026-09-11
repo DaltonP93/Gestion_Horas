@@ -15,7 +15,7 @@
 # Con el script en /app/api/scripts/migrate.js → /app/database/migrations, que
 # es donde `COPY database` lo deja.
 
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Cliente mysql (el runner aplica cada archivo con el binario `mysql` por los
 # DELIMITER de los procedimientos almacenados).

@@ -2,7 +2,7 @@
   "name": "zkteco-bridge",
   "version": "1.0.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22 <23"
   },
   "description": "Bridge Service para relojes ZKTeco — Sistema de Asistencia",
   "main": "src/index.js",
