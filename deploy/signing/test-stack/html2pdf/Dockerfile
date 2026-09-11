@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 WORKDIR /app
 # node_modules se instala en el HOST (ver prepare.sh / README) y se copia acá:
 # el build NO usa red (evita el proxy TLS). Reproducible y determinista.
