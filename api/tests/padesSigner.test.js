@@ -29,8 +29,10 @@ jest.mock('../src/config/logger', () => ({
 }));
 
 const pades = require('../src/services/signing/padesSigner');
+const { makeSignedPdf } = require('./helpers/makeSignedPdf');
 
 const PDF = () => Buffer.from('%PDF-1.4 fake\n%%EOF');
+// Un %PDF sin firma criptográfica real: el adaptador NUNCA debe declararlo pades_local.
 const SIGNED = () => Buffer.from('%PDF-1.4 signed\n%%EOF');
 
 // Config completa de pades_local para los tests de camino feliz.
@@ -203,26 +205,57 @@ describe('signReportDocument', () => {
     expect(axios.post).not.toHaveBeenCalled();
   });
 
-  test('pades_local OK: html2pdf → pades-signer → PDF firmado + provider', async () => {
+  test('pades_local con FIRMA REAL verificable: html2pdf → pades-signer → pades_local + verificado', async () => {
     Object.assign(process.env, FULL, { SIGNING_PROVIDER_NAME: 'pades-local' });
+    const { signedPdf } = makeSignedPdf({ commonName: 'SisHoras Test Cert' }); // firma PKCS#7 REAL
     axios.post
-      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: PDF() })     // html2pdf
-      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: SIGNED() }); // pades-signer
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: PDF() })       // html2pdf
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: signedPdf });  // pades-signer
 
     const fallbackPdf = jest.fn(() => PDF());
     const r = await pades.signReportDocument({ html: '<html>x</html>', fallbackPdf, meta: { reason: 'r' } });
 
     expect(r.mode).toBe('pades_local');
     expect(r.provider).toBe('pades-local');
-    expect(r.pdf.toString()).toContain('signed');
+    expect(r.signatureInfo).toEqual(expect.objectContaining({ verified: true, digestAlg: 'sha256' }));
     expect(fallbackPdf).not.toHaveBeenCalled();
     expect(axios.post).toHaveBeenCalledTimes(2);
-    // primer POST a html2pdf/pdf lleva el HTML
     expect(axios.post.mock.calls[0][0]).toBe('http://html2pdf:8000/pdf');
     expect(axios.post.mock.calls[0][1].html).toContain('<html>x</html>');
-    // segundo POST a pades/sign es multipart
     expect(axios.post.mock.calls[1][0]).toBe('http://pades:9000/sign');
     expect(axios.post.mock.calls[1][1]).toBeInstanceOf(FormData);
+    // [SSRF] ambas requests con maxRedirects:0
+    expect(axios.post.mock.calls[0][2].maxRedirects).toBe(0);
+    expect(axios.post.mock.calls[1][2].maxRedirects).toBe(0);
+  });
+
+  test('[SEGURIDAD] pades-signer devuelve un %PDF SIN firma válida → NO pades_local (degrada a simple/UNVERIFIED)', async () => {
+    Object.assign(process.env, FULL);
+    axios.post
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: PDF() })     // html2pdf OK
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: SIGNED() }); // %PDF sin firma real
+
+    const fallbackPdf = jest.fn(() => PDF());
+    const r = await pades.signReportDocument({ html: '<html>x</html>', fallbackPdf });
+    expect(r.mode).toBe('simple');
+    expect(r.provider).toBeNull();
+    expect(r.note).toBe(pades.DEGRADE_REASONS.UNVERIFIED);
+    expect(fallbackPdf).toHaveBeenCalled(); // se sirve el fallback simple, no el "firmado" falso
+    expect(axios.post).toHaveBeenCalledTimes(2); // se llamó a ambos servicios pero no se afirma PAdES
+  });
+
+  test('[SEGURIDAD] firma manipulada tras firmar → verificación falla → NO pades_local', async () => {
+    Object.assign(process.env, FULL);
+    const { signedPdf } = makeSignedPdf();
+    const tampered = Buffer.from(signedPdf); tampered[12] ^= 0xff; // altera el contenido firmado
+    axios.post
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: PDF() })
+      .mockResolvedValueOnce({ headers: { 'content-type': 'application/pdf' }, data: tampered });
+
+    const fallbackPdf = jest.fn(() => PDF());
+    const r = await pades.signReportDocument({ html: '<html>x</html>', fallbackPdf });
+    expect(r.mode).toBe('simple');
+    expect(r.note).toBe(pades.DEGRADE_REASONS.UNVERIFIED);
   });
 
   test('html2pdf caído: cae a simple con nota, sin romper', async () => {
@@ -248,5 +281,69 @@ describe('signReportDocument', () => {
     expect(r.mode).toBe('simple');
     expect(r.note).toBe(pades.DEGRADE_REASONS.SIGN_FAILED);
     expect(fallbackPdf).toHaveBeenCalled();
+  });
+
+  test('timeout de red → degrada seguro (nota HTML2PDF_FAILED), sin romper', async () => {
+    Object.assign(process.env, FULL);
+    const to = new Error('timeout of 15000ms exceeded'); to.code = 'ECONNABORTED';
+    axios.post.mockRejectedValueOnce(to);
+    const fallbackPdf = jest.fn(() => PDF());
+    const r = await pades.signReportDocument({ html: '<html></html>', fallbackPdf });
+    expect(r.mode).toBe('simple');
+    expect(r.note).toBe(pades.DEGRADE_REASONS.HTML2PDF_FAILED);
+  });
+});
+
+// ─── [SSRF] allowlist de destinos LOCALES/PRIVADOS ─────────────────────────
+describe('isLocalTarget (SSRF: sólo destinos locales/privados)', () => {
+  test('acepta loopback/privados/localhost/servicio Docker/sufijo interno', () => {
+    for (const u of [
+      'http://127.0.0.1:3001/sign', 'http://localhost:3002/pdf',
+      'http://10.1.2.3/sign', 'http://192.168.1.9/pdf', 'http://172.16.0.5/x',
+      'http://html2pdf:3000/pdf', 'http://pades-signer:3000/sign',
+      'http://render.internal/pdf', 'http://svc.local/x', 'http://[::1]:3001/sign',
+    ]) expect(pades.isLocalTarget(u, {})).toBe(true);
+  });
+  test('rechaza hosts PÚBLICOS (FQDN/IP enrutable) y esquemas no http', () => {
+    for (const u of [
+      'http://evil.example.com/pdf', 'https://8.8.8.8/sign',
+      'http://169.254.169.254/latest/meta-data/', // metadata de la nube (SSRF)
+      'http://169.254.169.254.nip.io/x', 'http://attacker.io/pdf',
+      'file:///etc/passwd', 'ftp://host/x', 'http://1.2.3.4/x',
+    ]) expect(pades.isLocalTarget(u, {})).toBe(false);
+  });
+  test('SIGNING_ALLOWED_HOSTS permite EXPLÍCITAMENTE un host adicional', () => {
+    expect(pades.isLocalTarget('http://firmador.corp:3000/sign', { SIGNING_ALLOWED_HOSTS: 'firmador.corp' })).toBe(true);
+    expect(pades.isLocalTarget('http://firmador.corp:3000/sign', {})).toBe(false);
+  });
+  test('resolveSigningConfig degrada a simple si una URL NO es local (URLS_NOT_LOCAL)', () => {
+    const c = pades.resolveSigningConfig({
+      SIGNING_MODE: 'pades_local',
+      HTML2PDF_URL: 'http://127.0.0.1:3002',
+      PADES_SIGNER_URL: 'http://evil.example.com:3001',
+      HTML2PDF_SHARED_SECRET: 'a', PADES_SIGNER_SHARED_SECRET: 'b',
+    });
+    expect(c.effectiveMode).toBe('simple');
+    expect(c.degradedReason).toBe(pades.DEGRADE_REASONS.URLS_NOT_LOCAL);
+  });
+});
+
+// ─── PDF/looksLikePdf + verificador criptográfico ──────────────────────────
+describe('looksLikePdf + verifyPdfSignature', () => {
+  test('looksLikePdf: sólo un PDF real ("%PDF-")', () => {
+    expect(pades.looksLikePdf(Buffer.from('%PDF-1.7\n...'))).toBe(true);
+    expect(pades.looksLikePdf(Buffer.from('%PDF'))).toBe(false);       // sin el guión ni cuerpo
+    expect(pades.looksLikePdf(Buffer.from('<html>error</html>'))).toBe(false);
+    expect(pades.looksLikePdf(Buffer.from(''))).toBe(false);
+    expect(pades.looksLikePdf('no-buffer')).toBe(false);
+  });
+  test('verifyPdfSignature: firma REAL → valid; %PDF sin firma / no-PDF → invalid', () => {
+    const { signedPdf, commonName } = makeSignedPdf({ commonName: 'CN Prueba' });
+    const ok = pades.verifyPdfSignature(signedPdf);
+    expect(ok.valid).toBe(true);
+    expect(ok.digestAlg).toBe('sha256');
+    expect(ok.signerSubjectCN).toBe(commonName);
+    expect(pades.verifyPdfSignature(Buffer.from('%PDF-1.4\nsin firma\n%%EOF')).valid).toBe(false);
+    expect(pades.verifyPdfSignature(Buffer.from('no es pdf')).valid).toBe(false);
   });
 });

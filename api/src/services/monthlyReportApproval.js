@@ -47,6 +47,39 @@ async function canUserActOn(user, approval) {
   });
 }
 
+// Roles con visibilidad GLOBAL de los reportes mensuales (RR.HH./administración).
+const GLOBAL_READ_ROLES = ['gth', 'admin', 'super_admin'];
+
+/**
+ * [SEGURIDAD/BOLA] Autorización de OBJETO para LEER/descargar el reporte firmado
+ * de un período. Es el "modelo vigente" del circuito de aprobación:
+ *   - gth / admin / super_admin → acceso GLOBAL (cualquier período/depto).
+ *   - coordinator → sólo los departamentos donde es `departments.coordinator_id`.
+ *   - manager     → sólo los departamentos donde es `departments.manager_id`.
+ *   - período org-wide (department_id = null) → SÓLO roles globales.
+ *   - cualquier otro rol / departamento fuera de alcance → false (la ruta → 403).
+ * No enumera: sin autorización no se revela ni se genera el documento.
+ */
+async function canReadApproval(user, approval) {
+  if (!user || !user.role) return false;
+  if (GLOBAL_READ_ROLES.includes(user.role)) return true;
+
+  const deptId = approval ? approval.department_id : null;
+  // Un período org-wide (sin departamento) sólo lo ven los roles globales.
+  if (deptId == null) return false;
+
+  if (user.role !== 'coordinator' && user.role !== 'manager') return false;
+
+  const [[dept]] = await sequelize.query(
+    'SELECT coordinator_id, manager_id FROM departments WHERE id = ? LIMIT 1',
+    { replacements: [deptId] }
+  );
+  if (!dept) return false;
+  if (user.role === 'coordinator') return dept.coordinator_id === user.id;
+  if (user.role === 'manager') return dept.manager_id === user.id;
+  return false;
+}
+
 /**
  * Flags de niveles requeridos para un período, derivados del departamento:
  *   - needs_level1 = el depto tiene coordinador asignado
@@ -224,7 +257,9 @@ async function getInboxFor(user) {
 module.exports = {
   STATES,
   OPEN_STATES,
+  GLOBAL_READ_ROLES,
   canUserActOn,
+  canReadApproval,
   computeNeeds,
   initialStatus,
   resolveDepartment,

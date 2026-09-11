@@ -55,14 +55,23 @@
  *                              signature_provider (default 'pades-local').
  *
  * ── FAIL-CLOSED ────────────────────────────────────────────────────────
- *   - SIGNING_MODE ausente/desconocido  → 'simple'.
+ *   - SIGNING_MODE ausente/desconocido  → 'simple' (default).
  *   - SIGNING_MODE=pades_local pero falta alguna URL   → 'simple' (nota).
+ *   - SIGNING_MODE=pades_local pero alguna URL NO es un destino LOCAL/PRIVADO
+ *     permitido (loopback/rango privado/host de Docker/allowlist SIGNING_ALLOWED_HOSTS)
+ *     → 'simple' (nota). Protección SSRF: nunca se contacta un host público.
  *   - SIGNING_MODE=pades_local pero falta algún secreto → 'simple' (nota):
  *     los servicios responden 401 sin el header, así que sin secreto la firma
  *     no es posible; se degrada ANTES de intentar la red.
+ *   - Requests con `maxRedirects: 0`: un 3xx NO reenvía la request a otro host.
+ *   - Respuesta que no es un PDF real ("%PDF-") → se descarta (no se confía en
+ *     bytes arbitrarios ni en base64 que no sea PDF).
+ *   - El PDF firmado se VERIFICA CRIPTOGRÁFICAMENTE (verifyPdfSignature): si no
+ *     contiene una firma PKCS#7 válida sobre su contenido → 'simple' (nota). NO
+ *     se declara 'pades_local' por el sólo hecho de recibir un %PDF.
  *   - Cualquier fallo de red/timeout/formato → cae a 'simple' con una nota.
  *     El estado 'approved' del período ya está persistido; esto NO rompe la
- *     aprobación. Nunca se afirma "firmado" si no se firmó de verdad.
+ *     aprobación. Nunca se afirma "firmado PAdES" si no se firmó/verificó de verdad.
  *
  * ── PRIVACIDAD ─────────────────────────────────────────────────────────
  *   No se loguean URLs, secretos ni PII. Sólo se guarda una etiqueta de
@@ -72,9 +81,17 @@
 const axios = require('axios');
 const FormData = require('form-data');
 const logger = require('../../config/logger');
+const { verifyPdfSignature } = require('./verifyPdfSignature');
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const MAX_BYTES = 25 * 1024 * 1024;
+/** Cabecera de un PDF real. Sólo se acepta un documento que empiece con esto. */
+const PDF_MAGIC = '%PDF-';
+
+/** ¿El buffer es un PDF real (empieza con "%PDF-")? Estricto (no "%PDF" a secas). */
+function looksLikePdf(buf) {
+  return Buffer.isBuffer(buf) && buf.length > 5 && buf.subarray(0, 5).toString('latin1') === PDF_MAGIC;
+}
 
 /** Modos válidos. Cualquier otro valor colapsa a 'simple' (fail-closed). */
 const SIGNING_MODES = Object.freeze({ SIMPLE: 'simple', PADES_LOCAL: 'pades_local' });
@@ -83,10 +100,12 @@ const SIGNING_MODES = Object.freeze({ SIMPLE: 'simple', PADES_LOCAL: 'pades_loca
 const DEGRADE_REASONS = Object.freeze({
   NOT_PADES: 'MODE_SIMPLE',                 // configurado explícitamente en simple
   MISSING_URLS: 'PADES_URLS_MISSING',       // pades_local pero faltan URLs
+  URLS_NOT_LOCAL: 'PADES_URLS_NOT_LOCAL',   // pades_local pero una URL no es local/privada permitida
   MISSING_SECRETS: 'PADES_SECRETS_MISSING', // pades_local pero faltan secretos
   HTML2PDF_FAILED: 'HTML2PDF_FAILED',       // html2pdf no respondió/erró
   SIGN_FAILED: 'PADES_SIGN_FAILED',         // pades-signer no respondió/erró
   EMPTY_RESULT: 'PADES_EMPTY_RESULT',       // respuesta sin PDF utilizable
+  UNVERIFIED: 'PADES_SIGNATURE_UNVERIFIED', // el PDF devuelto NO tiene una firma válida verificable
 });
 
 /** Defaults del contrato real de los servicios del dueño. */
@@ -129,6 +148,65 @@ function envOr(name, dflt) {
   return v == null ? dflt : v;
 }
 
+// ─── SSRF: sólo destinos LOCALES/PRIVADOS explícitamente permitidos ────────
+/** ¿Es una IPv4 privada/loopback/link-local? (no enrutable en Internet). */
+function isPrivateIPv4(host) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const o = m.slice(1).map(Number);
+  if (o.some((n) => n > 255)) return false;
+  if (o[0] === 127) return true;                 // 127.0.0.0/8 loopback
+  if (o[0] === 10) return true;                  // 10.0.0.0/8
+  if (o[0] === 192 && o[1] === 168) return true; // 192.168.0.0/16
+  if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true; // 172.16.0.0/12
+  // Se EXCLUYE a propósito 169.254.0.0/16 (link-local): contiene el endpoint de
+  // metadata de la nube (169.254.169.254), objetivo clásico de SSRF; no es un
+  // destino legítimo de firma. También se excluye 0.0.0.0/8.
+  return false;
+}
+/** ¿Es una IPv6 privada/loopback (ULA/loopback)? Se excluye link-local fe80. */
+function isPrivateIPv6(host) {
+  const h = host.toLowerCase();
+  if (h === '::1') return true;                       // loopback
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true;      // fc00::/7 ULA (docker/k8s)
+  if (h.startsWith('::ffff:')) return isPrivateIPv4(h.slice('::ffff:'.length)); // IPv4-mapped
+  return false;
+}
+/** Hosts permitidos EXPLÍCITAMENTE por ops (allowlist por env, coma-separada). */
+function allowedHostsFromEnv(env = process.env) {
+  return String(env.SIGNING_ALLOWED_HOSTS || '')
+    .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+/**
+ * [SSRF] Un target de firma sólo se acepta si apunta a un destino LOCAL/PRIVADO
+ * explícitamente permitido: http(s) hacia loopback/rango privado, `localhost`,
+ * un nombre de servicio de Docker de una sola etiqueta (sin punto), un sufijo
+ * interno (.local/.internal/.svc/.cluster.local) o un host de la allowlist
+ * `SIGNING_ALLOWED_HOSTS`. Cualquier host público (FQDN/IP enrutable) se rechaza.
+ * Combinado con `maxRedirects:0`, evita que una URL mal configurada o un redirect
+ * saquen la request del perímetro interno.
+ */
+function isLocalTarget(rawUrl, env = process.env) {
+  let u;
+  try { u = new URL(rawUrl); } catch (_e) { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  let host = (u.hostname || '').toLowerCase();
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1); // IPv6
+  if (!host) return false;
+
+  if (allowedHostsFromEnv(env).includes(host)) return true; // allowlist explícita
+
+  // IP literal → debe ser privada/loopback/link-local.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return isPrivateIPv4(host);
+  if (host.includes(':')) return isPrivateIPv6(host);
+
+  // Hostname (no IP): loopback, single-label (servicio Docker) o sufijo interno.
+  if (host === 'localhost' || host === 'localhost.localdomain') return true;
+  if (!host.includes('.')) return true; // p.ej. "html2pdf", "pades-signer"
+  if (/\.(local|internal|svc|cluster\.local)$/.test(host)) return true;
+  return false; // FQDN público → rechazado
+}
+
 /**
  * Resuelve la configuración de firma de forma fail-closed.
  * Devuelve el modo pedido, el modo EFECTIVO (lo que realmente se puede hacer)
@@ -159,6 +237,12 @@ function resolveSigningConfig(env = process.env) {
 
   // Fail-closed: pades_local SIN las dos URLs no puede firmar → 'simple'.
   if (!html2pdfUrl || !padesUrl) return simple(DEGRADE_REASONS.MISSING_URLS);
+
+  // Fail-closed [SSRF]: ambas URLs deben apuntar a destinos LOCALES/PRIVADOS
+  // permitidos. Una URL pública (o mal configurada) NO se contacta → 'simple'.
+  if (!isLocalTarget(html2pdfUrl, env) || !isLocalTarget(padesUrl, env)) {
+    return simple(DEGRADE_REASONS.URLS_NOT_LOCAL);
+  }
 
   // Fail-closed: los servicios exigen su shared secret (401 sin él). Sin ambos
   // secretos no tiene sentido intentar la red → 'simple'.
@@ -195,7 +279,8 @@ function pdfFromResponse(resp, base64Fields) {
         return { pdf: base64FromObject(obj, base64Fields), info: null };
       } catch (_e) { /* no era JSON legible; se trata como binario abajo */ }
     }
-    if (buf.length && buf.slice(0, 4).toString() === '%PDF') return { pdf: buf, info: null };
+    // Estricto: sólo un PDF real ("%PDF-"). Cualquier otra cosa → no es PDF.
+    if (looksLikePdf(buf)) return { pdf: buf, info: null };
     return { pdf: null, info: null };
   }
 
@@ -207,12 +292,17 @@ function pdfFromResponse(resp, base64Fields) {
   return { pdf: null, info: null };
 }
 
+/**
+ * Extrae un PDF de un campo base64 de un objeto JSON. RECHAZA cualquier
+ * resultado que NO sea un PDF real: nunca "confía" en el servicio devolviendo
+ * bytes arbitrarios (evita tratar como PDF una respuesta de error/redirect/HTML).
+ */
 function base64FromObject(obj, fields) {
   for (const f of fields) {
     if (obj && typeof obj[f] === 'string' && obj[f].length) {
-      const buf = Buffer.from(obj[f], 'base64');
-      if (buf.length && buf.slice(0, 4).toString() === '%PDF') return buf;
-      if (buf.length) return buf; // confiar en el servicio si no expone %PDF
+      let buf;
+      try { buf = Buffer.from(obj[f], 'base64'); } catch (_e) { continue; }
+      if (looksLikePdf(buf)) return buf; // SÓLO si es un PDF real ("%PDF-")
     }
   }
   return null;
@@ -252,6 +342,8 @@ async function renderHtmlToPdf(html, { url, timeout } = {}) {
       headers,
       maxContentLength: MAX_BYTES,
       maxBodyLength: MAX_BYTES,
+      // [SSRF] sin redirects: un 3xx no debe reenviar la request a otro host.
+      maxRedirects: 0,
       validateStatus: (s) => s >= 200 && s < 300,
     }
   );
@@ -302,6 +394,8 @@ async function signPdf(pdfBuffer, { meta = {}, url, timeout } = {}) {
     headers,
     maxContentLength: MAX_BYTES,
     maxBodyLength: MAX_BYTES,
+    // [SSRF] sin redirects: un 3xx no debe reenviar la request a otro host.
+    maxRedirects: 0,
     validateStatus: (s) => s >= 200 && s < 300,
   });
 
@@ -386,15 +480,34 @@ async function signReportDocument({ html, fallbackPdf, meta = {} } = {}) {
     return degrade(DEGRADE_REASONS.EMPTY_RESULT);
   }
 
-  logger.info('Reporte mensual firmado con firma local', {
+  // [SEGURIDAD] NO declarar 'pades_local' por recibir un %PDF: verificar
+  // CRIPTOGRÁFICAMENTE que el PDF devuelto contiene una firma PKCS#7 VÁLIDA
+  // sobre su propio contenido. Si no puede verificarse (sin firma, digest o
+  // firma que no cierran, CMS ilegible), se DEGRADA a 'simple' — nunca se afirma
+  // PAdES sobre un documento sin firma real.
+  const verification = verifyPdfSignature(signed.signedPdf);
+  if (!verification.valid) {
+    logger.error('El PDF de pades-signer NO tiene una firma válida verificable; firma simple interna', {
+      signing_reason: DEGRADE_REASONS.UNVERIFIED,
+      verify_reason: verification.reason,
+    });
+    return degrade(DEGRADE_REASONS.UNVERIFIED);
+  }
+
+  logger.info('Reporte mensual firmado con firma local (firma verificada criptográficamente)', {
     signing_mode: SIGNING_MODES.PADES_LOCAL,
     signature_provider: providerLabel(),
+    digest_alg: verification.digestAlg,
   });
   return {
     pdf: signed.signedPdf,
     mode: SIGNING_MODES.PADES_LOCAL,
     provider: providerLabel(),
-    signatureInfo: signed.signatureInfo || null,
+    signatureInfo: {
+      verified: true,
+      digestAlg: verification.digestAlg,
+      signerSubjectCN: verification.signerSubjectCN,
+    },
     note: null,
   };
 }
@@ -405,8 +518,12 @@ module.exports = {
   DEFAULTS,
   resolveSigningConfig,
   isPadesActive,
+  isLocalTarget,
+  looksLikePdf,
   providerLabel,
   renderHtmlToPdf,
   signPdf,
   signReportDocument,
+  // Reexportado para pruebas / uso directo.
+  verifyPdfSignature,
 };

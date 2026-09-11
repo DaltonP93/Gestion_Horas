@@ -5,12 +5,12 @@
  * El adaptador padesSigner se MOCKEA (los servicios html2pdf/pades-signer no
  * existen en CI). Verifica que la ruta:
  *   - pasa un HTML y un fallback al adaptador;
- *   - cuando el adaptador devuelve mode='pades_local', envía el PDF firmado,
- *     marca X-Signature-Mode: pades_local y PERSISTE los metadatos NO-PII
- *     (signature_provider) con un UPDATE;
+ *   - cuando el adaptador devuelve mode='pades_local', envía el PDF firmado y
+ *     marca X-Signature-Mode: pades_local, SIN persistir NADA (GET read-only);
+ *   - dos descargas consecutivas NO ejecutan ningún write;
  *   - cuando el adaptador cae a 'simple' con nota (servicio caído), la ruta
  *     igual responde el PDF de fallback, marca X-Signature-Mode: simple + nota
- *     y NO persiste metadatos PAdES (fail-closed).
+ *     y tampoco persiste nada.
  */
 
 jest.mock('../src/config/database', () => {
@@ -75,18 +75,17 @@ function primeReadQueries(hash) {
 
 beforeEach(() => { jest.clearAllMocks(); sequelize.query.mockReset(); });
 
-test('pades_local: envía el PDF firmado, marca el modo y persiste metadatos', async () => {
+test('[READ-ONLY] pades_local: envía el PDF firmado y marca el modo, SIN persistir NADA', async () => {
   const svc = require('../src/services/monthlyReportApproval');
   sequelize.query.mockResolvedValueOnce([dailyRows]);
   const { hash } = await svc.computeReportIntegrity({ year: 2026, month: 8, department_id: 7 });
   sequelize.query.mockReset();
 
   primeReadQueries(hash);
-  sequelize.query.mockResolvedValueOnce([{}]); // persistPadesMeta UPDATE
 
   const signedBuf = Buffer.from('%PDF-1.4 signed');
   pades.signReportDocument.mockResolvedValueOnce({
-    pdf: signedBuf, mode: 'pades_local', provider: 'pades-local', signatureInfo: { serial: 'z' }, note: null,
+    pdf: signedBuf, mode: 'pades_local', provider: 'pades-local', signatureInfo: { verified: true }, note: null,
   });
 
   const res = mkRes();
@@ -102,11 +101,28 @@ test('pades_local: envía el PDF firmado, marca el modo y persiste metadatos', a
   expect(modeHdr[1]).toBe('pades_local');
   expect(res.sent).toBe(signedBuf);
 
-  // persistió signature_provider (sin PII), best-effort UPDATE
-  const upd = sequelize.query.mock.calls.find(([s]) => /UPDATE monthly_report_approvals[\s\S]*signature_provider/.test(s));
-  expect(upd).toBeTruthy();
-  expect(upd[1].replacements[0]).toBe('pades-local');
-  expect(upd[1].replacements[1]).toBe(1);
+  // [READ-ONLY] la descarga NO ejecuta NINGÚN UPDATE/INSERT/DELETE: sólo SELECTs.
+  const writes = sequelize.query.mock.calls.filter(([s]) => /^\s*(UPDATE|INSERT|DELETE)\b/i.test(s));
+  expect(writes).toEqual([]);
+  expect(sequelize.transaction).not.toHaveBeenCalled();
+});
+
+test('[READ-ONLY] dos descargas consecutivas NO ejecutan ningún write (idempotente)', async () => {
+  const svc = require('../src/services/monthlyReportApproval');
+  sequelize.query.mockResolvedValueOnce([dailyRows]);
+  const { hash } = await svc.computeReportIntegrity({ year: 2026, month: 8, department_id: 7 });
+  sequelize.query.mockReset();
+
+  const signedBuf = Buffer.from('%PDF-1.4 signed');
+  for (let i = 0; i < 2; i++) {
+    primeReadQueries(hash);
+    pades.signReportDocument.mockResolvedValueOnce({ pdf: signedBuf, mode: 'pades_local', provider: 'pades-local', signatureInfo: { verified: true }, note: null });
+    const res = mkRes();
+    await handlerFor('get', '/:id/signed-pdf')({ params: { id: '1' }, user: { id: 9, role: 'gth' } }, res, jest.fn());
+    expect(res.sent).toBe(signedBuf);
+  }
+  const writes = sequelize.query.mock.calls.filter(([s]) => /^\s*(UPDATE|INSERT|DELETE)\b/i.test(s));
+  expect(writes).toEqual([]); // ninguna de las dos descargas modificó una fila/timestamp
 });
 
 test('servicio caído: adaptador devuelve simple+nota → responde fallback y NO persiste PAdES', async () => {

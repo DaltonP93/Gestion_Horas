@@ -295,4 +295,60 @@ describe('GET /:id/signed-pdf', () => {
     expect(sent.slice(0, 4).toString()).toBe('%PDF');
     expect(res.status).not.toHaveBeenCalledWith(409);
   });
+
+  // ── [SEGURIDAD/BOLA] autorización de objeto ──────────────────────────────
+  test('coordinador de OTRO depto (fuera de alcance) → 403 sin generar nada', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 1, year: 2026, month: 8, department_id: 7, status: 'approved', signed_by: 9, signed_at: '2026-09-01 10:00:00', integrity_hash: 'H' }]]) // SELECT approval
+      .mockResolvedValueOnce([[{ coordinator_id: 999, manager_id: 888 }]]); // canReadApproval → no es su depto
+    const res = mkRes(); res.setHeader = jest.fn(); res.send = jest.fn();
+    await handlerFor('get', '/:id/signed-pdf')(
+      { params: { id: '1' }, user: { id: 5, role: 'coordinator' } }, res, jest.fn()
+    );
+    expect(res.status).toHaveBeenCalledWith(403);
+    // no siguió: sin query de integridad/summary, sin generar PDF.
+    expect(sequelize.query.mock.calls.some(([s]) => /daily_summary/i.test(s))).toBe(false);
+    expect(res.send).not.toHaveBeenCalled();
+  });
+
+  test('usuario sin rol de lectura (employee) → 403', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 1, year: 2026, month: 8, department_id: 7, status: 'approved', signed_by: 9, signed_at: null, integrity_hash: 'H' }]]);
+    const res = mkRes(); res.setHeader = jest.fn(); res.send = jest.fn();
+    await handlerFor('get', '/:id/signed-pdf')(
+      { params: { id: '1' }, user: { id: 42, role: 'employee' } }, res, jest.fn()
+    );
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  test('período org-wide (department_id null) para coordinator → 403 (sólo roles globales)', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 1, year: 2026, month: 8, department_id: null, status: 'approved', signed_by: 9, signed_at: null, integrity_hash: 'H' }]]);
+    const res = mkRes(); res.setHeader = jest.fn(); res.send = jest.fn();
+    await handlerFor('get', '/:id/signed-pdf')(
+      { params: { id: '1' }, user: { id: 5, role: 'coordinator' } }, res, jest.fn()
+    );
+    expect(res.status).toHaveBeenCalledWith(403);
+  });
+
+  // ── [INTEGRIDAD fail-closed] ─────────────────────────────────────────────
+  test('hash actual != integrity_hash firmado → 409 REPORT_INTEGRITY_MISMATCH, sin firmar', async () => {
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 1, year: 2026, month: 8, department_id: 7, status: 'approved', signed_by: 9, signed_at: '2026-09-01 10:00:00', integrity_hash: 'HASH_QUE_YA_NO_COINCIDE' }]]) // SELECT (gth → authz sin query)
+      .mockResolvedValueOnce([[ // computeReportIntegrity → daily_summary (produce un hash distinto)
+        { employee_code: 'E001', date: '2026-08-01', status: 'present', first_in: '08:00:00', last_out: '17:00:00', worked_minutes: 480, late_minutes: 0, overtime_minutes: 0 },
+      ]]);
+    const pades = require('../src/services/signing/padesSigner');
+    const signSpy = jest.spyOn(pades, 'signReportDocument');
+    const res = mkRes(); res.setHeader = jest.fn(); res.send = jest.fn();
+    await handlerFor('get', '/:id/signed-pdf')(
+      { params: { id: '1' }, user: { id: 9, role: 'gth' } }, res, jest.fn()
+    );
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'REPORT_INTEGRITY_MISMATCH' }));
+    // fail-closed: NO se llamó al firmador ni se generó/envió el PDF.
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(res.send).not.toHaveBeenCalled();
+    signSpy.mockRestore();
+  });
 });

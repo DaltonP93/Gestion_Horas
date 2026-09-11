@@ -30,7 +30,6 @@ const { sequelize } = require('../config/database');
 const { minsToHM } = require('../services/scheduler');
 const svc = require('../services/monthlyReportApproval');
 const pades = require('../services/signing/padesSigner');
-const logger = require('../config/logger');
 
 router.use(authenticate);
 
@@ -384,26 +383,13 @@ function buildReportHtml({ row, events, summary, verified }) {
 </body></html>`;
 }
 
-// Persistencia best-effort de metadatos de la firma PAdES. NO bloquea ni
-// rompe la descarga: si la migración 082 no está aplicada (columnas
-// inexistentes) o el UPDATE falla, se ignora en silencio. Sin PII: sólo una
-// etiqueta de proveedor y un timestamp.
-async function persistPadesMeta(id, provider) {
-  try {
-    await sequelize.query(
-      `UPDATE monthly_report_approvals
-          SET signature_provider = ?, signed_pades_at = NOW()
-        WHERE id = ?`,
-      { replacements: [String(provider || 'pades-local').slice(0, 64), id] }
-    );
-  } catch (err) {
-    logger.warn('No se pudieron persistir metadatos PAdES (best-effort)', {
-      error_code: err?.original?.code || err?.parent?.code || 'UNKNOWN',
-    });
-  }
-}
-
 // ─── GET /:id/signed-pdf ── documento firmado, SÓLO si approved ─────────
+//
+// ESTRICTAMENTE READ-ONLY: este GET NO escribe NADA (ni metadatos de firma ni
+// timestamps). Dos descargas consecutivas dejan la fila EXACTAMENTE igual. La
+// persistencia de metadatos PAdES desde el GET (persistPadesMeta) fue eliminada:
+// un GET que muta estado es un efecto lateral inadmisible (además de romper el
+// contrato REST y permitir escrituras no auditadas por descarga repetida).
 router.get('/:id/signed-pdf', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'id inválido' });
@@ -414,16 +400,35 @@ router.get('/:id/signed-pdf', asyncHandler(async (req, res) => {
     { replacements: [id] }
   );
   if (!row) return res.status(404).json({ error: 'Pedido inexistente' });
+
+  // [SEGURIDAD/BOLA] Autorización de OBJETO ANTES de consultar o generar nada:
+  // gth/admin/super_admin global; coordinator/manager sólo sus departamentos;
+  // cualquier otro usuario o departamento fuera de alcance → 403. Evita IDOR/
+  // enumeración: sin permiso no se revela ni se arma el reporte.
+  const authorized = await svc.canReadApproval(req.user, row);
+  if (!authorized) {
+    return res.status(403).json({ error: 'Sin permisos para acceder a este reporte', code: 'REPORT_FORBIDDEN' });
+  }
+
   if (row.status !== 'approved') {
     return res.status(409).json({ error: 'El documento firmado sólo está disponible cuando el período está aprobado', status: row.status });
   }
 
-  // Recalcular el hash actual y compararlo con el firmado: si los datos
-  // subyacentes cambiaron desde la firma, el documento lo advierte.
+  // [INTEGRIDAD fail-closed] Recalcular el hash actual y compararlo con el
+  // firmado. Si los datos subyacentes cambiaron desde la firma, NO se firma ni
+  // se genera el documento y NO se persiste nada: se responde 409. Nunca se
+  // manda a firmar (html2pdf/pades-signer) un reporte cuyo contenido ya no
+  // coincide con lo que se aprobó.
   const { hash: currentHash } = await svc.computeReportIntegrity({
     year: row.year, month: row.month, department_id: row.department_id,
   });
-  const verified = currentHash === row.integrity_hash;
+  if (currentHash !== row.integrity_hash) {
+    return res.status(409).json({
+      error: 'Los datos del período ya no coinciden con el hash firmado; el reporte no puede emitirse.',
+      code: 'REPORT_INTEGRITY_MISMATCH',
+    });
+  }
+  const verified = true; // más allá de este punto, integridad garantizada.
 
   // Aprobadores/firmantes: ids + roles + timestamps (sin PII).
   const [events] = await sequelize.query(
@@ -486,12 +491,8 @@ router.get('/:id/signed-pdf', asyncHandler(async (req, res) => {
   res.setHeader('X-Signature-Mode', result.mode);
   if (result.note) res.setHeader('X-Signature-Note', result.note);
 
-  // Guardar metadatos SÓLO si de verdad se firmó PAdES (fail-closed: nunca
-  // afirmar "firmado PAdES" si no se pudo).
-  if (result.mode === pades.SIGNING_MODES.PADES_LOCAL) {
-    await persistPadesMeta(id, result.provider);
-  }
-
+  // READ-ONLY: NO se persiste ningún metadato desde el GET. El modo efectivo va
+  // sólo en el header de respuesta; la descarga no muta ninguna fila.
   return res.send(result.pdf);
 }));
 

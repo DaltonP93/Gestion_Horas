@@ -1,0 +1,35 @@
+# Stack de PRUEBA de firma PAdES (html2pdf + pades-signer) para la integración
+# real del backend. NO es producción: usa un certificado .p12 de PRUEBA montado
+# en ./certs (generado por gen-cert.sh, gitignored). Escucha SÓLO en loopback.
+services:
+  html2pdf:
+    build: ./html2pdf
+    container_name: sishoras-html2pdf-test
+    environment:
+      SHARED_SECRET: "${HTML2PDF_SECRET:-render-test-secret}"
+      AUTH_HEADER: "x-render-key"
+    ports:
+      - "127.0.0.1:${HTML2PDF_PORT:-3012}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  pades-signer:
+    build: ./pades-signer
+    container_name: sishoras-pades-signer-test
+    environment:
+      SHARED_SECRET: "${PADES_SECRET:-sign-test-secret}"
+      AUTH_HEADER: "x-sign-key"
+      P12_PATH: "/certs/test.p12"
+      P12_PASSPHRASE: "${P12_PASSPHRASE:-testpass}"
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "127.0.0.1:${PADES_PORT:-3011}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
