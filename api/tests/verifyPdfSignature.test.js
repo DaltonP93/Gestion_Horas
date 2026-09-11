@@ -8,7 +8,7 @@
  *   - un %PDF sin firma, un no-PDF y un buffer vacío → valid:false con razón.
  */
 
-const { verifyPdfSignature, REASONS } = require('../src/services/signing/verifyPdfSignature');
+const { verifyPdfSignature, REASONS, _extractSignature } = require('../src/services/signing/verifyPdfSignature');
 const { makeSignedPdf } = require('./helpers/makeSignedPdf');
 
 describe('verifyPdfSignature', () => {
@@ -37,6 +37,30 @@ describe('verifyPdfSignature', () => {
     expect(verifyPdfSignature(Buffer.from('GET / HTTP/1.1')).reason).toBe(REASONS.NOT_PDF);
     expect(verifyPdfSignature(Buffer.alloc(0)).reason).toBe(REASONS.NO_BUFFER);
     expect(verifyPdfSignature('x').reason).toBe(REASONS.NO_BUFFER);
+  });
+
+  test('regresión: firma DER que TERMINA en 0x00 no se recorta con el padding del hueco', () => {
+    // Reproduce de forma DETERMINISTA el flake no-determinista: cuando la firma
+    // DER termina en 0x00 (≈1/256 de las claves), recortar "los 00 del final"
+    // del hueco de /Contents se comía ese byte y corrompía la firma. El hueco
+    // real trae la firma seguida de padding de ceros; hay que recortar por la
+    // LONGITUD DE LA CABECERA DER, no por heurística de ceros.
+    const der = Buffer.from([0x30, 0x06, 0x04, 0x04, 0xDE, 0xAD, 0xBE, 0x00]); // SEQUENCE→OCTET STRING, termina en 0x00
+    const hex = `${der.toString('hex')}0000`; // firma + padding de ceros del hueco (2 bytes 00)
+    const pre = Buffer.from(
+      '%PDF-1.4\n% relleno\n/ByteRange [0000000000 0000000000 0000000000 0000000000]/Contents <',
+      'latin1');
+    const pdf = Buffer.concat([pre, Buffer.from(`${hex}>\ncola\n%%EOF\n`, 'latin1')]);
+    const hexStart = pdf.indexOf('/Contents <') + '/Contents <'.length;
+    const gtPos = pdf.indexOf('>', hexStart);
+    const [a, b, c, d] = [0, hexStart, gtPos, pdf.length - gtPos];
+    const brStr = `[${String(a).padStart(10, '0')} ${String(b).padStart(10, '0')} ${String(c).padStart(10, '0')} ${String(d).padStart(10, '0')}]`;
+    Buffer.from(brStr, 'latin1').copy(pdf, pdf.indexOf('[0000000000'));
+
+    const ext = _extractSignature(pdf);
+    expect(ext.error).toBeUndefined();
+    // La firma extraída es EXACTAMENTE la DER (8 bytes, con su 0x00 final), sin padding.
+    expect(Buffer.compare(ext.signature, der)).toBe(0);
   });
 
   test('ByteRange presente pero Contents ilegible → BAD_CMS/NO_CONTENTS (no valid)', () => {

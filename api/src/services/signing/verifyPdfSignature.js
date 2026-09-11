@@ -72,16 +72,40 @@ function extractSignature(pdfBuffer) {
   ]);
 
   // El PKCS#7 (hex) vive en el hueco [a+b, c) del ByteRange. Según el firmante
-  // los delimitadores `<`/`>` quedan dentro o fuera del hueco: se toleran ambos
-  // quitando todo lo que no sea hex y el padding de ceros del final.
+  // los delimitadores `<`/`>` quedan dentro o fuera del hueco: se tolera todo
+  // quitando lo que no sea hex. El hueco de `/Contents` está RELLENO CON CEROS
+  // hasta un ancho fijo, así que tras la firma hay padding `00`. NO se puede
+  // recortar el padding por "quitar 00 del final": la propia firma DER puede
+  // terminar en 0x00 (≈1/256 de las claves) y se perdería un byte → firma
+  // corrupta de forma no-determinista. Se recorta con la LONGITUD EXACTA que
+  // declara la cabecera DER de la estructura; el resto es padding y se descarta.
   const gap = pdfBuffer.subarray(a + b, c).toString('latin1');
-  const sigHex = gap.replace(/[^0-9A-Fa-f]/g, '').replace(/(?:00)+$/i, '');
-  if (!sigHex) return { error: REASONS.NO_CONTENTS };
-  let signature;
-  try { signature = Buffer.from(sigHex, 'hex'); } catch (_e) { return { error: REASONS.NO_CONTENTS }; }
-  if (!signature.length) return { error: REASONS.NO_CONTENTS };
+  const hexAll = gap.replace(/[^0-9A-Fa-f]/g, '');
+  if (hexAll.length < 4) return { error: REASONS.NO_CONTENTS };
+  let raw;
+  try { raw = Buffer.from(hexAll, 'hex'); } catch (_e) { return { error: REASONS.NO_CONTENTS }; }
+  if (!raw.length) return { error: REASONS.NO_CONTENTS };
+  const derLen = derTotalLength(raw);
+  const signature = (derLen && derLen >= 2 && derLen <= raw.length) ? raw.subarray(0, derLen) : raw;
 
   return { signedData, signature };
+}
+
+/**
+ * Longitud total (cabecera + contenido) de la PRIMERA estructura DER en `buf`,
+ * o `null` si la cabecera es ilegible/indefinida. Permite recortar el objeto
+ * PKCS#7 exacto sin depender de heurísticas sobre el padding del hueco.
+ */
+function derTotalLength(buf) {
+  if (!buf || buf.length < 2) return null;
+  const lenByte = buf[1];
+  if (lenByte < 0x80) return 2 + lenByte; // forma corta
+  const numBytes = lenByte & 0x7f;
+  // 0x80 = indefinida (no válida en DER); más de 4 bytes de longitud es absurdo aquí.
+  if (numBytes === 0 || numBytes > 4 || buf.length < 2 + numBytes) return null;
+  let contentLen = 0;
+  for (let i = 0; i < numBytes; i += 1) contentLen = (contentLen * 256) + buf[2 + i];
+  return 2 + numBytes + contentLen;
 }
 
 /** OID del digest → nombre de forge.md. Default sha256. */
