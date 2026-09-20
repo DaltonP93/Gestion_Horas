@@ -25,6 +25,7 @@ type Status = {
     forward_env_kill_switch: boolean
     forward_db_setting: boolean
     forward_effective: boolean
+    cutover: { configured: boolean; valid: boolean; date: string | null; reason: string | null }
     status_074_env: boolean
     workday_config_write_env: boolean
   }
@@ -99,6 +100,7 @@ export default function ActivacionMotorPage() {
 
   // Estado del asistente.
   const [backupConfirmed, setBackupConfirmed] = useState(false)
+  const [cutoverDate, setCutoverDate] = useState('')
   const [confFwd, setConfFwd] = useState('')
   const [confRecalc, setConfRecalc] = useState('')
   const [confRestore, setConfRestore] = useState('')
@@ -132,6 +134,8 @@ export default function ActivacionMotorPage() {
   }
 
   const masterOn = !!status?.gates.master_flag_enabled
+  const persistedCutover = status?.gates.cutover?.date || ''
+  const selectedCutover = persistedCutover || cutoverDate
   const mutableEnabled = (extra: boolean) => masterOn && backupConfirmed && extra
 
   async function run(path: string, body: any, ok: string) {
@@ -260,17 +264,28 @@ export default function ActivacionMotorPage() {
         <div className="mb-3 flex flex-wrap gap-1.5">
           <Pill ok={!!status?.gates.forward_env_kill_switch}>env kill-switch (ops)</Pill>
           <Pill ok={!!status?.gates.forward_db_setting}>setting BD</Pill>
+          <Pill ok={!!status?.gates.cutover?.valid}>cutover válido</Pill>
           <Pill ok={!!status?.gates.forward_effective}>motor escribe</Pill>
         </div>
         {!status?.gates.forward_env_kill_switch && (
           <p className="mb-2 text-xs text-amber-600">El env kill-switch está apagado: aun activando el setting, el motor NO escribirá hasta que ops habilite WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED=true.</p>
         )}
+        <div className="mb-2 grid gap-2 sm:grid-cols-[auto_1fr] sm:items-center">
+          <label className="text-sm text-slate-600 dark:text-slate-300">Fecha de cutover</label>
+          <input type="date" value={selectedCutover}
+            onChange={e => setCutoverDate(e.target.value)} disabled={!!persistedCutover}
+            className="w-fit rounded-lg border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-60 dark:bg-slate-900 dark:border-slate-600" />
+        </div>
+        <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
+          Desde esta fecha el writer automático puede modificar daily_summary. Las fechas anteriores quedan protegidas; cualquier reparación histórica debe hacerse por el recálculo explícito y auditable del paso 3.
+          {persistedCutover && <> El cutover ya está fijado en <b>{persistedCutover}</b> y no puede cambiarse al reactivar.</>}
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <input value={confFwd} onChange={e => setConfFwd(e.target.value)} placeholder='Escribí: ACTIVAR MOTOR'
             className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:bg-slate-900 dark:border-slate-600" />
           <button
-            disabled={!mutableEnabled(confFwd === 'ACTIVAR MOTOR') || busy !== ''}
-            onClick={() => run('/api/fase-e/forward/enable', { confirm: confFwd, backup_confirmed: backupConfirmed }, 'Motor activado hacia adelante.')}
+            disabled={!selectedCutover || !mutableEnabled(confFwd === 'ACTIVAR MOTOR') || busy !== ''}
+            onClick={() => run('/api/fase-e/forward/enable', { confirm: confFwd, backup_confirmed: backupConfirmed, cutover_date: selectedCutover }, 'Motor activado hacia adelante.')}
             className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-40">
             <ToggleRight size={14} /> Activar
           </button>

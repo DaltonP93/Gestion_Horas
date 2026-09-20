@@ -132,8 +132,9 @@ router.post('/forward/enable',
   requireBackupConfirmed,
   requireTypedConfirm('ACTIVAR MOTOR'),
   asyncHandler(async (req, res) => {
-    const state = await svc.setForwardEnabled(true);
-    auditLog(req, 'fase_e.forward.enable', state);
+    const { cutover_date } = req.body || {};
+    const state = await svc.setForwardEnabled(true, { cutoverDate: cutover_date });
+    auditLog(req, 'fase_e.forward.enable', { enabled: true, date: state.cutover_date });
     res.json({ ok: true, ...state, backup_confirmation: 'operator_declared' });
   }),
 );

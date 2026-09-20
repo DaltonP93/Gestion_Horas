@@ -46,6 +46,8 @@
 'use strict';
 
 const { sequelize } = require('../config/database');
+const logger = require('../config/logger');
+const audit = require('./audit');
 const engine = require('./workdayEngine');
 const dsEngine = require('./dailySummaryEngine');
 const { loadWorkdayConfig } = require('./workdayConfig');
@@ -63,6 +65,35 @@ function isEngineSummaryWriteEnabled() {
 
 /** Clave del segundo cerrojo (BD) del escritor hacia adelante (migración 083). */
 const FORWARD_SETTING_KEY = 'fase_e_forward_enabled';
+/** Fecha mínima que el writer automático puede mutar. Ausente hasta el cutover. */
+const CUTOVER_SETTING_KEY = 'fase_e_daily_summary_cutover_date';
+
+function isRealCivilDate(value) {
+  const s = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+/**
+ * Estado del cutover. Distingue fila ausente (pre-rollout) de valor inválido o
+ * error de lectura. Un valor configurado pero inválido jamás habilita escritura.
+ */
+async function getCutoverState() {
+  try {
+    const [rows] = await sequelize.query(
+      `SELECT value FROM system_settings WHERE key_name = ? LIMIT 1`,
+      { replacements: [CUTOVER_SETTING_KEY] },
+    );
+    if (!rows[0]) return { configured: false, valid: false, date: null, reason: 'missing' };
+    const value = String(rows[0].value ?? '');
+    if (!isRealCivilDate(value)) return { configured: true, valid: false, date: null, reason: 'invalid' };
+    return { configured: true, valid: true, date: value, reason: null };
+  } catch {
+    return { configured: false, valid: false, date: null, reason: 'read_error' };
+  }
+}
 
 /**
  * Cerrojo de APLICACIÓN (BD): el setting que la consola de FASE E flipea de
@@ -87,16 +118,53 @@ async function isForwardSettingEnabled() {
 }
 
 /**
- * Compuerta REAL del escritor hacia adelante: exige AMBOS cerrojos.
- *   env kill-switch === 'true'  AND  setting de BD === 'true'
- *
- * Con cualquiera de los dos en false, el recálculo operativo conserva su camino
- * LEGACY (comportamiento actual intacto). El env sigue siendo el kill-switch de
- * ops; el setting de BD es el flip controlado de la consola.
+ * Compuerta REAL del escritor hacia adelante: conserva los DOS cerrojos actuales
+ * y además exige un cutover civil válido. Si el cutover falta o es inválido, el
+ * writer nuevo queda OFF aunque ambos gates estén ON (fail-closed).
  */
 async function isEngineForwardWriteEnabled() {
-  if (!isEngineSummaryWriteEnabled()) return false; // corto-circuito sin tocar BD
-  return isForwardSettingEnabled();
+  if (!isEngineSummaryWriteEnabled()) return false; // kill-switch de ops
+  if (!(await isForwardSettingEnabled())) return false; // gate BD
+  const cutover = await getCutoverState();
+  return cutover.valid === true;
+}
+
+async function recordCutoverBlock({ date, employeeId = null, context = 'automatic', reason, cutoverDate = null }) {
+  logger.warn(`[CUTOVER_GUARD] bloqueada escritura daily_summary date=${date} cutover=${cutoverDate || 'unset'} context=${context} reason=${reason}`);
+  await audit.log({
+    action: 'daily_summary.cutover.blocked', entity: 'daily_summary',
+    entity_id: employeeId == null ? null : employeeId,
+    details: { employee_id: employeeId, date, from: cutoverDate || undefined, mode: context, reason },
+  });
+}
+
+/**
+ * Guard para caminos AUTOMÁTICOS (motor y rollback legacy). Antes del primer
+ * cutover, la fila ausente mantiene el comportamiento legacy. Una vez configurado,
+ * toda fecha anterior se bloquea. Un valor inválido/error de lectura bloquea.
+ * Si ambos gates pidieron FASE E pero falta cutover, también bloquea: nunca cae
+ * silenciosamente al legacy por una configuración incompleta.
+ */
+async function guardAutomaticSummaryDate(date, { employeeId = null, context = 'automatic' } = {}) {
+  if (!isRealCivilDate(date)) {
+    await recordCutoverBlock({ date: String(date || ''), employeeId, context, reason: 'invalid_date' });
+    return { allowed: false, reason: 'invalid_date', cutoverDate: null };
+  }
+  const cutover = await getCutoverState();
+  if (cutover.valid) {
+    if (date >= cutover.date) return { allowed: true, reason: null, cutoverDate: cutover.date };
+    await recordCutoverBlock({ date, employeeId, context, reason: 'before_cutover', cutoverDate: cutover.date });
+    return { allowed: false, reason: 'before_cutover', cutoverDate: cutover.date };
+  }
+  if (cutover.reason === 'invalid' || cutover.reason === 'read_error') {
+    await recordCutoverBlock({ date, employeeId, context, reason: `cutover_${cutover.reason}` });
+    return { allowed: false, reason: `cutover_${cutover.reason}`, cutoverDate: null };
+  }
+  if (isEngineSummaryWriteEnabled() && await isForwardSettingEnabled()) {
+    await recordCutoverBlock({ date, employeeId, context, reason: 'cutover_missing' });
+    return { allowed: false, reason: 'cutover_missing', cutoverDate: null };
+  }
+  return { allowed: true, reason: 'pre_cutover_legacy', cutoverDate: null };
 }
 
 /** Fecha civil (wall-clock) de la marca ancla, en aritmética sin zona. */
@@ -228,9 +296,11 @@ async function resolveSummary(employeeId, anchor, opts = {}) {
   // de fechas donde el writer sólo reconcilia lo ya existente.
   const reconcileOnly = new Set([shiftDate(anchorISO, 1)]);
 
-  if (apply) await escribirFilas(employeeId, rows, { reconcileOnly });
+  const writeResult = apply
+    ? await escribirFilas(employeeId, rows, { reconcileOnly, context: 'attendance_recalc' })
+    : null;
 
-  return { rows, affectedDates };
+  return { rows, affectedDates, writeResult };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -395,14 +465,32 @@ async function applyEffectiveWrite(t, employeeId, date, eff) {
  */
 async function escribirFilas(employeeId, rows, opts = {}) {
   const reconcileOnly = opts.reconcileOnly || new Set();
+  const context = opts.context || 'engine_writer';
+  const cutover = await getCutoverState();
+  if (!cutover.valid) {
+    const err = new Error(`CUTOVER GUARD: cutover no disponible (${cutover.reason}).`);
+    err.code = 'CUTOVER_NOT_READY';
+    throw err;
+  }
+
+  const blockedDates = [];
+  const writtenDates = [];
   for (const row of rows) {
+    if (!isRealCivilDate(row.date) || row.date < cutover.date) {
+      const reason = isRealCivilDate(row.date) ? 'before_cutover' : 'invalid_date';
+      await recordCutoverBlock({ date: row.date, employeeId, context, reason, cutoverDate: cutover.date });
+      blockedDates.push(row.date);
+      continue;
+    }
     const soloReconciliar = reconcileOnly.has(row.date);
     await withDayRecalcLock(row.date, async (t) => {
       const stored = await readDailySummaryRow(t, employeeId, row.date);
       const eff = effectiveDailySummary(row, stored, { reconcileOnly: soloReconciliar });
       await applyEffectiveWrite(t, employeeId, row.date, eff, { reconcileOnly: soloReconciliar });
     }, { label: `engineRecalc:${row.date}:${employeeId}` });
+    writtenDates.push(row.date);
   }
+  return { cutoverDate: cutover.date, blockedDates, writtenDates };
 }
 
 /**
@@ -501,7 +589,11 @@ module.exports = {
   isEngineSummaryWriteEnabled,
   isForwardSettingEnabled,
   isEngineForwardWriteEnabled,
+  getCutoverState,
+  guardAutomaticSummaryDate,
+  isRealCivilDate,
   FORWARD_SETTING_KEY,
+  CUTOVER_SETTING_KEY,
   isStatus074Enabled,
   resolveSummary,
   resolveSummaryBatchForDate,

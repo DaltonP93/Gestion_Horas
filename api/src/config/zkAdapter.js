@@ -29,14 +29,165 @@ const logger           = require('./logger');
 //   SENSORID    int          → ID del reloj
 //   WorkCode    varchar(10)
 
+function isCivilDate(value) {
+  const s = String(value ?? '').trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return false;
+
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+
+  const x = new Date(Date.UTC(y, mo - 1, d));
+
+  return (
+    x.getUTCFullYear() === y &&
+    x.getUTCMonth() + 1 === mo &&
+    x.getUTCDate() === d
+  );
+}
+
+function nextCivilDate(value) {
+  const s = String(value ?? '').trim();
+
+  if (!isCivilDate(s)) {
+    throw new Error(
+      `Fecha civil inválida: ${value}`
+    );
+  }
+
+  const [y, m, d] =
+    s.split('-').map(Number);
+
+  const x =
+    new Date(
+      Date.UTC(y, m - 1, d + 1)
+    );
+
+  const z =
+    n => String(n).padStart(2, '0');
+
+  return (
+    `${x.getUTCFullYear()}-` +
+    `${z(x.getUTCMonth() + 1)}-` +
+    `${z(x.getUTCDate())}`
+  );
+}
+
+function normalizeWallBoundary(value, name) {
+  if (typeof value !== 'string') {
+    throw new TypeError(
+      `${name} debe ser string de fecha/hora de pared`
+    );
+  }
+
+  const s =
+    value.trim();
+
+  if (isCivilDate(s)) {
+    return {
+      dateOnly: true,
+      value: s
+    };
+  }
+
+  /*
+   * Admitimos sólo formato civil/naive.
+   * Deliberadamente NO aceptamos Z ni offsets:
+   * CHECKTIME no representa un instante UTC.
+   */
+  const m =
+    s.match(
+      /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/
+    );
+
+  if (!m) {
+    throw new Error(
+      `${name} inválido: se espera YYYY-MM-DD o YYYY-MM-DD HH:mm:ss`
+    );
+  }
+
+  const datePart =
+    `${m[1]}-${m[2]}-${m[3]}`;
+
+  if (!isCivilDate(datePart)) {
+    throw new Error(
+      `${name} contiene fecha civil inválida`
+    );
+  }
+
+  const hh = Number(m[4]);
+  const mm = Number(m[5]);
+  const ss = Number(m[6]);
+
+  if (
+    hh > 23 ||
+    mm > 59 ||
+    ss > 59
+  ) {
+    throw new Error(
+      `${name} contiene hora inválida`
+    );
+  }
+
+  return {
+    dateOnly: false,
+    value:
+      `${datePart} ${m[4]}:${m[5]}:${m[6]}`
+  };
+}
+
 async function fetchCheckInOut({ dateFrom, dateTo, limit = 5000 } = {}) {
   // Parametrizar entradas del usuario para evitar inyección SQL de 2º grado
   // sobre la BD att2000. Los nombres de columna se siguen resolviendo por
   // lista blanca vía pickCol(); solo valores viajan como parámetros.
   const params = {};
   let where = '1=1';
-  if (dateFrom) { where += ' AND CHECKTIME >= @dateFrom'; params.dateFrom = new Date(dateFrom); }
-  if (dateTo)   { where += ' AND CHECKTIME <= @dateTo';   params.dateTo   = new Date(dateTo); }
+
+  if (dateFrom) {
+    const from =
+      normalizeWallBoundary(
+        dateFrom,
+        'dateFrom'
+      );
+
+    params.dateFrom =
+      from.dateOnly
+        ? `${from.value} 00:00:00`
+        : from.value;
+
+    where +=
+      ' AND c.CHECKTIME >= CONVERT(datetime, @dateFrom, 120)';
+  }
+
+  if (dateTo) {
+    const to =
+      normalizeWallBoundary(
+        dateTo,
+        'dateTo'
+      );
+
+    if (to.dateOnly) {
+      /*
+       * Fin de fecha civil SEMIABIERTO:
+       *
+       *   < día siguiente 00:00:00
+       *
+       * Así no se pierde 23:59:59.xxx.
+       */
+      params.dateToExclusive =
+        `${nextCivilDate(to.value)} 00:00:00`;
+
+      where +=
+        ' AND c.CHECKTIME < CONVERT(datetime, @dateToExclusive, 120)';
+    } else {
+      params.dateTo =
+        to.value;
+
+      where +=
+        ' AND c.CHECKTIME <= CONVERT(datetime, @dateTo, 120)';
+    }
+  }
 
   // Sanear limit a entero positivo acotado (SQL Server admite TOP (@n))
   const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 200000);
@@ -48,7 +199,7 @@ async function fetchCheckInOut({ dateFrom, dateTo, limit = 5000 } = {}) {
   const rows = await queryAtt2000(`
     SELECT TOP (@limit)
       ${pickCol(chkCols,  'USERID',     { prefix: 'c.' })},
-      ${pickCol(chkCols,  'CHECKTIME',  { prefix: 'c.' })},
+      CONVERT(varchar(19), c.CHECKTIME, 120) AS CHECKTIME,
       ${pickCol(chkCols,  'CHECKTYPE',  { prefix: 'c.' })},
       ${pickCol(chkCols,  'VERIFYCODE', { prefix: 'c.' })},
       ${pickCol(chkCols,  'SENSORID',   { prefix: 'c.' })},
@@ -272,7 +423,7 @@ async function syncAttendance({ dateFrom, dateTo, limit = 10000, source = 'att20
     rows.push([
       empId,
       deviceId,
-      new Date(r.CHECKTIME),
+      String(r.CHECKTIME),
       mapType(r.CHECKTYPE),
       source,   // 'att2000' (import histórico); distingue de 'zkteco_direct' y del legacy 'device'
       JSON.stringify({ userid: r.USERID, checktype: r.CHECKTYPE, verifycode: r.VERIFYCODE, sensorid: r.SENSORID }),

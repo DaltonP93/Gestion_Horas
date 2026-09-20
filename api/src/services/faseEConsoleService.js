@@ -265,13 +265,15 @@ async function getStatus() {
   }
   const envKillSwitch = workdaySummary.isEngineSummaryWriteEnabled();
   const forwardSetting = await workdaySummary.isForwardSettingEnabled();
+  const cutover = await workdaySummary.getCutoverState();
   const gates = {
     rbac: 'super_admin',
     master_flag_env: 'FASE_E_ACTIVATION_ENABLED',
     master_flag_enabled: isActivationEnabled(),
     forward_env_kill_switch: envKillSwitch,
     forward_db_setting: forwardSetting,
-    forward_effective: envKillSwitch && forwardSetting,
+    forward_effective: envKillSwitch && forwardSetting && cutover.valid,
+    cutover: { configured: cutover.configured, valid: cutover.valid, date: cutover.date, reason: cutover.reason },
     status_074_env: process.env.WORKDAY_ENGINE_STATUS_074_ENABLED === 'true',
     workday_config_write_env: process.env.WORKDAY_CONFIG_WRITE_ENABLED === 'true',
   };
@@ -671,17 +673,49 @@ async function assertNoOverlap(from, to) {
 }
 
 // ─── activación hacia adelante (reversible) ──────────────────────────────
-async function setForwardEnabled(enabled) {
-  if (enabled) await assertGoNoGo('forward/enable'); // disable NO se gatea (P2)
-  await sequelize.query(
-    `INSERT INTO system_settings (key_name, value) VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = VALUES(value)`,
-    { replacements: [workdaySummary.FORWARD_SETTING_KEY, enabled ? 'true' : 'false'] },
-  );
+async function setForwardEnabled(enabled, { cutoverDate = null } = {}) {
+  if (!enabled) {
+    await sequelize.query(
+      `INSERT INTO system_settings (key_name, value) VALUES (?, 'false')
+         ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+      { replacements: [workdaySummary.FORWARD_SETTING_KEY] },
+    );
+    const cutover = await workdaySummary.getCutoverState();
+    return { forward_db_setting: false, forward_env_kill_switch: workdaySummary.isEngineSummaryWriteEnabled(), forward_effective: false, cutover_date: cutover.date };
+  }
+
+  await assertGoNoGo('forward/enable');
+  if (!workdaySummary.isRealCivilDate(cutoverDate)) {
+    throw badRequest('cutover_date inválido: se requiere una fecha civil real YYYY-MM-DD.', 'INVALID_CUTOVER_DATE');
+  }
+
+  await sequelize.transaction(async (t) => {
+    const [rows] = await sequelize.query(
+      `SELECT value FROM system_settings WHERE key_name = ? LIMIT 1 FOR UPDATE`,
+      { replacements: [workdaySummary.CUTOVER_SETTING_KEY], transaction: t },
+    );
+    if (rows[0]) {
+      const existing = String(rows[0].value ?? '');
+      if (!workdaySummary.isRealCivilDate(existing)) throw conflict('El cutover persistido es inválido; activación bloqueada.', 'CUTOVER_STATE_INVALID');
+      if (existing !== cutoverDate) throw conflict(`El cutover ya quedó fijado en ${existing}; no puede cambiarse silenciosamente.`, 'CUTOVER_IMMUTABLE');
+    } else {
+      await sequelize.query(
+        `INSERT INTO system_settings (key_name, value) VALUES (?, ?)`,
+        { replacements: [workdaySummary.CUTOVER_SETTING_KEY, cutoverDate], transaction: t },
+      );
+    }
+    await sequelize.query(
+      `INSERT INTO system_settings (key_name, value) VALUES (?, 'true')
+         ON DUPLICATE KEY UPDATE value = VALUES(value)`,
+      { replacements: [workdaySummary.FORWARD_SETTING_KEY], transaction: t },
+    );
+  });
+
   return {
-    forward_db_setting: enabled,
+    forward_db_setting: true,
     forward_env_kill_switch: workdaySummary.isEngineSummaryWriteEnabled(),
-    forward_effective: enabled && workdaySummary.isEngineSummaryWriteEnabled(),
+    forward_effective: workdaySummary.isEngineSummaryWriteEnabled(),
+    cutover_date: cutoverDate,
   };
 }
 

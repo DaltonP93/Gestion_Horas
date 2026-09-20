@@ -17,6 +17,12 @@ jest.mock('../src/services/workdaySummaryService', () => ({
   // Compuerta combinada (env AND setting de BD) ON: es la que consulta el
   // scheduler para decidir el camino motor vs legacy.
   isEngineForwardWriteEnabled: async () => true,
+  // Este test prueba la semántica batch, no el gate de cutover. El guard se
+  // mockea explícitamente como permitido; la cobertura fail-closed vive en
+  // faseEForwardGate.test.js.
+  guardAutomaticSummaryDate: async () => ({
+    allowed: true, reason: null, cutoverDate: '2025-01-01',
+  }),
   resolveSummaryBatchForDate: (...a) => mockBatch(...a),
   shiftDate: (d, n) => `${d}#${n}`, // no importa el valor exacto para este test
 }));

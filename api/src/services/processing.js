@@ -12,6 +12,7 @@
 const { sequelize } = require('../config/database');
 const { recalcDailySummary } = require('../controllers/attendanceController');
 const { bulkRecalcDailySummary, materializeAbsents } = require('./scheduler');
+const workdaySummary = require('./workdaySummaryService');
 const logger = require('../config/logger');
 
 function daysInRange(dateFrom, dateTo) {
@@ -32,6 +33,15 @@ function daysInRange(dateFrom, dateTo) {
 async function recomputeRange({ dateFrom, dateTo, employeeIds = null, jobId, io }) {
   if (!dateFrom || !dateTo) throw new Error('dateFrom y dateTo son requeridos (YYYY-MM-DD)');
   if (dateFrom > dateTo) throw new Error('dateFrom debe ser <= dateTo');
+
+  // Este endpoint NO es un bypass de reparación histórica. Si el rango empieza
+  // antes del cutover, se aborta completo; la reparación autorizada vive en FASE E.
+  const cutoverGuard = await workdaySummary.guardAutomaticSummaryDate(dateFrom, { context: 'processing_range' });
+  if (!cutoverGuard.allowed) {
+    const err = new Error(`CUTOVER GUARD: recompute ${dateFrom}..${dateTo} bloqueado (${cutoverGuard.reason}).`);
+    err.code = 'CUTOVER_GUARD_BLOCKED';
+    throw err;
+  }
 
   const emit = (stage, payload) => {
     if (!io) return;

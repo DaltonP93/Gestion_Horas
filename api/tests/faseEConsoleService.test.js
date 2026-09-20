@@ -64,6 +64,7 @@ function installQueryMock(cfg = {}) {
     batchRecord: undefined,
     backupRows: [],
     backupCount: undefined,
+    settings: {},
     ...cfg,
   };
   const events = c.events || [];
@@ -106,6 +107,17 @@ function installQueryMock(cfg = {}) {
       return [[{ type: c.has074 ? "enum('present','absent','late','weekend','holiday','permission','non_working','unconfigured')" : "enum('present','absent','late','weekend','holiday','permission')" }]];
     }
     if (/COUNT\(\*\) AS n FROM employee_schedule_history/i.test(sql)) return [[{ n: 0 }]];
+    if (/SELECT value FROM system_settings WHERE key_name = \?/i.test(sql)) {
+      return [Object.prototype.hasOwnProperty.call(c.settings, p[0]) ? [{ value: c.settings[p[0]] }] : []];
+    }
+    if (/INSERT INTO system_settings/i.test(sql)) {
+      let value = p[1];
+      if (value === undefined && /VALUES \(\?, 'true'\)/i.test(sql)) value = 'true';
+      if (value === undefined && /VALUES \(\?, 'false'\)/i.test(sql)) value = 'false';
+      c.settings[p[0]] = value;
+      events.push(`setting:${p[0]}=${value}`);
+      return [{ affectedRows: 1 }];
+    }
     // lock de consola (acquire captura el token; heartbeat/release; fence lee el token)
     if (/UPDATE fase_e_console_lock/i.test(sql) && /SET lock_token = \?/i.test(sql)) { events.push('lock.acquire'); if (c.lockAcquired) heldToken = p[0]; return [{ affectedRows: c.lockAcquired ? 1 : 0 }]; }
     if (/UPDATE fase_e_console_lock/i.test(sql) && /heartbeat_seq = heartbeat_seq \+ 1/i.test(sql)) { events.push('lock.heartbeat'); return [{ affectedRows: 1 }]; }
@@ -454,6 +466,49 @@ describe('[R5-2] cotas fail-closed de empleados/celdas', () => {
     const { events } = installQueryMock({ batchRecord: { batch_id: 'B1', status: 'applied', rows_backed_up: 2 }, backupCount: 2 });
     await expect(svc.restoreBatch({ batchId: 'B1' })).rejects.toMatchObject({ code: 'TOO_MANY_CELLS' });
     expect(events).not.toContain('restored');
+  });
+});
+
+describe('cutover de forward — explícito, atómico e inmutable', () => {
+  test('fecha inválida bloquea enable antes de transacción', async () => {
+    installQueryMock();
+    await expect(svc.setForwardEnabled(true, { cutoverDate: '2026-02-30' }))
+      .rejects.toMatchObject({ code: 'INVALID_CUTOVER_DATE' });
+    expect(sequelize.transaction).not.toHaveBeenCalled();
+  });
+
+  test('primer enable fija cutover y forward=true en la misma transacción', async () => {
+    const settings = {};
+    const { c, events } = installQueryMock({ settings });
+    const out = await svc.setForwardEnabled(true, { cutoverDate: '2026-09-16' });
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+    expect(c.settings['fase_e_daily_summary_cutover_date']).toBe('2026-09-16');
+    expect(c.settings['fase_e_forward_enabled']).toBe('true');
+    expect(events).toContain('setting:fase_e_daily_summary_cutover_date=2026-09-16');
+    expect(events).toContain('setting:fase_e_forward_enabled=true');
+    expect(out.cutover_date).toBe('2026-09-16');
+  });
+
+  test('un cutover ya fijado no puede cambiarse al re-enable', async () => {
+    installQueryMock({ settings: { fase_e_daily_summary_cutover_date: '2026-09-16', fase_e_forward_enabled: 'false' } });
+    await expect(svc.setForwardEnabled(true, { cutoverDate: '2026-09-17' }))
+      .rejects.toMatchObject({ code: 'CUTOVER_IMMUTABLE' });
+  });
+
+  test('re-enable con el MISMO cutover es válido', async () => {
+    const { c } = installQueryMock({ settings: { fase_e_daily_summary_cutover_date: '2026-09-16', fase_e_forward_enabled: 'false' } });
+    await svc.setForwardEnabled(true, { cutoverDate: '2026-09-16' });
+    expect(c.settings['fase_e_daily_summary_cutover_date']).toBe('2026-09-16');
+    expect(c.settings['fase_e_forward_enabled']).toBe('true');
+  });
+
+  test('disable sólo baja forward; conserva cutover', async () => {
+    const { c } = installQueryMock({ settings: { fase_e_daily_summary_cutover_date: '2026-09-16', fase_e_forward_enabled: 'true' } });
+    const out = await svc.setForwardEnabled(false);
+    expect(c.settings['fase_e_forward_enabled']).toBe('false');
+    expect(c.settings['fase_e_daily_summary_cutover_date']).toBe('2026-09-16');
+    expect(out.forward_effective).toBe(false);
+    expect(out.cutover_date).toBe('2026-09-16');
   });
 });
 

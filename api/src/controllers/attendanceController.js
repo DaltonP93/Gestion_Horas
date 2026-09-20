@@ -221,14 +221,21 @@ async function resolveMarkType(employeeId, wallClockTs) {
  * exclusivamente en el motor/materializador, no duplicada acá.
  */
 async function recalcDailySummary(employeeId, timestamp) {
-  // El escritor hacia adelante del motor exige AMBOS cerrojos (env kill-switch
-  // Y setting de BD fase_e_forward_enabled). Con cualquiera en OFF se conserva
-  // el camino LEGACY — fail-closed y comportamiento actual intacto.
+  // CUTOVER GUARD común al motor y al rollback legacy. Antes de que exista un
+  // cutover conserva el comportamiento pre-rollout; una vez fijado, una marca
+  // retroactiva anterior se registra pero NUNCA reescribe daily_summary.
+  const date = workdaySummary.anchorDateISO(timestamp);
+  const cutoverGuard = await workdaySummary.guardAutomaticSummaryDate(date, {
+    employeeId, context: 'attendance_recalc',
+  });
+  if (!cutoverGuard.allowed) return { blocked_by_cutover: true, ...cutoverGuard };
+
+  // El writer nuevo sigue exigiendo AMBOS cerrojos existentes + cutover válido.
   if (await workdaySummary.isEngineForwardWriteEnabled()) {
-    await workdaySummary.resolveSummary(employeeId, timestamp, { apply: true });
-    return;
+    return workdaySummary.resolveSummary(employeeId, timestamp, { apply: true });
   }
   await legacyRecalcDailySummary(employeeId, timestamp);
+  return { blocked_by_cutover: false, mode: 'legacy' };
 }
 
 // ─────────────────────────────────────────────────────────────────────
