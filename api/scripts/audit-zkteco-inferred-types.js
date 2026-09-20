@@ -44,10 +44,14 @@ const CLASS = Object.freeze({
   EXPLICIT_STORED_MISMATCH: 'EXPLICIT_STORED_MISMATCH',
   AMBIGUOUS: 'AMBIGUOUS',
   UNKNOWN_NO_CONTEXT: 'UNKNOWN_NO_CONTEXT',
-  DUPLICATE: 'DUPLICATE',
   RAW_NOT_FOUND: 'RAW_NOT_FOUND',
   NOT_ELIGIBLE: 'NOT_ELIGIBLE',
 });
+// Nota: NO existe clasificación DUPLICATE para attendance_logs. El
+// raw_device_punches.mapping_status='duplicate' sólo indica que la marca cruda
+// fue RE-OBSERVADA en un polling posterior; el attendance_log enlazado sigue
+// siendo real (imported_attendance_log_id apunta a él). Usar mapping_status para
+// marcar el log como duplicado era incorrecto y se eliminó (corrección 6).
 
 // Extractor compartido (no duplicar un parser distinto).
 const explicitFromRawJson = resolver.explicitTypeFromRawJson;
@@ -56,7 +60,7 @@ const explicitFromRawJson = resolver.explicitTypeFromRawJson;
  * Clasificador PURO de un candidato. No accede a BD ni red.
  *
  * @param c {
- *   eligible, rawFound, isDuplicate,
+ *   eligible, rawFound,
  *   currentType, rawExplicitType,
  *   contextualType, contextualProvenance ('contextual'|'unknown_no_context'),
  * }
@@ -71,11 +75,8 @@ function classifyCandidate(c) {
   if (c.eligible === false) {
     return { classification: CLASS.NOT_ELIGIBLE, proposedType: currentType, reason: 'fuera de scope (source/cutover)' };
   }
-  if (c.isDuplicate) {
-    return { classification: CLASS.DUPLICATE, proposedType: currentType, reason: 'marca duplicada (dedupe cross-source)' };
-  }
   if (!c.rawFound) {
-    return { classification: CLASS.RAW_NOT_FOUND, proposedType: currentType, reason: 'sin raw_device_punches (emp|device|wall) para comparar evidencia' };
+    return { classification: CLASS.RAW_NOT_FOUND, proposedType: currentType, reason: 'sin raw enlazado por imported_attendance_log_id único (0 o >1) para comparar evidencia' };
   }
 
   // Tipo explícito confiable en el crudo → NUNCA auto-cambio.
@@ -233,24 +234,39 @@ async function runAudit({ sequelize, cutover = DEFAULT_CUTOVER, source = DEFAULT
   const fromWall = engine.absToDateTime(minAbs - spanMin * 60);
   const toWall = engine.absToDateTime(maxAbs + 1);
 
-  // 2) Timeline COMPLETO (candidatos + contexto) de esos empleados en la ventana,
-  //    con LEFT JOIN al raw por (emp, device, wall) para el tipo explícito y la
-  //    política de confianza. Una sola consulta.
+  // 2) Timeline COMPLETO (candidatos + contexto) de esos empleados en la ventana.
+  //    SIN join a raw aquí (el vínculo se resuelve aparte por imported_attendance_log_id).
   const [tl] = await q(
     `SELECT al.id, al.employee_id AS empId, al.device_id AS deviceId,
             DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall,
-            al.type AS storedType, al.source AS source,
-            rdp.raw_json AS rawJson, rdp.mapping_status AS mappingStatus
+            al.type AS storedType, al.source AS source
        FROM attendance_logs al
-       LEFT JOIN raw_device_punches rdp
-         ON rdp.employee_id = al.employee_id
-        AND rdp.device_id <=> al.device_id
-        AND rdp.record_time_py = DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s')
       WHERE al.employee_id IN (${empIds.map(() => '?').join(',')})
         AND al.\`timestamp\` >= ? AND al.\`timestamp\` < ?
       ORDER BY al.employee_id, al.\`timestamp\`, al.id`,
     { replacements: [...empIds, fromWall, toWall] }
   );
+
+  // 3) Vínculo EXACTO raw↔log por imported_attendance_log_id, agregando por log id.
+  //    rawCount=1 → raw único confiable; 0 → no enlazado; >1 → ambiguo (no confiable).
+  //    mapping_status NO interviene: un raw re-observado ('duplicate') sigue siendo
+  //    evidencia válida del log al que importó.
+  const alIds = (tl || []).map(r => r.id);
+  const rawByAlId = new Map(); // alId → { c, anyRaw }
+  const RCHUNK = 1000;
+  for (let i = 0; i < alIds.length; i += RCHUNK) {
+    const chunk = alIds.slice(i, i + RCHUNK);
+    if (!chunk.length) break;
+    const [rl] = await q(
+      `SELECT imported_attendance_log_id AS alId, COUNT(*) AS c,
+              MAX(CAST(raw_json AS CHAR)) AS anyRaw
+         FROM raw_device_punches
+        WHERE imported_attendance_log_id IN (${chunk.map(() => '?').join(',')})
+        GROUP BY imported_attendance_log_id`,
+      { replacements: chunk }
+    );
+    for (const row of rl || []) rawByAlId.set(row.alId, { c: Number(row.c), anyRaw: row.anyRaw });
+  }
 
   const byEmp = new Map();
   for (const r of tl || []) {
@@ -265,7 +281,11 @@ async function runAudit({ sequelize, cutover = DEFAULT_CUTOVER, source = DEFAULT
   for (const [, rows] of byEmp.entries()) {
     const history = []; // [{abs,type}] con política de confianza / replay
     for (const r of rows) {
-      const rawExplicitType = explicitFromRawJson(r.rawJson);
+      const link = rawByAlId.get(r.id);
+      const rawCount = link ? link.c : 0;
+      // Sólo un raw ÚNICO enlazado es evidencia confiable; 0 o >1 → no confiable.
+      const rawExplicitType = rawCount === 1 ? explicitFromRawJson(link.anyRaw) : null;
+      const rawFound = rawCount === 1;
       const isCandidate = candIdSet.has(r.id);
       if (!isCandidate) {
         // Fila de contexto: se ancla sólo si es confiable.
@@ -276,11 +296,9 @@ async function runAudit({ sequelize, cutover = DEFAULT_CUTOVER, source = DEFAULT
       // Candidato: la expectativa se calcula ANTES de agregarlo al historial.
       const contextualType = resolver.inferContextualType(history, r.abs, opts);
       const contextualProvenance = (contextualType === 'in' || contextualType === 'out') ? 'contextual' : 'unknown_no_context';
-      const rawFound = (r.rawJson !== undefined && r.rawJson !== null) || r.mappingStatus != null;
-      const isDuplicate = r.mappingStatus === 'duplicate';
 
       const verdict = classifyCandidate({
-        eligible: true, rawFound, isDuplicate,
+        eligible: true, rawFound,
         currentType: r.storedType, rawExplicitType,
         contextualType, contextualProvenance,
       });

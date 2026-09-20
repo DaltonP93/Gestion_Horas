@@ -278,28 +278,36 @@ async function resolvePunchTypesBatch(punches, deps = {}) {
 
   const ctxByEmp = new Map();
   if (sequelize && empIds.length) {
-    // Contexto en UNA consulta (sin N+1). LEFT JOIN a raw_device_punches por
-    // (empleado, dispositivo, hora de pared) para conocer si el type histórico
-    // tiene evidencia explícita. Un type de zkteco_direct SIN raw explícito NO
-    // se usa como ancla (trustedContextType lo degrada a unknown).
+    // Contexto en UNA consulta (sin N+1). El raw se enlaza por el VÍNCULO EXACTO
+    // del pipeline: raw_device_punches.imported_attendance_log_id = attendance_logs.id
+    // (no por aproximación emp+device+hora). Un raw con tipo explícito es evidencia
+    // confiable AUNQUE su mapping_status sea 'duplicate' por una relectura posterior.
+    // Ante 0 o >1 raws enlazados (rawCount != 1) no hay evidencia confiable, así que
+    // un type de zkteco_direct sin explícito único queda como unknown.
+    const ph = empIds.map(() => '?').join(',');
     const [rows] = await sequelize.query(
       `SELECT al.employee_id AS empId,
               DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall,
-              al.type AS storedType, al.source AS source, rdp.raw_json AS rawJson
+              al.type AS storedType, al.source AS source,
+              rl.c AS rawCount, rl.anyRaw AS rawJson
          FROM attendance_logs al
-         LEFT JOIN raw_device_punches rdp
-           ON rdp.employee_id = al.employee_id
-          AND rdp.device_id <=> al.device_id
-          AND rdp.record_time_py = DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s')
-        WHERE al.employee_id IN (${empIds.map(() => '?').join(',')})
+         LEFT JOIN (
+           SELECT imported_attendance_log_id AS alId, COUNT(*) AS c,
+                  MAX(CAST(raw_json AS CHAR)) AS anyRaw
+             FROM raw_device_punches
+            WHERE imported_attendance_log_id IS NOT NULL
+              AND employee_id IN (${ph})
+            GROUP BY imported_attendance_log_id
+         ) rl ON rl.alId = al.id
+        WHERE al.employee_id IN (${ph})
           AND al.\`timestamp\` >= ? AND al.\`timestamp\` < ?
         ORDER BY al.employee_id, al.\`timestamp\`, al.id`,
-      { replacements: [...empIds, fromWall, toWallStr] }
+      { replacements: [...empIds, ...empIds, fromWall, toWallStr] }
     );
     for (const r of rows || []) {
       const w = engine.toWall(r.wall);
       if (!w) continue;
-      const rawExplicitType = explicitTypeFromRawJson(r.rawJson);
+      const rawExplicitType = Number(r.rawCount) === 1 ? explicitTypeFromRawJson(r.rawJson) : null;
       const ctxType = trustedContextType({ source: r.source, storedType: r.storedType, rawExplicitType });
       if (!ctxByEmp.has(r.empId)) ctxByEmp.set(r.empId, []);
       ctxByEmp.get(r.empId).push({ kind: 'context', abs: w.abs, type: ctxType });

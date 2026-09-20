@@ -61,10 +61,12 @@ describe('classifyCandidate — reglas de clasificación', () => {
     expect(v.classification).toBe('AMBIGUOUS');
     expect(v.proposedType).toBe('in');
   });
-  test('duplicado → DUPLICATE; sin raw → RAW_NOT_FOUND; fuera de scope → NOT_ELIGIBLE', () => {
-    expect(audit.classifyCandidate({ ...base, isDuplicate: true }).classification).toBe('DUPLICATE');
+  test('sin raw único enlazado → RAW_NOT_FOUND; fuera de scope → NOT_ELIGIBLE', () => {
     expect(audit.classifyCandidate({ ...base, rawFound: false }).classification).toBe('RAW_NOT_FOUND');
     expect(audit.classifyCandidate({ ...base, eligible: false }).classification).toBe('NOT_ELIGIBLE');
+  });
+  test('Corrección 6: NO existe clasificación DUPLICATE en el auditor', () => {
+    expect(audit.CLASS.DUPLICATE).toBeUndefined();
   });
 });
 
@@ -114,100 +116,119 @@ describe('makeReadOnlyRunner — guard de sólo-lectura', () => {
   });
 });
 
-describe('runAudit — replay, device-key y coverage (sequelize sintético)', () => {
-  // fake por patrón de SQL. COUNT → total; scope → candidatos; timeline → JOIN.
-  function fakeDb({ total, candidates, timeline }) {
+describe('runAudit — replay, vínculo por imported_attendance_log_id y coverage', () => {
+  // fake por patrón de SQL. COUNT → total; raw_device_punches (group) → rawLinks
+  // filtrados por los ids pedidos; scope → candidatos; timeline (sin join) → rows.
+  // rawLinks: [{ alId, c, anyRaw }]
+  function fakeDb({ total, candidates, timeline, rawLinks = [] }) {
     return {
-      query: jest.fn(async (sql) => {
+      query: jest.fn(async (sql, opts) => {
         if (/COUNT\(\*\) AS n/i.test(sql)) return [[{ n: total }]];
-        if (/LEFT JOIN raw_device_punches/i.test(sql)) return [timeline];
+        if (/FROM raw_device_punches/i.test(sql)) {
+          const ids = new Set((opts && opts.replacements) || []);
+          return [rawLinks.filter(r => ids.has(r.alId))];
+        }
         if (/FROM attendance_logs\s+WHERE source/i.test(sql)) return [candidates];
+        if (/FROM attendance_logs/i.test(sql)) return [timeline];
         return [[]];
       }),
       close: jest.fn(async () => {}),
     };
   }
+  const candOf = (rows) => rows.map(r => ({ id: r.id, empId: r.empId, deviceId: r.deviceId, wall: r.wall, type: r.storedType }));
 
   test('Corrección 1: 18:16 AMBIGUOUS y 07:01 NO se vuelve DETERMINISTIC_CHANGE por el current ambiguo', async () => {
-    // Dos zkteco_direct sin raw explícito y sin contexto confiable previo.
     const rows = [
-      { id: 101, empId: 55, deviceId: 1, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}', mappingStatus: 'mapped' },
-      { id: 102, empId: 55, deviceId: 1, wall: '2026-09-20 07:01:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}', mappingStatus: 'mapped' },
+      { id: 101, empId: 55, deviceId: 1, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct' },
+      { id: 102, empId: 55, deviceId: 1, wall: '2026-09-20 07:01:00', storedType: 'in', source: 'zkteco_direct' },
     ];
-    const db = fakeDb({
-      total: 2,
-      candidates: rows.map(r => ({ id: r.id, empId: r.empId, deviceId: r.deviceId, wall: r.wall, type: r.storedType })),
-      timeline: rows,
-    });
+    // raw enlazado por imported id, sin tipo explícito.
+    const rawLinks = [{ alId: 101, c: 1, anyRaw: '{}' }, { alId: 102, c: 1, anyRaw: '{}' }];
+    const db = fakeDb({ total: 2, candidates: candOf(rows), timeline: rows, rawLinks });
     const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100, generatedAt: 'fixed', baselineCommit: 't' });
     const byId = Object.fromEntries(manifest.candidate_rows.map(r => [r.attendance_log_id, r]));
     expect(byId[101].classification).toBe('AMBIGUOUS');
-    expect(byId[102].classification).toBe('AMBIGUOUS');       // <-- NO DETERMINISTIC_CHANGE
+    expect(byId[102].classification).toBe('AMBIGUOUS');      // NO DETERMINISTIC_CHANGE
     expect(manifest.counts.by_classification.DETERMINISTIC_CHANGE).toBeUndefined();
+  });
+
+  test('Corrección 6.1/6.2: raw mapping_status irrelevante; log con raw enlazado sin explícito → AMBIGUOUS, NO DUPLICATE', async () => {
+    // Aunque el raw haya sido re-observado (mapping_status='duplicate' en prod),
+    // aquí no se lee mapping_status: sólo el vínculo por imported id + su explícito.
+    const rows = [{ id: 700, empId: 71, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct' }];
+    const rawLinks = [{ alId: 700, c: 1, anyRaw: '{}' }]; // sin tipo explícito
+    const db = fakeDb({ total: 1, candidates: candOf(rows), timeline: rows, rawLinks });
+    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
+    const r = manifest.candidate_rows[0];
+    expect(r.classification).toBe('AMBIGUOUS');
+    expect(manifest.counts.by_classification.DUPLICATE).toBeUndefined();
+  });
+
+  test('Corrección 6.3: raw enlazado con explícito IN/OUT es evidencia confiable (aunque fuese re-observado)', async () => {
+    const rows = [{ id: 710, empId: 72, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct' }];
+    const rawLinks = [{ alId: 710, c: 1, anyRaw: '{"inOutStatus":0}' }]; // explícito IN
+    const db = fakeDb({ total: 1, candidates: candOf(rows), timeline: rows, rawLinks });
+    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
+    const r = manifest.candidate_rows[0];
+    expect(r.raw_explicit_type).toBe('in');
+    expect(r.classification).toBe('ALREADY_CORRECT'); // raw in == stored in
+  });
+
+  test('Corrección 6.4: dos devices, mismo empleado/segundo → imported_attendance_log_id enlaza cada log con SU raw', async () => {
+    const rows = [
+      { id: 400, empId: 70, deviceId: 1, wall: '2026-09-18 09:00:00', storedType: 'in', source: 'zkteco_direct' },
+      { id: 401, empId: 70, deviceId: 2, wall: '2026-09-18 09:00:00', storedType: 'out', source: 'zkteco_direct' },
+    ];
+    const rawLinks = [{ alId: 400, c: 1, anyRaw: '{"inOutStatus":0}' }, { alId: 401, c: 1, anyRaw: '{"inOutStatus":1}' }];
+    const db = fakeDb({ total: 2, candidates: candOf(rows), timeline: rows, rawLinks });
+    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
+    const byId = Object.fromEntries(manifest.candidate_rows.map(r => [r.attendance_log_id, r]));
+    expect(byId[400].raw_explicit_type).toBe('in');   // su propio raw
+    expect(byId[401].raw_explicit_type).toBe('out');  // su propio raw
+    expect(byId[400].classification).not.toBe('EXPLICIT_STORED_MISMATCH');
+    expect(byId[401].classification).not.toBe('EXPLICIT_STORED_MISMATCH');
+    expect(byId[400].classification).toBe('ALREADY_CORRECT');
+    expect(byId[401].classification).toBe('EXPLICIT_CONFLICT'); // mismo segundo: dedupe espera IN, raw dice OUT
+  });
+
+  test('Corrección 6.5: imported_attendance_log_id NULL (0 links) o múltiple (>1) → RAW_NOT_FOUND (nunca raw ajeno)', async () => {
+    const rows = [
+      { id: 800, empId: 80, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct' }, // 0 links
+      { id: 801, empId: 80, deviceId: 1, wall: '2026-09-16 09:00:00', storedType: 'in', source: 'zkteco_direct' }, // >1 links
+    ];
+    const rawLinks = [{ alId: 801, c: 2, anyRaw: '{"inOutStatus":0}' }]; // 801 ambiguo; 800 sin link
+    const db = fakeDb({ total: 2, candidates: candOf(rows), timeline: rows, rawLinks });
+    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
+    const byId = Object.fromEntries(manifest.candidate_rows.map(r => [r.attendance_log_id, r]));
+    expect(byId[800].classification).toBe('RAW_NOT_FOUND');
+    expect(byId[801].classification).toBe('RAW_NOT_FOUND');
+    expect(byId[801].raw_explicit_type).toBeNull(); // no se elige el raw ambiguo
   });
 
   test('DETERMINISTIC_CHANGE sólo con ancla CONFIABLE (contexto device) previa', async () => {
     const rows = [
-      { id: 300, empId: 60, deviceId: 9, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'device', rawJson: null, mappingStatus: null },       // contexto confiable
-      { id: 301, empId: 60, deviceId: 1, wall: '2026-09-16 17:00:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}', mappingStatus: 'mapped' }, // candidato
+      { id: 300, empId: 60, deviceId: 9, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'device' },       // contexto confiable (otra fuente)
+      { id: 301, empId: 60, deviceId: 1, wall: '2026-09-16 17:00:00', storedType: 'in', source: 'zkteco_direct' }, // candidato
     ];
-    const db = fakeDb({
-      total: 1,
-      candidates: [{ id: 301, empId: 60, deviceId: 1, wall: '2026-09-16 17:00:00', type: 'in' }],
-      timeline: rows,
-    });
-    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100, generatedAt: 'fixed' });
+    const rawLinks = [{ alId: 301, c: 1, anyRaw: '{}' }]; // 300 es device (contexto no candidato); 301 sin explícito
+    const db = fakeDb({ total: 1, candidates: candOf([rows[1]]), timeline: rows, rawLinks });
+    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
     const r = manifest.candidate_rows.find(x => x.attendance_log_id === 301);
     expect(r.classification).toBe('DETERMINISTIC_CHANGE');
     expect(r.proposed_type).toBe('out');
     expect(manifest.coverage).toEqual({ total_scoped_rows: 1, rows_audited: 1, truncated: false });
   });
 
-  test('Corrección 3: dos dispositivos, mismo empleado/segundo → cada candidato usa el raw de SU device', async () => {
-    const rows = [
-      { id: 400, empId: 70, deviceId: 1, wall: '2026-09-18 09:00:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{"inOutStatus":0}', mappingStatus: 'mapped' },
-      { id: 401, empId: 70, deviceId: 2, wall: '2026-09-18 09:00:00', storedType: 'out', source: 'zkteco_direct', rawJson: '{"inOutStatus":1}', mappingStatus: 'mapped' },
-    ];
-    const db = fakeDb({
-      total: 2,
-      candidates: rows.map(r => ({ id: r.id, empId: r.empId, deviceId: r.deviceId, wall: r.wall, type: r.storedType })),
-      timeline: rows,
-    });
-    const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
-    const byId = Object.fromEntries(manifest.candidate_rows.map(r => [r.attendance_log_id, r]));
-    // Cada candidato leyó el raw de SU PROPIO device (no cross-read): si hubiera
-    // pisado el otro, el raw explícito no coincidiría con el device.
-    expect(byId[400].raw_explicit_type).toBe('in');   // device 1
-    expect(byId[401].raw_explicit_type).toBe('out');  // device 2
-    // El explícito se conserva (proposed == stored), nunca invertido.
-    expect(byId[400].proposed_type).toBe('in');
-    expect(byId[401].proposed_type).toBe('out');
-    // Ninguno es EXPLICIT_STORED_MISMATCH (eso indicaría haber leído el raw del otro device).
-    expect(byId[400].classification).not.toBe('EXPLICIT_STORED_MISMATCH');
-    expect(byId[401].classification).not.toBe('EXPLICIT_STORED_MISMATCH');
-    expect(byId[400].classification).toBe('ALREADY_CORRECT');
-    // 401 comparte el mismo segundo que 400: el IN explícito de 400 entra al
-    // historial y, por ventana de dedupe, el contexto de 401 espera IN → como su
-    // raw dice OUT, se REPORTA EXPLICIT_CONFLICT (explícito preservado, no invertido).
-    expect(byId[401].classification).toBe('EXPLICIT_CONFLICT');
-  });
-
   test('coverage.truncated=true cuando el scope excede el LIMIT', async () => {
-    const rows = [{ id: 500, empId: 88, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}', mappingStatus: 'mapped' }];
-    const db = fakeDb({
-      total: 212,
-      candidates: rows.map(r => ({ id: r.id, empId: r.empId, deviceId: r.deviceId, wall: r.wall, type: r.storedType })),
-      timeline: rows,
-    });
+    const rows = [{ id: 500, empId: 88, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct' }];
+    const db = fakeDb({ total: 212, candidates: candOf(rows), timeline: rows, rawLinks: [{ alId: 500, c: 1, anyRaw: '{}' }] });
     const { manifest } = await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 1 });
-    expect(manifest.coverage.total_scoped_rows).toBe(212);
-    expect(manifest.coverage.rows_audited).toBe(1);
-    expect(manifest.coverage.truncated).toBe(true);
+    expect(manifest.coverage).toEqual({ total_scoped_rows: 212, rows_audited: 1, truncated: true });
   });
 
   test('runAudit no ejecuta ningún SQL de escritura', async () => {
-    const rows = [{ id: 900, empId: 91, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}', mappingStatus: 'mapped' }];
-    const db = fakeDb({ total: 1, candidates: rows.map(r => ({ id: r.id, empId: r.empId, deviceId: r.deviceId, wall: r.wall, type: r.storedType })), timeline: rows });
+    const rows = [{ id: 900, empId: 91, deviceId: 1, wall: '2026-09-16 08:00:00', storedType: 'in', source: 'zkteco_direct' }];
+    const db = fakeDb({ total: 1, candidates: candOf(rows), timeline: rows, rawLinks: [{ alId: 900, c: 1, anyRaw: '{}' }] });
     await audit.runAudit({ sequelize: db, cutover: '2026-09-16', limit: 100 });
     for (const call of db.query.mock.calls) {
       expect(String(call[0])).not.toMatch(/^\s*(INSERT|UPDATE|DELETE|REPLACE|TRUNCATE|ALTER|DROP|CREATE)\b/i);

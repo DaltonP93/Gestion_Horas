@@ -182,20 +182,27 @@ describe('resolvePunchTypesBatch — lote eficiente y determinista', () => {
   });
 
   // ── Corrección 5: contexto zkteco_direct sin raw explícito NO es confiable ──
-  test('5A. contexto zkteco_direct stored=IN SIN raw explícito → NO fuerza OUT (unknown)', async () => {
-    const contextRows = [{ empId: 4, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}' }];
+  test('5A. contexto zkteco_direct stored=IN SIN raw explícito único → NO fuerza OUT (unknown)', async () => {
+    const contextRows = [{ empId: 4, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawCount: 1, rawJson: '{}' }];
     const punches = [{ empId: 4, wall: '2026-09-20 07:01:00', explicitType: null }];
     await R.resolvePunchTypesBatch(punches, deps(fakeSequelize(contextRows), contextRows));
     expect(punches[0].type).toBe('unknown');
     expect(punches[0].typeProvenance).toBe('unknown_no_context');
   });
 
-  test('5B. contexto zkteco_direct stored=IN CON raw explícito IN → sí infiere OUT', async () => {
-    const contextRows = [{ empId: 6, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{"inOutStatus":0}' }];
+  test('5B. contexto zkteco_direct stored=IN CON raw explícito IN (link único) → sí infiere OUT', async () => {
+    const contextRows = [{ empId: 6, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawCount: 1, rawJson: '{"inOutStatus":0}' }];
     const punches = [{ empId: 6, wall: '2026-09-20 07:01:00', explicitType: null }];
     await R.resolvePunchTypesBatch(punches, deps(fakeSequelize(contextRows), contextRows));
     expect(punches[0].type).toBe('out');
     expect(punches[0].typeProvenance).toBe('contextual');
+  });
+
+  test('5D. contexto zkteco_direct con raw explícito pero MÚLTIPLE (rawCount>1) → no confiable (unknown)', async () => {
+    const contextRows = [{ empId: 12, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawCount: 2, rawJson: '{"inOutStatus":0}' }];
+    const punches = [{ empId: 12, wall: '2026-09-20 07:01:00', explicitType: null }];
+    await R.resolvePunchTypesBatch(punches, deps(fakeSequelize(contextRows), contextRows));
+    expect(punches[0].type).toBe('unknown');
   });
 
   test('5C. una marca del batch resuelta determinista sí alimenta a la siguiente', async () => {

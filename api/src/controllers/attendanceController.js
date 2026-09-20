@@ -166,20 +166,26 @@ async function resolveMarkType(employeeId, wallClockTs) {
   // es EXCLUSIVO en esta marca (miramos sólo lo previo).
   const desde = engine.absToDateTime(at.abs - engine.DEFAULTS.historicalMaxWorkdaySpanMinutes * 60);
   const hasta = engine.absToDateTime(at.abs);
-  // Se trae source y el raw enlazado para aplicar la POLÍTICA DE CONTEXTO
-  // CONFIABLE: un type de zkteco_direct SIN evidencia explícita en raw fue
-  // inferido por la lógica vieja y NO ancla la secuencia (se degrada a unknown).
+  // Se trae source y el raw enlazado por el VÍNCULO EXACTO del pipeline
+  // (raw_device_punches.imported_attendance_log_id = attendance_logs.id) para
+  // aplicar la POLÍTICA DE CONTEXTO CONFIABLE: un type de zkteco_direct SIN raw
+  // explícito único (rawCount != 1) fue inferido por la lógica vieja y NO ancla
+  // la secuencia (se degrada a unknown). El mapping_status del raw NO interviene.
   const [rows] = await sequelize.query(`
     SELECT DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s') AS timestamp,
-           al.type AS storedType, al.source AS source, rdp.raw_json AS rawJson
+           al.type AS storedType, al.source AS source,
+           rl.c AS rawCount, rl.anyRaw AS rawJson
     FROM attendance_logs al
-    LEFT JOIN raw_device_punches rdp
-      ON rdp.employee_id = al.employee_id
-     AND rdp.device_id <=> al.device_id
-     AND rdp.record_time_py = DATE_FORMAT(al.timestamp, '%Y-%m-%d %H:%i:%s')
+    LEFT JOIN (
+      SELECT imported_attendance_log_id AS alId, COUNT(*) AS c,
+             MAX(CAST(raw_json AS CHAR)) AS anyRaw
+        FROM raw_device_punches
+       WHERE imported_attendance_log_id IS NOT NULL AND employee_id = ?
+       GROUP BY imported_attendance_log_id
+    ) rl ON rl.alId = al.id
     WHERE al.employee_id = ? AND al.timestamp >= ? AND al.timestamp < ?
     ORDER BY al.timestamp, al.id
-  `, { replacements: [employeeId, desde, hasta] });
+  `, { replacements: [employeeId, employeeId, desde, hasta] });
 
   if (!rows.length) return 'unknown';   // sin marcas previas: no se afirma in/out
 
@@ -191,7 +197,7 @@ async function resolveMarkType(employeeId, wallClockTs) {
   for (const r of rows) {
     const w = engine.toWall(r.timestamp);
     if (!w) continue;
-    const rawExplicitType = punchTypeResolver.explicitTypeFromRawJson(r.rawJson);
+    const rawExplicitType = Number(r.rawCount) === 1 ? punchTypeResolver.explicitTypeFromRawJson(r.rawJson) : null;
     const type = punchTypeResolver.trustedContextType({ source: r.source, storedType: r.storedType, rawExplicitType });
     priorTyped.push({ abs: w.abs, type });
   }
