@@ -6,7 +6,8 @@
  * 'unmapped' y crea attendance_logs cuando encuentra empleado.
  */
 const { sequelize } = require('../config/database');
-const { buildEmployeeMatcher, resolveTypes, pyDateStr, pyDateTimeStr } = require('./zktecoReader');
+const { buildEmployeeMatcher, resolvePunchTypes, pyDateStr, pyDateTimeStr } = require('./zktecoReader');
+const punchTypeResolver = require('./punchTypeResolver');
 
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 
@@ -21,7 +22,7 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
   if (deviceId != null) { where.push('device_id = ?'); repl.push(deviceId); }
 
   const [rows] = await sequelize.query(
-    `SELECT id, device_id, device_user_id, record_time FROM raw_device_punches
+    `SELECT id, device_id, device_user_id, record_time, raw_json FROM raw_device_punches
      WHERE ${where.join(' AND ')} ORDER BY record_time`,
     { replacements: repl }
   );
@@ -33,11 +34,14 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
   for (const r of rows) {
     const empId = matcher.resolve(r.device_id, r.device_user_id);
     if (!empId) { result.still_unmapped++; continue; }
-    mappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time) });
+    // Preservar el tipo EXPLÍCITO del crudo (si el dispositivo lo trae) con el
+    // MISMO extractor compartido; sin él, el resolver lo tratará por contexto.
+    const explicitFromRaw = punchTypeResolver.explicitTypeFromRawJson(r.raw_json);
+    mappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time), type: explicitFromRaw, explicit: !!explicitFromRaw });
   }
   if (!mappable.length) return result;
 
-  resolveTypes(mappable);
+  await resolvePunchTypes(mappable);
   const dates = new Set();
   for (const p of mappable) {
     try {

@@ -17,8 +17,12 @@ const { resolveMarkType } = require('../src/controllers/attendanceController');
 /** Marcas previas que devolverá la lectura de la ventana. */
 function conPrevias(rows) {
   sequelize.query.mockReset();
+  // La consulta real ahora trae storedType/source/rawJson (política de contexto
+  // confiable). Estas previas representan marcas confiables (source device, sin
+  // degradación): se mapean a la forma que devuelve el SELECT con LEFT JOIN.
+  const mapped = rows.map(r => ({ timestamp: r.timestamp, storedType: r.type, source: r.source || 'device', rawJson: r.rawJson ?? null }));
   sequelize.query.mockImplementation(async (sql) => {
-    if (/FROM attendance_logs/i.test(sql)) return [rows];
+    if (/FROM attendance_logs/i.test(sql)) return [mapped];
     return [[]];
   });
 }

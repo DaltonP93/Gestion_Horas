@@ -17,6 +17,7 @@
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 const { withDeadlockRetry, isRetryable, mysqlErrno } = require('../utils/mysqlRetry');
+const punchTypeResolver = require('./punchTypeResolver');
 // Sólo mide: no altera qué se lee ni cuándo (ver services/netMetrics.js).
 const netMetrics = require('./netMetrics');
 
@@ -186,10 +187,10 @@ function normalizeRecord(l) {
 }
 
 // Mapea un valor de in/out explícito a 'in'/'out'; null si no es concluyente.
+// Delegado en el resolver compartido: una sola definición de "tipo explícito
+// confiable" para todas las fuentes.
 function explicitType(inout) {
-  if (inout === 0 || inout === '0' || inout === 'in') return 'in';
-  if (inout === 1 || inout === '1' || inout === 'out') return 'out';
-  return null;
+  return punchTypeResolver.classifyExplicit(inout);
 }
 
 // Qué campos trae un registro (para el diagnóstico crudo).
@@ -201,24 +202,25 @@ function detectFields(sample) {
   return ALL_KNOWN_FIELDS.filter(f => sample[f] !== undefined);
 }
 
-// Los registros masivos de getAttendances() no traen in/out. Inferimos por
-// orden temporal por (empleado, día PY): la primera marca = 'in', la última =
-// 'out', las intermedias alternan. Respeta el in/out explícito si existe.
-function resolveTypes(candidates) {
-  const groups = new Map();
-  for (const c of candidates) {
-    const k = `${c.empId}|${pyDateStr(c.ts)}`;
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(c);
-  }
-  for (const arr of groups.values()) {
-    arr.sort((a, b) => a.ts - b.ts);
-    arr.forEach((c, i) => { if (!c.type) c.type = i % 2 === 0 ? 'in' : 'out'; });
-    // Con ≥2 marcas, garantizar que la última cuente como salida (para que
-    // daily_summary calcule last_out y las horas trabajadas).
-    const last = arr[arr.length - 1];
-    if (arr.length >= 2 && !last.explicit && last.type === 'in') last.type = 'out';
-  }
+// Resolución del tipo (in/out) de las marcas masivas de getAttendances(), que
+// NO traen in/out. Antes se agrupaba por (empleado, DÍA CIVIL) y se alternaba
+// por paridad forzando la última como salida; eso reiniciaba el contador a
+// medianoche y rompía los turnos nocturnos (una marca del día siguiente se
+// asumía entrada nueva). Ahora se delega en el resolver CONTEXTUAL compartido
+// (misma semántica que attendanceController): ventana de jornada, no día civil;
+// respeta el tipo explícito sin reescribirlo; sin evidencia → unknown.
+//
+// Es asíncrono porque carga (una sola vez, sin N+1) el contexto previo de los
+// empleados del lote desde attendance_logs. Escribe de vuelta p.type (sólo si
+// NO era explícito), p.typeProvenance, p.typeConflict, p.contextualExpectation.
+async function resolvePunchTypes(candidates) {
+  return punchTypeResolver.resolvePunchTypesBatch(candidates, {
+    sequelize,
+    source: 'zkteco_direct',
+    getEmpId: (p) => p.empId,
+    getWall: (p) => pyDateTimeStr(p.ts),
+    getExplicitType: (p) => (p.explicit ? p.type : null),
+  });
 }
 
 // Recomendación operativa según el error de conexión/lectura.
@@ -748,9 +750,11 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
 
   if (!punches.length) { report.duration_ms = Date.now() - t0; return report; }
 
-  // Inferir in/out por orden temporal para las marcas mapeadas.
+  // Inferir in/out por CONTEXTO de jornada (resolver compartido) para las marcas
+  // mapeadas. El explícito del dispositivo se conserva; sólo se infiere lo que no
+  // trae tipo confiable, y sin evidencia queda 'unknown'.
   const mapped = punches.filter(p => p.empId);
-  resolveTypes(mapped);
+  await resolvePunchTypes(mapped);
 
   // Dedup cross-source por (emp, fecha-hora PY): las que ya existen quedan
   // 'duplicate'; las nuevas se insertan y quedan 'mapped'.
@@ -1030,6 +1034,6 @@ module.exports = {
   tableExists, getExistingColumns,
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
-  normalizeRecord, resolveTypes, explicitType, detectFields, memSnapshot,
+  normalizeRecord, resolvePunchTypes, explicitType, detectFields, memSnapshot,
   recordSyncRun, recommendationFor,
 };

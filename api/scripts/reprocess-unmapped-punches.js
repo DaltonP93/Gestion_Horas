@@ -15,7 +15,8 @@
  */
 require('dotenv').config();
 const { sequelize } = require('../src/config/database');
-const { buildEmployeeMatcher, resolveTypes, pyDateStr, pyDateTimeStr } = require('../src/services/zktecoReader');
+const { buildEmployeeMatcher, resolvePunchTypes, pyDateStr, pyDateTimeStr } = require('../src/services/zktecoReader');
+const punchTypeResolver = require('../src/services/punchTypeResolver');
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -36,7 +37,7 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
   if (to) { where.push('record_time_py <= ?'); repl.push(`${to} 23:59:59`); }
 
   const [rows] = await sequelize.query(
-    `SELECT id, device_id, device_user_id, record_time FROM raw_device_punches
+    `SELECT id, device_id, device_user_id, record_time, raw_json FROM raw_device_punches
      WHERE ${where.join(' AND ')} ORDER BY record_time`,
     { replacements: repl }
   );
@@ -52,7 +53,8 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
   for (const r of rows) {
     const empId = matcher.resolve(r.device_id, r.device_user_id);
     if (!empId) { result.still_unmapped++; continue; }
-    nowMappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time) });
+    const explicitFromRaw = punchTypeResolver.explicitTypeFromRawJson(r.raw_json);
+    nowMappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time), type: explicitFromRaw, explicit: !!explicitFromRaw });
   }
 
   if (!nowMappable.length) {
@@ -61,8 +63,8 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
     await sequelize.close(); process.exit(0);
   }
 
-  // Inferir in/out por (empleado, día).
-  resolveTypes(nowMappable);
+  // Inferir in/out por CONTEXTO de jornada (resolver compartido, sin día civil).
+  await resolvePunchTypes(nowMappable);
 
   for (const p of nowMappable) {
     try {
