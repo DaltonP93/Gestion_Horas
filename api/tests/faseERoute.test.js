@@ -22,7 +22,7 @@ const mockSvc = {
   getStatus: jest.fn(async () => ({ read_only: true, migrations: [] })),
   getImpact: jest.fn(async () => ({ read_only: true, rows_differ: 0 })),
   listBatches: jest.fn(async () => []),
-  setForwardEnabled: jest.fn(async (v) => ({ forward_db_setting: v })),
+  setForwardEnabled: jest.fn(async (v, opts = {}) => ({ forward_db_setting: v, cutover_date: opts.cutoverDate || null })),
   recalcApply: jest.fn(async () => ({ batch_id: 'B1', period: {}, scope: {}, employees: 1, rows_backed_up: 1, rows_written: 1 })),
   restoreBatch: jest.fn(async () => ({ batch_id: 'B1', rows_restored: 1, rows_deleted: 0 })),
 };
@@ -78,7 +78,7 @@ const ADMIN = { id: 2, role: 'admin', username: 'adm' };
 // /migrations/apply se retiró (migraciones = paso de OPS). /forward/disable ya
 // NO se gatea con el master-flag: es el FRENO DE EMERGENCIA (se prueba aparte).
 const MUTATING = [
-  ['post', '/forward/enable', { confirm: 'ACTIVAR MOTOR', backup_confirmed: true }],
+  ['post', '/forward/enable', { confirm: 'ACTIVAR MOTOR', backup_confirmed: true, cutover_date: '2026-09-16' }],
   ['post', '/recalc/apply', { confirm: 'RECALCULAR', backup_confirmed: true, from: '2025-01-01', to: '2025-01-31' }],
   ['post', '/recalc/restore', { confirm: 'RESTAURAR', batch_id: 'B1' }],
 ];
@@ -155,6 +155,15 @@ describe('(c) master-flag ON — confirmación tipeada y backup obligatorios', (
     });
     expect(res.statusCode).toBe(400);
     expect(mockSvc.setForwardEnabled).not.toHaveBeenCalled();
+  });
+
+  test('forward/enable pasa el cutover explícito al servicio', async () => {
+    const res = await runRoute('post', '/forward/enable', {
+      user: SUPER, body: { confirm: 'ACTIVAR MOTOR', backup_confirmed: true, cutover_date: '2026-09-16' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mockSvc.setForwardEnabled).toHaveBeenCalledWith(true, { cutoverDate: '2026-09-16' });
+    expect(res.body.cutover_date).toBe('2026-09-16');
   });
 
   test('con todo correcto, recalc SÍ ejecuta y devuelve batch_id', async () => {

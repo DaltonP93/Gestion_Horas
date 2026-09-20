@@ -42,6 +42,11 @@ function conMarcajes(rows, stored = {}) {
   sequelize.query.mockImplementation(async (sql, opts) => {
     if (/FROM attendance_logs/i.test(sql)) return [rows];
     if (/FROM holidays/i.test(sql)) return [[]];
+    // Contrato nuevo del writer: las pruebas de APPLY viven después de un cutover
+    // ficticio muy anterior, sin cambiar la semántica que cada caso ejercita.
+    if (/FROM system_settings/i.test(sql) && opts?.replacements?.[0] === svc.CUTOVER_SETTING_KEY) {
+      return [[{ value: '2020-01-01' }]];
+    }
     // Lectura del estado previo (FOR UPDATE) por (empleado, fecha).
     if (/FROM daily_summary WHERE employee_id = \? AND date = \? FOR UPDATE/i.test(sql)) {
       const date = opts?.replacements?.[1];

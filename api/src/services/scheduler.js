@@ -515,6 +515,9 @@ function stopJob(scheduleId) {
 
 // ─── Recalcular daily_summary en bloque para una fecha (Paraguay) ─
 async function bulkRecalcDailySummary(date) {
+  const cutoverGuard = await workdaySummary.guardAutomaticSummaryDate(date, { context: 'bulk_recalc' });
+  if (!cutoverGuard.allowed) return 0;
+
   // Cuando el motor está habilitado, el recálculo en bloque también pasa por él:
   // no puede quedar un job/cron recalculando con la matemática vieja mientras el
   // camino operativo usa el motor. Con el flag OFF (default) se conserva el SQL
@@ -666,6 +669,9 @@ async function legacyBulkRecalcDailySummary(date) {
 // debían trabajar ese día, no es feriado, y no tienen ya una fila. No pisa
 // filas existentes. Empleados sin horario asignado se omiten.
 async function materializeAbsents(date) {
+  const cutoverGuard = await workdaySummary.guardAutomaticSummaryDate(date, { context: 'materialize_absents' });
+  if (!cutoverGuard.allowed) return 0;
+
   // Con el motor habilitado, la materialización de días vacíos ya la hace el
   // recálculo por el motor, que DELIBERADAMENTE deja sin fila un día
   // `unconfigured` (sin evidencia de ausencia). materializeAbsents usa el
