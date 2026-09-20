@@ -15,7 +15,7 @@
  */
 require('dotenv').config();
 const { sequelize } = require('../src/config/database');
-const { buildEmployeeMatcher, resolveTypes, pyDateStr, pyDateTimeStr } = require('../src/services/zktecoReader');
+const { buildEmployeeMatcher, resolvePunchTypes, pyDateStr, pyDateTimeStr } = require('../src/services/zktecoReader');
 
 function arg(name, def) {
   const i = process.argv.indexOf(`--${name}`);
@@ -61,8 +61,8 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
     await sequelize.close(); process.exit(0);
   }
 
-  // Inferir in/out por (empleado, día).
-  resolveTypes(nowMappable);
+  // Inferir in/out por CONTEXTO de jornada (resolver compartido, sin día civil).
+  await resolvePunchTypes(nowMappable);
 
   for (const p of nowMappable) {
     try {

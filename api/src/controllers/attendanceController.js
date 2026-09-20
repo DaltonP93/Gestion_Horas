@@ -8,6 +8,7 @@ const { LINKED_SQL } = require('../services/rawPunchStats');
 const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
 const { normalizeAttendanceTimestampForDb, attendanceDisplayInstant } = require('../utils/attendanceTime');
 const engine = require('../services/workdayEngine');
+const punchTypeResolver = require('../services/punchTypeResolver');
 const workdaySummary = require('../services/workdaySummaryService');
 const lateAlert = require('../services/lateAlertService');
 let fireWebhooks;
@@ -174,37 +175,16 @@ async function resolveMarkType(employeeId, wallClockTs) {
 
   if (!rows.length) return 'unknown';   // sin marcas previas: no se afirma in/out
 
-  // RÁFAGA / DUPLICADO PRIMERO: si la marca más reciente cae dentro de la ventana
-  // de dedupe, esta marca es una repetición del reloj y CONSERVA su tipo, no
-  // alterna. Si no, un 08:00:00 in + 08:00:30 (unknown) se tiparía out, y como el
-  // dedupe nuevo no colapsa tipos opuestos, quedaría un tramo de 30 s y la salida
-  // real de las 17:00 se infiere in. Detectarlo antes de alternar lo evita.
-  const previa = rows[rows.length - 1];
-  if (previa && (previa.type === 'in' || previa.type === 'out')) {
-    const wPrev = engine.toWall(previa.timestamp);
-    if (wPrev && (at.abs - wPrev.abs) <= engine.DEFAULTS.duplicateWindowSeconds) {
-      return previa.type;
-    }
-  }
-
-  // Última marca con tipo conocido (los duplicados y desconocidos no cambian el
-  // estado de sesión).
-  let ultima = null;
+  // La DECISIÓN vive en el resolver compartido (punchTypeResolver): misma
+  // semántica contextual (ventana de jornada, ráfaga/dedupe, sesión abierta,
+  // sólo-unknown → unknown) que usa la importación masiva ZKTeco. Acá sólo se
+  // provee el I/O (la ventana ya leída) y la marca a resolver.
+  const priorTyped = [];
   for (const r of rows) {
-    if (r.type === 'in' || r.type === 'out') ultima = r;
+    const w = engine.toWall(r.timestamp);
+    if (w) priorTyped.push({ abs: w.abs, type: r.type });
   }
-  if (!ultima) return 'unknown';   // sólo hay unknown previos: sin estado de sesión
-
-  if (ultima.type === 'in') {
-    // ¿Sigue abierta la sesión? Si el hueco supera el máximo de una jornada, esa
-    // entrada ya pertenece a otra jornada: no se puede afirmar si esta marca es
-    // la SALIDA tardía que faltó o una ENTRADA nueva → ambiguo → 'unknown'.
-    const w = engine.toWall(ultima.timestamp);
-    const gapMin = (at.abs - w.abs) / 60;
-    return gapMin <= engine.DEFAULTS.historicalMaxWorkdaySpanMinutes ? 'out' : 'unknown';
-  }
-  // Última fue SALIDA → esta marca abre una sesión nueva → ENTRADA.
-  return 'in';
+  return punchTypeResolver.inferContextualType(priorTyped, at.abs);
 }
 
 /**

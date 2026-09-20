@@ -6,7 +6,7 @@
  * 'unmapped' y crea attendance_logs cuando encuentra empleado.
  */
 const { sequelize } = require('../config/database');
-const { buildEmployeeMatcher, resolveTypes, pyDateStr, pyDateTimeStr } = require('./zktecoReader');
+const { buildEmployeeMatcher, resolvePunchTypes, pyDateStr, pyDateTimeStr } = require('./zktecoReader');
 
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 
@@ -37,7 +37,7 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
   }
   if (!mappable.length) return result;
 
-  resolveTypes(mappable);
+  await resolvePunchTypes(mappable);
   const dates = new Set();
   for (const p of mappable) {
     try {
