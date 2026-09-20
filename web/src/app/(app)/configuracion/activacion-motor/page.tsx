@@ -313,9 +313,9 @@ export default function ActivacionMotorPage() {
       <Card n={3} title="Recálculo histórico acotado (reversible)"
         subtitle="Dry-run → preview → confirmación tipeada. Respalda cada fila antes de sobrescribirla.">
         <div className="grid gap-2 sm:grid-cols-4">
-          <input type="date" value={range.from} onChange={e => setRange({ ...range, from: e.target.value })}
+          <input type="date" aria-label="Desde recálculo" value={range.from} onChange={e => setRange({ ...range, from: e.target.value })}
             className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm dark:bg-slate-900 dark:border-slate-600" />
-          <input type="date" value={range.to} onChange={e => setRange({ ...range, to: e.target.value })}
+          <input type="date" aria-label="Hasta recálculo" value={range.to} onChange={e => setRange({ ...range, to: e.target.value })}
             className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm dark:bg-slate-900 dark:border-slate-600" />
           <select value={range.scope_kind} onChange={e => setRange({ ...range, scope_kind: e.target.value })}
             className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm dark:bg-slate-900 dark:border-slate-600">

@@ -97,10 +97,10 @@ async function renderAndDryRun() {
   render(<ActivacionMotorPage />)
   // Espera a que cargue el preflight (status).
   await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/fase-e/status'))
-  // Completa el rango y dispara el dry-run.
-  const dateInputs = document.querySelectorAll('input[type="date"]')
-  await userEvent.type(dateInputs[0] as HTMLElement, '2025-02-01')
-  await userEvent.type(dateInputs[1] as HTMLElement, '2025-02-28')
+  // Completa específicamente el rango del recálculo. No dependemos del orden
+  // global de inputs de fecha porque existe además la fecha de cutover.
+  await userEvent.type(screen.getByLabelText('Desde recálculo'), '2025-02-01')
+  await userEvent.type(screen.getByLabelText('Hasta recálculo'), '2025-02-28')
   await userEvent.click(screen.getByRole('button', { name: /dry-run/i }))
   await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/fase-e/recalc/dryrun', expect.any(Object)))
 }

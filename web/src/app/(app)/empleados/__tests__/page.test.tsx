@@ -112,14 +112,14 @@ describe('EmpleadosPage — filtro y contadores', () => {
 
   it('avisa cuando el listado quedó truncado por el límite', async () => {
     listMock.mockResolvedValue({
-      data: new Array(500).fill(0).map((_, i) => ({ id: i, code: String(i), full_name: `E${i}`, status: 'active' })),
+      data: new Array(5).fill(0).map((_, i) => ({ id: i, code: String(i), full_name: `E${i}`, status: 'active' })),
       total: 1200,
       counts: { all: 1200, active: 1100, inactive: 100, suspended: 0 },
     })
     renderPage()
 
     await waitFor(() =>
-      expect(screen.getByText(/500 de 1200 empleados mostrados/)).toBeInTheDocument()
+      expect(screen.getByText(/5 de 1200 empleados mostrados/)).toBeInTheDocument()
     )
   })
 
