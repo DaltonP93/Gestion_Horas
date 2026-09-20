@@ -9,13 +9,24 @@
  * de sólo-lectura (makeReadOnlyRunner) hace fallar cualquier intento de SQL de
  * escritura, y hay un test que lo verifica.
  *
- * Scope obligatorio (filtros): source='zkteco_direct' AND timestamp >= cutover
- * (default 2026-09-16). Usa raw_device_punches/raw_json para distinguir el tipo
- * EXPLÍCITO original del inferido. Emite un manifest JSON (con SHA-256) que
- * clasifica cada candidato; NO incluye nombres de empleados (sólo IDs).
+ * Correcciones clave respecto de la primera versión:
+ *  1. REPLAY de la secuencia: un candidato AMBIGUOUS/UNKNOWN NO alimenta al
+ *     siguiente con su current_type almacenado; alimenta como 'unknown'. Sólo el
+ *     tipo explícito del raw o una resolución contextual REALMENTE determinista
+ *     entran como evidencia para la marca siguiente.
+ *  2. raw explícito ≠ current_type ⇒ nunca ALREADY_CORRECT (EXPLICIT_STORED_MISMATCH).
+ *  3. El match del raw incluye device_id (employee|device|wall); no se elige otro
+ *     dispositivo arbitrariamente.
+ *  4. El extractor del tipo explícito del raw es el COMPARTIDO
+ *     (punchTypeResolver.explicitTypeFromRawJson): no hay parser duplicado.
+ *  5. Contexto de zkteco_direct sin raw explícito = 'unknown' (política de
+ *     confianza compartida trustedContextType); no se usa el type histórico.
  *
- * Uso:
- *   node scripts/audit-zkteco-inferred-types.js [--cutover=YYYY-MM-DD]
+ * Scope: source='zkteco_direct' AND timestamp >= cutover (default 2026-09-16).
+ * El manifest (con SHA-256, sin nombres de empleados) reporta total_scoped_rows,
+ * rows_audited y truncated para que un LIMIT no parezca auditoría completa.
+ *
+ * Uso: node scripts/audit-zkteco-inferred-types.js [--cutover=YYYY-MM-DD]
  *        [--limit=N] [--out=ruta.json]
  */
 
@@ -26,11 +37,11 @@ const resolver = require('../src/services/punchTypeResolver');
 const DEFAULT_CUTOVER = '2026-09-16';
 const DEFAULT_SOURCE = 'zkteco_direct';
 
-// Clasificaciones posibles.
 const CLASS = Object.freeze({
   ALREADY_CORRECT: 'ALREADY_CORRECT',
   DETERMINISTIC_CHANGE: 'DETERMINISTIC_CHANGE',
   EXPLICIT_CONFLICT: 'EXPLICIT_CONFLICT',
+  EXPLICIT_STORED_MISMATCH: 'EXPLICIT_STORED_MISMATCH',
   AMBIGUOUS: 'AMBIGUOUS',
   UNKNOWN_NO_CONTEXT: 'UNKNOWN_NO_CONTEXT',
   DUPLICATE: 'DUPLICATE',
@@ -38,39 +49,22 @@ const CLASS = Object.freeze({
   NOT_ELIGIBLE: 'NOT_ELIGIBLE',
 });
 
-// Campos crudos donde un dispositivo puede traer el in/out explícito.
-const INOUT_FIELDS = ['inOutStatus', 'state', 'status', 'type', 'inout'];
-
-/** Extrae el tipo explícito ('in'|'out'|null) de un raw_json (objeto o string). */
-function explicitFromRawJson(rawJson) {
-  let obj = rawJson;
-  if (obj == null) return null;
-  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
-  if (typeof obj !== 'object') return null;
-  for (const f of INOUT_FIELDS) {
-    if (obj[f] !== undefined && obj[f] !== null) {
-      const t = resolver.classifyExplicit(obj[f]);
-      if (t) return t;
-    }
-  }
-  return null;
-}
+// Extractor compartido (no duplicar un parser distinto).
+const explicitFromRawJson = resolver.explicitTypeFromRawJson;
 
 /**
  * Clasificador PURO de un candidato. No accede a BD ni red.
  *
  * @param c {
- *   eligible:bool, rawFound:bool, isDuplicate:bool,
- *   currentType:'in'|'out'|'unknown',
- *   rawExplicitType:'in'|'out'|null,
- *   contextualType:'in'|'out'|'unknown',        // expectativa del resolver
- *   contextualProvenance:'contextual'|'unknown_no_context',
+ *   eligible, rawFound, isDuplicate,
+ *   currentType, rawExplicitType,
+ *   contextualType, contextualProvenance ('contextual'|'unknown_no_context'),
  * }
  * @returns { classification, proposedType, reason }
  *
- * DETERMINISTIC_CHANGE sólo cuando: el tipo original NO era explícito, el
- * resolver es determinista (in/out) y no hay ambigüedad, y difiere del actual.
- * Un EXPLICIT_CONFLICT NUNCA entra en DETERMINISTIC_CHANGE.
+ * DETERMINISTIC_CHANGE sólo cuando: el original NO era explícito, el resolver es
+ * determinista (in/out) y no hay ambigüedad, y difiere del actual. Un explícito
+ * NUNCA se auto-corrige aquí (read-only) y NUNCA es DETERMINISTIC_CHANGE.
  */
 function classifyCandidate(c) {
   const currentType = c.currentType;
@@ -81,30 +75,35 @@ function classifyCandidate(c) {
     return { classification: CLASS.DUPLICATE, proposedType: currentType, reason: 'marca duplicada (dedupe cross-source)' };
   }
   if (!c.rawFound) {
-    return { classification: CLASS.RAW_NOT_FOUND, proposedType: currentType, reason: 'sin raw_device_punches para comparar evidencia' };
+    return { classification: CLASS.RAW_NOT_FOUND, proposedType: currentType, reason: 'sin raw_device_punches (emp|device|wall) para comparar evidencia' };
   }
 
-  // Tipo explícito confiable en el crudo → NUNCA se cambia automáticamente.
+  // Tipo explícito confiable en el crudo → NUNCA auto-cambio.
   if (c.rawExplicitType === 'in' || c.rawExplicitType === 'out') {
+    if (c.rawExplicitType !== currentType) {
+      // El type almacenado difiere de la evidencia de hardware: el almacenado
+      // está mal, pero NO se corrige en este PR read-only. Se reporta.
+      return {
+        classification: CLASS.EXPLICIT_STORED_MISMATCH,
+        proposedType: currentType,
+        reason: `raw explícito=${c.rawExplicitType} != type almacenado=${currentType}; requiere revisión (no auto-corrige)`,
+      };
+    }
     const ctx = c.contextualType;
     if ((ctx === 'in' || ctx === 'out') && ctx !== c.rawExplicitType) {
       return {
         classification: CLASS.EXPLICIT_CONFLICT,
-        proposedType: currentType, // NO auto-cambio; requiere revisión humana
-        reason: `raw explícito=${c.rawExplicitType} contradice contexto=${ctx}; se conserva el explícito`,
+        proposedType: currentType,
+        reason: `raw explícito=${c.rawExplicitType} coincide con almacenado pero contradice contexto=${ctx}; se conserva el explícito`,
       };
     }
-    return {
-      classification: CLASS.ALREADY_CORRECT,
-      proposedType: currentType,
-      reason: `raw explícito=${c.rawExplicitType} sin contradicción de contexto`,
-    };
+    return { classification: CLASS.ALREADY_CORRECT, proposedType: currentType, reason: `raw explícito=${c.rawExplicitType} == almacenado, sin contradicción` };
   }
 
-  // Sin tipo explícito: la inferencia contextual decide.
+  // Sin tipo explícito: decide la inferencia contextual (con contexto CONFIABLE).
   if (c.contextualProvenance === 'contextual' && (c.contextualType === 'in' || c.contextualType === 'out')) {
     if (c.contextualType === currentType) {
-      return { classification: CLASS.ALREADY_CORRECT, proposedType: currentType, reason: 'inferencia contextual coincide con el tipo actual' };
+      return { classification: CLASS.ALREADY_CORRECT, proposedType: currentType, reason: 'inferencia contextual determinista coincide con el actual' };
     }
     return {
       classification: CLASS.DETERMINISTIC_CHANGE,
@@ -113,13 +112,13 @@ function classifyCandidate(c) {
     };
   }
 
-  // Contexto insuficiente/ambiguo.
+  // Contexto insuficiente/ambiguo → NO cambio.
   if (currentType === 'unknown') {
     return { classification: CLASS.UNKNOWN_NO_CONTEXT, proposedType: 'unknown', reason: 'sin explícito y sin contexto determinista; unknown es correcto' };
   }
   return {
     classification: CLASS.AMBIGUOUS,
-    proposedType: currentType, // NO cambio: no hay evidencia determinista
+    proposedType: currentType,
     reason: `actual=${currentType} pero sin explícito y contexto no determinista (${c.contextualType})`,
   };
 }
@@ -138,13 +137,8 @@ function sha256Hex(str) {
 }
 
 /**
- * Construye el manifest a partir de las filas candidatas ya clasificadas y la
- * metadata. Puro; sin BD. Calcula counts y SHA-256 del contenido.
- *
- * @param rows array de candidate rows:
- *   { attendance_log_id, employee_id, device_id, wall_clock_timestamp,
- *     current_type, raw_explicit_type, proposed_type, classification, reason }
- * @param meta { generated_at, baseline_commit, cutover, source, limit, note }
+ * Construye el manifest. Puro; sin BD. Calcula counts, SHA-256 y campos de
+ * cobertura (total_scoped_rows / rows_audited / truncated).
  */
 function buildManifest(rows, meta = {}) {
   const byClassification = {};
@@ -157,6 +151,8 @@ function buildManifest(rows, meta = {}) {
     const date = String(r.wall_clock_timestamp || '').slice(0, 10) || 'null';
     byDate[date] = (byDate[date] || 0) + 1;
   }
+  const rowsAudited = rows.length;
+  const totalScoped = meta.total_scoped_rows != null ? meta.total_scoped_rows : rowsAudited;
   const manifest = {
     tool: 'audit-zkteco-inferred-types',
     mode: 'dry-run',
@@ -169,8 +165,13 @@ function buildManifest(rows, meta = {}) {
       timestamp_gte: meta.cutover || DEFAULT_CUTOVER,
       limit: meta.limit != null ? meta.limit : null,
     },
+    coverage: {
+      total_scoped_rows: totalScoped,
+      rows_audited: rowsAudited,
+      truncated: totalScoped > rowsAudited,
+    },
     counts: {
-      total: rows.length,
+      total: rowsAudited,
       by_classification: byClassification,
       by_device: byDevice,
       by_date: byDate,
@@ -182,11 +183,7 @@ function buildManifest(rows, meta = {}) {
   return { manifest, sha256 };
 }
 
-/**
- * Envuelve un sequelize.query en un runner de SÓLO LECTURA: cualquier SQL de
- * escritura (DML/DDL) es rechazado ANTES de tocar la BD. Blindaje de que el
- * auditor no muta nada.
- */
+/** Guard de sólo lectura: rechaza SQL de escritura antes de tocar la BD. */
 const WRITE_SQL_RE = /^\s*(?:\/\*.*?\*\/\s*)*(INSERT|UPDATE|DELETE|REPLACE|MERGE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|RENAME|LOCK|UNLOCK|SET\s+GLOBAL|CALL|LOAD\s+DATA)\b/i;
 function makeReadOnlyRunner(sequelize) {
   return async function readOnlyQuery(sql, options) {
@@ -199,14 +196,23 @@ function makeReadOnlyRunner(sequelize) {
 
 /**
  * Ejecuta la auditoría contra la BD (READ-ONLY). Devuelve { manifest, sha256 }.
- * Sin N+1: consultas acotadas y set-based por lote de empleados.
+ * Sin N+1: consultas acotadas set-based por lote de empleados. Hace REPLAY de la
+ * secuencia por empleado con política de contexto confiable.
  */
 async function runAudit({ sequelize, cutover = DEFAULT_CUTOVER, source = DEFAULT_SOURCE, limit = 5000, baselineCommit = null, generatedAt = null } = {}) {
   const q = makeReadOnlyRunner(sequelize);
   const opts = resolver.resolverOptions();
   const spanMin = opts.historicalMaxWorkdaySpanMinutes;
+  const cutoverTs = `${cutover} 00:00:00`;
 
-  // 1) Candidatos: attendance_logs del scope. Acotado por LIMIT.
+  // 0) Total en scope (para reportar truncamiento honesto).
+  const [[cnt]] = await q(
+    `SELECT COUNT(*) AS n FROM attendance_logs WHERE source = ? AND \`timestamp\` >= ?`,
+    { replacements: [source, cutoverTs] }
+  );
+  const totalScoped = Number(cnt ? cnt.n : 0);
+
+  // 1) Candidatos del scope (acotado por LIMIT).
   const [cands] = await q(
     `SELECT id, employee_id AS empId, device_id AS deviceId,
             DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall, type
@@ -214,11 +220,12 @@ async function runAudit({ sequelize, cutover = DEFAULT_CUTOVER, source = DEFAULT
       WHERE source = ? AND \`timestamp\` >= ?
       ORDER BY employee_id, \`timestamp\`, id
       LIMIT ?`,
-    { replacements: [source, `${cutover} 00:00:00`, limit] }
+    { replacements: [source, cutoverTs, limit] }
   );
   if (!cands || !cands.length) {
-    return buildManifest([], { generated_at: generatedAt, baseline_commit: baselineCommit, cutover, source, limit });
+    return buildManifest([], { generated_at: generatedAt, baseline_commit: baselineCommit, cutover, source, limit, total_scoped_rows: totalScoped });
   }
+  const candIdSet = new Set(cands.map(c => c.id));
 
   const empIds = [...new Set(cands.map(c => c.empId))];
   let minAbs = Infinity, maxAbs = -Infinity;
@@ -226,81 +233,87 @@ async function runAudit({ sequelize, cutover = DEFAULT_CUTOVER, source = DEFAULT
   const fromWall = engine.absToDateTime(minAbs - spanMin * 60);
   const toWall = engine.absToDateTime(maxAbs + 1);
 
-  // 2) Contexto: TODAS las marcas (cualquier fuente) de esos empleados en la
-  //    ventana [min - jornada, max], una sola consulta.
-  const [ctxRows] = await q(
-    `SELECT id, employee_id AS empId,
-            DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall, type
-       FROM attendance_logs
-      WHERE employee_id IN (${empIds.map(() => '?').join(',')})
-        AND \`timestamp\` >= ? AND \`timestamp\` < ?
-      ORDER BY employee_id, \`timestamp\`, id`,
+  // 2) Timeline COMPLETO (candidatos + contexto) de esos empleados en la ventana,
+  //    con LEFT JOIN al raw por (emp, device, wall) para el tipo explícito y la
+  //    política de confianza. Una sola consulta.
+  const [tl] = await q(
+    `SELECT al.id, al.employee_id AS empId, al.device_id AS deviceId,
+            DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall,
+            al.type AS storedType, al.source AS source,
+            rdp.raw_json AS rawJson, rdp.mapping_status AS mappingStatus
+       FROM attendance_logs al
+       LEFT JOIN raw_device_punches rdp
+         ON rdp.employee_id = al.employee_id
+        AND rdp.device_id <=> al.device_id
+        AND rdp.record_time_py = DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s')
+      WHERE al.employee_id IN (${empIds.map(() => '?').join(',')})
+        AND al.\`timestamp\` >= ? AND al.\`timestamp\` < ?
+      ORDER BY al.employee_id, al.\`timestamp\`, al.id`,
     { replacements: [...empIds, fromWall, toWall] }
   );
 
-  // 3) raw_device_punches de esos empleados en la ventana, una sola consulta.
-  //    Índice por (empId|record_time_py) para O(1) por candidato.
-  const rawByKey = new Map();
-  const [rawRows] = await q(
-    `SELECT employee_id AS empId, record_time_py AS wall, mapping_status, raw_json
-       FROM raw_device_punches
-      WHERE employee_id IN (${empIds.map(() => '?').join(',')})
-        AND record_time_py >= ? AND record_time_py < ?`,
-    { replacements: [...empIds, fromWall, toWall] }
-  );
-  for (const r of rawRows || []) {
-    rawByKey.set(`${r.empId}|${r.wall}`, r);
-  }
-
-  // Historial por empleado (contexto ordenado con tipos ALMACENADOS).
-  const histByEmp = new Map();
-  for (const r of ctxRows || []) {
+  const byEmp = new Map();
+  for (const r of tl || []) {
     const w = engine.toWall(r.wall);
     if (!w) continue;
-    if (!histByEmp.has(r.empId)) histByEmp.set(r.empId, []);
-    histByEmp.get(r.empId).push({ id: r.id, abs: w.abs, type: r.type });
+    if (!byEmp.has(r.empId)) byEmp.set(r.empId, []);
+    byEmp.get(r.empId).push({ ...r, abs: w.abs });
   }
-  for (const arr of histByEmp.values()) arr.sort((a, b) => (a.abs - b.abs) || (a.id - b.id));
+  for (const arr of byEmp.values()) arr.sort((a, b) => (a.abs - b.abs) || (a.id - b.id));
 
-  const candById = new Map(cands.map(c => [c.id, c]));
   const outRows = [];
-  for (const c of cands) {
-    const w = engine.toWall(c.wall);
-    const hist = histByEmp.get(c.empId) || [];
-    // priorTyped = marcas estrictamente anteriores (abs,id) a este candidato.
-    const priorTyped = [];
-    for (const h of hist) {
-      if (h.abs < w.abs || (h.abs === w.abs && h.id < c.id)) priorTyped.push({ abs: h.abs, type: h.type });
+  for (const [, rows] of byEmp.entries()) {
+    const history = []; // [{abs,type}] con política de confianza / replay
+    for (const r of rows) {
+      const rawExplicitType = explicitFromRawJson(r.rawJson);
+      const isCandidate = candIdSet.has(r.id);
+      if (!isCandidate) {
+        // Fila de contexto: se ancla sólo si es confiable.
+        const t = resolver.trustedContextType({ source: r.source, storedType: r.storedType, rawExplicitType });
+        history.push({ abs: r.abs, type: t });
+        continue;
+      }
+      // Candidato: la expectativa se calcula ANTES de agregarlo al historial.
+      const contextualType = resolver.inferContextualType(history, r.abs, opts);
+      const contextualProvenance = (contextualType === 'in' || contextualType === 'out') ? 'contextual' : 'unknown_no_context';
+      const rawFound = (r.rawJson !== undefined && r.rawJson !== null) || r.mappingStatus != null;
+      const isDuplicate = r.mappingStatus === 'duplicate';
+
+      const verdict = classifyCandidate({
+        eligible: true, rawFound, isDuplicate,
+        currentType: r.storedType, rawExplicitType,
+        contextualType, contextualProvenance,
+      });
+
+      outRows.push({
+        attendance_log_id: r.id,
+        employee_id: r.empId,
+        device_id: r.deviceId,
+        wall_clock_timestamp: r.wall,
+        current_type: r.storedType,
+        raw_explicit_type: rawExplicitType,
+        proposed_type: verdict.proposedType,
+        classification: verdict.classification,
+        reason: verdict.reason,
+      });
+
+      // REPLAY: el candidato alimenta al siguiente SÓLO con evidencia real:
+      //  - explícito del raw → ese tipo;
+      //  - resolución contextual determinista → ese tipo;
+      //  - en cualquier otro caso → 'unknown' (NO el current_type almacenado).
+      let feed = resolver.UNKNOWN;
+      if (rawExplicitType === 'in' || rawExplicitType === 'out') feed = rawExplicitType;
+      else if (contextualProvenance === 'contextual') feed = contextualType;
+      history.push({ abs: r.abs, type: feed });
     }
-    const contextualType = w ? resolver.inferContextualType(priorTyped, w.abs, opts) : 'unknown';
-    const contextualProvenance = (contextualType === 'in' || contextualType === 'out') ? 'contextual' : 'unknown_no_context';
-
-    const raw = rawByKey.get(`${c.empId}|${c.wall}`);
-    const rawFound = !!raw;
-    const isDuplicate = !!raw && raw.mapping_status === 'duplicate';
-    const rawExplicitType = raw ? explicitFromRawJson(raw.raw_json) : null;
-
-    const verdict = classifyCandidate({
-      eligible: true, rawFound, isDuplicate,
-      currentType: c.type, rawExplicitType,
-      contextualType, contextualProvenance,
-    });
-
-    outRows.push({
-      attendance_log_id: c.id,
-      employee_id: c.empId,
-      device_id: c.deviceId,
-      wall_clock_timestamp: c.wall,
-      current_type: c.type,
-      raw_explicit_type: rawExplicitType,
-      proposed_type: verdict.proposedType,
-      classification: verdict.classification,
-      reason: verdict.reason,
-    });
   }
-  void candById;
 
-  return buildManifest(outRows, { generated_at: generatedAt, baseline_commit: baselineCommit, cutover, source, limit });
+  // Orden de salida estable por (employee_id, wall, id) para SHA reproducible.
+  outRows.sort((a, b) => (a.employee_id - b.employee_id)
+    || (a.wall_clock_timestamp < b.wall_clock_timestamp ? -1 : a.wall_clock_timestamp > b.wall_clock_timestamp ? 1 : 0)
+    || (a.attendance_log_id - b.attendance_log_id));
+
+  return buildManifest(outRows, { generated_at: generatedAt, baseline_commit: baselineCommit, cutover, source, limit, total_scoped_rows: totalScoped });
 }
 
 function parseArgs(argv) {
@@ -342,7 +355,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  CLASS, INOUT_FIELDS,
+  CLASS, INOUT_FIELDS: resolver.INOUT_FIELDS,
   explicitFromRawJson, classifyCandidate, buildManifest,
   canonicalJson, sha256Hex, makeReadOnlyRunner, runAudit,
 };

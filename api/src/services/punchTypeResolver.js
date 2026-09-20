@@ -46,6 +46,51 @@ function classifyExplicit(rawInout) {
   return null;
 }
 
+// Campos crudos donde un dispositivo puede traer el in/out explícito. Única
+// lista compartida (no duplicar parsers por fuente).
+const INOUT_FIELDS = Object.freeze(['inOutStatus', 'state', 'status', 'type', 'inout']);
+
+/**
+ * Extrae el tipo explícito ('in'|'out'|null) de un raw_json (objeto o string
+ * JSON). Único extractor: lo usan el resolver, el auditor y el reproceso.
+ */
+function explicitTypeFromRawJson(rawJson) {
+  let obj = rawJson;
+  if (obj == null) return null;
+  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
+  if (typeof obj !== 'object') return null;
+  for (const f of INOUT_FIELDS) {
+    if (obj[f] !== undefined && obj[f] !== null) {
+      const t = classifyExplicit(obj[f]);
+      if (t) return t;
+    }
+  }
+  return null;
+}
+
+/**
+ * POLÍTICA DE CONTEXTO CONFIABLE.
+ *
+ * Un `attendance_logs.type` almacenado sólo puede actuar como ancla in/out del
+ * contexto si es evidencia confiable. Hecho de producción confirmado: los tipos
+ * de `zkteco_direct` fueron INFERIDOS por la lógica vieja y su raw NO trae tipo
+ * explícito → NO son confiables. Regla:
+ *
+ *   - source='zkteco_direct': confiable SÓLO si el raw enlazado trae tipo
+ *     explícito; en ese caso el tipo confiable ES el del raw. Sin raw explícito
+ *     → 'unknown' (no se usa el type histórico).
+ *   - otras fuentes: se conserva el type almacenado (comportamiento previo).
+ *
+ * Fallback seguro = 'unknown': preservar incertidumbre es preferible a fabricar
+ * certeza (WorkdayEngine ya segmenta por secuencia y tolera unknown).
+ */
+function trustedContextType({ source, storedType, rawExplicitType }) {
+  if (source === 'zkteco_direct') {
+    return (rawExplicitType === IN || rawExplicitType === OUT) ? rawExplicitType : UNKNOWN;
+  }
+  return (storedType === IN || storedType === OUT) ? storedType : UNKNOWN;
+}
+
 /** Opciones efectivas: parte de engine.DEFAULTS y permite override explícito. */
 function resolverOptions(overrides = {}) {
   return {
@@ -233,19 +278,31 @@ async function resolvePunchTypesBatch(punches, deps = {}) {
 
   const ctxByEmp = new Map();
   if (sequelize && empIds.length) {
+    // Contexto en UNA consulta (sin N+1). LEFT JOIN a raw_device_punches por
+    // (empleado, dispositivo, hora de pared) para conocer si el type histórico
+    // tiene evidencia explícita. Un type de zkteco_direct SIN raw explícito NO
+    // se usa como ancla (trustedContextType lo degrada a unknown).
     const [rows] = await sequelize.query(
-      `SELECT employee_id AS empId, DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall, type
-         FROM attendance_logs
-        WHERE employee_id IN (${empIds.map(() => '?').join(',')})
-          AND \`timestamp\` >= ? AND \`timestamp\` < ?
-        ORDER BY employee_id, \`timestamp\`, id`,
+      `SELECT al.employee_id AS empId,
+              DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS wall,
+              al.type AS storedType, al.source AS source, rdp.raw_json AS rawJson
+         FROM attendance_logs al
+         LEFT JOIN raw_device_punches rdp
+           ON rdp.employee_id = al.employee_id
+          AND rdp.device_id <=> al.device_id
+          AND rdp.record_time_py = DATE_FORMAT(al.\`timestamp\`, '%Y-%m-%d %H:%i:%s')
+        WHERE al.employee_id IN (${empIds.map(() => '?').join(',')})
+          AND al.\`timestamp\` >= ? AND al.\`timestamp\` < ?
+        ORDER BY al.employee_id, al.\`timestamp\`, al.id`,
       { replacements: [...empIds, fromWall, toWallStr] }
     );
     for (const r of rows || []) {
       const w = engine.toWall(r.wall);
       if (!w) continue;
+      const rawExplicitType = explicitTypeFromRawJson(r.rawJson);
+      const ctxType = trustedContextType({ source: r.source, storedType: r.storedType, rawExplicitType });
       if (!ctxByEmp.has(r.empId)) ctxByEmp.set(r.empId, []);
-      ctxByEmp.get(r.empId).push({ kind: 'context', abs: w.abs, type: r.type });
+      ctxByEmp.get(r.empId).push({ kind: 'context', abs: w.abs, type: ctxType });
     }
   }
 
@@ -282,7 +339,10 @@ async function resolvePunchTypesBatch(punches, deps = {}) {
 module.exports = {
   IN, OUT, UNKNOWN,
   PROV_EXPLICIT, PROV_CONTEXTUAL, PROV_UNKNOWN,
+  INOUT_FIELDS,
   classifyExplicit,
+  explicitTypeFromRawJson,
+  trustedContextType,
   resolverOptions,
   inferContextualType,
   resolveSequence,

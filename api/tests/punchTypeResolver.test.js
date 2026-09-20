@@ -172,13 +172,42 @@ describe('resolvePunchTypesBatch — lote eficiente y determinista', () => {
     expect(byWall['2026-09-16 17:00:00']).toBe('out');
   });
 
-  test('contexto de BD (jornada anterior IN) resuelve la 1ª marca del batch de madrugada como out', async () => {
-    // El IN previo vive en attendance_logs (contexto), no en el batch.
-    const contextRows = [{ empId: 3, wall: '2026-09-19 18:16:00', type: 'in' }];
+  test('contexto de BD CONFIABLE (jornada anterior IN, fuente device) resuelve la madrugada como out', async () => {
+    // IN previo confiable (source device) en attendance_logs, no en el batch.
+    const contextRows = [{ empId: 3, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'device', rawJson: null }];
     const punches = [{ empId: 3, wall: '2026-09-20 07:01:00', explicitType: null }];
     await R.resolvePunchTypesBatch(punches, deps(fakeSequelize(contextRows), contextRows));
     expect(punches[0].type).toBe('out');
     expect(punches[0].typeProvenance).toBe('contextual');
+  });
+
+  // ── Corrección 5: contexto zkteco_direct sin raw explícito NO es confiable ──
+  test('5A. contexto zkteco_direct stored=IN SIN raw explícito → NO fuerza OUT (unknown)', async () => {
+    const contextRows = [{ empId: 4, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{}' }];
+    const punches = [{ empId: 4, wall: '2026-09-20 07:01:00', explicitType: null }];
+    await R.resolvePunchTypesBatch(punches, deps(fakeSequelize(contextRows), contextRows));
+    expect(punches[0].type).toBe('unknown');
+    expect(punches[0].typeProvenance).toBe('unknown_no_context');
+  });
+
+  test('5B. contexto zkteco_direct stored=IN CON raw explícito IN → sí infiere OUT', async () => {
+    const contextRows = [{ empId: 6, wall: '2026-09-19 18:16:00', storedType: 'in', source: 'zkteco_direct', rawJson: '{"inOutStatus":0}' }];
+    const punches = [{ empId: 6, wall: '2026-09-20 07:01:00', explicitType: null }];
+    await R.resolvePunchTypesBatch(punches, deps(fakeSequelize(contextRows), contextRows));
+    expect(punches[0].type).toBe('out');
+    expect(punches[0].typeProvenance).toBe('contextual');
+  });
+
+  test('5C. una marca del batch resuelta determinista sí alimenta a la siguiente', async () => {
+    // ancla explícita IN + unknown (→out, determinista) + unknown (→in por el out)
+    const punches = [
+      { empId: 8, wall: '2026-09-16 08:00:00', explicitType: 'in' },
+      { empId: 8, wall: '2026-09-16 12:00:00', explicitType: null }, // → out
+      { empId: 8, wall: '2026-09-16 13:00:00', explicitType: null }, // → in (por el out previo)
+    ];
+    await R.resolvePunchTypesBatch(punches, deps(null, []));
+    expect(punches[1].type).toBe('out');
+    expect(punches[2].type).toBe('in');
   });
 
   test('dos IN explícitos en el batch NO se invierten y marcan conflicto', async () => {
