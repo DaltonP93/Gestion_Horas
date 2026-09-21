@@ -218,11 +218,21 @@ describe('precedencia de configuración', () => {
     expect(sql).not.toMatch(/schedule_id\s+FROM\s+employees/);
   });
 
-  test('carga en tres consultas, no una por empleado y día', async () => {
+  test('carga en un número CONSTANTE de consultas, no una por empleado y día', async () => {
     mockTablas({});
     await loadWorkdayConfig([1, 2, 3, 4, 5], RANGO);
-    // 5 empleados x 31 días serían 155 consultas si hubiera N+1.
-    expect(sequelize.query).toHaveBeenCalledTimes(3);
+    // 5 empleados x 31 días serían 155 consultas si hubiera N+1. La jerarquía
+    // (Corrección A) agrega loaders set-based (asignaciones + defaults) pero el
+    // total sigue siendo CONSTANTE respecto del tamaño del lote: history,
+    // shift_assignments, contracts, employee_assignments y defaults. Sin
+    // sucursales/centros de costo en el lote no se consultan sus empresas.
+    const n1 = sequelize.query.mock.calls.length;
+    expect(n1).toBe(5);
+
+    sequelize.query.mockClear();
+    await loadWorkdayConfig([10, 20, 30, 40, 50, 60, 70, 80, 90, 100], RANGO);
+    // El doble de empleados NO cambia el número de consultas: no hay N+1.
+    expect(sequelize.query.mock.calls.length).toBe(n1);
   });
 
   test('sin empleados no consulta nada', async () => {

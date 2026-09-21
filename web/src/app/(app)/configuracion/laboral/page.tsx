@@ -17,12 +17,11 @@ import { SlidersHorizontal, Search, Plus, X, Upload, CheckCircle, AlertTriangle,
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 import {
-  WorkdayDefaultRow, EffectiveHierarchical, DefaultForm, DefaultScope,
+  WorkdayDefaultRow, EffectiveHierarchical, DefaultForm, DefaultScope, CompanyRef, DeptRef,
   SCOPE_LABEL, DAY_LABELS, emptyDefaultForm, validateDefaultForm, defaultPayload,
-  parseBulkItems, layerLabel, scopeSummary,
+  parseBulkItems, layerLabel, scopeSummary, companyLabel, unwrapList,
 } from '@/lib/workdayDefaults'
 
-interface Ref { id: number; name: string }
 const WRITE_ROLES = ['super_admin', 'admin', 'gth', 'hr']
 const inputCls = 'border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] bg-white dark:bg-transparent'
 
@@ -44,8 +43,8 @@ export default function ConfiguracionLaboralPage() {
   const [feedback, setFeedback] = useState<string | null>(null)
 
   const [scopeFilter, setScopeFilter] = useState<'' | DefaultScope>('')
-  const [companies, setCompanies] = useState<Ref[]>([])
-  const [departments, setDepartments] = useState<Ref[]>([])
+  const [companies, setCompanies] = useState<CompanyRef[]>([])
+  const [departments, setDepartments] = useState<DeptRef[]>([])
 
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState<DefaultForm>(emptyDefaultForm(today()))
@@ -89,8 +88,9 @@ export default function ConfiguracionLaboralPage() {
   useEffect(() => { loadDefaults() }, [scopeFilter])
   useEffect(() => {
     if (!canWrite) return
-    api.get('/api/companies').then(r => setCompanies(r.data?.data ?? [])).catch(() => setCompanies([]))
-    api.get('/api/departments').then(r => setDepartments(r.data?.data ?? [])).catch(() => setDepartments([]))
+    // /api/companies → { data: [...] }; /api/departments → [ ... ] (array directo).
+    api.get('/api/companies').then(r => setCompanies(unwrapList<CompanyRef>(r.data))).catch(() => setCompanies([]))
+    api.get('/api/departments').then(r => setDepartments(unwrapList<DeptRef>(r.data))).catch(() => setDepartments([]))
   }, [canWrite])
 
   function toggleDay(d: number) {
@@ -259,7 +259,7 @@ export default function ConfiguracionLaboralPage() {
               <label className="text-sm">Empresa
                 <select value={form.company_id} onChange={e => setForm(f => ({ ...f, company_id: e.target.value }))} className={`${inputCls} block mt-1 w-full`}>
                   <option value="">—</option>
-                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {companies.map(c => <option key={c.id} value={c.id}>{companyLabel(c)}</option>)}
                 </select>
               </label>
             )}

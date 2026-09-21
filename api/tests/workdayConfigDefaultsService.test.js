@@ -70,10 +70,15 @@ describe('normalizeScopeTarget — coherencia de alcance', () => {
     expectCode(() => svc.normalizeScopeTarget({ scope: 'company', company_id: 3, department_id: 4 }), 'SCOPE_MISMATCH');
     expect(svc.normalizeScopeTarget({ scope: 'company', company_id: 3 })).toEqual({ scope: 'company', company_id: 3, department_id: null });
   });
-  test('department requiere department_id (company_id opcional)', () => {
+  test('department requiere department_id y RECHAZA company_id (Corrección C)', () => {
     expectCode(() => svc.normalizeScopeTarget({ scope: 'department' }), 'SCOPE_MISMATCH');
-    expect(svc.normalizeScopeTarget({ scope: 'department', department_id: 9, company_id: 3 }))
-      .toEqual({ scope: 'department', company_id: 3, department_id: 9 });
+    // Con company_id ahora es incoherente: el scope_key sería department:<c>:<d>,
+    // que el resolvedor jamás consultaría (invisible).
+    expectCode(() => svc.normalizeScopeTarget({ scope: 'department', department_id: 9, company_id: 3 }), 'SCOPE_MISMATCH');
+    expect(svc.normalizeScopeTarget({ scope: 'department', department_id: 9 }))
+      .toEqual({ scope: 'department', company_id: null, department_id: 9 });
+    // scope_key canónico department:0:<id>.
+    expect(svc.scopeKey('department', null, 9)).toBe('department:0:9');
   });
   test('scope inválido → 400', () => {
     expectCode(() => svc.normalizeScopeTarget({ scope: 'zonal' }), 'INVALID_SCOPE');
@@ -94,8 +99,8 @@ describe('normalizeDefaultBody — validación de cuerpo y vigencia', () => {
   test('valid_to < valid_from → 400', () => {
     expectCode(() => svc.normalizeDefaultBody({ scope: 'general', valid_from: '2026-09-10', valid_to: '2026-09-01', ...BASE }), 'INVALID_VALIDITY');
   });
-  test('regime y break_mode inválidos → 400 (Set.has, no Array.includes)', () => {
-    expectCode(() => svc.normalizeDefaultBody({ scope: 'general', valid_from: '2026-09-01', work_regime: 'X', ...BASE }), 'INVALID_REGIME');
+  test('regime y break_mode inválidos → 400 (validadores compartidos)', () => {
+    expectCode(() => svc.normalizeDefaultBody({ scope: 'general', valid_from: '2026-09-01', work_regime: 'X', ...BASE }), 'INVALID_WORK_REGIME');
     expectCode(() => svc.normalizeDefaultBody({ scope: 'general', valid_from: '2026-09-01', break_mode: 'X', ...BASE }), 'INVALID_BREAK_MODE');
     // Valores válidos aceptados.
     expect(svc.normalizeDefaultBody({ scope: 'general', valid_from: '2026-09-01', work_regime: 'night', break_mode: 'none', ...BASE }).work_regime).toBe('night');
@@ -105,6 +110,31 @@ describe('normalizeDefaultBody — validación de cuerpo y vigencia', () => {
     const row = svc.normalizeDefaultBody(partial);
     expect(row.config_complete).toBe(false);
     expectCode(() => svc.normalizeDefaultBody(partial, { requireComplete: true }), 'INCOMPLETE_CONFIG');
+  });
+
+  // Corrección E: los defaults validan IGUAL que employee_schedule_history.
+  test('validación de payload con paridad ESH (tests negativos)', () => {
+    const base = { scope: 'general', valid_from: '2026-09-01', ...BASE };
+    expectCode(() => svc.normalizeDefaultBody({ ...base, check_in: '99:99' }), 'INVALID_TIME');
+    expectCode(() => svc.normalizeDefaultBody({ ...base, tolerance_in: -1 }), 'INVALID_NUMBER');
+    expectCode(() => svc.normalizeDefaultBody({ ...base, tolerance_in: 1.5 }), 'INVALID_NUMBER');
+    expectCode(() => svc.normalizeDefaultBody({ ...base, break_minutes: -1 }), 'INVALID_NUMBER');
+    expectCode(() => svc.normalizeDefaultBody({ ...base, weekly_target_minutes: 20000 }), 'INVALID_NUMBER'); // > 10080
+    expectCode(() => svc.normalizeDefaultBody({ ...base, overtime_policy: 'no válida!' }), 'INVALID_POLICY');
+    expectCode(() => svc.normalizeDefaultBody({ ...base, overtime_policy_config: '[1,2,3]' }), 'INVALID_POLICY_CONFIG'); // array donde se espera object
+    expectCode(() => svc.normalizeDefaultBody({ ...base, night_start: '21:00' }), 'INVALID_NIGHT_RANGE'); // sin night_end
+  });
+
+  test('persiste policy version/config (paridad de columnas 085)', () => {
+    const row = svc.normalizeDefaultBody({
+      scope: 'general', valid_from: '2026-09-01', ...BASE,
+      overtime_policy: 'rrhh_review', overtime_policy_version: 2, overtime_policy_config: { cap: 10 },
+      rounding_policy: 'nearest_5', rounding_policy_version: 1, rounding_policy_config: { step: 5 },
+    });
+    expect(row.overtime_policy_version).toBe(2);
+    expect(row.overtime_policy_config).toEqual({ cap: 10 });
+    expect(row.rounding_policy_version).toBe(1);
+    expect(row.rounding_policy_config).toEqual({ step: 5 });
   });
 });
 
@@ -204,5 +234,96 @@ describe('createDefault — camino feliz con BD mockeada', () => {
     expect(out).toMatchObject({ id: 123 });
     const audited = sequelize.query.mock.calls.some(c => /workday_config_default_audit/.test(c[0]));
     expect(audited).toBe(true);
+  });
+});
+
+describe('Corrección D — identidad de lock por alcance', () => {
+  function lockCapture() {
+    const locks = [];
+    sequelize.query.mockImplementation(async (sql, opts) => {
+      const repl = (opts && opts.replacements) || [];
+      if (/GET_LOCK/.test(sql)) { locks.push(repl[0]); return [[{ ok: 1 }]]; }
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'department:0:9' }]];
+      if (/FOR UPDATE/.test(sql)) return [[{ id: 5, scope: 'department', company_id: null, department_id: 9, valid_from: '2026-01-01', valid_to: null, check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6', break_mode: 'punched' }]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) return [77, 1];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ id: 5, scope: 'department', company_id: null, department_id: 9, valid_from: '2026-01-01' }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    return locks;
+  }
+  const only = (locks) => locks.find(l => /wcd/.test(l));
+
+  test('create, update y close del MISMO scope usan el MISMO nombre de lock', async () => {
+    const locks = lockCapture();
+    await svc.createDefault({ scope: 'department', department_id: 9, valid_from: '2026-02-01', ...BASE }, 1);
+    const createLock = only(locks);
+    locks.length = 0;
+    await svc.updateDefault(5, { valid_from: '2026-03-01', ...BASE }, 1);
+    const updateLock = only(locks);
+    locks.length = 0;
+    await svc.closeDefault(5, '2026-12-31', 1, 'fin');
+    const closeLock = only(locks);
+    expect(createLock).toBe('sishoras:wcd:department:0:9');
+    expect(updateLock).toBe(createLock);
+    expect(closeLock).toBe(createLock);
+  });
+});
+
+describe('Corrección D — bulkApply atómico (todo o nada)', () => {
+  test('3 filas, la 3ª inválida → 0 escrituras y NI SIQUIERA se abre transacción', async () => {
+    sequelize.query.mockImplementation(async () => [[]]);
+    const items = [
+      { scope: 'general', valid_from: '2026-01-01', valid_to: '2026-03-31', ...BASE },
+      { scope: 'department', department_id: 5, valid_from: '2026-01-01', ...BASE },
+      { scope: 'company', valid_from: '2026-01-01', ...BASE }, // company sin company_id → inválida
+    ];
+    await expect(svc.bulkApply(items, 1)).rejects.toMatchObject({ code: 'BULK_ITEM_INVALID' });
+    expect(sequelize.transaction).not.toHaveBeenCalled();
+    const writes = sequelize.query.mock.calls.filter(c => /INSERT|UPDATE/i.test(c[0]));
+    expect(writes).toHaveLength(0);
+  });
+
+  test('lote válido se aplica en UNA sola transacción', async () => {
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) return [1, 1];
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ id: 1 }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    const items = [
+      { scope: 'general', valid_from: '2026-01-01', valid_to: '2026-06-30', ...BASE },
+      { scope: 'department', department_id: 5, valid_from: '2026-01-01', ...BASE },
+    ];
+    const out = await svc.bulkApply(items, 1);
+    expect(out.applied).toBe(2);
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1); // atómico
+  });
+
+  test('fallo en la 3ª fila DENTRO de la transacción → propaga (rollback de todo)', async () => {
+    let inserts = 0;
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) { inserts += 1; if (inserts === 3) throw new Error('boom'); return [inserts, 1]; }
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ id: inserts }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    const items = [
+      { scope: 'general', valid_from: '2026-01-01', valid_to: '2026-02-28', ...BASE },
+      { scope: 'company', company_id: 2, valid_from: '2026-01-01', valid_to: '2026-02-28', ...BASE },
+      { scope: 'department', department_id: 5, valid_from: '2026-01-01', ...BASE },
+    ];
+    await expect(svc.bulkApply(items, 1)).rejects.toThrow('boom');
+    // Una sola transacción: en MySQL real el error revierte las 2 inserciones previas.
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
   });
 });

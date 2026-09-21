@@ -29,26 +29,39 @@ Reutiliza el `WorkdayEngine`, `workdayConfig.forDate`, los validadores de
 **Precedencia previa (incompleta):** `published_shift_assignment` →
 `employee_schedule_history` → `employee_contract_trace` → `historical_fallback`.
 
-## 2. Precedencia nueva (explícita y auditable)
+## 2. Precedencia nueva (explícita y auditable) — UN SOLO resolvedor
 
-Única fuente de verdad en `api/src/services/workdayEffectiveConfig.js`
-(`PRECEDENCE`), de mayor a menor prioridad:
+**Única fuente de verdad: `workdayConfig.loadWorkdayConfig().resolveForDate()`**
+(constante `PRECEDENCE` en `api/src/services/workdayConfig.js`). El motor
+(`workdaySummaryService`, `scheduler`) consume `forDate()`, que es exactamente
+`resolveForDate().config`; el endpoint administrativo consume `resolveForDate()`
+vía `workdayConfigDefaultsService.getEffectiveForDate` (envoltura). **No existe un
+segundo algoritmo de precedencia** (el `workdayEffectiveConfig.js` paralelo se
+eliminó). Orden de mayor a menor prioridad:
 
-1. `published_shift_assignment` — turnera publicada (capa 1, vía `forDate`).
-2. `employee_historical_override` — `employee_schedule_history` (capa 2, vía `forDate`).
+1. `published_shift_assignment` — turnera publicada (por día).
+2. `employee_historical_override` — `employee_schedule_history` (snapshot vigente).
 3. `department_historical_default` — `workday_config_defaults` scope=department **(NUEVO)**.
 4. `company_historical_default` — scope=company **(NUEVO)**.
 5. `general_historical_default` — scope=general **(NUEVO)**.
 6. `employee_contract_trace` — identidad de contrato (aporta `contract_id`, **no** habilita `configured`).
-7. `historical_fallback` — sin evidencia → el motor resuelve sin config.
+7. `historical_fallback` — sin evidencia → el motor resuelve sin config (`forDate` = `null`).
 
-Reglas: una capa sólo habilita `calculation_mode='configured'` si su config es
-**completa** (`check_in` + `check_out` + `work_days`); si no, se **salta** a la
-siguiente (nunca se inventa una jornada). El departamento/empresa del empleado se
-resuelven **as-of-date** desde `employee_assignments` (078) y
-`cost_centers.company_id`; sin asignación vigente se cae al `department_id`
-**actual** de `employees`, marcado `scope_source='current_fallback'` para no
-introducir deriva retroactiva.
+Reglas: una capa sólo habilita `configured` si su config es **completa**
+(`check_in` + `check_out` + `work_days`); si no, se **salta** a la siguiente
+(nunca se inventa una jornada). La turnera aporta el HORARIO del día y el "perfil"
+(target/policies) sale del snapshot del empleado o, si no existe, del default
+jerárquico vigente. El departamento/empresa del empleado se resuelven
+**as-of-date** SÓLO desde `employee_assignments` (078); la empresa se deriva de
+`branches.company_id` y `cost_centers.company_id` (076) — si ambas existen y
+**difieren**, es ambiguo y NO se elige empresa. **Sin asignación vigente no hay
+alcance autoritativo**: no se usa `employees.department_id` actual (eso fabricaría
+historia), se continúa a general/fallback.
+
+**Degradación deliberada:** si faltan 078/076/085 (tablas o columnas), los
+loaders degradan a "sin dato" y el resultado es IDÉNTICO al comportamiento previo
+(sin defaults → `historical_fallback`). Sin `WORKDAY_CONFIG_WRITE_ENABLED` y sin
+085 aplicada en prod, la jerarquía no altera ningún cálculo.
 
 ## 3. Datos (migración `085`)
 

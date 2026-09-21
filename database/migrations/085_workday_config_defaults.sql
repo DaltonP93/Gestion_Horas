@@ -75,7 +75,18 @@ CREATE TABLE IF NOT EXISTS workday_config_defaults (
   KEY ix_wcd_department (department_id),
   KEY ix_wcd_valid (valid_from, valid_to),
   CONSTRAINT fk_wcd_company    FOREIGN KEY (company_id)    REFERENCES companies(id)   ON DELETE RESTRICT,
-  CONSTRAINT fk_wcd_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT
+  CONSTRAINT fk_wcd_department FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT,
+  -- Semántica de alcance ÚNICA (Corrección C): la BD y el servicio coinciden.
+  --   general    → company_id NULL      y department_id NULL   → general:0:0
+  --   company    → company_id NOT NULL  y department_id NULL   → company:<c>:0
+  --   department → department_id NOT NULL y company_id NULL     → department:0:<d>
+  -- Impide crear un default de departamento con company_id (scope_key
+  -- department:<c>:<d>) que el resolvedor jamás consultaría (invisible).
+  CONSTRAINT ck_wcd_scope CHECK (
+    (scope = 'general'    AND company_id IS NULL     AND department_id IS NULL)
+    OR (scope = 'company'    AND company_id IS NOT NULL AND department_id IS NULL)
+    OR (scope = 'department' AND department_id IS NOT NULL AND company_id IS NULL)
+  )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS workday_config_default_audit (

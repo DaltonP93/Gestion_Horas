@@ -63,6 +63,24 @@ export interface DefaultForm {
   change_reason: string
 }
 
+// Formas REALES de las APIs (Corrección F):
+//   GET /api/companies   → { data: [{ id, code, legal_name, trade_name, ... }] }  (NO existe company.name)
+//   GET /api/departments → [{ id, name, ... }]  (array DIRECTO, no { data: [...] })
+export interface CompanyRef { id: number; code?: string | null; legal_name?: string | null; trade_name?: string | null }
+export interface DeptRef { id: number; name: string }
+
+/** Nombre visible de una empresa: trade_name || legal_name || code || #id. */
+export function companyLabel(c: CompanyRef): string {
+  return c.trade_name || c.legal_name || c.code || `#${c.id}`
+}
+
+/** Normaliza una respuesta que puede venir como array directo o como { data: [...] }. */
+export function unwrapList<T = unknown>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload as T[]
+  const data = (payload as { data?: unknown } | null | undefined)?.data
+  return Array.isArray(data) ? (data as T[]) : []
+}
+
 export const SCOPE_LABEL: Record<DefaultScope, string> = {
   general: 'General (organización)',
   company: 'Empresa',

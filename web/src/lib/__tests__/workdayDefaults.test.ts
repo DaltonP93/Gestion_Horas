@@ -1,6 +1,6 @@
 import {
   validateDefaultForm, defaultPayload, parseBulkItems, layerLabel, scopeSummary,
-  emptyDefaultForm, DefaultForm,
+  emptyDefaultForm, DefaultForm, companyLabel, unwrapList,
 } from '../workdayDefaults'
 
 const base = (over: Partial<DefaultForm> = {}): DefaultForm => ({ ...emptyDefaultForm('2026-09-20'), ...over })
@@ -52,6 +52,22 @@ describe('parseBulkItems — JSON array y NDJSON', () => {
   })
   test('línea inválida informa el número', () => {
     expect(() => parseBulkItems('{"a":1}\n{bad}')).toThrow(/Línea 2/)
+  })
+})
+
+describe('Corrección F — formas reales de las APIs', () => {
+  test('companyLabel usa trade_name || legal_name || code (NO company.name)', () => {
+    expect(companyLabel({ id: 1, trade_name: 'ACME', legal_name: 'ACME S.A.', code: 'AC' })).toBe('ACME')
+    expect(companyLabel({ id: 1, trade_name: null, legal_name: 'ACME S.A.', code: 'AC' })).toBe('ACME S.A.')
+    expect(companyLabel({ id: 1, trade_name: null, legal_name: null, code: 'AC' })).toBe('AC')
+    expect(companyLabel({ id: 7 })).toBe('#7')
+  })
+  test('unwrapList acepta { data: [...] } (companies) y array directo (departments)', () => {
+    expect(unwrapList({ data: [{ id: 1 }, { id: 2 }] })).toHaveLength(2)   // /api/companies
+    expect(unwrapList([{ id: 1 }])).toHaveLength(1)                        // /api/departments
+    expect(unwrapList(null)).toEqual([])
+    expect(unwrapList({})).toEqual([])
+    expect(unwrapList('nope')).toEqual([])
   })
 })
 

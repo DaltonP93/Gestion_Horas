@@ -768,6 +768,14 @@ module.exports = {
   assertWriteEnabled,
   validDateISO,
   normalizeWorkDays,
+  // Validadores compartidos (reutilizados por workdayConfigDefaultsService para
+  // que los defaults validen IGUAL que employee_schedule_history — sin duplicar
+  // versiones más débiles).
+  normalizeTime,
+  normalizeInt,
+  normalizePolicy,
+  normalizeJson,
+  normalizeRegime,
   buildSnapshot,
   snapshotFromSchedule,
   composeScheduleWithProfile,
