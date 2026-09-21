@@ -71,6 +71,15 @@ function normalizeScopeTarget(input = {}) {
   return { scope, company_id: companyId, department_id: departmentId };
 }
 
+/** Día civil anterior a 'YYYY-MM-DD' (determinista, sin timezone). */
+function prevDayISO(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 /** Superposición inclusiva de vigencias; valid_to null = abierta. */
 function rangesOverlap(aFrom, aTo, bFrom, bTo) {
   const aEnd = aTo || OPEN;
@@ -293,34 +302,125 @@ async function createDefault(body, actorId) {
   });
 }
 
+// Campos de configuración EFECTIVA: inmutables in-place (Corrección I). Cambiarlos
+// requiere `supersedeDefault` (versión nueva), nunca un UPDATE sobre la fila.
+const EFFECTIVE_FIELDS = Object.freeze([
+  'valid_from', 'valid_to', 'check_in', 'check_out', 'tolerance_in', 'tolerance_out',
+  'break_mode', 'break_minutes', 'break_after_minutes', 'weekly_target_minutes',
+  'daily_target_minutes', 'work_regime', 'night_start', 'night_end', 'work_days',
+  'overtime_policy', 'overtime_policy_version', 'overtime_policy_config',
+  'rounding_policy', 'rounding_policy_version', 'rounding_policy_config',
+  'scope', 'company_id', 'department_id',
+]);
+// Metadata NO efectiva: lo único que un UPDATE in-place puede tocar.
+const METADATA_FIELDS = Object.freeze(['label', 'change_reason']);
+
+/**
+ * UPDATE in-place LIMITADO a metadata (label/change_reason). Cualquier intento de
+ * cambiar configuración efectiva o vigencia se rechaza con 409
+ * IMMUTABLE_EFFECTIVE_CONFIG: el pasado no se reescribe (Corrección I) — para eso
+ * está `supersedeDefault`. Bajo el MISMO scope lock y con auditoría.
+ */
 async function updateDefault(id, body, actorId) {
   assertWriteEnabled();
-  // Se bloquea el ALCANCE REAL de la fila (leído antes; el alcance es inmutable),
-  // no el que venga en el body: así update compite por el MISMO lock que
-  // create/close del mismo scope (Corrección D). Nunca bloquea general por omisión.
+  const input = body || {};
+  const forbidden = EFFECTIVE_FIELDS.filter(f => Object.prototype.hasOwnProperty.call(input, f) && input[f] !== undefined);
+  if (forbidden.length) {
+    throw httpError(409, 'IMMUTABLE_EFFECTIVE_CONFIG',
+      `No se puede modificar in-place configuración efectiva/vigencia (${forbidden.join(', ')}); usá supersede`);
+  }
   const sk = await readScopeKeyById(id);
   if (!sk) throw httpError(404, 'NOT_FOUND', 'default no encontrado');
   return withScopeLock(sk, async (t) => {
     const before = await readDefault(t, id);
     if (!before) throw httpError(404, 'NOT_FOUND', 'default no encontrado');
-    // El alcance de un default NO se muda; se corrige su vigencia/payload.
-    const merged = { ...before, ...body, scope: before.scope, company_id: before.company_id, department_id: before.department_id };
-    const row = normalizeDefaultBody(merged);
-    await assertNoOverlapDb(t, { ...row, excludeId: id });
+    const label = Object.prototype.hasOwnProperty.call(input, 'label')
+      ? (input.label == null ? null : String(input.label).slice(0, 120)) : before.label;
+    const changeReason = input.change_reason ?? input.reason ?? before.change_reason ?? null;
     await sequelize.query(
-      `UPDATE workday_config_defaults SET
-         ${UPDATE_COLS.map(c => `${c}=?`).join(', ')},
-         config_version = config_version + 1, updated_by=?
-       WHERE id=?`,
-      { replacements: [...UPDATE_COLS.map(c => colValue(row, c)), actorId ?? null, id], transaction: t }
+      'UPDATE workday_config_defaults SET label=?, change_reason=?, updated_by=? WHERE id=?',
+      { replacements: [label, changeReason, actorId ?? null, id], transaction: t },
     );
     const [after] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [id], transaction: t });
-    await auditDefault(t, { default_id: id, scope: before.scope, company_id: before.company_id, department_id: before.department_id, action: 'update', actor_id: actorId, before, after: after[0], change_reason: row.change_reason });
+    await auditDefault(t, { default_id: id, scope: before.scope, company_id: before.company_id, department_id: before.department_id, action: 'update_metadata', actor_id: actorId, before, after: after[0], change_reason: changeReason });
     return { before, after: after[0] };
   });
 }
 
-/** Cierra la vigencia (valid_to) sin borrar; el pasado queda intacto. */
+/**
+ * SUPERSEDE (append-only, Corrección I): cambia la configuración desde una fecha
+ * `effective_from` creando una VERSIÓN NUEVA y cerrando la anterior en
+ * `effective_from - 1`, sin reescribir el payload histórico. Atómico: mismo scope
+ * lock, una transacción, rollback total ante error.
+ *   v1: valid_from=A .. valid_to=effective_from-1  (payload viejo intacto)
+ *   v2: valid_from=effective_from .. NULL          (payload nuevo)
+ */
+async function supersedeDefault(id, body, actorId) {
+  assertWriteEnabled();
+  const input = body || {};
+  const effectiveFrom = input.effective_from == null ? '' : String(input.effective_from).slice(0, 10);
+  if (!wc.validDateISO(effectiveFrom)) throw httpError(400, 'INVALID_EFFECTIVE_FROM', 'effective_from (YYYY-MM-DD) requerido');
+
+  const sk = await readScopeKeyById(id);
+  if (!sk) throw httpError(404, 'NOT_FOUND', 'default no encontrado');
+  return withScopeLock(sk, async (t) => {
+    const before = await readDefault(t, id);
+    if (!before) throw httpError(404, 'NOT_FOUND', 'default no encontrado');
+    const beforeFrom = String(before.valid_from).slice(0, 10);
+    // No se permite corrección histórica in-band: effective_from debe ser POSTERIOR
+    // al inicio de la versión que se supersede (un flujo de corrección del pasado
+    // queda explícitamente fuera de alcance).
+    if (effectiveFrom <= beforeFrom) {
+      throw httpError(409, 'SUPERSEDE_NOT_FORWARD',
+        'effective_from debe ser posterior al valid_from de la versión vigente');
+    }
+
+    // La versión nueva hereda el alcance (inmutable) y toma el payload del body,
+    // con lo no especificado heredado de la versión anterior. Vigencia: abierta.
+    const merged = {
+      ...before, ...input,
+      scope: before.scope, company_id: before.company_id, department_id: before.department_id,
+      valid_from: effectiveFrom, valid_to: null,
+    };
+    const row = normalizeDefaultBody(merged);
+
+    // Ninguna OTRA versión activa debe cubrir [effective_from, ∞) (excluye la que
+    // vamos a cerrar).
+    await assertNoOverlapDb(t, { scope_key: row.scope_key, valid_from: effectiveFrom, valid_to: null, excludeId: id });
+
+    // Cierra la versión anterior en effective_from - 1 (el pasado queda intacto).
+    const closedTo = prevDayISO(effectiveFrom);
+    await sequelize.query(
+      'UPDATE workday_config_defaults SET valid_to=?, updated_by=? WHERE id=? AND valid_to IS NULL',
+      { replacements: [closedTo, actorId ?? null, id], transaction: t },
+    );
+    // Relee la versión anterior ya cerrada (para auditoría before/after fiel).
+    const [closedRows] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [id], transaction: t });
+    await auditDefault(t, { default_id: id, scope: before.scope, company_id: before.company_id, department_id: before.department_id, action: 'supersede_close', actor_id: actorId, before, after: closedRows[0], change_reason: row.change_reason });
+
+    // Inserta la versión nueva.
+    const [res] = await sequelize.query(
+      `INSERT INTO workday_config_defaults (${INSERT_COLS.join(', ')}, created_by, updated_by)
+       VALUES (${INSERT_COLS.map(() => '?').join(', ')}, ?, ?)`,
+      { replacements: [...rowToInsertValues(row), actorId ?? null, actorId ?? null], transaction: t },
+    );
+    const newId = insertId(res);
+    const [createdRows] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [newId], transaction: t });
+    const created = createdRows && createdRows[0] ? createdRows[0] : { id: newId };
+    await auditDefault(t, { default_id: newId, scope: row.scope, company_id: row.company_id, department_id: row.department_id, action: 'supersede_create', actor_id: actorId, before: null, after: created, change_reason: row.change_reason });
+
+    return { closed_id: id, closed_valid_to: closedTo, created };
+  });
+}
+
+/**
+ * Cierre DELIBERADO de una versión: fija `valid_to` (sin borrar la fila ni tocar
+ * su payload). Semántica: se usa para TERMINAR la vigencia de un alcance
+ * (p. ej. un departamento que deja de existir) sin abrir una versión sucesora.
+ * Para CAMBIAR la configuración desde una fecha, usar `supersedeDefault` (que
+ * cierra y crea la sucesora en una sola operación). Bajo el MISMO scope lock y
+ * con auditoría; el pasado queda intacto.
+ */
 async function closeDefault(id, validTo, actorId, reason) {
   assertWriteEnabled();
   const to = validTo == null ? '' : String(validTo).slice(0, 10);
@@ -497,6 +597,7 @@ module.exports = {
   listDefaults,
   createDefault,
   updateDefault,
+  supersedeDefault,
   closeDefault,
   bulkPreview,
   bulkApply,

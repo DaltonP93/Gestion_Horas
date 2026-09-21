@@ -369,21 +369,45 @@ async function loadContracts(employeeIds, { from, to }) {
  *
  * @returns {Map<number, Array>} employee_id → asignaciones ordenadas por valid_from.
  */
+// La columna `employee_assignments.company_id` (snapshot histórico de empresa,
+// migración 086) puede no existir todavía si 078 se aplicó y 086 no. Se degrada
+// SÓLO esa columna (como el patrón de metadata FASE C) para no perder también el
+// department_id histórico: sin la columna, la empresa histórica es desconocida.
+let eaCompanyAvailable = null;
+
 async function loadEmployeeAssignments(employeeIds) {
   const ids = idsValidos(employeeIds);
   if (!ids.length) return new Map();
-  const rows = await consultarOpcionalTablaOColumna('employee_assignments', `
+
+  const query = (withCompany) => consultarOpcionalTablaOColumna('employee_assignments', `
     SELECT
       a.employee_id,
       a.branch_id,
       a.department_id,
       a.cost_center_id,
+      ${withCompany ? 'a.company_id' : 'NULL AS company_id'},
       DATE_FORMAT(a.valid_from, '%Y-%m-%d') AS valid_from,
       DATE_FORMAT(a.valid_to,   '%Y-%m-%d') AS valid_to
     FROM employee_assignments a
     WHERE a.employee_id IN (${marcas(ids.length)})
     ORDER BY a.employee_id, a.valid_from
   `, ids);
+
+  let rows;
+  if (eaCompanyAvailable === false) {
+    rows = await query(false);
+  } else {
+    try {
+      rows = await query(true);
+      eaCompanyAvailable = true;
+    } catch (err) {
+      if (!isMissingColumnError(err)) throw err;
+      eaCompanyAvailable = false;
+      avisarTablaAusente('employee_assignments.company_id (086 pendiente)');
+      rows = await query(false);
+    }
+  }
+
   const porEmpleado = new Map();
   for (const r of rows) {
     const lista = porEmpleado.get(r.employee_id) || [];
@@ -391,29 +415,6 @@ async function loadEmployeeAssignments(employeeIds) {
     porEmpleado.set(r.employee_id, lista);
   }
   return porEmpleado;
-}
-
-/**
- * Mapa id→company_id para sucursales y centros de costo (076). Se consulta SÓLO
- * por los ids presentes en las asignaciones del lote (IN acotado, sin N+1).
- * Tolerante a que falte la columna/tabla (076 sin aplicar → sin empresa).
- */
-async function loadOrgCompanyMaps(branchIds, costCenterIds) {
-  const bIds = idsValidos(branchIds);
-  const ccIds = idsValidos(costCenterIds);
-  const branchCompany = new Map();
-  const ccCompany = new Map();
-  if (bIds.length) {
-    const rows = await consultarOpcionalTablaOColumna('branches.company_id',
-      `SELECT id, company_id FROM branches WHERE id IN (${marcas(bIds.length)})`, bIds);
-    for (const r of rows) branchCompany.set(Number(r.id), r.company_id != null ? Number(r.company_id) : null);
-  }
-  if (ccIds.length) {
-    const rows = await consultarOpcionalTablaOColumna('cost_centers.company_id',
-      `SELECT id, company_id FROM cost_centers WHERE id IN (${marcas(ccIds.length)})`, ccIds);
-    for (const r of rows) ccCompany.set(Number(r.id), r.company_id != null ? Number(r.company_id) : null);
-  }
-  return { branchCompany, ccCompany };
 }
 
 /**
@@ -482,24 +483,18 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
   ]);
   const hasIds = idsValidos(employeeIds).length > 0;
 
-  // Ids org distintos presentes en las asignaciones → mapas empresa (IN acotado).
-  const branchIds = new Set();
-  const ccIds = new Set();
+  // Departamentos y EMPRESAS (snapshot histórico `a.company_id`, 086) presentes
+  // en las asignaciones del lote → acotan la consulta de defaults. La empresa NO
+  // se reconstruye leyendo branches/cost_centers ACTUALES (Corrección H): se usa
+  // exclusivamente la congelada en la asignación.
   const deptIds = new Set();
+  const companyIds = new Set();
   for (const lista of orgAssignments.values()) {
     for (const a of lista) {
-      if (a.branch_id != null) branchIds.add(Number(a.branch_id));
-      if (a.cost_center_id != null) ccIds.add(Number(a.cost_center_id));
       if (a.department_id != null) deptIds.add(Number(a.department_id));
+      if (a.company_id != null) companyIds.add(Number(a.company_id));
     }
   }
-  const { branchCompany, ccCompany } = await loadOrgCompanyMaps([...branchIds], [...ccIds]);
-
-  // Empresas alcanzables (para cargar sus defaults). No se elige empresa acá;
-  // sólo se enumeran las candidatas del lote para acotar la consulta de defaults.
-  const companyIds = new Set();
-  for (const c of branchCompany.values()) if (c != null) companyIds.add(Number(c));
-  for (const c of ccCompany.values()) if (c != null) companyIds.add(Number(c));
 
   // Sin empleados no se consulta NADA (ni el default general): mantiene la
   // garantía "sin ids, sin consultas" y evita trabajo inútil.
@@ -510,30 +505,21 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
 
   /**
    * Alcance AUTORITATIVO as-of-date: SÓLO la asignación organizativa vigente en
-   * la fecha (078). NUNCA `employees.department_id` actual — usar el estado de
-   * hoy para una fecha sin evidencia de pertenencia histórica fabricaría
-   * historia (Corrección B). Sin asignación vigente el alcance es nulo y la
-   * resolución continúa a general/fallback.
+   * la fecha (078). El departamento sale de `a.department_id` y la EMPRESA del
+   * snapshot histórico `a.company_id` (086) — NUNCA de branches/cost_centers
+   * ACTUALES (Corrección H) ni de `employees.department_id` actual (Corrección
+   * B). Sin asignación vigente el alcance es nulo → general/fallback. Una
+   * asignación con `company_id` NULL (empresa histórica desconocida) NO habilita
+   * el company_historical_default.
    */
   function scopeForDate(id, workDate) {
     const vig = asignacionVigente(orgAssignments.get(id), workDate);
     if (!vig) {
-      return { department_id: null, company_id: null, company_scope_conflict: false, scope_source: null };
+      return { department_id: null, company_id: null, scope_source: null };
     }
-    const departmentId = vig.department_id != null ? Number(vig.department_id) : null;
-    const fromBranch = vig.branch_id != null ? (branchCompany.get(Number(vig.branch_id)) ?? null) : null;
-    const fromCC = vig.cost_center_id != null ? (ccCompany.get(Number(vig.cost_center_id)) ?? null) : null;
-    let companyId = null;
-    let conflict = false;
-    if (fromBranch != null && fromCC != null) {
-      if (Number(fromBranch) === Number(fromCC)) companyId = Number(fromBranch);
-      else conflict = true; // ambiguo: NO se elige empresa arbitrariamente
-    } else if (fromBranch != null) companyId = Number(fromBranch);
-    else if (fromCC != null) companyId = Number(fromCC);
     return {
-      department_id: departmentId,
-      company_id: companyId,
-      company_scope_conflict: conflict,
+      department_id: vig.department_id != null ? Number(vig.department_id) : null,
+      company_id: vig.company_id != null ? Number(vig.company_id) : null,
       scope_source: 'employee_assignments',
     };
   }
@@ -887,7 +873,6 @@ module.exports = {
   loadShiftAssignments,
   loadContracts,
   loadEmployeeAssignments,
-  loadOrgCompanyMaps,
   loadWorkdayConfigDefaults,
   normalizeConfigRow,
   parseWorkDays,

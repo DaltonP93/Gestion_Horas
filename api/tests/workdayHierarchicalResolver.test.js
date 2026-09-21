@@ -29,7 +29,7 @@ const complete = (over = {}) => ({ check_in: '08:00:00', check_out: '17:00:00', 
  * Mock de BD consciente de la sentencia. `defaults` es un array de filas con
  * scope_key; se devuelven las que estén en el IN pedido.
  */
-function mockDb({ history = [], shifts = [], contracts = [], assignments = [], branches = {}, costCenters = {}, defaults = [] } = {}) {
+function mockDb({ history = [], shifts = [], contracts = [], assignments = [], defaults = [] } = {}) {
   sequelize.query.mockReset();
   sequelize.query.mockImplementation(async (sql, opts) => {
     const repl = (opts && opts.replacements) || [];
@@ -37,8 +37,6 @@ function mockDb({ history = [], shifts = [], contracts = [], assignments = [], b
     if (/shift_assignments/.test(sql)) return [shifts];
     if (/employee_contracts/.test(sql)) return [contracts];
     if (/FROM employee_assignments/.test(sql)) return [assignments];
-    if (/FROM branches/.test(sql)) return [repl.map(id => ({ id, company_id: branches[id] ?? null })).filter(r => branches[r.id] !== undefined)];
-    if (/FROM cost_centers/.test(sql)) return [repl.map(id => ({ id, company_id: costCenters[id] ?? null })).filter(r => costCenters[r.id] !== undefined)];
     if (/FROM workday_config_defaults/.test(sql)) {
       const keys = new Set(repl);
       return [defaults.filter(d => keys.has(d.scope_key))];
@@ -47,7 +45,9 @@ function mockDb({ history = [], shifts = [], contracts = [], assignments = [], b
   });
 }
 
-const asg = (over) => ({ employee_id: 1, branch_id: null, department_id: null, cost_center_id: null, valid_from: '2026-01-01', valid_to: null, ...over });
+// La empresa se congela en la asignación (snapshot 086); ya no se deriva de
+// branches/cost_centers en la resolución del motor.
+const asg = (over) => ({ employee_id: 1, branch_id: null, department_id: null, cost_center_id: null, company_id: null, valid_from: '2026-01-01', valid_to: null, ...over });
 const def = (scope_key, over = {}) => ({ scope_key, valid_from: '2026-01-01', valid_to: null, ...complete(), ...over });
 
 describe('jerarquía en el motor — defaults por alcance', () => {
@@ -63,10 +63,9 @@ describe('jerarquía en el motor — defaults por alcance', () => {
     expect(r.source).toBe('department_historical_default');
   });
 
-  test('default de EMPRESA (empresa derivada del branch as-of-date)', async () => {
+  test('default de EMPRESA usa el snapshot a.company_id (086), no branches actuales', async () => {
     mockDb({
-      assignments: [asg({ branch_id: 30 })],
-      branches: { 30: 3 },
+      assignments: [asg({ branch_id: 30, company_id: 3 })], // empresa congelada
       defaults: [def('company:3:0', { check_in: '09:00:00' })],
     });
     const cfg = await workdayConfig.loadWorkdayConfig([1], RANGO);
@@ -128,6 +127,23 @@ describe('jerarquía en el motor — defaults por alcance', () => {
   });
 });
 
+describe('Corrección I — versiones append-only resueltas por fecha', () => {
+  test('tras supersede (v1 08:00 hasta 2026-09-30, v2 07:00 desde 2026-10-01) cada fecha usa su versión', async () => {
+    mockDb({
+      assignments: [],
+      defaults: [
+        def('general:0:0', { valid_from: '2026-01-01', valid_to: '2026-09-30', check_in: '08:00:00' }),
+        def('general:0:0', { valid_from: '2026-10-01', valid_to: null, check_in: '07:00:00' }),
+      ],
+    });
+    const cfg = await workdayConfig.loadWorkdayConfig([1], { from: '2026-05-01', to: '2026-11-30' });
+    expect(cfg.forDate(1, '2026-05-01').check_in).toBe('08:00:00'); // v1 (pasado intacto)
+    expect(cfg.forDate(1, '2026-09-30').check_in).toBe('08:00:00'); // último día de v1
+    expect(cfg.forDate(1, '2026-10-01').check_in).toBe('07:00:00'); // v2
+    expect(cfg.forDate(1, '2026-11-01').check_in).toBe('07:00:00'); // v2
+  });
+});
+
 describe('Corrección B — estado actual NO fabrica historia', () => {
   test('sin employee_assignment vigente, un default de departamento NO se aplica aunque exista', async () => {
     // No hay asignación; el motor NO consulta employees.department_id. Existe un
@@ -152,33 +168,39 @@ describe('Corrección B — estado actual NO fabrica historia', () => {
   });
 });
 
-describe('Corrección C — derivación de empresa as-of-date', () => {
+describe('Corrección H — snapshot histórico de empresa (a.company_id)', () => {
   const runCompany = async (over) => {
-    mockDb({ assignments: [asg(over.asg)], branches: over.branches || {}, costCenters: over.costCenters || {},
+    mockDb({ assignments: [asg(over.asg)],
       defaults: [def('company:7:0', { check_in: '09:09:00' }), def('general:0:0', { check_in: '08:00:00' })] });
     const cfg = await workdayConfig.loadWorkdayConfig([1], RANGO);
     return cfg.forDate(1, '2026-09-15');
   };
 
-  test('empresa sólo por branch', async () => {
-    const r = await runCompany({ asg: { branch_id: 30 }, branches: { 30: 7 } });
+  test('company_id=7 en la asignación → company_historical_default', async () => {
+    const r = await runCompany({ asg: { branch_id: 30, company_id: 7 } });
     expect(r.source).toBe('company_historical_default');
+    expect(r.check_in).toBe('09:09:00');
   });
-  test('empresa sólo por cost_center', async () => {
-    const r = await runCompany({ asg: { cost_center_id: 40 }, costCenters: { 40: 7 } });
-    expect(r.source).toBe('company_historical_default');
-  });
-  test('branch y cost_center coinciden → empresa confiable', async () => {
-    const r = await runCompany({ asg: { branch_id: 30, cost_center_id: 40 }, branches: { 30: 7 }, costCenters: { 40: 7 } });
-    expect(r.source).toBe('company_historical_default');
-  });
-  test('branch y cost_center DIFIEREN → ambiguo, NO elige empresa (cae a general)', async () => {
-    const r = await runCompany({ asg: { branch_id: 30, cost_center_id: 40 }, branches: { 30: 7 }, costCenters: { 40: 8 } });
+
+  test('company_id=NULL → NO company default (cae a general)', async () => {
+    const r = await runCompany({ asg: { branch_id: 30, cost_center_id: 40, company_id: null } });
     expect(r.source).toBe('general_historical_default');
   });
-  test('ninguno → sin empresa (cae a general)', async () => {
-    const r = await runCompany({ asg: { department_id: null } });
-    expect(r.source).toBe('general_historical_default');
+
+  test('snapshot congelado: aunque branches/cost_centers cambien HOY, el motor usa a.company_id y NO los consulta', async () => {
+    // La asignación histórica congeló empresa 3. Un mock de branches diría 8,
+    // pero el motor no debe consultarlo para resolver el pasado.
+    mockDb({
+      assignments: [asg({ branch_id: 30, company_id: 3 })],
+      defaults: [def('company:3:0', { check_in: '06:06:00' }), def('company:8:0', { check_in: '23:23:00' }), def('general:0:0')],
+    });
+    const cfg = await workdayConfig.loadWorkdayConfig([1], RANGO);
+    const r = cfg.forDate(1, '2026-09-15');
+    expect(r.source).toBe('company_historical_default');
+    expect(r.check_in).toBe('06:06:00'); // empresa 3 congelada, nunca 8
+    const sql = sequelize.query.mock.calls.map(c => c[0]).join('\n');
+    expect(sql).not.toMatch(/FROM branches\b/);
+    expect(sql).not.toMatch(/FROM cost_centers\b/);
   });
 });
 

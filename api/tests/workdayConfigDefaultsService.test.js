@@ -257,18 +257,22 @@ describe('Corrección D — identidad de lock por alcance', () => {
   }
   const only = (locks) => locks.find(l => /wcd/.test(l));
 
-  test('create, update y close del MISMO scope usan el MISMO nombre de lock', async () => {
+  test('create, update(metadata), supersede y close del MISMO scope usan el MISMO lock', async () => {
     const locks = lockCapture();
     await svc.createDefault({ scope: 'department', department_id: 9, valid_from: '2026-02-01', ...BASE }, 1);
     const createLock = only(locks);
     locks.length = 0;
-    await svc.updateDefault(5, { valid_from: '2026-03-01', ...BASE }, 1);
+    await svc.updateDefault(5, { label: 'x', change_reason: 'meta' }, 1);
     const updateLock = only(locks);
+    locks.length = 0;
+    await svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1);
+    const supersedeLock = only(locks);
     locks.length = 0;
     await svc.closeDefault(5, '2026-12-31', 1, 'fin');
     const closeLock = only(locks);
     expect(createLock).toBe('sishoras:wcd:department:0:9');
     expect(updateLock).toBe(createLock);
+    expect(supersedeLock).toBe(createLock);
     expect(closeLock).toBe(createLock);
   });
 });
@@ -325,5 +329,97 @@ describe('Corrección D — bulkApply atómico (todo o nada)', () => {
     await expect(svc.bulkApply(items, 1)).rejects.toThrow('boom');
     // Una sola transacción: en MySQL real el error revierte las 2 inserciones previas.
     expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Corrección I — defaults append-only (supersede / inmutabilidad)', () => {
+  const beforeRow = {
+    id: 5, scope: 'general', company_id: null, department_id: null,
+    valid_from: '2026-01-01', valid_to: null,
+    check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6', break_mode: 'punched',
+  };
+
+  test('PUT que intenta cambiar configuración efectiva → 409 IMMUTABLE_EFFECTIVE_CONFIG (sin tocar BD)', async () => {
+    sequelize.query.mockImplementation(async () => [[]]);
+    await expect(svc.updateDefault(5, { check_in: '09:00' }, 1)).rejects.toMatchObject({ status: 409, code: 'IMMUTABLE_EFFECTIVE_CONFIG' });
+    await expect(svc.updateDefault(5, { valid_to: '2026-12-31' }, 1)).rejects.toMatchObject({ code: 'IMMUTABLE_EFFECTIVE_CONFIG' });
+    expect(sequelize.transaction).not.toHaveBeenCalled();
+  });
+
+  test('PUT de metadata (label/change_reason) sólo actualiza esos campos', async () => {
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
+      if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ ...beforeRow, label: 'nuevo' }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    const { after } = await svc.updateDefault(5, { label: 'nuevo', change_reason: 'typo' }, 1);
+    expect(after.label).toBe('nuevo');
+    const upd = sequelize.query.mock.calls.find(c => /^UPDATE workday_config_defaults/.test(c[0].trim()));
+    expect(upd[0]).toMatch(/SET label=\?, change_reason=\?/);
+    expect(upd[0]).not.toMatch(/check_in|valid_from|work_days/);
+  });
+
+  test('supersede: cierra v1 en effective_from-1 y crea v2 desde effective_from', async () => {
+    let created = null;
+    sequelize.query.mockImplementation(async (sql, opts) => {
+      const repl = (opts && opts.replacements) || [];
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
+      if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]]; // sin otro solape
+      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) {
+        created = { id: 99, scope: 'general', valid_from: repl[4], check_in: repl[6] };
+        return [99, 1];
+      }
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) {
+        return [[created || { ...beforeRow, valid_to: '2026-09-30' }]];
+      }
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    const out = await svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00', change_reason: 'nuevo horario' }, 1);
+    expect(out.closed_id).toBe(5);
+    expect(out.closed_valid_to).toBe('2026-09-30'); // effective_from - 1
+    expect(out.created.id).toBe(99);
+    expect(out.created.valid_from).toBe('2026-10-01');
+    expect(out.created.check_in).toBe('07:00:00');
+    // Cierre + inserción en UNA sola transacción.
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  test('supersede con effective_from <= valid_from de la versión → 409 SUPERSEDE_NOT_FORWARD', async () => {
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
+      if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
+      return [[]];
+    });
+    await expect(svc.supersedeDefault(5, { effective_from: '2026-01-01', check_in: '07:00' }, 1))
+      .rejects.toMatchObject({ status: 409, code: 'SUPERSEDE_NOT_FORWARD' });
+  });
+
+  test('supersede: fallo al insertar v2 → propaga (rollback; v1 no queda cerrada)', async () => {
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/GET_LOCK/.test(sql)) return [[{ ok: 1 }]];
+      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
+      if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
+      if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) throw new Error('insert boom');
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ ...beforeRow, valid_to: '2026-09-30' }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    await expect(svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1)).rejects.toThrow('insert boom');
+    expect(sequelize.transaction).toHaveBeenCalledTimes(1); // en MySQL real revierte el cierre de v1
   });
 });

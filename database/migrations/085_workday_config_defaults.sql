@@ -17,10 +17,15 @@
 --     defaults (before/after JSON + actor + motivo). El nivel empleado ya audita
 --     por la ruta workdayConfiguration; este es el equivalente para defaults.
 --
--- PRECEDENCIA (resuelta en código, workdayEffectiveConfig.js):
+-- PRECEDENCIA (resuelta en código por el ÚNICO resolvedor del motor,
+-- workdayConfig.resolveForDate — sin algoritmo paralelo):
 --   published shift assignment > employee historical override
 --   > department historical default > company/general historical default
 --   > employee contract trace > historical_fallback.
+--
+-- APPEND-ONLY (Corrección I): versionar = crear una fila nueva y CERRAR la
+-- anterior (supersedeDefault); la configuración efectiva de una versión es
+-- INMUTABLE in-place. El UPDATE del servicio sólo toca metadata (label/motivo).
 --
 -- COEXISTENCIA / INVARIANTES: esto es CONFIGURACIÓN. No modifica
 -- attendance_logs, daily_summary ni att2000, no recalcula histórico y no

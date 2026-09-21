@@ -192,6 +192,16 @@ export function defaultPayload(form: DefaultForm) {
   }
 }
 
+/**
+ * Filas de un preview masivo que BLOQUEAN la aplicación: inválidas, incompletas
+ * o solapadas. `bulkApply` en el backend exige config completa (requireComplete),
+ * así que una fila `incomplete` también impide aplicar (Corrección J).
+ */
+export function bulkBlockingCount(results: Array<{ status?: string }> | null | undefined): number {
+  if (!Array.isArray(results)) return 0
+  return results.filter(r => r.status === 'invalid' || r.status === 'incomplete' || r.status === 'overlap').length
+}
+
 /** Parsea el textarea de importación masiva (JSON array o NDJSON) a items. */
 export function parseBulkItems(text: string): Record<string, unknown>[] {
   const s = String(text || '').trim()

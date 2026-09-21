@@ -233,11 +233,22 @@ router.post('/defaults', update, asyncHandler(async (req, res) => {
   res.status(201).json({ ok: true, data: created });
 }));
 
+// PUT: SÓLO metadata (label/change_reason). Cambiar configuración efectiva o
+// vigencia se rechaza (409 IMMUTABLE_EFFECTIVE_CONFIG) — usar /supersede.
 router.put('/defaults/:id', update, asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
-  const { before, after } = await defaults.updateDefault(id, req.body || {}, req.user?.id || null);
-  auditDefaultRoute(req, 'update', id, { id }, { id, valid_from: after.valid_from, valid_to: after.valid_to }, after.change_reason || null);
+  const { after } = await defaults.updateDefault(id, req.body || {}, req.user?.id || null);
+  auditDefaultRoute(req, 'update_metadata', id, { id }, { id, label: after.label }, after.change_reason || null);
   res.json({ ok: true, data: after });
+}));
+
+// SUPERSEDE: append-only. Cierra la versión vigente y crea la sucesora desde
+// effective_from, en una sola transacción atómica.
+router.post('/defaults/:id/supersede', update, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const data = await defaults.supersedeDefault(id, req.body || {}, req.user?.id || null);
+  auditDefaultRoute(req, 'supersede', id, { id }, { closed_id: data.closed_id, closed_valid_to: data.closed_valid_to, created_id: data.created?.id }, req.body?.change_reason || req.body?.reason || null);
+  res.status(201).json({ ok: true, data });
 }));
 
 router.post('/defaults/:id/close', update, asyncHandler(async (req, res) => {

@@ -80,7 +80,7 @@ describe('createAssignment — atómica con lock del empleado', () => {
       .mockResolvedValueOnce([{}])                                             // UPDATE cierre
       .mockResolvedValueOnce([8, 1]);                                          // INSERT: forma real [insertId, affectedRows]
     const r = await people.createAssignment(50, { valid_from: '2026-03-01' }, 7);
-    expect(r).toEqual({ id: 8, closed_previous: 7 });
+    expect(r).toEqual({ id: 8, company_id: null, closed_previous: 7 });
     expect(sequelize.query.mock.calls[0][0]).toMatch(/SELECT id FROM employees WHERE id = \? FOR UPDATE/);
     expect(sequelize.__tx.commit).toHaveBeenCalled();
   });
@@ -90,7 +90,7 @@ describe('createAssignment — atómica con lock del empleado', () => {
       .mockResolvedValueOnce([[{ id: 50 }]])
       .mockResolvedValueOnce([[]])
       .mockResolvedValueOnce([3, 1]);                                          // INSERT: forma real
-    expect(await people.createAssignment(50, { valid_from: '2026-01-01' }, 1)).toEqual({ id: 3, closed_previous: null });
+    expect(await people.createAssignment(50, { valid_from: '2026-01-01' }, 1)).toEqual({ id: 3, company_id: null, closed_previous: null });
   });
 
   test('fuera de orden (vigencia abierta POSTERIOR, Date real) → 409 y rollback', async () => {
@@ -159,23 +159,47 @@ describe('validateAssignmentRefs — existencia + alcance + coherencia mutua (P1
       .rejects.toMatchObject({ status: 400, code: 'INCOHERENT_SCOPE' });
   });
 
-  test('COHERENTE: todas de la misma empresa → ok', async () => {
+  test('COHERENTE: todas de la misma empresa → devuelve company_id autoritativo (H)', async () => {
     sequelize.query
       .mockResolvedValueOnce([[{ id: 2, company_id: 9 }]])  // branch → 9
       .mockResolvedValueOnce([[{ id: 5, company_id: 9 }]])  // cost_center → 9
       .mockResolvedValueOnce([[{ id: 4, company_id: 9 }]]); // department → 9
-    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, cost_center_id: 5, department_id: 4 })).resolves.toBeUndefined();
+    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, cost_center_id: 5, department_id: 4 }))
+      .resolves.toEqual({ company_id: 9 });
   });
 
-  test('departamento sin centro de costo (company NULL) no bloquea', async () => {
+  test('departamento sin centro de costo (company NULL) no bloquea; empresa por branch (H)', async () => {
     sequelize.query
       .mockResolvedValueOnce([[{ id: 2, company_id: 9 }]])  // branch → 9
       .mockResolvedValueOnce([[{ id: 4, company_id: null }]]); // department sin cc → NULL
-    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, department_id: 4 })).resolves.toBeUndefined();
+    await expect(people.validateAssignmentRefs(scope, { branch_id: 2, department_id: 4 }))
+      .resolves.toEqual({ company_id: 9 });
   });
 
-  test('unrestricted: valida existencia pero no alcance', async () => {
+  test('sin ninguna referencia con empresa → company_id NULL (H: desconocido, no se infiere)', async () => {
+    // department sin cost_center, sin branch ni cost_center → ninguna empresa conocida.
+    sequelize.query.mockResolvedValueOnce([[{ id: 4, company_id: null }]]); // department → NULL
+    await expect(people.validateAssignmentRefs({ unrestricted: true }, { department_id: 4 }))
+      .resolves.toEqual({ company_id: null });
+  });
+
+  test('unrestricted: valida existencia pero no alcance; devuelve empresa del branch (H)', async () => {
     sequelize.query.mockResolvedValueOnce([[{ id: 3, company_id: 1 }]]);
-    await expect(people.validateAssignmentRefs({ unrestricted: true }, { branch_id: 3 })).resolves.toBeUndefined();
+    await expect(people.validateAssignmentRefs({ unrestricted: true }, { branch_id: 3 }))
+      .resolves.toEqual({ company_id: 1 });
+  });
+
+  test('createAssignment persiste el company_id resuelto en el snapshot (H)', async () => {
+    // branch de empresa 3 → INSERT recibe company_id=3 y el retorno lo expone.
+    sequelize.query
+      .mockResolvedValueOnce([[{ id: 50 }]])                    // employees FOR UPDATE
+      .mockResolvedValueOnce([[{ id: 3, company_id: 3 }]])      // validateAssignmentRefs: branch → empresa 3
+      .mockResolvedValueOnce([[]])                              // SELECT open (ninguna)
+      .mockResolvedValueOnce([9, 1]);                           // INSERT [insertId, affected]
+    const r = await people.createAssignment(50, { valid_from: '2026-01-01', branch_id: 3 }, 1, { unrestricted: true });
+    expect(r).toEqual({ id: 9, company_id: 3, closed_previous: null });
+    const insertCall = sequelize.query.mock.calls.find(c => /INSERT INTO employee_assignments/.test(c[0]));
+    expect(insertCall[0]).toMatch(/company_id/);
+    expect(insertCall[1].replacements).toContain(3); // company_id=3 en los valores
   });
 });

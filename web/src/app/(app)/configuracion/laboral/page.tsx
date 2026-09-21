@@ -19,7 +19,7 @@ import { useCurrentUser } from '@/lib/useCurrentUser'
 import {
   WorkdayDefaultRow, EffectiveHierarchical, DefaultForm, DefaultScope, CompanyRef, DeptRef,
   SCOPE_LABEL, DAY_LABELS, emptyDefaultForm, validateDefaultForm, defaultPayload,
-  parseBulkItems, layerLabel, scopeSummary, companyLabel, unwrapList,
+  parseBulkItems, layerLabel, scopeSummary, companyLabel, unwrapList, bulkBlockingCount,
 } from '@/lib/workdayDefaults'
 
 const WRITE_ROLES = ['super_admin', 'admin', 'gth', 'hr']
@@ -163,9 +163,7 @@ export default function ConfiguracionLaboralPage() {
     } finally { setBulkBusy(false) }
   }
 
-  const bulkBlocking = bulkPreview
-    ? (bulkPreview.results || []).filter((r: any) => r.status === 'invalid' || r.status === 'overlap').length
-    : 0
+  const bulkBlocking = bulkPreview ? bulkBlockingCount(bulkPreview.results) : 0
 
   return (
     <div className="space-y-6">
@@ -362,7 +360,7 @@ export default function ConfiguracionLaboralPage() {
                   </tbody>
                 </table>
               </div>
-              {bulkBlocking > 0 && <p className="mt-1 text-xs text-rose-600">{bulkBlocking} fila(s) bloquean la aplicación (invalid/overlap).</p>}
+              {bulkBlocking > 0 && <p className="mt-1 text-xs text-rose-600">{bulkBlocking} fila(s) bloquean la aplicación (invalid / incomplete / overlap).</p>}
             </div>
           )}
         </div>

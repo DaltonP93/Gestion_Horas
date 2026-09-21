@@ -52,18 +52,22 @@ Reglas: una capa sólo habilita `configured` si su config es **completa**
 (nunca se inventa una jornada). La turnera aporta el HORARIO del día y el "perfil"
 (target/policies) sale del snapshot del empleado o, si no existe, del default
 jerárquico vigente. El departamento/empresa del empleado se resuelven
-**as-of-date** SÓLO desde `employee_assignments` (078); la empresa se deriva de
-`branches.company_id` y `cost_centers.company_id` (076) — si ambas existen y
-**difieren**, es ambiguo y NO se elige empresa. **Sin asignación vigente no hay
-alcance autoritativo**: no se usa `employees.department_id` actual (eso fabricaría
-historia), se continúa a general/fallback.
+**as-of-date** SÓLO desde `employee_assignments` (078): departamento de
+`a.department_id` y empresa del **snapshot histórico `a.company_id`** (086),
+congelado al crear la asignación (Corrección H). El motor **no** lee
+`branches`/`cost_centers` para reconstruir el pasado, ni `employees.department_id`
+actual (Corrección B: eso fabricaría historia). **Sin asignación vigente no hay
+alcance autoritativo** → general/fallback. Una asignación con `company_id` NULL
+(empresa histórica desconocida) NO habilita el company default. La derivación de
+empresa (branch/cost_center/departamento, con `INCOHERENT_SCOPE` si difieren)
+ocurre una sola vez, al **escribir** la asignación (`people.createAssignment`).
 
 **Degradación deliberada:** si faltan 078/076/085 (tablas o columnas), los
 loaders degradan a "sin dato" y el resultado es IDÉNTICO al comportamiento previo
 (sin defaults → `historical_fallback`). Sin `WORKDAY_CONFIG_WRITE_ENABLED` y sin
 085 aplicada en prod, la jerarquía no altera ningún cálculo.
 
-## 3. Datos (migración `085`)
+## 3. Datos (migraciones `085` y `086`)
 
 `database/migrations/085_workday_config_defaults.sql` (aditiva, idempotente,
 sin backfill):
@@ -71,66 +75,90 @@ sin backfill):
 - **`workday_config_defaults`** — default de jornada **versionado por alcance**:
   `scope ENUM('general','company','department')`, `company_id`/`department_id`
   nullables, `valid_from`/`valid_to` (inclusive, `NULL`=abierta), payload de
-  jornada con paridad con ESH (`check_in`…`work_days`, políticas, franja
-  nocturna). Columna generada `scope_key = scope:company:department` con
-  `UNIQUE(scope_key, valid_from)`; la NO-superposición de vigencias dentro del
-  alcance se valida en el servicio (igual que ESH). FKs a `companies`/
-  `departments` `ON DELETE RESTRICT`.
+  jornada con paridad con ESH (`check_in`…`work_days`, políticas + versión/config,
+  franja nocturna). Columna generada `scope_key = scope:company:department` con
+  `UNIQUE(scope_key, valid_from)`; `CHECK ck_wcd_scope` fija la semántica de
+  alcance en BD (general=sin ids, company=company_id, department=department_id).
+  La NO-superposición de vigencias dentro del alcance se valida en el servicio.
+  FKs a `companies`/`departments` `ON DELETE RESTRICT`.
 - **`workday_config_default_audit`** — auditoría de defaults
-  (`create|update|close`, actor, `before_json`/`after_json`, motivo).
+  (`create|update_metadata|supersede_close|supersede_create|close`, actor,
+  `before_json`/`after_json`, motivo).
 
-**Modelo elegido:** versionado inmutable del pasado (una versión nueva = una fila
-nueva), como `labor_calendars` (079) y el snapshot de ESH. Preserva el histórico
-sin explosión de snapshots por empleado y evita la deriva retroactiva.
+`database/migrations/086_employee_assignments_company_snapshot.sql` (Corrección
+H, aditiva/idempotente/sin backfill): agrega **`employee_assignments.company_id`**
+(FK a `companies` `ON DELETE RESTRICT`) — el snapshot histórico de empresa que se
+congela al crear la asignación. NULL = empresa histórica desconocida.
+
+**Modelo elegido:** versionado **append-only e inmutable del pasado** — una
+versión nueva es una fila nueva y su configuración efectiva no se reescribe
+in-place (ver §4 supersede), como `labor_calendars` (079) y el snapshot de ESH.
+Preserva el histórico sin explosión de snapshots por empleado y evita la deriva
+retroactiva.
 
 ## 4. API (rutas nuevas, `/api/workday-config`)
 
 - `GET /precedence` — precedencia canónica + `writes_enabled` (para UI/docs).
 - `GET /employees/:id/effective-hierarchical?date=YYYY-MM-DD` — **resuelve la
-  jornada efectiva** aplicando toda la precedencia (read-only).
+  jornada efectiva** por el mismo resolvedor del motor (read-only).
 - `GET /defaults?scope=&company_id=&department_id=` — listado (read-only).
-- `POST /defaults` · `PUT /defaults/:id` · `POST /defaults/:id/close` — CRUD
-  versionado con lock por alcance, chequeo de solapes y auditoría (gateado).
-- `POST /defaults/bulk/preview` — **dry-run masivo, cero escrituras**; valida,
-  detecta solapes intra-lote y contra BD (una consulta por `scope_key`, **sin
-  N+1**) y devuelve veredicto por fila. Base de la importación masiva.
-- `POST /defaults/bulk/apply` — aplicación masiva **gateada**; sólo si el preview
-  no tiene conflictos (`409 BULK_HAS_CONFLICTS` si los hay).
+- `POST /defaults` — crea una versión (lock por alcance, chequeo de solapes, auditoría).
+- `PUT /defaults/:id` — **sólo metadata** (`label`/`change_reason`). Cambiar
+  configuración efectiva o vigencia devuelve `409 IMMUTABLE_EFFECTIVE_CONFIG`.
+- `POST /defaults/:id/supersede` — **append-only**: cierra la versión vigente en
+  `effective_from - 1` y crea la sucesora desde `effective_from`, en UNA
+  transacción atómica bajo el scope lock (rechaza `effective_from` no posterior
+  con `409 SUPERSEDE_NOT_FORWARD`).
+- `POST /defaults/:id/close` — cierre deliberado de vigencia (sin sucesora).
+- `POST /defaults/bulk/preview` — **dry-run masivo, cero escrituras** (sin N+1).
+- `POST /defaults/bulk/apply` — aplicación masiva **atómica** (una transacción,
+  todo-o-nada, locks deterministas), sólo sin conflictos (`409 BULK_HAS_CONFLICTS`).
 
 Todas las escrituras pasan por `assertWriteEnabled()` (fail-closed) **antes** de
-tocar la BD y quedan auditadas por `audit.log` + `workday_config_default_audit`.
+tocar la BD y quedan auditadas. Locks de alcance: create/update/supersede/close
+del mismo scope comparten `sishoras:wcd:<scope_key>` (el alcance es inmutable).
 
 ## 5. UI
 
 - `/configuracion/laboral` — administración escalable: precedencia visible,
   resolutor efectivo por empleado+fecha, alta de default por alcance con
   vigencia y días, importación masiva con preview/dry-run (aplicar bloqueado si
-  hay conflictos), listado filtrable y **banner de modo sólo lectura** cuando el
-  flag está en `false`. Registrada en `navModules` (roles admin/gth/hr) + i18n
-  es/en/pt.
+  hay filas **invalid / incomplete / overlap**), listado filtrable y **banner de
+  modo sólo lectura** cuando el flag está en `false`. Companies/departments se
+  leen con sus formas reales (`trade_name||legal_name||code`; array directo).
+  Registrada en `navModules` (roles admin/gth/hr) + i18n es/en/pt.
 
 ## 6. Tests
 
-- `api/tests/workdayEffectiveConfig.test.js` — precedencia pura (7 capas),
-  vigencias, completitud, nocturnos, determinismo por string (sin TZ).
-- `api/tests/workdayConfigDefaultsService.test.js` — validadores de alcance/
-  cuerpo/solape, **write-gate fail-closed** (no toca BD con el flag OFF),
-  **bulk dry-run sin escrituras y sin N+1**, camino feliz de `createDefault`.
-- `api/tests/workdayEffectiveForDate.test.js` — cableado de `getEffectiveForDate`
-  con BD y `forDate` mockeados: precedencia, vigencias, **cambio de departamento
-  as-of-date** (bordes 2026-06-30/2026-07-01), nocturnos, `current_fallback`.
-- `web/src/lib/__tests__/workdayDefaults.test.ts` — validación/normalización del
-  formulario e importación (JSON array/NDJSON).
-- Corridas: `api` suite completa verde; matriz TZ UTC/America-Asuncion/Asia-Tokyo
-  sobre las suites nuevas; `web` build (typecheck) + jest verdes.
+- `api/tests/workdayConfig.test.js` — resolvedor único, sin N+1, guard "no lee
+  employees".
+- `api/tests/workdayHierarchicalResolver.test.js` — integración por el motor:
+  defaults depto/empresa/general; turnera/override ganan; **cambio de
+  departamento** as-of-date; **B** (estado actual no fabrica historia); **H**
+  (empresa del snapshot `a.company_id`, no branches/cost_centers actuales; NULL
+  no aplica company default); **I** (versiones resueltas por fecha); **A/G**
+  (`forDate` === `resolveForDate().config`; endpoint === motor).
+- `api/tests/workdayConfigDefaultsService.test.js` — alcance (rechazo de
+  company_id en department), write-gate fail-closed, negativos de validación,
+  policy version/config, **bulk atómico**, **identidad de lock**, **supersede
+  append-only** e **inmutabilidad de PUT** (IMMUTABLE_EFFECTIVE_CONFIG).
+- `api/tests/peopleService.test.js` — `validateAssignmentRefs` devuelve la
+  empresa autoritativa; `createAssignment` persiste el snapshot; INCOHERENT_SCOPE.
+- `web/src/lib/__tests__/workdayDefaults.test.ts` — validación/normalización,
+  formas reales de API, `bulkBlockingCount` (incluye incomplete).
+- Corridas: `api` suite completa verde; matriz TZ UTC/America-Asuncion/Asia-Tokyo;
+  `web` build (typecheck) + jest verdes. Migraciones 085/086 las valida el job
+  MySQL 8 efímero de CI.
 
 ## 7. Invariantes respetadas
 
 No toca ATT2000 (READ-ONLY); no `DELETE`; no modifica fichajes históricos; **no
-recalcula `daily_summary`** (< 2026-09-16 ni ningún otro); no inventa contratos/
-horarios/asignaciones a partir de datos ambiguos (config incompleta se salta de
-capa); toda operación masiva es preview/dry-run y su aplicación es gateada y
-requiere autorización posterior (writers en `false`). Sin merge ni deploy.
+recalcula `daily_summary`**; no inventa contratos/horarios/asignaciones a partir
+de datos ambiguos (config incompleta se salta de capa; empresa histórica
+desconocida = NULL, no se infiere); el pasado es inmutable (append-only); toda
+operación masiva es preview/dry-run y su aplicación es gateada. Migraciones
+085/086 aditivas y **NO aplicadas en prod**; writers fail-closed. Sin merge ni
+deploy.
 
 ## 8. Gaps / trabajo futuro (fuera de este PR)
 

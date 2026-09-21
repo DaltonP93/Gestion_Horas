@@ -1,6 +1,6 @@
 import {
   validateDefaultForm, defaultPayload, parseBulkItems, layerLabel, scopeSummary,
-  emptyDefaultForm, DefaultForm, companyLabel, unwrapList,
+  emptyDefaultForm, DefaultForm, companyLabel, unwrapList, bulkBlockingCount,
 } from '../workdayDefaults'
 
 const base = (over: Partial<DefaultForm> = {}): DefaultForm => ({ ...emptyDefaultForm('2026-09-20'), ...over })
@@ -52,6 +52,26 @@ describe('parseBulkItems — JSON array y NDJSON', () => {
   })
   test('línea inválida informa el número', () => {
     expect(() => parseBulkItems('{"a":1}\n{bad}')).toThrow(/Línea 2/)
+  })
+})
+
+describe('Corrección J — incomplete bloquea la aplicación masiva', () => {
+  test('bulkBlockingCount cuenta invalid, incomplete y overlap', () => {
+    const results = [
+      { status: 'ok' }, { status: 'incomplete' }, { status: 'invalid' },
+      { status: 'overlap' }, { status: 'ok' },
+    ]
+    expect(bulkBlockingCount(results)).toBe(3)
+  })
+  test('sólo ok → 0 (aplicable)', () => {
+    expect(bulkBlockingCount([{ status: 'ok' }, { status: 'ok' }])).toBe(0)
+  })
+  test('una fila incomplete basta para bloquear', () => {
+    expect(bulkBlockingCount([{ status: 'ok' }, { status: 'incomplete' }])).toBe(1)
+  })
+  test('robusto ante null/no-array', () => {
+    expect(bulkBlockingCount(null)).toBe(0)
+    expect(bulkBlockingCount(undefined)).toBe(0)
   })
 })
 

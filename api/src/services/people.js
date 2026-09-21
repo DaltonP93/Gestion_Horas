@@ -194,13 +194,15 @@ async function convertCandidate(id, employeeId, scope) {
 async function listAssignments(employeeId) {
   const [rows] = await sequelize.query(
     `SELECT a.id, a.employee_id, a.branch_id, a.department_id, a.cost_center_id,
-            a.job_title, a.reference_salary, a.valid_from, a.valid_to, a.change_reason,
+            a.company_id, a.job_title, a.reference_salary, a.valid_from, a.valid_to, a.change_reason,
             a.created_at,
-            b.name AS branch_name, d.name AS department_name, cc.name AS cost_center_name
+            b.name AS branch_name, d.name AS department_name, cc.name AS cost_center_name,
+            co.trade_name AS company_name
        FROM employee_assignments a
        LEFT JOIN branches    b  ON b.id  = a.branch_id
        LEFT JOIN departments d  ON d.id  = a.department_id
        LEFT JOIN cost_centers cc ON cc.id = a.cost_center_id
+       LEFT JOIN companies    co ON co.id = a.company_id
       WHERE a.employee_id = ?
       ORDER BY a.valid_from DESC, a.id DESC`,
     { replacements: [employeeId] },
@@ -270,6 +272,10 @@ async function validateAssignmentRefs(scope, data, transaction) {
     throw httpError(400, 'INCOHERENT_SCOPE',
       'Las referencias (sucursal/departamento/centro de costo) pertenecen a empresas distintas');
   }
+  // (Corrección H) Empresa AUTORITATIVA a congelar en el snapshot de la
+  // asignación: la única empresa conocida, o null si ninguna referencia la
+  // aporta. NO se infiere ni se rellena después: null = desconocido histórico.
+  return { company_id: distinct.length === 1 ? distinct[0] : null };
 }
 
 /**
@@ -300,7 +306,8 @@ async function createAssignment(employeeId, data, userId, scope) {
 
     // Validación de referencias DENTRO de la transacción, tras el lock del
     // empleado (anti-TOCTOU): existencia + alcance + coherencia mutua de empresa.
-    await validateAssignmentRefs(scope, data, tx);
+    // Devuelve la EMPRESA autoritativa (o null) que se congela en el snapshot.
+    const { company_id: resolvedCompanyId } = await validateAssignmentRefs(scope, data, tx);
 
     const [openRows] = await sequelize.query(
       `SELECT id, valid_from FROM employee_assignments
@@ -330,12 +337,12 @@ async function createAssignment(employeeId, data, userId, scope) {
     }
     const [result] = await sequelize.query(
       `INSERT INTO employee_assignments
-         (employee_id, branch_id, department_id, cost_center_id, job_title,
+         (employee_id, branch_id, department_id, cost_center_id, company_id, job_title,
           reference_salary, valid_from, valid_to, change_reason, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       { replacements: [
         employeeId, data.branch_id ?? null, data.department_id ?? null,
-        data.cost_center_id ?? null, data.job_title ?? null,
+        data.cost_center_id ?? null, resolvedCompanyId ?? null, data.job_title ?? null,
         data.reference_salary ?? null, data.valid_from,
         data.change_reason ?? null, userId ?? null,
       ], transaction: tx },
@@ -343,7 +350,7 @@ async function createAssignment(employeeId, data, userId, scope) {
     await tx.commit();
     committed = true;
     // [insertId, affectedRows] contra MySQL real; {insertId} con mocks.
-    return { id: result?.insertId ?? result, closed_previous: open ? open.id : null };
+    return { id: result?.insertId ?? result, company_id: resolvedCompanyId ?? null, closed_previous: open ? open.id : null };
   } catch (err) {
     if (!committed) { try { await tx.rollback(); } catch { /* noop */ } }
     throw err;
