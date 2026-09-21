@@ -202,6 +202,89 @@ export function bulkBlockingCount(results: Array<{ status?: string }> | null | u
   return results.filter(r => r.status === 'invalid' || r.status === 'incomplete' || r.status === 'overlap').length
 }
 
+// ── Append-only en la UI (Corrección N): sólo versiones ABIERTAS se mutan ──
+
+/** Una versión está ABIERTA si su vigencia no está cerrada (valid_to null). */
+export function versionIsOpen(row: Pick<WorkdayDefaultRow, 'valid_to'>): boolean {
+  return row.valid_to == null || row.valid_to === ''
+}
+
+/** ¿Se pueden ofrecer acciones de mutación (supersede/close) sobre esta versión? */
+export function canMutateVersion(
+  row: Pick<WorkdayDefaultRow, 'valid_to'>,
+  opts: { canWrite: boolean; writesEnabled: boolean },
+): boolean {
+  return !!opts.canWrite && !!opts.writesEnabled && versionIsOpen(row)
+}
+
+/** Precarga un DefaultForm desde una versión existente (para el modal de supersede). */
+export function formFromDefaultRow(row: WorkdayDefaultRow, today: string): DefaultForm {
+  const base = emptyDefaultForm(today)
+  const t5 = (v: string | null | undefined) => (v ? String(v).slice(0, 5) : '')
+  const days = (row.work_days || '').split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 1 && n <= 7)
+  return {
+    ...base,
+    scope: row.scope,
+    company_id: row.company_id == null ? '' : String(row.company_id),
+    department_id: row.department_id == null ? '' : String(row.department_id),
+    label: row.label || '',
+    check_in: t5(row.check_in) || base.check_in,
+    check_out: t5(row.check_out) || base.check_out,
+    tolerance_in: row.tolerance_in == null ? base.tolerance_in : String(row.tolerance_in),
+    tolerance_out: row.tolerance_out == null ? base.tolerance_out : String(row.tolerance_out),
+    work_days: days.length ? days : base.work_days,
+    night_start: t5(row.night_start),
+    night_end: t5(row.night_end),
+    change_reason: '',
+  }
+}
+
+/**
+ * Cuerpo para POST /defaults/:id/supersede: `effective_from` (obligatorio) + el
+ * payload de jornada del formulario + change_reason. Reutiliza la validación del
+ * formulario (horas/días/nocturno). NO envía scope: el alcance es inmutable.
+ */
+export function supersedePayload(effectiveFrom: string, form: DefaultForm) {
+  const errors = validateDefaultForm({ ...form, scope: 'general', company_id: '', department_id: '', valid_from: effectiveFrom })
+    .filter(e => !/alcance|Empresa|Departamento/i.test(e)) // el alcance no se edita en supersede
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) errors.unshift('"Vigente desde (nueva versión)" debe ser una fecha real.')
+  if (errors.length) throw new Error(errors[0])
+  return {
+    effective_from: effectiveFrom,
+    check_in: form.check_in,
+    check_out: form.check_out,
+    tolerance_in: Number(form.tolerance_in || 0),
+    tolerance_out: Number(form.tolerance_out || 0),
+    work_days: [...form.work_days].sort((a, b) => a - b),
+    night_start: form.night_start || null,
+    night_end: form.night_end || null,
+    change_reason: form.change_reason.trim() || null,
+  }
+}
+
+/** Cuerpo para POST /defaults/:id/close. */
+export function closePayload(validTo: string, reason: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(validTo)) throw new Error('"Vigente hasta" debe ser una fecha real.')
+  return { valid_to: validTo, reason: (reason || '').trim() || null }
+}
+
+/** Mensaje legible para los 409 de mutación de defaults (para la UI). */
+export function mutationErrorMessage(err: unknown): string {
+  const anyErr = err as { response?: { status?: number; data?: { code?: string; error?: string } }; message?: string }
+  const code = anyErr?.response?.data?.code
+  const map: Record<string, string> = {
+    IMMUTABLE_EFFECTIVE_CONFIG: 'No se puede editar la configuración de una versión; creá una versión nueva.',
+    SUPERSEDE_REQUIRES_OPEN_VERSION: 'Sólo puede versionarse una vigencia abierta.',
+    SUPERSEDE_NOT_FORWARD: 'La nueva vigencia debe empezar después del inicio de la versión actual.',
+    DEFAULT_ALREADY_CLOSED: 'La versión ya está cerrada.',
+    BULK_HAS_CONFLICTS: 'La importación tiene conflictos; resolvelos antes de aplicar.',
+    WORKDAY_CONFIG_DEFAULT_OVERLAP: 'La vigencia se solapa con otra versión del mismo alcance.',
+  }
+  if (code && map[code]) return map[code]
+  if (anyErr?.response?.status === 503) return 'Escrituras deshabilitadas (fail-closed).'
+  return anyErr?.response?.data?.error || anyErr?.message || 'No se pudo completar la operación.'
+}
+
 /** Parsea el textarea de importación masiva (JSON array o NDJSON) a items. */
 export function parseBulkItems(text: string): Record<string, unknown>[] {
   const s = String(text || '').trim()

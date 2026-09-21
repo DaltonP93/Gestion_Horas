@@ -20,6 +20,7 @@ import {
   WorkdayDefaultRow, EffectiveHierarchical, DefaultForm, DefaultScope, CompanyRef, DeptRef,
   SCOPE_LABEL, DAY_LABELS, emptyDefaultForm, validateDefaultForm, defaultPayload,
   parseBulkItems, layerLabel, scopeSummary, companyLabel, unwrapList, bulkBlockingCount,
+  versionIsOpen, canMutateVersion, formFromDefaultRow, supersedePayload, closePayload, mutationErrorMessage,
 } from '@/lib/workdayDefaults'
 
 const WRITE_ROLES = ['super_admin', 'admin', 'gth', 'hr']
@@ -63,6 +64,54 @@ export default function ConfiguracionLaboralPage() {
   const [bulkPreview, setBulkPreview] = useState<any | null>(null)
   const [bulkErr, setBulkErr] = useState<string | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+
+  // Append-only (Corrección N): supersede / cerrar vigencia por versión abierta.
+  const [superseding, setSuperseding] = useState<WorkdayDefaultRow | null>(null)
+  const [supersedeDate, setSupersedeDate] = useState(today())
+  const [supersedeForm, setSupersedeForm] = useState<DefaultForm>(emptyDefaultForm(today()))
+  const [closingRow, setClosingRow] = useState<WorkdayDefaultRow | null>(null)
+  const [closeTo, setCloseTo] = useState(today())
+  const [closeReason, setCloseReason] = useState('')
+  const [mutBusy, setMutBusy] = useState(false)
+  const [mutErr, setMutErr] = useState<string | null>(null)
+  const canMutate = (r: WorkdayDefaultRow) => canMutateVersion(r, { canWrite, writesEnabled: writesEnabled === true })
+
+  function openSupersede(r: WorkdayDefaultRow) {
+    setMutErr(null); setClosingRow(null)
+    setSuperseding(r)
+    setSupersedeDate(today())
+    setSupersedeForm(formFromDefaultRow(r, today()))
+  }
+  function openClose(r: WorkdayDefaultRow) {
+    setMutErr(null); setSuperseding(null)
+    setClosingRow(r); setCloseTo(today()); setCloseReason('')
+  }
+  async function submitSupersede(e: React.FormEvent) {
+    e.preventDefault(); setMutErr(null); setFeedback(null)
+    if (!superseding) return
+    let payload: ReturnType<typeof supersedePayload>
+    try { payload = supersedePayload(supersedeDate, supersedeForm) } catch (err: any) { setMutErr(err.message); return }
+    setMutBusy(true)
+    try {
+      await api.post(`/api/workday-config/defaults/${superseding.id}/supersede`, payload)
+      setFeedback('Nueva versión creada; la anterior quedó cerrada.')
+      setSuperseding(null)
+      await loadDefaults()
+    } catch (err) { setMutErr(mutationErrorMessage(err)) } finally { setMutBusy(false) }
+  }
+  async function submitClose(e: React.FormEvent) {
+    e.preventDefault(); setMutErr(null); setFeedback(null)
+    if (!closingRow) return
+    let payload: ReturnType<typeof closePayload>
+    try { payload = closePayload(closeTo, closeReason) } catch (err: any) { setMutErr(err.message); return }
+    setMutBusy(true)
+    try {
+      await api.post(`/api/workday-config/defaults/${closingRow.id}/close`, payload)
+      setFeedback('Vigencia cerrada.')
+      setClosingRow(null)
+      await loadDefaults()
+    } catch (err) { setMutErr(mutationErrorMessage(err)) } finally { setMutBusy(false) }
+  }
 
   async function loadMeta() {
     try {
@@ -391,6 +440,7 @@ export default function ConfiguracionLaboralPage() {
                   <th className="p-2 text-left">Alcance</th><th className="p-2 text-left">Etiqueta</th>
                   <th className="p-2 text-left">Vigencia</th><th className="p-2 text-left">Horario</th>
                   <th className="p-2 text-left">Días</th><th className="p-2 text-left">v</th>
+                  <th className="p-2 text-left">Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -398,10 +448,20 @@ export default function ConfiguracionLaboralPage() {
                   <tr key={r.id} className="border-t border-slate-100 dark:border-white/[0.06]">
                     <td className="p-2">{scopeSummary(r)}</td>
                     <td className="p-2">{r.label || '—'}</td>
-                    <td className="p-2">{vigencia(r)}</td>
+                    <td className="p-2">{vigencia(r)}{!versionIsOpen(r) && <span className="ml-1 text-xs text-slate-400">(cerrada)</span>}</td>
                     <td className="p-2">{t5(r.check_in)}–{t5(r.check_out)}{r.night_start ? ` · noct ${t5(r.night_start)}–${t5(r.night_end)}` : ''}</td>
                     <td className="p-2">{(r.work_days || '').split(',').filter(Boolean).map(d => DAY_LABELS[Number(d)]).join(' ')}</td>
                     <td className="p-2">{r.config_version ?? 1}</td>
+                    <td className="p-2">
+                      {canMutate(r) ? (
+                        <div className="flex gap-2">
+                          <button onClick={() => openSupersede(r)} className="text-xs text-indigo-600 hover:underline" data-testid={`supersede-${r.id}`}>Nueva versión</button>
+                          <button onClick={() => openClose(r)} className="text-xs text-slate-600 hover:underline" data-testid={`close-${r.id}`}>Cerrar vigencia</button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">{versionIsOpen(r) ? '—' : 'histórica'}</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -409,6 +469,79 @@ export default function ConfiguracionLaboralPage() {
           </div>
         )}
       </div>
+
+      {/* Modal: Nueva versión (supersede, append-only) */}
+      {superseding && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <form onSubmit={submitSupersede} className="w-full max-w-lg rounded-2xl bg-white p-4 space-y-3 dark:bg-slate-900 max-h-[90vh] overflow-auto">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium">Nueva versión — {scopeSummary(superseding)}</div>
+              <button type="button" onClick={() => setSuperseding(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <p className="text-xs text-slate-500">Crea una versión nueva desde la fecha indicada; la versión vigente se cierra el día anterior. El pasado no se modifica.</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <label className="text-sm">Vigente desde
+                <input type="date" value={supersedeDate} onChange={e => setSupersedeDate(e.target.value)} className={`${inputCls} block mt-1 w-full`} />
+              </label>
+              <label className="text-sm">Entrada
+                <input type="time" value={supersedeForm.check_in} onChange={e => setSupersedeForm(f => ({ ...f, check_in: e.target.value }))} className={`${inputCls} block mt-1 w-full`} />
+              </label>
+              <label className="text-sm">Salida
+                <input type="time" value={supersedeForm.check_out} onChange={e => setSupersedeForm(f => ({ ...f, check_out: e.target.value }))} className={`${inputCls} block mt-1 w-full`} />
+              </label>
+              <label className="text-sm">Nocturno desde
+                <input type="time" value={supersedeForm.night_start} onChange={e => setSupersedeForm(f => ({ ...f, night_start: e.target.value }))} className={`${inputCls} block mt-1 w-full`} />
+              </label>
+              <label className="text-sm">Nocturno hasta
+                <input type="time" value={supersedeForm.night_end} onChange={e => setSupersedeForm(f => ({ ...f, night_end: e.target.value }))} className={`${inputCls} block mt-1 w-full`} />
+              </label>
+            </div>
+            <div className="text-sm">
+              <span className="block mb-1">Días laborables</span>
+              <div className="flex flex-wrap gap-1">
+                {[1, 2, 3, 4, 5, 6, 7].map(d => (
+                  <button type="button" key={d} onClick={() => setSupersedeForm(f => ({ ...f, work_days: f.work_days.includes(d) ? f.work_days.filter(x => x !== d) : [...f.work_days, d].sort((a, b) => a - b) }))}
+                    className={`rounded-lg px-2 py-1 text-xs border ${supersedeForm.work_days.includes(d) ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-300 dark:border-white/[0.12]'}`}>
+                    {DAY_LABELS[d]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="text-sm block">Motivo del cambio
+              <input value={supersedeForm.change_reason} onChange={e => setSupersedeForm(f => ({ ...f, change_reason: e.target.value }))} className={`${inputCls} block mt-1 w-full`} placeholder="Ej: nuevo horario 2026" />
+            </label>
+            {mutErr && <p className="text-sm text-rose-600">{mutErr}</p>}
+            <div className="flex gap-2">
+              <button type="submit" disabled={mutBusy} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700 disabled:opacity-50">{mutBusy ? 'Guardando…' : 'Crear nueva versión'}</button>
+              <button type="button" onClick={() => setSuperseding(null)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm dark:border-white/[0.12]">Cancelar</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Modal: Cerrar vigencia */}
+      {closingRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+          <form onSubmit={submitClose} className="w-full max-w-sm rounded-2xl bg-white p-4 space-y-3 dark:bg-slate-900">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium">Cerrar vigencia — {scopeSummary(closingRow)}</div>
+              <button type="button" onClick={() => setClosingRow(null)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+            </div>
+            <p className="text-xs text-slate-500">Termina la vigencia de esta versión sin abrir una sucesora. El payload histórico no cambia.</p>
+            <label className="text-sm block">Vigente hasta
+              <input type="date" value={closeTo} onChange={e => setCloseTo(e.target.value)} className={`${inputCls} block mt-1 w-full`} />
+            </label>
+            <label className="text-sm block">Motivo
+              <input value={closeReason} onChange={e => setCloseReason(e.target.value)} className={`${inputCls} block mt-1 w-full`} />
+            </label>
+            {mutErr && <p className="text-sm text-rose-600">{mutErr}</p>}
+            <div className="flex gap-2">
+              <button type="submit" disabled={mutBusy} className="rounded-xl bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700 disabled:opacity-50">{mutBusy ? 'Cerrando…' : 'Cerrar vigencia'}</button>
+              <button type="button" onClick={() => setClosingRow(null)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm dark:border-white/[0.12]">Cancelar</button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

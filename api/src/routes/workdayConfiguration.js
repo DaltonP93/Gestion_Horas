@@ -99,12 +99,10 @@ router.get('/meta', view, (_req, res) => {
       rounding_policy: 'named/versioned; not applied unless engine implements it explicitly',
       overtime_policy: 'named/versioned; contract excess is not automatically legal overtime',
     },
-    precedence: [
-      'published_shift_assignment',
-      'employee_schedule_history',
-      'employee_contract_trace',
-      'historical_fallback',
-    ],
+    // Fuente ÚNICA: la misma constante canónica del motor (workdayConfig.PRECEDENCE),
+    // re-exportada por el servicio de defaults. /meta, /precedence, el endpoint
+    // effective y el motor coinciden exactamente.
+    precedence: defaults.PRECEDENCE,
   });
 });
 

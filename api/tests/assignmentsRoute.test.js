@@ -71,4 +71,26 @@ test('POST válido: valida ref, crea vigencia (201) y audita con salario redacta
   expect(details).toContain('[REDACTED]');
   expect(details).not.toContain('5000000');           // salario redactado
   expect(details).not.toContain('confidencial');       // change_reason (texto libre) redactado
+  expect(details).toContain('company_id');             // snapshot de empresa en la evidencia (M)
+});
+
+test('POST audita el company_id RESUELTO/persistido, no el enviado por el cliente (M)', async () => {
+  process.env.PEOPLE_WRITE_ENABLED = 'true';
+  // Orden de consultas dentro de createAssignment: employees FOR UPDATE, luego
+  // validateAssignmentRefs (branch → empresa 7), SELECT open, INSERT.
+  sequelize.query
+    .mockResolvedValueOnce([[{ id: 50 }]])              // employees FOR UPDATE
+    .mockResolvedValueOnce([[{ id: 2, company_id: 7 }]]) // branch → empresa 7
+    .mockResolvedValueOnce([[]])                        // SELECT open → ninguna
+    .mockResolvedValueOnce([{ insertId: 9 }]);          // INSERT
+  const res = mkRes();
+  await handlerFor('post', '/employee/:id')(
+    // el cliente miente con company_id: 999; debe ignorarse y auditarse el resuelto (7).
+    { user: USER, params: { id: '50' }, body: { valid_from: '2026-01-01', branch_id: 2, company_id: 999 }, correlationId: 'c3', headers: {} },
+    res, jest.fn(),
+  );
+  expect(res.status).toHaveBeenCalledWith(201);
+  const after = audit.log.mock.calls.at(-1)[0].details.after;
+  expect(after.company_id).toBe(7);
+  expect(after.company_id).not.toBe(999);
 });

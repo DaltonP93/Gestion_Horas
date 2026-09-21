@@ -1,7 +1,12 @@
 import {
   validateDefaultForm, defaultPayload, parseBulkItems, layerLabel, scopeSummary,
   emptyDefaultForm, DefaultForm, companyLabel, unwrapList, bulkBlockingCount,
+  versionIsOpen, canMutateVersion, formFromDefaultRow, supersedePayload, closePayload,
+  mutationErrorMessage, WorkdayDefaultRow,
 } from '../workdayDefaults'
+
+const rowOpen = { id: 1, scope: 'general', company_id: null, department_id: null, label: null, valid_from: '2026-01-01', valid_to: null, check_in: '08:00:00', check_out: '17:00:00', tolerance_in: 10, tolerance_out: 10, break_mode: 'punched', break_minutes: 0, break_after_minutes: 0, weekly_target_minutes: null, daily_target_minutes: null, work_regime: null, night_start: null, night_end: null, work_days: '2,3,4,5,6', config_version: 1, change_reason: null, active: 1 } as unknown as WorkdayDefaultRow
+const rowClosed = { ...rowOpen, id: 2, valid_to: '2026-06-30' } as WorkdayDefaultRow
 
 const base = (over: Partial<DefaultForm> = {}): DefaultForm => ({ ...emptyDefaultForm('2026-09-20'), ...over })
 
@@ -52,6 +57,50 @@ describe('parseBulkItems — JSON array y NDJSON', () => {
   })
   test('línea inválida informa el número', () => {
     expect(() => parseBulkItems('{"a":1}\n{bad}')).toThrow(/Línea 2/)
+  })
+})
+
+describe('Corrección N — acciones append-only en la UI', () => {
+  test('versionIsOpen: abierta si valid_to null/""', () => {
+    expect(versionIsOpen(rowOpen)).toBe(true)
+    expect(versionIsOpen(rowClosed)).toBe(false)
+    expect(versionIsOpen({ valid_to: '' })).toBe(true)
+  })
+
+  test('canMutateVersion exige canWrite + writesEnabled + versión ABIERTA', () => {
+    expect(canMutateVersion(rowOpen, { canWrite: true, writesEnabled: true })).toBe(true)
+    expect(canMutateVersion(rowClosed, { canWrite: true, writesEnabled: true })).toBe(false) // cerrada
+    expect(canMutateVersion(rowOpen, { canWrite: false, writesEnabled: true })).toBe(false)   // sin permiso
+    expect(canMutateVersion(rowOpen, { canWrite: true, writesEnabled: false })).toBe(false)   // writes off
+  })
+
+  test('supersedePayload arma effective_from + payload de jornada (sin scope)', () => {
+    const form = formFromDefaultRow(rowOpen, '2026-09-20')
+    const p = supersedePayload('2026-10-01', { ...form, check_in: '07:00', change_reason: 'nuevo' })
+    expect(p.effective_from).toBe('2026-10-01')
+    expect(p.check_in).toBe('07:00')
+    expect(p.work_days).toEqual([2, 3, 4, 5, 6])
+    expect(p.change_reason).toBe('nuevo')
+    expect(p).not.toHaveProperty('scope')
+  })
+
+  test('supersedePayload rechaza effective_from inválido', () => {
+    const form = formFromDefaultRow(rowOpen, '2026-09-20')
+    expect(() => supersedePayload('nope', form)).toThrow(/fecha real/)
+  })
+
+  test('closePayload arma valid_to + reason y valida fecha', () => {
+    expect(closePayload('2026-12-31', 'fin')).toEqual({ valid_to: '2026-12-31', reason: 'fin' })
+    expect(closePayload('2026-12-31', '')).toEqual({ valid_to: '2026-12-31', reason: null })
+    expect(() => closePayload('x', 'y')).toThrow(/fecha real/)
+  })
+
+  test('mutationErrorMessage mapea los 409 conocidos', () => {
+    expect(mutationErrorMessage({ response: { status: 409, data: { code: 'SUPERSEDE_REQUIRES_OPEN_VERSION' } } })).toMatch(/vigencia abierta/i)
+    expect(mutationErrorMessage({ response: { status: 409, data: { code: 'DEFAULT_ALREADY_CLOSED' } } })).toMatch(/cerrada/i)
+    expect(mutationErrorMessage({ response: { status: 409, data: { code: 'SUPERSEDE_NOT_FORWARD' } } })).toMatch(/después/i)
+    expect(mutationErrorMessage({ response: { status: 503 } })).toMatch(/deshabilitadas/i)
+    expect(mutationErrorMessage({ message: 'boom' })).toBe('boom')
   })
 })
 

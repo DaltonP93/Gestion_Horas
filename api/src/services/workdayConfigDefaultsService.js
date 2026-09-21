@@ -210,28 +210,44 @@ function colValue(r, c) {
 
 function rowToInsertValues(r) { return INSERT_COLS.map(c => colValue(r, c)); }
 
-/** Nombre de lock determinista por alcance: todo cambio del MISMO scope compite acá. */
-function lockNameForScope(scopeKeyStr) {
-  return `sishoras:wcd:${scopeKeyStr}`.slice(0, 64);
+/** Filas afectadas por un UPDATE crudo (mysql2/sequelize). */
+function affectedRowsOf(res) {
+  return (res && (res.affectedRows ?? res.rowCount)) || 0;
 }
 
-async function acquireLock(t, lockName) {
-  const [rows] = await sequelize.query('SELECT GET_LOCK(?, 10) AS ok', { replacements: [lockName], transaction: t });
-  const ok = Array.isArray(rows) && rows[0] ? rows[0].ok : null;
-  if (Number(ok) !== 1) throw httpError(409, 'WORKDAY_CONFIG_LOCK_TIMEOUT', 'no se pudo obtener el lock');
+/** ¿La versión está ABIERTA (vigencia sin cerrar y activa)? */
+function isOpenVersion(row) {
+  return !!row && (row.valid_to == null) && (row.active == null || Number(row.active) === 1);
 }
 
 /**
- * Ejecuta `fn(t)` bajo el lock del alcance `scopeKeyStr` en su propia
- * transacción. Create/update/close del MISMO alcance usan esta misma identidad
- * de lock (Corrección D): nunca compiten por locks distintos.
+ * Toma el LOCK TRANSACCIONAL de un alcance (Corrección K): asegura la fila del
+ * scope en `workday_config_scope_locks` y la bloquea con `SELECT ... FOR UPDATE`.
+ * El row-lock de InnoDB se retiene AUTOMÁTICAMENTE hasta el COMMIT/ROLLBACK de la
+ * transacción — a diferencia de GET_LOCK/RELEASE_LOCK, que se liberaba dentro del
+ * callback ANTES del commit y abría una ventana de no-serialización entre writers.
+ */
+async function lockScopeRow(t, scopeKeyStr) {
+  await sequelize.query(
+    'INSERT INTO workday_config_scope_locks (scope_key) VALUES (?) ON DUPLICATE KEY UPDATE scope_key = VALUES(scope_key)',
+    { replacements: [scopeKeyStr], transaction: t },
+  );
+  await sequelize.query(
+    'SELECT scope_key FROM workday_config_scope_locks WHERE scope_key = ? FOR UPDATE',
+    { replacements: [scopeKeyStr], transaction: t },
+  );
+}
+
+/**
+ * Ejecuta `fn(t)` con el alcance `scopeKeyStr` bloqueado hasta DESPUÉS del commit.
+ * Create/update/supersede/close del MISMO alcance compiten por la MISMA fila de
+ * lock; el lock sólo se suelta cuando Sequelize hace commit (o rollback) al
+ * resolver el callback. No hay RELEASE manual.
  */
 async function withScopeLock(scopeKeyStr, fn) {
   const { result } = await withDeadlockRetry(() => sequelize.transaction(async (t) => {
-    const lockName = lockNameForScope(scopeKeyStr);
-    await acquireLock(t, lockName);
-    try { return await fn(t); }
-    finally { await sequelize.query('SELECT RELEASE_LOCK(?)', { replacements: [lockName], transaction: t }); }
+    await lockScopeRow(t, scopeKeyStr);
+    return fn(t);
   }));
   return result;
 }
@@ -366,6 +382,12 @@ async function supersedeDefault(id, body, actorId) {
   return withScopeLock(sk, async (t) => {
     const before = await readDefault(t, id);
     if (!before) throw httpError(404, 'NOT_FOUND', 'default no encontrado');
+    // Sólo se supersede una versión ABIERTA (Corrección L): superseder una versión
+    // ya cerrada reescribiría el pasado / crearía una sucesora colgada.
+    if (!isOpenVersion(before)) {
+      throw httpError(409, 'SUPERSEDE_REQUIRES_OPEN_VERSION',
+        'sólo puede superseerse una versión vigente (valid_to IS NULL y activa)');
+    }
     const beforeFrom = String(before.valid_from).slice(0, 10);
     // No se permite corrección histórica in-band: effective_from debe ser POSTERIOR
     // al inicio de la versión que se supersede (un flujo de corrección del pasado
@@ -390,10 +412,16 @@ async function supersedeDefault(id, body, actorId) {
 
     // Cierra la versión anterior en effective_from - 1 (el pasado queda intacto).
     const closedTo = prevDayISO(effectiveFrom);
-    await sequelize.query(
+    const [closeRes] = await sequelize.query(
       'UPDATE workday_config_defaults SET valid_to=?, updated_by=? WHERE id=? AND valid_to IS NULL',
       { replacements: [closedTo, actorId ?? null, id], transaction: t },
     );
+    // Fail-closed + rollback si el cierre no afectó EXACTAMENTE 1 fila (p. ej. otra
+    // transacción la cerró entre el read y el UPDATE): jamás se crea la sucesora
+    // afirmando un cierre que no ocurrió.
+    if (affectedRowsOf(closeRes) !== 1) {
+      throw httpError(409, 'SUPERSEDE_REQUIRES_OPEN_VERSION', 'la versión dejó de estar abierta durante la operación');
+    }
     // Relee la versión anterior ya cerrada (para auditoría before/after fiel).
     const [closedRows] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [id], transaction: t });
     await auditDefault(t, { default_id: id, scope: before.scope, company_id: before.company_id, department_id: before.department_id, action: 'supersede_close', actor_id: actorId, before, after: closedRows[0], change_reason: row.change_reason });
@@ -431,9 +459,15 @@ async function closeDefault(id, validTo, actorId, reason) {
   return withScopeLock(sk, async (t) => {
     const before = await readDefault(t, id);
     if (!before) throw httpError(404, 'NOT_FOUND', 'default no encontrado');
+    // Sólo se cierra una versión ABIERTA (Corrección L): una versión histórica ya
+    // cerrada NO se re-cierra silenciosamente (eso mutaría el pasado).
+    if (!isOpenVersion(before)) {
+      throw httpError(409, 'DEFAULT_ALREADY_CLOSED', 'la versión ya está cerrada; no se re-cierra una versión histórica');
+    }
     const from = String(before.valid_from).slice(0, 10);
     if (to < from) throw httpError(400, 'INVALID_VALIDITY', 'valid_to < valid_from');
-    await sequelize.query('UPDATE workday_config_defaults SET valid_to=?, updated_by=? WHERE id=?', { replacements: [to, actorId ?? null, id], transaction: t });
+    const [res] = await sequelize.query('UPDATE workday_config_defaults SET valid_to=?, updated_by=? WHERE id=? AND valid_to IS NULL', { replacements: [to, actorId ?? null, id], transaction: t });
+    if (affectedRowsOf(res) !== 1) throw httpError(409, 'DEFAULT_ALREADY_CLOSED', 'la versión dejó de estar abierta durante la operación');
     const [after] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [id], transaction: t });
     await auditDefault(t, { default_id: id, scope: before.scope, company_id: before.company_id, department_id: before.department_id, action: 'close', actor_id: actorId, before, after: after[0], change_reason: reason || null });
     return { before, after: after[0] };
@@ -521,33 +555,31 @@ async function bulkApply(items, actorId) {
   if (intra.length) throw httpError(409, 'BULK_HAS_CONFLICTS', `solape intra-lote en ${intra.length} par(es)`);
   if (!rows.length) return { applied: 0, created: [] };
 
-  // (4) Locks en orden determinista (scope_keys ordenados).
+  // (4) Locks TRANSACCIONALES en orden determinista (scope_keys ordenados): las
+  // filas de `workday_config_scope_locks` se bloquean FOR UPDATE y quedan tomadas
+  // hasta el commit (Corrección K). El orden fijo evita deadlocks entre lotes.
   const scopeKeysSorted = [...new Set(rows.map(r => r.scope_key))].sort();
 
   const { result } = await withDeadlockRetry(() => sequelize.transaction(async (t) => {
-    const acquired = [];
-    try {
-      for (const sk of scopeKeysSorted) { const ln = lockNameForScope(sk); await acquireLock(t, ln); acquired.push(ln); }
-      // (5) Cada fila: revalida solape (incluye inserciones previas de esta misma
-      // transacción) e inserta + audita. Todo dentro de la única transacción.
-      const created = [];
-      for (const row of rows) {
-        await assertNoOverlapDb(t, row);
-        const [res] = await sequelize.query(
-          `INSERT INTO workday_config_defaults (${INSERT_COLS.join(', ')}, created_by, updated_by)
-           VALUES (${INSERT_COLS.map(() => '?').join(', ')}, ?, ?)`,
-          { replacements: [...rowToInsertValues(row), actorId ?? null, actorId ?? null], transaction: t }
-        );
-        const id = insertId(res);
-        const [sel] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [id], transaction: t });
-        const after = sel && sel[0] ? sel[0] : { id };
-        await auditDefault(t, { default_id: id, scope: row.scope, company_id: row.company_id, department_id: row.department_id, action: 'create', actor_id: actorId, before: null, after, change_reason: row.change_reason });
-        created.push(after);
-      }
-      return created;
-    } finally {
-      for (const ln of acquired.reverse()) await sequelize.query('SELECT RELEASE_LOCK(?)', { replacements: [ln], transaction: t });
+    for (const sk of scopeKeysSorted) await lockScopeRow(t, sk);
+    // (5) Cada fila: revalida solape (incluye inserciones previas de esta misma
+    // transacción) e inserta + audita. Todo dentro de la única transacción.
+    const created = [];
+    for (const row of rows) {
+      await assertNoOverlapDb(t, row);
+      const [res] = await sequelize.query(
+        `INSERT INTO workday_config_defaults (${INSERT_COLS.join(', ')}, created_by, updated_by)
+         VALUES (${INSERT_COLS.map(() => '?').join(', ')}, ?, ?)`,
+        { replacements: [...rowToInsertValues(row), actorId ?? null, actorId ?? null], transaction: t }
+      );
+      const id = insertId(res);
+      const [sel] = await sequelize.query('SELECT * FROM workday_config_defaults WHERE id = ?', { replacements: [id], transaction: t });
+      const after = sel && sel[0] ? sel[0] : { id };
+      await auditDefault(t, { default_id: id, scope: row.scope, company_id: row.company_id, department_id: row.department_id, action: 'create', actor_id: actorId, before: null, after, change_reason: row.change_reason });
+      created.push(after);
     }
+    return created;
+    // COMMIT (al resolver el callback) libera automáticamente los row-locks.
   }));
   return { applied: result.length, created: result };
 }

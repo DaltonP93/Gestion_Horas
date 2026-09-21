@@ -215,6 +215,17 @@ describe('Corrección A/G — una sola resolución', () => {
     expect(viaResolve.calculation_mode).toBe('configured');
   });
 
+  test('la precedencia es la MISMA constante en motor, defaults y (por ende) /meta (Corrección M)', () => {
+    const canon = [
+      'published_shift_assignment', 'employee_historical_override',
+      'department_historical_default', 'company_historical_default',
+      'general_historical_default', 'employee_contract_trace', 'historical_fallback',
+    ];
+    expect(workdayConfig.PRECEDENCE).toEqual(canon);
+    // /meta y /precedence exponen defaultsSvc.PRECEDENCE, que ES workdayConfig.PRECEDENCE.
+    expect(defaultsSvc.PRECEDENCE).toBe(workdayConfig.PRECEDENCE);
+  });
+
   test('el endpoint administrativo devuelve EXACTAMENTE lo que usa el motor', async () => {
     mockDb({ assignments: [asg({ department_id: 5 })], defaults: [def('department:0:5', { check_in: '07:00:00' })] });
     const engine = await workdayConfig.loadWorkdayConfig([1], { from: '2026-09-15', to: '2026-09-15' });

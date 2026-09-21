@@ -46,6 +46,14 @@ describe('FASE C routing/RBAC/audit', () => {
     expect(route).toMatch(/write_mode:/);
   });
 
+  test('meta usa la precedencia CANÓNICA única (Corrección M), no un array hardcodeado viejo', () => {
+    expect(route).toMatch(/precedence:\s*defaults\.PRECEDENCE/);
+    // Ya no existe el array de precedencia hardcodeado con 'employee_schedule_history'
+    // como CAPA (era una lista de strings de capas). El nombre puede seguir usándose
+    // como entidad de auditoría, pero no como literal de precedencia.
+    expect(route).not.toMatch(/['"]employee_schedule_history['"],\s*\n?\s*['"]employee_contract_trace['"]/);
+  });
+
   test('expone historial, perfil, cierre y effective-config', () => {
     expect(route).toMatch(/employees\/:employeeId\/history/);
     expect(route).toMatch(/employees\/:employeeId\/profiles/);

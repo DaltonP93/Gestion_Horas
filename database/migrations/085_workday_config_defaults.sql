@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS workday_config_defaults (
   )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Lock TRANSACCIONAL por alcance (Corrección K): la serialización entre writers
+-- del mismo scope se hace bloqueando la fila correspondiente con
+-- `SELECT ... FOR UPDATE`; el row-lock de InnoDB se retiene hasta COMMIT/ROLLBACK
+-- (no como GET_LOCK/RELEASE_LOCK, que se soltaba antes del commit). La fila se
+-- asegura on-demand con INSERT ... ON DUPLICATE KEY UPDATE.
+CREATE TABLE IF NOT EXISTS workday_config_scope_locks (
+  scope_key   VARCHAR(64) NOT NULL PRIMARY KEY,
+  created_at  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS workday_config_default_audit (
   id             BIGINT AUTO_INCREMENT PRIMARY KEY,
   default_id     INT          NULL,               -- fila afectada (NULL si ya no existe)

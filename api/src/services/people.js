@@ -197,7 +197,7 @@ async function listAssignments(employeeId) {
             a.company_id, a.job_title, a.reference_salary, a.valid_from, a.valid_to, a.change_reason,
             a.created_at,
             b.name AS branch_name, d.name AS department_name, cc.name AS cost_center_name,
-            co.trade_name AS company_name
+            COALESCE(co.trade_name, co.legal_name, co.code) AS company_name
        FROM employee_assignments a
        LEFT JOIN branches    b  ON b.id  = a.branch_id
        LEFT JOIN departments d  ON d.id  = a.department_id

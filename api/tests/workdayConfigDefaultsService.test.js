@@ -237,43 +237,72 @@ describe('createDefault — camino feliz con BD mockeada', () => {
   });
 });
 
-describe('Corrección D — identidad de lock por alcance', () => {
+describe('Corrección K — lock transaccional por alcance (fila FOR UPDATE hasta commit)', () => {
+  // Captura el scope_key bloqueado a partir del INSERT ... ON DUPLICATE KEY sobre
+  // workday_config_scope_locks (la señal del lock transaccional).
   function lockCapture() {
-    const locks = [];
+    const scopeLockInserts = [];
     sequelize.query.mockImplementation(async (sql, opts) => {
       const repl = (opts && opts.replacements) || [];
-      if (/GET_LOCK/.test(sql)) { locks.push(repl[0]); return [[{ ok: 1 }]]; }
-      if (/RELEASE_LOCK/.test(sql)) return [[{}]];
-      if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'department:0:9' }]];
-      if (/FOR UPDATE/.test(sql)) return [[{ id: 5, scope: 'department', company_id: null, department_id: 9, valid_from: '2026-01-01', valid_to: null, check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6', break_mode: 'punched' }]];
+      if (/INSERT INTO workday_config_scope_locks/.test(sql)) { scopeLockInserts.push(repl[0]); return [[{}]]; }
+      if (/workday_config_scope_locks.*FOR UPDATE/s.test(sql)) return [[{ scope_key: repl[0] }]];
+      if (/FROM workday_config_defaults WHERE id = \? FOR UPDATE/.test(sql)) return [[{ id: 5, scope: 'department', company_id: null, department_id: 9, valid_from: '2026-01-01', valid_to: null, check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6', break_mode: 'punched' }]];
+      if (/SELECT scope_key FROM workday_config_defaults/.test(sql)) return [[{ scope_key: 'department:0:9' }]];
       if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
       if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) return [77, 1];
-      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [{ affectedRows: 1 }, 1];
       if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ id: 5, scope: 'department', company_id: null, department_id: 9, valid_from: '2026-01-01' }]];
       if (/workday_config_default_audit/.test(sql)) return [1, 1];
       return [[]];
     });
-    return locks;
+    return scopeLockInserts;
   }
-  const only = (locks) => locks.find(l => /wcd/.test(l));
 
-  test('create, update(metadata), supersede y close del MISMO scope usan el MISMO lock', async () => {
-    const locks = lockCapture();
+  test('NO usa GET_LOCK/RELEASE_LOCK (advisory) — sólo la fila transaccional', async () => {
+    lockCapture();
     await svc.createDefault({ scope: 'department', department_id: 9, valid_from: '2026-02-01', ...BASE }, 1);
-    const createLock = only(locks);
-    locks.length = 0;
+    const sql = sequelize.query.mock.calls.map(c => c[0]).join('\n');
+    expect(sql).not.toMatch(/GET_LOCK/);
+    expect(sql).not.toMatch(/RELEASE_LOCK/);
+    expect(sql).toMatch(/workday_config_scope_locks.*FOR UPDATE/s); // lock retenido hasta commit
+  });
+
+  test('create, update(metadata), supersede y close del MISMO scope bloquean la MISMA fila', async () => {
+    const inserts = lockCapture();
+    await svc.createDefault({ scope: 'department', department_id: 9, valid_from: '2026-02-01', ...BASE }, 1);
+    const createLock = inserts.at(-1);
     await svc.updateDefault(5, { label: 'x', change_reason: 'meta' }, 1);
-    const updateLock = only(locks);
-    locks.length = 0;
+    const updateLock = inserts.at(-1);
     await svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1);
-    const supersedeLock = only(locks);
-    locks.length = 0;
+    const supersedeLock = inserts.at(-1);
     await svc.closeDefault(5, '2026-12-31', 1, 'fin');
-    const closeLock = only(locks);
-    expect(createLock).toBe('sishoras:wcd:department:0:9');
-    expect(updateLock).toBe(createLock);
-    expect(supersedeLock).toBe(createLock);
-    expect(closeLock).toBe(createLock);
+    const closeLock = inserts.at(-1);
+    expect(createLock).toBe('department:0:9');
+    expect(updateLock).toBe('department:0:9');
+    expect(supersedeLock).toBe('department:0:9');
+    expect(closeLock).toBe('department:0:9');
+  });
+
+  test('bulkApply bloquea los scope_keys en orden DETERMINISTA (ordenados)', async () => {
+    const lockOrder = [];
+    sequelize.query.mockImplementation(async (sql, opts) => {
+      const repl = (opts && opts.replacements) || [];
+      if (/INSERT INTO workday_config_scope_locks/.test(sql)) { lockOrder.push(repl[0]); return [[{}]]; }
+      if (/workday_config_scope_locks.*FOR UPDATE/s.test(sql)) return [[{ scope_key: repl[0] }]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) return [1, 1];
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ id: 1 }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+    // Ítems fuera de orden de scope_key; el lock debe tomarse ordenado.
+    await svc.bulkApply([
+      { scope: 'general', valid_from: '2026-01-01', valid_to: '2026-06-30', ...BASE },
+      { scope: 'department', department_id: 5, valid_from: '2026-01-01', ...BASE },
+      { scope: 'company', company_id: 2, valid_from: '2026-01-01', ...BASE },
+    ], 1);
+    expect(lockOrder).toEqual([...lockOrder].sort());
+    expect(lockOrder).toEqual(['company:2:0', 'department:0:5', 'general:0:0']);
   });
 });
 
@@ -352,7 +381,7 @@ describe('Corrección I — defaults append-only (supersede / inmutabilidad)', (
       if (/RELEASE_LOCK/.test(sql)) return [[{}]];
       if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
       if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
-      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [{ affectedRows: 1 }, 1];
       if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ ...beforeRow, label: 'nuevo' }]];
       if (/workday_config_default_audit/.test(sql)) return [1, 1];
       return [[]];
@@ -373,7 +402,7 @@ describe('Corrección I — defaults append-only (supersede / inmutabilidad)', (
       if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
       if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
       if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]]; // sin otro solape
-      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [{ affectedRows: 1 }, 1];
       if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) {
         created = { id: 99, scope: 'general', valid_from: repl[4], check_in: repl[6] };
         return [99, 1];
@@ -413,7 +442,7 @@ describe('Corrección I — defaults append-only (supersede / inmutabilidad)', (
       if (/SELECT scope_key FROM/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
       if (/FOR UPDATE/.test(sql)) return [[beforeRow]];
       if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
-      if (/UPDATE workday_config_defaults/.test(sql)) return [1, 1];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [{ affectedRows: 1 }, 1];
       if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) throw new Error('insert boom');
       if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ ...beforeRow, valid_to: '2026-09-30' }]];
       if (/workday_config_default_audit/.test(sql)) return [1, 1];
@@ -421,5 +450,59 @@ describe('Corrección I — defaults append-only (supersede / inmutabilidad)', (
     });
     await expect(svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1)).rejects.toThrow('insert boom');
     expect(sequelize.transaction).toHaveBeenCalledTimes(1); // en MySQL real revierte el cierre de v1
+  });
+});
+
+describe('Corrección L — supersede/close SÓLO sobre versión abierta', () => {
+  const openRow = { id: 5, scope: 'general', company_id: null, department_id: null, valid_from: '2026-01-01', valid_to: null, active: 1, check_in: '08:00:00', check_out: '17:00:00', work_days: '2,3,4,5,6', break_mode: 'punched' };
+  const closedRow = { ...openRow, valid_to: '2026-09-30' };
+
+  function mockWith(before, { closeAffected = 1 } = {}) {
+    sequelize.query.mockImplementation(async (sql) => {
+      if (/workday_config_scope_locks.*FOR UPDATE/s.test(sql)) return [[{ scope_key: 'general:0:0' }]];
+      if (/SELECT scope_key FROM workday_config_defaults/.test(sql)) return [[{ scope_key: 'general:0:0' }]];
+      if (/FROM workday_config_defaults WHERE id = \? FOR UPDATE/.test(sql)) return [[before]];
+      if (/SELECT id FROM workday_config_defaults/.test(sql)) return [[]];
+      if (/UPDATE workday_config_defaults/.test(sql)) return [{ affectedRows: closeAffected }, closeAffected];
+      if (/^\s*INSERT INTO workday_config_defaults \(/.test(sql)) return [99, 1];
+      if (/SELECT \* FROM workday_config_defaults WHERE id/.test(sql)) return [[{ id: 99 }]];
+      if (/workday_config_default_audit/.test(sql)) return [1, 1];
+      return [[]];
+    });
+  }
+  const insertCount = () => sequelize.query.mock.calls.filter(c => /^\s*INSERT INTO workday_config_defaults \(/.test(c[0])).length;
+
+  test('supersede sobre versión ABIERTA → OK', async () => {
+    mockWith(openRow);
+    const out = await svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1);
+    expect(out.created.id).toBe(99);
+  });
+
+  test('supersede sobre versión CERRADA → 409 SUPERSEDE_REQUIRES_OPEN_VERSION y 0 INSERT', async () => {
+    mockWith(closedRow);
+    await expect(svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1))
+      .rejects.toMatchObject({ status: 409, code: 'SUPERSEDE_REQUIRES_OPEN_VERSION' });
+    expect(insertCount()).toBe(0);
+  });
+
+  test('supersede con UPDATE cierre affectedRows=0 → rollback y 0 nueva versión', async () => {
+    mockWith(openRow, { closeAffected: 0 });
+    await expect(svc.supersedeDefault(5, { effective_from: '2026-10-01', check_in: '07:00' }, 1))
+      .rejects.toMatchObject({ status: 409, code: 'SUPERSEDE_REQUIRES_OPEN_VERSION' });
+    expect(insertCount()).toBe(0);
+  });
+
+  test('close sobre versión ABIERTA → OK', async () => {
+    mockWith(openRow);
+    const { after } = await svc.closeDefault(5, '2026-12-31', 1, 'fin');
+    expect(after).toBeTruthy();
+  });
+
+  test('close sobre versión CERRADA → 409 DEFAULT_ALREADY_CLOSED (sin mutación)', async () => {
+    mockWith(closedRow);
+    await expect(svc.closeDefault(5, '2026-12-31', 1, 'fin'))
+      .rejects.toMatchObject({ status: 409, code: 'DEFAULT_ALREADY_CLOSED' });
+    const updates = sequelize.query.mock.calls.filter(c => /^UPDATE workday_config_defaults/.test(c[0].trim()));
+    expect(updates).toHaveLength(0);
   });
 });
