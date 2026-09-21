@@ -59,6 +59,21 @@ const { sequelize } = require('../config/database');
 const { isMissingTableError } = require('../utils/schemaState');
 const logger = require('../config/logger');
 
+/**
+ * PRECEDENCIA canónica (mayor → menor). ÚNICA fuente de verdad del orden de
+ * capas: la usan `resolveForDate` (motor + endpoint) y la UI/documentación. No
+ * existe un segundo algoritmo de precedencia en el proyecto.
+ */
+const PRECEDENCE = Object.freeze([
+  'published_shift_assignment',
+  'employee_historical_override',
+  'department_historical_default',
+  'company_historical_default',
+  'general_historical_default',
+  'employee_contract_trace',
+  'historical_fallback',
+]);
+
 /** Se avisa una sola vez por tabla y por proceso: es una condición estable. */
 const avisado = new Set();
 
@@ -80,6 +95,29 @@ async function consultarOpcional(tabla, sql, replacements) {
     if (!isMissingTableError(err)) throw err;
     avisarTablaAusente(tabla);
     return [];
+  }
+}
+
+/** ER_BAD_FIELD_ERROR (columna inexistente): p. ej. branches.company_id sin 076. */
+function isMissingColumnError(err) {
+  return errorLayers(err).some((e) => e && (e.code === 'ER_BAD_FIELD_ERROR' || e.errno === 1054 || e.sqlState === '42S22'));
+}
+
+/**
+ * Como `consultarOpcional`, pero también tolera que falte una COLUMNA (migración
+ * aditiva sin aplicar, p. ej. `branches.company_id`/`cost_centers.company_id` de
+ * 076, o toda la tabla `workday_config_defaults`/`employee_assignments`). En ese
+ * caso degrada a "sin dato" en vez de tumbar el reporte: la jerarquía nueva es
+ * OPCIONAL y su ausencia debe reproducir EXACTAMENTE el comportamiento previo.
+ */
+async function consultarOpcionalTablaOColumna(tabla, sql, replacements) {
+  try {
+    const [rows] = await sequelize.query(sql, { replacements });
+    return rows;
+  } catch (err) {
+    if (isMissingTableError(err)) { avisarTablaAusente(tabla); return []; }
+    if (isMissingColumnError(err)) { avisarTablaAusente(`${tabla} (columna de jerarquía)`); return []; }
+    throw err;
   }
 }
 
@@ -323,19 +361,261 @@ async function loadContracts(employeeIds, { from, to }) {
 }
 
 /**
+ * Asignaciones organizativas históricas (078) del lote: departamento / sucursal
+ * / centro de costo CON vigencia. Es la ÚNICA fuente autoritativa del alcance
+ * as-of-date; NUNCA se usa `employees.department_id` actual para habilitar una
+ * configuración histórica (fabricaría pertenencia que no existió). Tolerante a
+ * que la tabla no exista (078 sin aplicar → sin alcance → sólo default general).
+ *
+ * @returns {Map<number, Array>} employee_id → asignaciones ordenadas por valid_from.
+ */
+// La columna `employee_assignments.company_id` (snapshot histórico de empresa,
+// migración 086) puede no existir todavía si 078 se aplicó y 086 no. Se degrada
+// SÓLO esa columna (como el patrón de metadata FASE C) para no perder también el
+// department_id histórico: sin la columna, la empresa histórica es desconocida.
+let eaCompanyAvailable = null;
+
+async function loadEmployeeAssignments(employeeIds) {
+  const ids = idsValidos(employeeIds);
+  if (!ids.length) return new Map();
+
+  const query = (withCompany) => consultarOpcionalTablaOColumna('employee_assignments', `
+    SELECT
+      a.employee_id,
+      a.branch_id,
+      a.department_id,
+      a.cost_center_id,
+      ${withCompany ? 'a.company_id' : 'NULL AS company_id'},
+      DATE_FORMAT(a.valid_from, '%Y-%m-%d') AS valid_from,
+      DATE_FORMAT(a.valid_to,   '%Y-%m-%d') AS valid_to
+    FROM employee_assignments a
+    WHERE a.employee_id IN (${marcas(ids.length)})
+    ORDER BY a.employee_id, a.valid_from
+  `, ids);
+
+  let rows;
+  if (eaCompanyAvailable === false) {
+    rows = await query(false);
+  } else {
+    try {
+      rows = await query(true);
+      eaCompanyAvailable = true;
+    } catch (err) {
+      if (!isMissingColumnError(err)) throw err;
+      eaCompanyAvailable = false;
+      avisarTablaAusente('employee_assignments.company_id (086 pendiente)');
+      rows = await query(false);
+    }
+  }
+
+  const porEmpleado = new Map();
+  for (const r of rows) {
+    const lista = porEmpleado.get(r.employee_id) || [];
+    lista.push(r);
+    porEmpleado.set(r.employee_id, lista);
+  }
+  return porEmpleado;
+}
+
+/**
+ * Defaults de jornada (085) para el conjunto de scope_keys que el lote podría
+ * necesitar (general + los departamentos y empresas presentes en las
+ * asignaciones). UNA sola consulta (IN), sin N+1. Tolerante a que la tabla no
+ * exista (085 sin aplicar → sin defaults → comportamiento idéntico al previo).
+ *
+ * @returns {Map<string, Array>} scope_key → versiones ordenadas por valid_from.
+ */
+async function loadWorkdayConfigDefaults(scopeKeys) {
+  const keys = [...new Set((scopeKeys || []).filter(Boolean))];
+  if (!keys.length) return new Map();
+  const rows = await consultarOpcionalTablaOColumna('workday_config_defaults', `
+    SELECT
+      scope_key,
+      DATE_FORMAT(valid_from, '%Y-%m-%d') AS valid_from,
+      DATE_FORMAT(valid_to,   '%Y-%m-%d') AS valid_to,
+      check_in, check_out, tolerance_in, tolerance_out,
+      break_mode, break_minutes, break_after_minutes,
+      weekly_target_minutes, daily_target_minutes, work_regime,
+      overtime_policy, overtime_policy_version, overtime_policy_config,
+      rounding_policy, rounding_policy_version, rounding_policy_config,
+      night_start, night_end, work_days
+    FROM workday_config_defaults
+    WHERE active = 1 AND scope_key IN (${marcas(keys.length)})
+    ORDER BY scope_key, valid_from
+  `, keys);
+  const porScope = new Map();
+  for (const r of rows) {
+    const lista = porScope.get(r.scope_key) || [];
+    lista.push(r);
+    porScope.set(r.scope_key, lista);
+  }
+  return porScope;
+}
+
+/** Asignación organizativa vigente en la fecha (gana el valid_from más reciente). */
+function asignacionVigente(lista, workDate) {
+  if (!Array.isArray(lista) || !lista.length) return null;
+  let mejor = null;
+  for (const a of lista) {
+    if (!a.valid_from || a.valid_from > workDate) continue;
+    if (a.valid_to && a.valid_to < workDate) continue;
+    if (!mejor || a.valid_from > mejor.valid_from) mejor = a;
+  }
+  return mejor;
+}
+
+/** ¿La config de un default es COMPLETA (utilizable como `configured`)? */
+function isDefaultConfigComplete(cfg) {
+  return !!(cfg && cfg.check_in && cfg.check_out && cfg.work_days && cfg.work_days.length > 0);
+}
+
+/**
  * Carga toda la configuración del lote y devuelve un resolvedor por fecha.
  *
- * @returns {{ forDate(employeeId, workDate): Object|null, historyFor(employeeId): Array }}
+ * @returns {{ forDate(employeeId, workDate): Object|null, resolveForDate(employeeId, workDate): Object, historyFor(employeeId): Array }}
  */
 async function loadWorkdayConfig(employeeIds, { from, to }) {
-  const [history, assignments, contracts] = await Promise.all([
+  const [history, assignments, contracts, orgAssignments] = await Promise.all([
     loadScheduleHistory(employeeIds),
     loadShiftAssignments(employeeIds, { from, to }),
     loadContracts(employeeIds, { from, to }),
+    loadEmployeeAssignments(employeeIds),
   ]);
+  const hasIds = idsValidos(employeeIds).length > 0;
+
+  // Departamentos y EMPRESAS (snapshot histórico `a.company_id`, 086) presentes
+  // en las asignaciones del lote → acotan la consulta de defaults. La empresa NO
+  // se reconstruye leyendo branches/cost_centers ACTUALES (Corrección H): se usa
+  // exclusivamente la congelada en la asignación.
+  const deptIds = new Set();
+  const companyIds = new Set();
+  for (const lista of orgAssignments.values()) {
+    for (const a of lista) {
+      if (a.department_id != null) deptIds.add(Number(a.department_id));
+      if (a.company_id != null) companyIds.add(Number(a.company_id));
+    }
+  }
+
+  // Sin empleados no se consulta NADA (ni el default general): mantiene la
+  // garantía "sin ids, sin consultas" y evita trabajo inútil.
+  const scopeKeys = hasIds ? ['general:0:0'] : [];
+  for (const d of deptIds) scopeKeys.push(`department:0:${d}`);
+  for (const c of companyIds) scopeKeys.push(`company:${c}:0`);
+  const defaults = await loadWorkdayConfigDefaults(scopeKeys);
+
+  /**
+   * Alcance AUTORITATIVO as-of-date: SÓLO la asignación organizativa vigente en
+   * la fecha (078). El departamento sale de `a.department_id` y la EMPRESA del
+   * snapshot histórico `a.company_id` (086) — NUNCA de branches/cost_centers
+   * ACTUALES (Corrección H) ni de `employees.department_id` actual (Corrección
+   * B). Sin asignación vigente el alcance es nulo → general/fallback. Una
+   * asignación con `company_id` NULL (empresa histórica desconocida) NO habilita
+   * el company_historical_default.
+   */
+  function scopeForDate(id, workDate) {
+    const vig = asignacionVigente(orgAssignments.get(id), workDate);
+    if (!vig) {
+      return { department_id: null, company_id: null, scope_source: null };
+    }
+    return {
+      department_id: vig.department_id != null ? Number(vig.department_id) : null,
+      company_id: vig.company_id != null ? Number(vig.company_id) : null,
+      scope_source: 'employee_assignments',
+    };
+  }
+
+  /** Primer default jerárquico COMPLETO vigente (depto → empresa → general). */
+  function hierDefaultForDate(scope, workDate) {
+    const considered = [];
+    const candidatos = [];
+    if (scope.department_id != null) candidatos.push(['department_historical_default', `department:0:${scope.department_id}`]);
+    if (scope.company_id != null) candidatos.push(['company_historical_default', `company:${scope.company_id}:0`]);
+    candidatos.push(['general_historical_default', 'general:0:0']);
+    for (const [layer, key] of candidatos) {
+      considered.push(layer);
+      const row = vigenteEn(defaults.get(key), workDate);
+      if (!row) continue;
+      const cfg = normalizeConfigRow(row);
+      if (!isDefaultConfigComplete(cfg)) continue; // incompleto → siguiente capa
+      return { layer, config: cfg, considered };
+    }
+    return { layer: null, config: null, considered };
+  }
+
+  function resolveForDate(employeeId, workDate) {
+    const id = Number(employeeId);
+    const tramo = vigenteEn(history.get(id), workDate);
+    const contractId = contratoVigente(contracts.get(id), workDate);
+    const scope = scopeForDate(id, workDate);
+    const considered = [];
+
+    const hier = hierDefaultForDate(scope, workDate);
+
+    // 1. Turnera publicada. Su HORARIO gana; el "perfil" (target/policies) sale
+    //    del snapshot histórico del empleado y, si no existe, del default
+    //    jerárquico vigente. Sin ningún perfil, la turnera NO habilita cálculo
+    //    (gate FASE E intacto: se cae al fallback como antes).
+    const shiftTramos = assignments.get(`${id}|${workDate}`);
+    if (shiftTramos && shiftTramos.length) {
+      considered.push('published_shift_assignment');
+      const profile = (tramo && !tramo.config_incomplete) ? tramo : (hier.config || null);
+      if (profile) {
+        const cfg = configDesdeTurnera(shiftTramos);
+        if (cfg && cfg.non_working) {
+          return richResult('published_shift_assignment', 'non_working',
+            { ...cfg, contract_id: contractId }, contractId, scope, considered);
+        }
+        if (cfg) {
+          return richResult('published_shift_assignment', 'configured', {
+            ...cfg,
+            shift_weekly_target_minutes: cfg.weekly_target_minutes ?? null,
+            weekly_target_minutes: profile.weekly_target_minutes ?? null,
+            work_regime: profile.work_regime ?? null,
+            night_start: profile.night_start ?? null,
+            night_end: profile.night_end ?? null,
+            rounding_policy: profile.rounding_policy ?? null,
+            rounding_policy_version: profile.rounding_policy_version ?? null,
+            rounding_policy_config: profile.rounding_policy_config ?? null,
+            overtime_policy: profile.overtime_policy ?? null,
+            overtime_policy_version: profile.overtime_policy_version ?? null,
+            overtime_policy_config: profile.overtime_policy_config ?? null,
+            contract_id: contractId,
+            profile_history_id: profile.history_id ?? null,
+          }, contractId, scope, considered);
+        }
+      }
+      // Sin perfil: no se usa la turnera; se continúa (idéntico al previo: null).
+    }
+
+    // 2. Override histórico del empleado (snapshot completo).
+    considered.push('employee_historical_override');
+    if (tramo && !tramo.config_incomplete) {
+      return richResult('employee_historical_override', 'configured',
+        { ...tramo, contract_id: contractId, source: 'schedule_history' }, contractId, scope, considered);
+    }
+    // Un override incompleto NO habilita configured: se salta a las capas
+    // inferiores (idéntico al previo cuando no hay defaults: cae a fallback).
+
+    // 3–5. Defaults jerárquicos (departamento → empresa → general).
+    for (const l of hier.considered) if (!considered.includes(l)) considered.push(l);
+    if (hier.config) {
+      return richResult(hier.layer, 'configured',
+        { ...hier.config, contract_id: contractId, source: hier.layer }, contractId, scope, considered);
+    }
+
+    // 6. Traza de contrato / fallback histórico (el motor describe lo observado).
+    if (contractId != null) {
+      considered.push('employee_contract_trace');
+      return richResult('employee_contract_trace', 'historical_fallback', null, contractId, scope, considered);
+    }
+    considered.push('historical_fallback');
+    return richResult('historical_fallback', 'historical_fallback', null, null, scope, considered);
+  }
 
   return {
     historyFor: (employeeId) => history.get(Number(employeeId)) || [],
+    resolveForDate,
+    scopeForDate,
 
     // Visibilidad administrativa de la Turnera, SIN afirmar que ya puede
     // usarse para cálculo. FASE C/UI puede mostrar una planificación existente
@@ -346,74 +626,29 @@ async function loadWorkdayConfig(employeeIds, { from, to }) {
       return tramos && tramos.length ? configDesdeTurnera(tramos) : null;
     },
 
+    // Resolución ÚNICA que consume el motor (workdaySummaryService / scheduler)
+    // y el endpoint administrativo (effective-hierarchical). Devuelve la config
+    // lista para el motor o `null` (→ historical_fallback), derivada de la MISMA
+    // `resolveForDate`: no hay un segundo algoritmo de precedencia.
     forDate(employeeId, workDate) {
-      const id = Number(employeeId);
-      const tramo = vigenteEn(history.get(id), workDate);
-      const contractId = contratoVigente(contracts.get(id), workDate);
-
-      // 1. Turnera publicada para esa fecha exacta.
-      //
-      // La Turnera responde CUÁNDO trabaja ese día; el perfil histórico responde
-      // CUÁNTO y bajo qué políticas. Por eso una asignación diaria NO debe
-      // reemplazar silenciosamente el target contractual individual por el
-      // weekly_target genérico de la cabecera de la turnera (p. ej. 48 h para
-      // una persona cuyo perfil vigente es 36 h). El target de la turnera queda
-      // como fallback cuando no existe perfil histórico.
-      const tramos = assignments.get(`${id}|${workDate}`);
-      if (tramos && tramos.length) {
-        // GATE DE ACTIVACIÓN: una Turnera publicada por sí sola NO habilita
-        // cálculo configurado. Mientras el empleado no tenga un snapshot
-        // histórico COMPLETO y vigente, el reporte debe seguir exactamente en
-        // historical_fallback. Esto evita que datos de planificación existentes
-        // cambien 2024/2025 antes de que RR.HH. configure formalmente al
-        // empleado.
-        const profile = tramo && !tramo.config_incomplete ? tramo : null;
-        if (!profile) return null;
-
-        const cfg = configDesdeTurnera(tramos);
-        if (cfg) {
-          return {
-            ...cfg,
-            // El weekly target de shift_schedules es un dato de PLANIFICACIÓN
-            // de la Turnera, no prueba del objetivo contractual individual.
-            // Sin perfil histórico explícito el target del empleado queda
-            // DESCONOCIDO; no se inventan 48 h por el default de la cabecera.
-            shift_weekly_target_minutes: cfg.weekly_target_minutes ?? null,
-            weekly_target_minutes: profile?.weekly_target_minutes ?? null,
-            work_regime: profile?.work_regime ?? null,
-            night_start: profile?.night_start ?? null,
-            night_end: profile?.night_end ?? null,
-            rounding_policy: profile?.rounding_policy ?? null,
-            rounding_policy_version: profile?.rounding_policy_version ?? null,
-            rounding_policy_config: profile?.rounding_policy_config ?? null,
-            overtime_policy: profile?.overtime_policy ?? null,
-            overtime_policy_version: profile?.overtime_policy_version ?? null,
-            overtime_policy_config: profile?.overtime_policy_config ?? null,
-            contract_id: contractId,
-            profile_history_id: profile?.history_id ?? null,
-          };
-        }
-      }
-
-      // 2. Horario habitual con vigencia.
-      if (tramo && !tramo.config_incomplete) {
-        return {
-          ...tramo,
-          contract_id: contractId,
-          source: 'schedule_history',
-        };
-      }
-      // Un tramo histórico incompleto (sin check_in snapshoteado) NO habilita el
-      // modo configured: se prefiere caer al fallback antes que calcular atraso
-      // contra un horario a medias o —peor— contra el schedules vivo.
-      if (tramo && tramo.config_incomplete) return null;
-
-      // 3. Contrato: aporta carga, no horario. NO habilita el modo
-      //    `configured` por sí solo — sin hora de entrada no hay atraso que
-      //    calcular, y devolver una config a medias haría que el motor deje de
-      //    reportar el fallback cuando en realidad no sabe el horario.
-      return null;
+      return resolveForDate(employeeId, workDate).config;
     },
+  };
+}
+
+/**
+ * Envuelve el resultado de la resolución con metadatos de trazabilidad para el
+ * endpoint administrativo. `config` es exactamente lo que consume el motor
+ * (o `null` → historical_fallback).
+ */
+function richResult(layer, calculationMode, config, contractId, scope, considered) {
+  return {
+    layer,
+    calculation_mode: calculationMode,
+    config: config || null,
+    contract_id: contractId ?? (config ? (config.contract_id ?? null) : null),
+    scope,
+    precedence_considered: considered,
   };
 }
 
@@ -632,13 +867,18 @@ function parseWorkDays(value) {
 }
 
 module.exports = {
+  PRECEDENCE,
   loadWorkdayConfig,
   loadScheduleHistory,
   loadShiftAssignments,
   loadContracts,
+  loadEmployeeAssignments,
+  loadWorkdayConfigDefaults,
   normalizeConfigRow,
   parseWorkDays,
   vigenteEn,
+  asignacionVigente,
+  isDefaultConfigComplete,
   configDesdeTurnera,
   isMissingPhaseCMetadataError,
   resetPhaseCMetadataCacheForTests,

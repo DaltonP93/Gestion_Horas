@@ -92,6 +92,9 @@ router.post('/employee/:id', requirePermission('asignaciones', 'create'), valida
         branch_id: req.body.branch_id ?? null,
         department_id: req.body.department_id ?? null,
         cost_center_id: req.body.cost_center_id ?? null,
+        // Empresa RESUELTA/persistida en el snapshot (Corrección M) — nunca el
+        // company_id que pudiera enviar el cliente: se audita lo que se guardó.
+        company_id: result.company_id ?? null,
         job_title: req.body.job_title ?? null,
         reference_salary: req.body.reference_salary ?? null,
       },

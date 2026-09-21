@@ -15,6 +15,7 @@
 const router = require('express').Router();
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const svc = require('../services/workdayConfigurationService');
+const defaults = require('../services/workdayConfigDefaultsService');
 const audit = require('../services/audit');
 
 router.use(authenticate);
@@ -98,12 +99,10 @@ router.get('/meta', view, (_req, res) => {
       rounding_policy: 'named/versioned; not applied unless engine implements it explicitly',
       overtime_policy: 'named/versioned; contract excess is not automatically legal overtime',
     },
-    precedence: [
-      'published_shift_assignment',
-      'employee_schedule_history',
-      'employee_contract_trace',
-      'historical_fallback',
-    ],
+    // Fuente ÚNICA: la misma constante canónica del motor (workdayConfig.PRECEDENCE),
+    // re-exportada por el servicio de defaults. /meta, /precedence, el endpoint
+    // effective y el motor coinciden exactamente.
+    precedence: defaults.PRECEDENCE,
   });
 });
 
@@ -192,6 +191,81 @@ router.get('/employees/:employeeId/effective', view, asyncHandler(async (req, re
   const id = employeeId(req);
   const date = String(req.query.date || '');
   const data = await svc.getEffectiveConfiguration(id, date);
+  res.json({ ok: true, data });
+}));
+
+// ─────────────────────────────────────────────────────────────────────
+// Configuración Laboral Histórica, Jerárquica y Masiva (defaults + precedencia)
+// ─────────────────────────────────────────────────────────────────────
+
+// Precedencia explícita (para UI y documentación).
+router.get('/precedence', view, (req, res) => {
+  res.json({ ok: true, data: { precedence: defaults.PRECEDENCE, writes_enabled: defaults.isWriteEnabled() } });
+});
+
+// Efectiva por precedencia completa (6 capas): departamento/empresa/general.
+router.get('/employees/:employeeId/effective-hierarchical', view, asyncHandler(async (req, res) => {
+  const id = employeeId(req);
+  const data = await defaults.getEffectiveForDate(id, String(req.query.date || ''));
+  res.json({ ok: true, data });
+}));
+
+// Listado de defaults por alcance (read-only).
+router.get('/defaults', view, asyncHandler(async (req, res) => {
+  const data = await defaults.listDefaults({
+    scope: req.query.scope || null,
+    company_id: req.query.company_id || null,
+    department_id: req.query.department_id || null,
+    includeInactive: String(req.query.include_inactive || '') === 'true',
+  });
+  res.json({ ok: true, data });
+}));
+
+function auditDefaultRoute(req, action, entityId, before, after, reason) {
+  audit.log({ req, user: req.user, action: `workday_config_default.${action}`, entity: 'workday_config_defaults', entity_id: entityId, details: { before, after, reason } });
+}
+
+router.post('/defaults', update, asyncHandler(async (req, res) => {
+  const created = await defaults.createDefault(req.body || {}, req.user?.id || null);
+  auditDefaultRoute(req, 'create', created.id, null, { id: created.id, scope: created.scope, valid_from: created.valid_from }, created.change_reason || null);
+  res.status(201).json({ ok: true, data: created });
+}));
+
+// PUT: SÓLO metadata (label/change_reason). Cambiar configuración efectiva o
+// vigencia se rechaza (409 IMMUTABLE_EFFECTIVE_CONFIG) — usar /supersede.
+router.put('/defaults/:id', update, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const { after } = await defaults.updateDefault(id, req.body || {}, req.user?.id || null);
+  auditDefaultRoute(req, 'update_metadata', id, { id }, { id, label: after.label }, after.change_reason || null);
+  res.json({ ok: true, data: after });
+}));
+
+// SUPERSEDE: append-only. Cierra la versión vigente y crea la sucesora desde
+// effective_from, en una sola transacción atómica.
+router.post('/defaults/:id/supersede', update, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const data = await defaults.supersedeDefault(id, req.body || {}, req.user?.id || null);
+  auditDefaultRoute(req, 'supersede', id, { id }, { closed_id: data.closed_id, closed_valid_to: data.closed_valid_to, created_id: data.created?.id }, req.body?.change_reason || req.body?.reason || null);
+  res.status(201).json({ ok: true, data });
+}));
+
+router.post('/defaults/:id/close', update, asyncHandler(async (req, res) => {
+  const id = Number(req.params.id);
+  const { after } = await defaults.closeDefault(id, req.body?.valid_to, req.user?.id || null, req.body?.reason);
+  auditDefaultRoute(req, 'close', id, { id }, { id, valid_to: after.valid_to }, req.body?.reason || null);
+  res.json({ ok: true, data: after });
+}));
+
+// Preview/dry-run masivo (NO escribe). También sirve para validar importaciones.
+router.post('/defaults/bulk/preview', view, asyncHandler(async (req, res) => {
+  const data = await defaults.bulkPreview(req.body?.items || []);
+  res.json({ ok: true, data });
+}));
+
+// Aplicación masiva (gateada; sólo si el preview no tiene conflictos).
+router.post('/defaults/bulk/apply', update, asyncHandler(async (req, res) => {
+  const data = await defaults.bulkApply(req.body?.items || [], req.user?.id || null);
+  auditDefaultRoute(req, 'bulk_apply', null, null, { applied: data.applied }, req.body?.reason || null);
   res.json({ ok: true, data });
 }));
 
