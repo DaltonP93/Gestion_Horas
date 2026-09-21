@@ -26,6 +26,12 @@ export interface WorkdayDefaultRow {
   weekly_target_minutes: number | null
   daily_target_minutes: number | null
   work_regime: string | null
+  overtime_policy: string | null
+  overtime_policy_version: number | null
+  overtime_policy_config: Record<string, unknown> | null
+  rounding_policy: string | null
+  rounding_policy_version: number | null
+  rounding_policy_config: Record<string, unknown> | null
   night_start: string | null
   night_end: string | null
   work_days: string | null
@@ -33,6 +39,11 @@ export interface WorkdayDefaultRow {
   change_reason: string | null
   active: number
 }
+
+// Conjuntos válidos (paridad con el backend workdayConfigurationService).
+export const BREAK_MODES = ['none', 'fixed_unpaid', 'punched'] as const
+export const WORK_REGIMES = ['day', 'night', 'mixed', 'special', 'custom'] as const
+export type BreakMode = (typeof BREAK_MODES)[number]
 
 export interface EffectiveHierarchical {
   employee_id: number
@@ -58,8 +69,24 @@ export interface DefaultForm {
   tolerance_in: string
   tolerance_out: string
   work_days: number[]
+  // Descanso
+  break_mode: BreakMode
+  break_minutes: string
+  break_after_minutes: string
+  // Objetivos
+  daily_target_minutes: string
+  weekly_target_minutes: string
+  work_regime: '' | (typeof WORK_REGIMES)[number]
+  // Nocturno
   night_start: string
   night_end: string
+  // Políticas avanzadas (config como texto JSON)
+  overtime_policy: string
+  overtime_policy_version: string
+  overtime_policy_config: string
+  rounding_policy: string
+  rounding_policy_version: string
+  rounding_policy_config: string
   change_reason: string
 }
 
@@ -126,8 +153,22 @@ export function emptyDefaultForm(today: string): DefaultForm {
     tolerance_in: '10',
     tolerance_out: '10',
     work_days: [2, 3, 4, 5, 6],
+    // Descanso: defaults seguros y coherentes con el backend (break_mode default 'punched').
+    break_mode: 'punched',
+    break_minutes: '0',
+    break_after_minutes: '0',
+    // Objetivos/políticas: vacíos (null) — no se inventan.
+    daily_target_minutes: '',
+    weekly_target_minutes: '',
+    work_regime: '',
     night_start: '',
     night_end: '',
+    overtime_policy: '',
+    overtime_policy_version: '',
+    overtime_policy_config: '',
+    rounding_policy: '',
+    rounding_policy_version: '',
+    rounding_policy_config: '',
     change_reason: '',
   }
 }
@@ -146,6 +187,63 @@ function isClockTime(v: string): boolean {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(v || ''))
 }
 
+const POLICY_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i
+
+/** true si `v` (string) es un entero dentro de [min,max]; '' cuenta como válido sólo si nullable. */
+function isBoundedInt(v: string, min: number, max: number, nullable = true): boolean {
+  const s = String(v ?? '').trim()
+  if (!s) return nullable
+  if (!/^-?\d+$/.test(s)) return false
+  const n = Number(s)
+  return Number.isInteger(n) && n >= min && n <= max
+}
+
+/** Parsea un JSON de config de policy: '' → null; debe ser objeto (no array). Lanza si inválido. */
+function parsePolicyConfig(v: string, label: string): Record<string, unknown> | null {
+  const s = String(v ?? '').trim()
+  if (!s) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(s) } catch { throw new Error(`${label} debe ser JSON válido.`) }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${label} debe ser un objeto JSON (no un array).`)
+  return parsed as Record<string, unknown>
+}
+function isPolicyConfigValid(v: string): boolean {
+  try { parsePolicyConfig(v, 'x'); return true } catch { return false }
+}
+const intOrNull = (v: string): number | null => { const s = String(v ?? '').trim(); return s ? Number(s) : null }
+
+/**
+ * Valida los campos EFECTIVOS de jornada (compartido entre creación y supersede):
+ * horario, días, descanso, objetivos, régimen, nocturno y políticas. Mismas
+ * reglas que el backend (autoridad final).
+ */
+function validateJornadaFields(form: DefaultForm): string[] {
+  const errors: string[] = []
+  if (!isClockTime(form.check_in)) errors.push('La hora de entrada debe ser HH:mm válida.')
+  if (!isClockTime(form.check_out)) errors.push('La hora de salida debe ser HH:mm válida.')
+  if (!form.work_days.length) errors.push('Seleccioná al menos un día laborable.')
+  if (!isBoundedInt(form.tolerance_in, 0, 1440, false)) errors.push('Tolerancia de entrada: entero entre 0 y 1440.')
+  if (!isBoundedInt(form.tolerance_out, 0, 1440, false)) errors.push('Tolerancia de salida: entero entre 0 y 1440.')
+  if (!BREAK_MODES.includes(form.break_mode)) errors.push('Modo de descanso inválido.')
+  if (!isBoundedInt(form.break_minutes, 0, 1440, false)) errors.push('Minutos de descanso: entero entre 0 y 1440.')
+  if (!isBoundedInt(form.break_after_minutes, 0, 1440, false)) errors.push('Umbral de descanso: entero entre 0 y 1440.')
+  if (!isBoundedInt(form.daily_target_minutes, 0, 1440)) errors.push('Objetivo diario (min): entero entre 0 y 1440.')
+  if (!isBoundedInt(form.weekly_target_minutes, 0, 10080)) errors.push('Objetivo semanal (min): entero entre 0 y 10080.')
+  if (form.work_regime && !WORK_REGIMES.includes(form.work_regime as any)) errors.push('Régimen laboral inválido.')
+  if ((form.night_start && !form.night_end) || (!form.night_start && form.night_end)) {
+    errors.push('La franja nocturna requiere inicio y fin.')
+  } else if (form.night_start && (!isClockTime(form.night_start) || !isClockTime(form.night_end))) {
+    errors.push('La franja nocturna debe usar horas HH:mm válidas.')
+  }
+  if (form.overtime_policy.trim() && !POLICY_RE.test(form.overtime_policy.trim())) errors.push('Política de horas extra: código de hasta 40 caracteres (letras, números, _ o -).')
+  if (form.rounding_policy.trim() && !POLICY_RE.test(form.rounding_policy.trim())) errors.push('Política de redondeo: código de hasta 40 caracteres (letras, números, _ o -).')
+  if (!isBoundedInt(form.overtime_policy_version, 1, 100000)) errors.push('Versión de horas extra: entero positivo.')
+  if (!isBoundedInt(form.rounding_policy_version, 1, 100000)) errors.push('Versión de redondeo: entero positivo.')
+  if (!isPolicyConfigValid(form.overtime_policy_config)) errors.push('Config de horas extra debe ser un objeto JSON (no un array).')
+  if (!isPolicyConfigValid(form.rounding_policy_config)) errors.push('Config de redondeo debe ser un objeto JSON (no un array).')
+  return errors
+}
+
 /** Valida el formulario en cliente (mismos criterios que la API, sin red). */
 export function validateDefaultForm(form: DefaultForm): string[] {
   const errors: string[] = []
@@ -159,15 +257,35 @@ export function validateDefaultForm(form: DefaultForm): string[] {
   if (form.valid_to && isCivilDate(form.valid_from) && isCivilDate(form.valid_to) && form.valid_to < form.valid_from) {
     errors.push('"Vigente hasta" no puede ser anterior a "Vigente desde".')
   }
-  if (!isClockTime(form.check_in)) errors.push('La hora de entrada debe ser HH:mm válida.')
-  if (!isClockTime(form.check_out)) errors.push('La hora de salida debe ser HH:mm válida.')
-  if (!form.work_days.length) errors.push('Seleccioná al menos un día laborable.')
-  if ((form.night_start && !form.night_end) || (!form.night_start && form.night_end)) {
-    errors.push('La franja nocturna requiere inicio y fin.')
-  } else if (form.night_start && (!isClockTime(form.night_start) || !isClockTime(form.night_end))) {
-    errors.push('La franja nocturna debe usar horas HH:mm válidas.')
+  return [...new Set([...errors, ...validateJornadaFields(form)])]
+}
+
+/**
+ * Campos EFECTIVOS de jornada listos para persistir (paridad exacta con
+ * normalizeDefaultBody del backend). Compartido por creación y supersede.
+ */
+function jornadaPayload(form: DefaultForm) {
+  return {
+    check_in: form.check_in,
+    check_out: form.check_out,
+    tolerance_in: Number(form.tolerance_in || 0),
+    tolerance_out: Number(form.tolerance_out || 0),
+    work_days: [...form.work_days].sort((a, b) => a - b),
+    break_mode: form.break_mode,
+    break_minutes: Number(form.break_minutes || 0),
+    break_after_minutes: Number(form.break_after_minutes || 0),
+    daily_target_minutes: intOrNull(form.daily_target_minutes),
+    weekly_target_minutes: intOrNull(form.weekly_target_minutes),
+    work_regime: form.work_regime || null,
+    night_start: form.night_start || null,
+    night_end: form.night_end || null,
+    overtime_policy: form.overtime_policy.trim() || null,
+    overtime_policy_version: intOrNull(form.overtime_policy_version),
+    overtime_policy_config: parsePolicyConfig(form.overtime_policy_config, 'Config de horas extra'),
+    rounding_policy: form.rounding_policy.trim() || null,
+    rounding_policy_version: intOrNull(form.rounding_policy_version),
+    rounding_policy_config: parsePolicyConfig(form.rounding_policy_config, 'Config de redondeo'),
   }
-  return [...new Set(errors)]
 }
 
 /** Construye el cuerpo para POST /defaults; lanza con el primer error. */
@@ -181,13 +299,7 @@ export function defaultPayload(form: DefaultForm) {
     label: form.label.trim() || null,
     valid_from: form.valid_from,
     valid_to: form.valid_to || null,
-    check_in: form.check_in,
-    check_out: form.check_out,
-    tolerance_in: Number(form.tolerance_in || 0),
-    tolerance_out: Number(form.tolerance_out || 0),
-    work_days: [...form.work_days].sort((a, b) => a - b),
-    night_start: form.night_start || null,
-    night_end: form.night_end || null,
+    ...jornadaPayload(form),
     change_reason: form.change_reason.trim() || null,
   }
 }
@@ -217,10 +329,12 @@ export function canMutateVersion(
   return !!opts.canWrite && !!opts.writesEnabled && versionIsOpen(row)
 }
 
-/** Precarga un DefaultForm desde una versión existente (para el modal de supersede). */
+/** Precarga un DefaultForm con el payload COMPLETO de una versión existente (supersede). */
 export function formFromDefaultRow(row: WorkdayDefaultRow, today: string): DefaultForm {
   const base = emptyDefaultForm(today)
   const t5 = (v: string | null | undefined) => (v ? String(v).slice(0, 5) : '')
+  const numStr = (v: number | null | undefined, fallback = '') => (v == null ? fallback : String(v))
+  const jsonStr = (v: Record<string, unknown> | null | undefined) => (v == null ? '' : JSON.stringify(v))
   const days = (row.work_days || '').split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 1 && n <= 7)
   return {
     ...base,
@@ -230,41 +344,48 @@ export function formFromDefaultRow(row: WorkdayDefaultRow, today: string): Defau
     label: row.label || '',
     check_in: t5(row.check_in) || base.check_in,
     check_out: t5(row.check_out) || base.check_out,
-    tolerance_in: row.tolerance_in == null ? base.tolerance_in : String(row.tolerance_in),
-    tolerance_out: row.tolerance_out == null ? base.tolerance_out : String(row.tolerance_out),
+    tolerance_in: numStr(row.tolerance_in, base.tolerance_in),
+    tolerance_out: numStr(row.tolerance_out, base.tolerance_out),
     work_days: days.length ? days : base.work_days,
+    break_mode: (BREAK_MODES as readonly string[]).includes(row.break_mode || '') ? (row.break_mode as BreakMode) : base.break_mode,
+    break_minutes: numStr(row.break_minutes, base.break_minutes),
+    break_after_minutes: numStr(row.break_after_minutes, base.break_after_minutes),
+    daily_target_minutes: numStr(row.daily_target_minutes),
+    weekly_target_minutes: numStr(row.weekly_target_minutes),
+    work_regime: (WORK_REGIMES as readonly string[]).includes(row.work_regime || '') ? (row.work_regime as any) : '',
     night_start: t5(row.night_start),
     night_end: t5(row.night_end),
+    overtime_policy: row.overtime_policy || '',
+    overtime_policy_version: numStr(row.overtime_policy_version),
+    overtime_policy_config: jsonStr(row.overtime_policy_config),
+    rounding_policy: row.rounding_policy || '',
+    rounding_policy_version: numStr(row.rounding_policy_version),
+    rounding_policy_config: jsonStr(row.rounding_policy_config),
     change_reason: '',
   }
 }
 
 /**
  * Cuerpo para POST /defaults/:id/supersede: `effective_from` (obligatorio) + el
- * payload de jornada del formulario + change_reason. Reutiliza la validación del
- * formulario (horas/días/nocturno). NO envía scope: el alcance es inmutable.
+ * payload EFECTIVO COMPLETO del formulario + change_reason. Reutiliza la
+ * validación de jornada (horario/días/descanso/objetivos/régimen/nocturno/
+ * políticas). NO envía scope: el alcance es inmutable.
  */
 export function supersedePayload(effectiveFrom: string, form: DefaultForm) {
-  const errors = validateDefaultForm({ ...form, scope: 'general', company_id: '', department_id: '', valid_from: effectiveFrom })
-    .filter(e => !/alcance|Empresa|Departamento/i.test(e)) // el alcance no se edita en supersede
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) errors.unshift('"Vigente desde (nueva versión)" debe ser una fecha real.')
-  if (errors.length) throw new Error(errors[0])
+  const errors: string[] = []
+  if (!isCivilDate(effectiveFrom)) errors.push('"Vigente desde (nueva versión)" debe ser una fecha real.')
+  errors.push(...validateJornadaFields(form))
+  if (errors.length) throw new Error([...new Set(errors)][0])
   return {
     effective_from: effectiveFrom,
-    check_in: form.check_in,
-    check_out: form.check_out,
-    tolerance_in: Number(form.tolerance_in || 0),
-    tolerance_out: Number(form.tolerance_out || 0),
-    work_days: [...form.work_days].sort((a, b) => a - b),
-    night_start: form.night_start || null,
-    night_end: form.night_end || null,
+    ...jornadaPayload(form),
     change_reason: form.change_reason.trim() || null,
   }
 }
 
-/** Cuerpo para POST /defaults/:id/close. */
+/** Cuerpo para POST /defaults/:id/close. Fecha civil real (no sólo regex). */
 export function closePayload(validTo: string, reason: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(validTo)) throw new Error('"Vigente hasta" debe ser una fecha real.')
+  if (!isCivilDate(validTo)) throw new Error('"Vigente hasta" debe ser una fecha real.')
   return { valid_to: validTo, reason: (reason || '').trim() || null }
 }
 

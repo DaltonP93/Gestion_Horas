@@ -60,6 +60,84 @@ describe('parseBulkItems — JSON array y NDJSON', () => {
   })
 })
 
+describe('Corrección O — paridad completa UI ↔ payload de jornada', () => {
+  const full = (over: Partial<DefaultForm> = {}): DefaultForm => base({
+    break_mode: 'fixed_unpaid', break_minutes: '30', break_after_minutes: '300',
+    daily_target_minutes: '480', weekly_target_minutes: '2400', work_regime: 'night',
+    overtime_policy: 'rrhh_review', overtime_policy_version: '2', overtime_policy_config: '{"cap":10}',
+    rounding_policy: 'nearest_5', rounding_policy_version: '1', rounding_policy_config: '{"step":5}',
+    night_start: '22:00', night_end: '06:00', ...over,
+  })
+
+  test('defaultPayload envía TODOS los campos efectivos', () => {
+    const p = defaultPayload(full())
+    expect(p.break_mode).toBe('fixed_unpaid')
+    expect(p.break_minutes).toBe(30)
+    expect(p.break_after_minutes).toBe(300)
+    expect(p.daily_target_minutes).toBe(480)
+    expect(p.weekly_target_minutes).toBe(2400)
+    expect(p.work_regime).toBe('night')
+    expect(p.overtime_policy).toBe('rrhh_review')
+    expect(p.overtime_policy_version).toBe(2)
+    expect(p.overtime_policy_config).toEqual({ cap: 10 })
+    expect(p.rounding_policy).toBe('nearest_5')
+    expect(p.rounding_policy_version).toBe(1)
+    expect(p.rounding_policy_config).toEqual({ step: 5 })
+    expect(p.night_start).toBe('22:00'); expect(p.night_end).toBe('06:00')
+  })
+
+  test('targets/policies vacíos → null (no se inventan)', () => {
+    const p = defaultPayload(base())
+    expect(p.daily_target_minutes).toBeNull()
+    expect(p.weekly_target_minutes).toBeNull()
+    expect(p.work_regime).toBeNull()
+    expect(p.overtime_policy).toBeNull()
+    expect(p.overtime_policy_version).toBeNull()
+    expect(p.overtime_policy_config).toBeNull()
+    expect(p.break_mode).toBe('punched') // default seguro
+  })
+
+  test('formFromDefaultRow conserva el payload COMPLETO de una versión', () => {
+    const row = { ...rowOpen, break_mode: 'fixed_unpaid', break_minutes: 30, break_after_minutes: 300, daily_target_minutes: 480, weekly_target_minutes: 2400, work_regime: 'night', overtime_policy: 'rrhh_review', overtime_policy_version: 2, overtime_policy_config: { cap: 10 }, rounding_policy: 'nearest_5', rounding_policy_version: 1, rounding_policy_config: { step: 5 }, night_start: '22:00:00', night_end: '06:00:00' } as unknown as WorkdayDefaultRow
+    const f = formFromDefaultRow(row, '2026-09-20')
+    expect(f.break_mode).toBe('fixed_unpaid')
+    expect(f.break_minutes).toBe('30')
+    expect(f.daily_target_minutes).toBe('480')
+    expect(f.weekly_target_minutes).toBe('2400')
+    expect(f.work_regime).toBe('night')
+    expect(f.overtime_policy).toBe('rrhh_review')
+    expect(f.overtime_policy_version).toBe('2')
+    expect(f.overtime_policy_config).toBe('{"cap":10}')
+    expect(f.rounding_policy_config).toBe('{"step":5}')
+    expect(f.night_start).toBe('22:00'); expect(f.night_end).toBe('06:00')
+  })
+
+  test('supersedePayload conserva el payload COMPLETO y permite cambiarlo', () => {
+    const p = supersedePayload('2026-10-01', full({ break_mode: 'punched', daily_target_minutes: '420', work_regime: 'mixed', rounding_policy: 'floor' }))
+    expect(p.effective_from).toBe('2026-10-01')
+    expect(p.break_mode).toBe('punched')      // cambio de descanso
+    expect(p.daily_target_minutes).toBe(420)   // cambio de objetivo
+    expect(p.work_regime).toBe('mixed')        // cambio de régimen
+    expect(p.rounding_policy).toBe('floor')    // cambio de política
+    expect(p.overtime_policy_config).toEqual({ cap: 10 })
+  })
+
+  test('validación: JSON array en policy_config → error', () => {
+    expect(validateDefaultForm(full({ overtime_policy_config: '[1,2,3]' })).some(e => /objeto JSON/.test(e))).toBe(true)
+    expect(() => defaultPayload(full({ overtime_policy_config: '[1,2,3]' }))).toThrow(/objeto JSON/)
+  })
+
+  test('validación: número negativo/ fuera de rango → error', () => {
+    expect(validateDefaultForm(full({ break_minutes: '-1' })).some(e => /Minutos de descanso/.test(e))).toBe(true)
+    expect(validateDefaultForm(full({ weekly_target_minutes: '20000' })).some(e => /Objetivo semanal/.test(e))).toBe(true)
+    expect(validateDefaultForm(full({ overtime_policy_version: '0' })).some(e => /Versión de horas extra/.test(e))).toBe(true)
+  })
+
+  test('close con fecha civil inexistente (2026-02-31) → error', () => {
+    expect(() => closePayload('2026-02-31', 'x')).toThrow(/fecha real/)
+  })
+})
+
 describe('Corrección N — acciones append-only en la UI', () => {
   test('versionIsOpen: abierta si valid_to null/""', () => {
     expect(versionIsOpen(rowOpen)).toBe(true)

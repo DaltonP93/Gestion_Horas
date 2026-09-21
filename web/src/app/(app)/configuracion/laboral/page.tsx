@@ -26,6 +26,83 @@ import {
 const WRITE_ROLES = ['super_admin', 'admin', 'gth', 'hr']
 const inputCls = 'border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-white/[0.08] bg-white dark:bg-transparent'
 
+/**
+ * Campos avanzados de jornada (descanso, objetivos, régimen, políticas),
+ * compartidos por el alta y el modal "Nueva versión" (supersede). Colapsable.
+ */
+function AdvancedJornadaFields({ form, onChange }: { form: DefaultForm; onChange: (updater: (f: DefaultForm) => DefaultForm) => void }) {
+  const set = (k: keyof DefaultForm, v: any) => onChange(f => ({ ...f, [k]: v }))
+  return (
+    <details className="rounded-xl border border-slate-200 p-3 dark:border-white/[0.08]">
+      <summary className="cursor-pointer text-sm font-medium">Descanso, objetivos y políticas (avanzado)</summary>
+      <div className="mt-3 space-y-3">
+        <div>
+          <div className="text-xs font-medium text-slate-500 mb-1">Descanso</div>
+          <div className="grid grid-cols-3 gap-3">
+            <label className="text-sm">Modo
+              <select value={form.break_mode} onChange={e => set('break_mode', e.target.value)} className={`${inputCls} block mt-1 w-full`}>
+                <option value="none">Ninguno</option>
+                <option value="fixed_unpaid">Fijo no pago</option>
+                <option value="punched">Fichado</option>
+              </select>
+            </label>
+            <label className="text-sm">Minutos
+              <input value={form.break_minutes} onChange={e => set('break_minutes', e.target.value)} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" />
+            </label>
+            <label className="text-sm">Umbral (min)
+              <input value={form.break_after_minutes} onChange={e => set('break_after_minutes', e.target.value)} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" />
+            </label>
+          </div>
+        </div>
+        <div>
+          <div className="text-xs font-medium text-slate-500 mb-1">Objetivos</div>
+          <div className="grid grid-cols-3 gap-3">
+            <label className="text-sm">Diario (min)
+              <input value={form.daily_target_minutes} onChange={e => set('daily_target_minutes', e.target.value)} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" placeholder="—" />
+            </label>
+            <label className="text-sm">Semanal (min)
+              <input value={form.weekly_target_minutes} onChange={e => set('weekly_target_minutes', e.target.value)} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" placeholder="—" />
+            </label>
+            <label className="text-sm">Régimen
+              <select value={form.work_regime} onChange={e => set('work_regime', e.target.value)} className={`${inputCls} block mt-1 w-full`}>
+                <option value="">—</option>
+                <option value="day">Diurno</option>
+                <option value="night">Nocturno</option>
+                <option value="mixed">Mixto</option>
+                <option value="special">Especial</option>
+                <option value="custom">Personalizado</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div>
+          <div className="text-xs font-medium text-slate-500 mb-1">Políticas avanzadas (no se aplican salvo que el motor las implemente)</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="text-sm">Horas extra (código)
+              <input value={form.overtime_policy} onChange={e => set('overtime_policy', e.target.value)} className={`${inputCls} block mt-1 w-full`} placeholder="ej: rrhh_review" />
+            </label>
+            <label className="text-sm">Versión HE
+              <input value={form.overtime_policy_version} onChange={e => set('overtime_policy_version', e.target.value)} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" placeholder="—" />
+            </label>
+            <label className="text-sm sm:col-span-1">Config HE (JSON)
+              <textarea value={form.overtime_policy_config} onChange={e => set('overtime_policy_config', e.target.value)} rows={2} className={`${inputCls} block mt-1 w-full font-mono text-xs`} placeholder='{"cap":10}' />
+            </label>
+            <label className="text-sm">Redondeo (código)
+              <input value={form.rounding_policy} onChange={e => set('rounding_policy', e.target.value)} className={`${inputCls} block mt-1 w-full`} placeholder="ej: nearest_5" />
+            </label>
+            <label className="text-sm">Versión red.
+              <input value={form.rounding_policy_version} onChange={e => set('rounding_policy_version', e.target.value)} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" placeholder="—" />
+            </label>
+            <label className="text-sm sm:col-span-1">Config red. (JSON)
+              <textarea value={form.rounding_policy_config} onChange={e => set('rounding_policy_config', e.target.value)} rows={2} className={`${inputCls} block mt-1 w-full font-mono text-xs`} placeholder='{"step":5}' />
+            </label>
+          </div>
+        </div>
+      </div>
+    </details>
+  )
+}
+
 function today(): string { return new Date().toISOString().slice(0, 10) }
 function t5(v: string | null | undefined): string { return v ? String(v).slice(0, 5) : '—' }
 function vigencia(r: WorkdayDefaultRow): string {
@@ -274,7 +351,7 @@ export default function ConfiguracionLaboralPage() {
             <div className="flex flex-wrap gap-x-6 gap-y-1">
               <span><b>Capa:</b> {layerLabel(eff.layer)}</span>
               <span><b>Modo:</b> {eff.calculation_mode}</span>
-              <span><b>Depto:</b> {eff.scope?.department_id ?? '—'} {eff.scope?.scope_source === 'current_fallback' ? '(actual, sin asignación vigente)' : ''}</span>
+              <span><b>Depto:</b> {eff.scope?.department_id ?? '—'} {eff.scope?.scope_source == null ? '(sin asignación vigente)' : ''}</span>
               <span><b>Empresa:</b> {eff.scope?.company_id ?? '—'}</span>
               <span><b>Contrato:</b> {eff.contract_id ?? '—'}</span>
             </div>
@@ -361,6 +438,7 @@ export default function ConfiguracionLaboralPage() {
               ))}
             </div>
           </div>
+          <AdvancedJornadaFields form={form} onChange={setForm} />
           <label className="text-sm block">Motivo del cambio (auditoría)
             <input value={form.change_reason} onChange={e => setForm(f => ({ ...f, change_reason: e.target.value }))} className={`${inputCls} block mt-1 w-full`} placeholder="Ej: alta de política 2026" />
           </label>
@@ -489,6 +567,12 @@ export default function ConfiguracionLaboralPage() {
               <label className="text-sm">Salida
                 <input type="time" value={supersedeForm.check_out} onChange={e => setSupersedeForm(f => ({ ...f, check_out: e.target.value }))} className={`${inputCls} block mt-1 w-full`} />
               </label>
+              <label className="text-sm">Tol. entrada
+                <input value={supersedeForm.tolerance_in} onChange={e => setSupersedeForm(f => ({ ...f, tolerance_in: e.target.value }))} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" />
+              </label>
+              <label className="text-sm">Tol. salida
+                <input value={supersedeForm.tolerance_out} onChange={e => setSupersedeForm(f => ({ ...f, tolerance_out: e.target.value }))} className={`${inputCls} block mt-1 w-full`} inputMode="numeric" />
+              </label>
               <label className="text-sm">Nocturno desde
                 <input type="time" value={supersedeForm.night_start} onChange={e => setSupersedeForm(f => ({ ...f, night_start: e.target.value }))} className={`${inputCls} block mt-1 w-full`} />
               </label>
@@ -507,6 +591,7 @@ export default function ConfiguracionLaboralPage() {
                 ))}
               </div>
             </div>
+            <AdvancedJornadaFields form={supersedeForm} onChange={setSupersedeForm} />
             <label className="text-sm block">Motivo del cambio
               <input value={supersedeForm.change_reason} onChange={e => setSupersedeForm(f => ({ ...f, change_reason: e.target.value }))} className={`${inputCls} block mt-1 w-full`} placeholder="Ej: nuevo horario 2026" />
             </label>
