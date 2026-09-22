@@ -66,9 +66,11 @@ un manager.
 1. `GOVERNANCE_WRITE_ENABLED=true` → reload (§5).
 2. Con un usuario **global-HR**, en `/configuracion/empresas` y `/configuracion/centros-costo`:
    crear la(s) **empresa(s)** y **centros de costo** reales (RUC/razón social, etc.).
-3. **Enlazar la estructura:** asignar `branches.company_id` a cada sucursal y (opcional)
-   `departments.cost_center_id`. *Si no hay UI para el enlace, ops lo hace por UPDATE puntual y
-   auditado; es aditivo sobre columnas nuleables.*
+3. **Enlazar la estructura:** con un usuario `admin`/`super_admin`, usar la acción
+   **Vincular empresa** de `/configuracion/sedes` para asignar `branches.company_id`; la operación
+   exige confirmación explícita, sólo permite el primer vínculo y queda auditada. Un traslado posterior
+   de empresa requiere un procedimiento aparte. Vincular (opcionalmente) también
+   `departments.cost_center_id`.
 4. **Verificar aislamiento (§6):** un usuario **no-global** de la sucursal de la empresa A **no** debe
    ver datos de la empresa B.
 
