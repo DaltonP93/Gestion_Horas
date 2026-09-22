@@ -8,6 +8,8 @@ interface Branch {
   id: number
   code: string
   name: string
+  company_id: number | null
+  company_name: string | null
   address: string | null
   city: string | null
   phone: string | null
@@ -20,12 +22,17 @@ interface Branch {
   geo_radius_m: number | null
 }
 
+interface Company { id: number; legal_name: string; active: number }
+
 export default function SedesPage() {
   const [items, setItems] = useState<Branch[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<Branch | null>(null)
+  const [linking, setLinking] = useState<Branch | null>(null)
   const [creating, setCreating] = useState(false)
+  const [companies, setCompanies] = useState<Company[]>([])
+  const [companyError, setCompanyError] = useState('')
 
   async function load() {
     setLoading(true); setError('')
@@ -37,7 +44,12 @@ export default function SedesPage() {
     } finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    api.get('/api/companies')
+      .then(r => setCompanies((r.data?.data ?? []).filter((c: Company) => !!c.active)))
+      .catch(() => setCompanyError('No se pudo cargar el catálogo de empresas'))
+  }, [])
 
   async function handleToggle(b: Branch) {
     try {
@@ -72,9 +84,9 @@ export default function SedesPage() {
         </button>
       </div>
 
-      {error && (
+      {(error || companyError) && (
         <div role="alert" className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
-          {error}
+          {error || companyError}
         </div>
       )}
 
@@ -86,6 +98,7 @@ export default function SedesPage() {
             <tr>
               <th className="text-left px-4 py-3 font-semibold">Código</th>
               <th className="text-left px-4 py-3 font-semibold">Nombre</th>
+              <th className="text-left px-4 py-3 font-semibold">Empresa</th>
               <th className="text-left px-4 py-3 font-semibold">Ciudad</th>
               <th className="text-center px-4 py-3 font-semibold">Empleados</th>
               <th className="text-center px-4 py-3 font-semibold">Relojes</th>
@@ -94,9 +107,9 @@ export default function SedesPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={7} className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</td></tr>}
+            {loading && <tr><td colSpan={8} className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</td></tr>}
             {!loading && items.length === 0 && (
-              <tr><td colSpan={7} className="text-center py-8 text-slate-400 dark:text-white/30">Sin sedes registradas</td></tr>
+              <tr><td colSpan={8} className="text-center py-8 text-slate-400 dark:text-white/30">Sin sedes registradas</td></tr>
             )}
             {items.map(b => (
               <tr key={b.id} className="border-t border-slate-100 hover:bg-slate-50 dark:border-white/[0.06] dark:hover:bg-white/[0.04]">
@@ -109,6 +122,7 @@ export default function SedesPage() {
                     </span>
                   )}
                 </td>
+                <td className="px-4 py-3 text-slate-600 dark:text-white/60">{b.company_name || 'Sin vincular'}</td>
                 <td className="px-4 py-3 text-slate-600 dark:text-white/60">{b.city || '—'}</td>
                 <td className="px-4 py-3 text-center">{b.employee_count}</td>
                 <td className="px-4 py-3 text-center">{b.device_count}</td>
@@ -121,6 +135,11 @@ export default function SedesPage() {
                   <button onClick={() => setEditing(b)} className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800">
                     <Edit size={14} aria-hidden="true" /> Editar
                   </button>
+                  {b.company_id == null && (
+                    <button onClick={() => setLinking(b)} disabled={!companies.length} className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-40">
+                      <Building2 size={14} aria-hidden="true" /> Vincular empresa
+                    </button>
+                  )}
                   <button onClick={() => handleToggle(b)} className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-800 dark:text-white/60">
                     {b.active ? 'Desactivar' : 'Activar'}
                   </button>
@@ -134,19 +153,25 @@ export default function SedesPage() {
       {(creating || editing) && (
         <BranchModal
           branch={editing}
+          companies={companies}
           onClose={() => { setCreating(false); setEditing(null) }}
           onSaved={() => { setCreating(false); setEditing(null); load() }}
         />
+      )}
+      {linking && (
+        <LinkCompanyModal branch={linking} companies={companies}
+          onClose={() => setLinking(null)} onLinked={() => { setLinking(null); load() }} />
       )}
     </div>
   )
 }
 
-function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onClose: () => void; onSaved: () => void }) {
+function BranchModal({ branch, companies, onClose, onSaved }: { branch: Branch | null; companies: Company[]; onClose: () => void; onSaved: () => void }) {
   const isEdit = !!branch
   const [form, setForm] = useState({
     code: branch?.code || '',
     name: branch?.name || '',
+    company_id: '',
     address: branch?.address || '',
     city: branch?.city || '',
     phone: branch?.phone || '',
@@ -173,8 +198,10 @@ function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onCl
     e.preventDefault()
     setSaving(true); setError('')
     try {
-      if (isEdit) await api.put(`/api/branches/${branch!.id}`, form)
-      else await api.post('/api/branches', form)
+      if (isEdit) {
+        const { company_id: _companyId, ...changes } = form
+        await api.put(`/api/branches/${branch!.id}`, changes)
+      } else await api.post('/api/branches', form)
       onSaved()
     } catch (e: any) {
       setError(e?.response?.data?.error || 'Error al guardar')
@@ -192,6 +219,16 @@ function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onCl
         <form onSubmit={submit} className="space-y-3">
           <Field label="Código *" value={form.code} onChange={v => setForm(f => ({ ...f, code: v }))} required disabled={isEdit} />
           <Field label="Nombre *" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} required />
+          {!isEdit && (
+            <label className="block text-sm font-medium text-slate-700 dark:text-white/80">
+              Empresa
+              <select value={form.company_id} onChange={e => setForm(f => ({ ...f, company_id: e.target.value }))}
+                className="block w-full mt-1 border border-slate-200 rounded-xl px-3 py-2 bg-white dark:bg-slate-900 dark:border-white/[0.08]">
+                <option value="">Sin vincular por ahora</option>
+                {companies.map(c => <option key={c.id} value={c.id}>{c.legal_name}</option>)}
+              </select>
+            </label>
+          )}
           <Field label="Dirección" value={form.address} onChange={v => setForm(f => ({ ...f, address: v }))} />
           <Field label="Ciudad" value={form.city} onChange={v => setForm(f => ({ ...f, city: v }))} />
           <Field label="Teléfono" value={form.phone} onChange={v => setForm(f => ({ ...f, phone: v }))} />
@@ -223,6 +260,66 @@ function BranchModal({ branch, onClose, onSaved }: { branch: Branch | null; onCl
           </div>
         </form>
       </div>
+    </div>
+  )
+}
+
+function LinkCompanyModal({ branch, companies, onClose, onLinked }: {
+  branch: Branch; companies: Company[]; onClose: () => void; onLinked: () => void
+}) {
+  const [companyId, setCompanyId] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!companyId || !confirmed) return
+    setSaving(true); setError('')
+    try {
+      await api.patch('/api/branches/' + branch.id + '/company', {
+        company_id: Number(companyId), confirm: 'VINCULAR',
+      })
+      onLinked()
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'No se pudo vincular la empresa')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div role="dialog" aria-modal="true" aria-labelledby="link-company-title"
+      className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+      <form onSubmit={submit} className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 space-y-4 dark:bg-slate-900">
+        <div className="flex items-center justify-between">
+          <h2 id="link-company-title" className="text-lg font-bold">Vincular empresa a {branch.name}</h2>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="text-slate-500"><X size={20} /></button>
+        </div>
+        <p className="text-sm text-slate-600 dark:text-white/70">
+          Esta sede tiene {branch.employee_count} empleados activos. El vínculo define su empresa para
+          el alcance actual; no recalcula fichajes ni resúmenes históricos.
+        </p>
+        <label className="block text-sm font-medium">
+          Empresa activa
+          <select required value={companyId} onChange={e => setCompanyId(e.target.value)}
+            className="block w-full mt-1 border border-slate-200 rounded-xl px-3 py-2 bg-white dark:bg-slate-800 dark:border-white/[0.08]">
+            <option value="">Seleccionar empresa</option>
+            {companies.map(c => <option key={c.id} value={c.id}>{c.legal_name}</option>)}
+          </select>
+        </label>
+        <label className="flex items-start gap-2 text-sm text-slate-700 dark:text-white/70">
+          <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+          Confirmo que esta sede pertenece a la empresa seleccionada.
+        </label>
+        <p className="text-xs text-slate-500">Para trasladar una sede ya vinculada se requiere un procedimiento aparte.</p>
+        {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+        <div className="flex gap-2">
+          <button type="button" onClick={onClose} className="flex-1 rounded-xl bg-slate-100 px-4 py-2.5">Cancelar</button>
+          <button type="submit" disabled={saving || !companyId || !confirmed}
+            className="flex-1 rounded-xl bg-indigo-600 text-white px-4 py-2.5 disabled:opacity-50">
+            {saving ? 'Vinculando...' : 'Vincular empresa'}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
