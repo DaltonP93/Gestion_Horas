@@ -13,6 +13,7 @@ import { getSocket, reconnectSocket } from '@/lib/socket'
 import { useI18n } from '@/i18n/I18nProvider'
 import { Bento, Ring, GlowDot, Avatar, StatCard } from '@/components/futurista'
 import { fmtTimePy } from '@/lib/datetime'
+import { useCurrentUser } from '@/lib/useCurrentUser'
 
 interface AttendanceEvent {
   employeeId: number
@@ -29,6 +30,7 @@ const formatPunchTime = (raw: string) => fmtTimePy(raw)
 
 export default function DashboardPage() {
   const { t, locale } = useI18n()
+  const user = useCurrentUser()
   const qc = useQueryClient()
   const [liveEvents, setLiveEvents] = useState<AttendanceEvent[]>([])
   const [today, setToday] = useState('')
@@ -132,18 +134,20 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={recalc}
-            disabled={recalcLoading}
-            title="Recalcular resumen del día"
-            className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-white/50
-              hover:text-cyan-600 dark:hover:text-cyan-400 px-3 py-1.5 rounded-xl
-              border border-slate-200 dark:border-white/[0.08] hover:border-cyan-300 dark:hover:border-cyan-400/30
-              transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={recalcLoading ? 'animate-spin' : ''} />
-            Actualizar KPIs
-          </button>
+          {(user?.role === 'admin' || user?.role === 'super_admin') && (
+            <button
+              onClick={recalc}
+              disabled={recalcLoading}
+              title="Recalcular resumen del día"
+              className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-white/50
+                hover:text-cyan-600 dark:hover:text-cyan-400 px-3 py-1.5 rounded-xl
+                border border-slate-200 dark:border-white/[0.08] hover:border-cyan-300 dark:hover:border-cyan-400/30
+                transition-colors disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={recalcLoading ? 'animate-spin' : ''} />
+              Actualizar KPIs
+            </button>
+          )}
           <div className={`flex items-center gap-1.5 pl-2 pr-3 py-1.5 rounded-xl border ${
             socketConnected
               ? 'bg-emerald-50 dark:bg-emerald-400/[0.08] border-emerald-100 dark:border-emerald-400/20'
@@ -156,6 +160,12 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {data?._scope?.branch_required && (
+        <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:bg-blue-400/[0.06] dark:border-blue-400/30 dark:text-blue-300">
+          <b>Falta configurar tu sede.</b> Tu rol usa la sede del usuario para definir qué empleados y relojes podés ver. Pedí a un administrador que asigne tu sede.
+        </div>
+      )}
 
       {/* Aviso: solo cuando hay un problema REAL (error / parcial / sync viejo).
           Un reloj todavía no leído hoy no cuenta como problema. */}

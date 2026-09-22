@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Plus, User, Edit2, Trash2, Key, Check, X } from 'lucide-react'
 import { api } from '@/lib/api'
+import { useCurrentUser } from '@/lib/useCurrentUser'
 
 // ─── Tipos ────────────────────────────────────────────────────────
 interface SysUser {
@@ -10,18 +11,29 @@ interface SysUser {
   username: string
   email: string
   full_name: string
-  role: 'admin' | 'hr' | 'supervisor' | 'employee'
+  role: 'super_admin' | 'admin' | 'gth' | 'hr' | 'manager' | 'coordinator' | 'gestor' | 'supervisor' | 'employee'
   active: number
   last_login: string | null
+  branch_id?: number | null
+  branch_name?: string | null
+  branch_code?: string | null
   employee_id?: number
   employee_name?: string
 }
 
+interface BranchRef { id: number; code: string; name: string; active: number }
+const BRANCH_SCOPED_ROLES = new Set(['manager', 'coordinator', 'supervisor', 'gestor'])
+
 const ROLES: Record<string, { label: string; cls: string }> = {
-  admin:      { label: 'Administrador', cls: 'bg-red-50    text-red-700'    },
-  hr:         { label: 'Recursos H.',   cls: 'bg-blue-50   text-blue-700'   },
-  supervisor: { label: 'Supervisor',    cls: 'bg-purple-50 text-purple-700' },
-  employee:   { label: 'Empleado',      cls: 'bg-slate-50  text-slate-600'  },
+  super_admin: { label: 'Super Admin',   cls: 'bg-amber-50  text-amber-700'  },
+  admin:       { label: 'Administrador', cls: 'bg-red-50    text-red-700'    },
+  gth:         { label: 'Gestión Humana', cls: 'bg-indigo-50 text-indigo-700' },
+  hr:          { label: 'Recursos H.',   cls: 'bg-blue-50   text-blue-700'   },
+  manager:     { label: 'Manager',       cls: 'bg-violet-50 text-violet-700' },
+  coordinator: { label: 'Coordinador',   cls: 'bg-cyan-50   text-cyan-700'   },
+  gestor:      { label: 'Gestor',        cls: 'bg-teal-50   text-teal-700'   },
+  supervisor:  { label: 'Supervisor',    cls: 'bg-purple-50 text-purple-700' },
+  employee:    { label: 'Empleado',      cls: 'bg-slate-50  text-slate-600'  },
 }
 
 // ─── Modal crear/editar usuario ───────────────────────────────────
@@ -29,13 +41,20 @@ function UserModal({
   user, onClose,
 }: { user?: SysUser; onClose: () => void }) {
   const qc = useQueryClient()
+  const currentUser = useCurrentUser()
   const isEdit = !!user
+  const { data: branches = [] } = useQuery<BranchRef[]>({
+    queryKey: ['branches', 'active'],
+    queryFn: () => api.get('/api/branches?active=1').then(r => r.data),
+    staleTime: 60_000,
+  })
 
   const [form, setForm] = useState({
     username:  user?.username  || '',
     email:     user?.email     || '',
     full_name: user?.full_name || '',
     role:      user?.role      || 'hr',
+    branch_id: user?.branch_id ? String(user.branch_id) : '',
     password:  '',
     active:    user?.active !== undefined ? String(user.active) : '1',
   })
@@ -48,15 +67,25 @@ function UserModal({
     e.preventDefault()
     setSaving(true)
     try {
+      const branchId = form.branch_id ? Number(form.branch_id) : null
+      if (BRANCH_SCOPED_ROLES.has(form.role) && !branchId) {
+        setError('La sede es obligatoria para este rol')
+        return
+      }
+      const payload = {
+        ...form,
+        branch_id: branchId,
+      }
       if (isEdit) {
         await api.put(`/api/users/${user!.id}`, {
           full_name: form.full_name,
           email: form.email,
           role: form.role,
           active: +form.active,
+          branch_id: branchId,
         })
       } else {
-        await api.post('/api/users', form)
+        await api.post('/api/users', payload)
       }
       qc.invalidateQueries({ queryKey: ['sys-users'] })
       onClose()
@@ -91,10 +120,26 @@ function UserModal({
               <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Rol</label>
               <select value={form.role} onChange={e => set('role', e.target.value)}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
-                {Object.entries(ROLES).map(([v, { label }]) => (
-                  <option key={v} value={v}>{label}</option>
-                ))}
+                {Object.entries(ROLES)
+                  .filter(([v]) => v !== 'super_admin' || currentUser?.role === 'super_admin')
+                  .map(([v, { label }]) => (
+                    <option key={v} value={v}>{label}</option>
+                  ))}
               </select>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">
+                Sede de alcance {BRANCH_SCOPED_ROLES.has(form.role) && <span className="text-red-500">*</span>}
+              </label>
+              <select value={form.branch_id} onChange={e => set('branch_id', e.target.value)}
+                required={BRANCH_SCOPED_ROLES.has(form.role)}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-white/[0.08]">
+                <option value="">Sin sede</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name} ({b.code})</option>)}
+              </select>
+              <p className="mt-1 text-[11px] text-slate-400">
+                Define qué sede puede ver el usuario. Es independiente del empleado vinculado.
+              </p>
             </div>
             <div className="col-span-2">
               <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-white/80">Email <span className="text-red-500">*</span></label>
@@ -190,6 +235,7 @@ function PasswordModal({ userId, onClose }: { userId: number; onClose: () => voi
 // ─── Página principal ─────────────────────────────────────────────
 export default function UsuariosPage() {
   const qc = useQueryClient()
+  const currentUser = useCurrentUser()
   const [modal, setModal]     = useState<null | 'new' | SysUser>(null)
   const [pwModal, setPwModal] = useState<number | null>(null)
   const [roleFilter, setRole] = useState('all')
@@ -254,6 +300,7 @@ export default function UsuariosPage() {
                 <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Usuario</th>
                 <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Email</th>
                 <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Rol</th>
+                <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Sede</th>
                 <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Empleado vinculado</th>
                 <th className="text-center px-4 py-3 text-slate-500 font-medium dark:text-white/40">Estado</th>
                 <th className="text-left px-4 py-3 text-slate-500 font-medium dark:text-white/40">Último acceso</th>
@@ -263,6 +310,7 @@ export default function UsuariosPage() {
             <tbody className="divide-y divide-slate-50 dark:divide-white/[0.05]">
               {users.map(u => {
                 const role = ROLES[u.role] || ROLES.employee
+                const canManage = u.role !== 'super_admin' || currentUser?.role === 'super_admin'
                 return (
                   <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-white/[0.04]">
                     <td className="px-4 py-3">
@@ -282,6 +330,7 @@ export default function UsuariosPage() {
                         {role.label}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-slate-500 text-xs dark:text-white/40">{u.branch_name || '—'}</td>
                     <td className="px-4 py-3 text-slate-500 text-xs dark:text-white/40">{u.employee_name || '—'}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
@@ -298,7 +347,9 @@ export default function UsuariosPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
-                        <button onClick={() => setModal(u)}
+                        {canManage ? (
+                          <>
+                            <button onClick={() => setModal(u)}
                           className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors dark:text-white/30" title="Editar">
                           <Edit2 size={14} />
                         </button>
@@ -316,13 +367,17 @@ export default function UsuariosPage() {
                             <Trash2 size={14} />
                           </button>
                         ) : null}
+                          </>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">Protegido</span>
+                        )}
                       </div>
                     </td>
                   </tr>
                 )
               })}
               {users.length === 0 && (
-                <tr><td colSpan={7} className="text-center py-12 text-slate-400 dark:text-white/30">Sin usuarios</td></tr>
+                <tr><td colSpan={8} className="text-center py-12 text-slate-400 dark:text-white/30">Sin usuarios</td></tr>
               )}
             </tbody>
           </table>

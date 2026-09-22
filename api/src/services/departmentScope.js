@@ -1,24 +1,15 @@
 /**
- * departmentScope.js — RBAC jerárquico por departamento.
+ * departmentScope.js — RBAC de lectura por SEDE para roles de gestión.
  *
- * Roles "scoped" (manager / coordinator / supervisor / gestor) sólo ven
- * empleados de su departamento y de los descendientes en la jerarquía
- * (`departments.parent_id`). Los roles admin / super_admin / hr / gth
- * mantienen visibilidad total (retornamos `null`, "sin filtro").
+ * Modelo canónico:
+ *   - users.branch_id = alcance de datos (sede).
+ *   - role / user_permissions = capacidades (qué puede ver/hacer).
+ *   - users.employee_id = vínculo personal opcional; NO define el alcance.
  *
- * El scope se determina desde el empleado vinculado al usuario
- * (`users.employee_id → employees.department_id`) más los descendientes
- * de ese departamento. Si el usuario tiene rol scoped pero no está
- * vinculado a un empleado con departamento, el resultado es `[]`
- * (sin visibilidad → 0 filas) para evitar leaks accidentales.
- *
- * Diseño defensivo:
- *   - `getVisibleDepartmentIds(user)` retorna `{ unrestricted: true }`
- *     para roles no scoped o `{ unrestricted: false, ids: number[] }`.
- *   - El helper `applyDepartmentScope(where, params, scope, col)` compone
- *     la cláusula SQL de forma segura cuando `unrestricted === false`.
- *   - Si la migración 066 aún no corrió (no hay `parent_id`), degradamos
- *     al scope plano del propio departamento del usuario.
+ * Roles scoped (manager / coordinator / supervisor / gestor) ven los
+ * departamentos activos de su sede. Sin users.branch_id => alcance vacío
+ * (fail-closed). Roles globales (super_admin / admin / gth / hr) mantienen
+ * visibilidad total.
  */
 
 const { sequelize } = require('../config/database');
@@ -78,24 +69,37 @@ async function _expandDescendants(rootId) {
  * Roles no reconocidos (p.ej. 'employee') → { unrestricted: false, ids: [] }.
  */
 async function getVisibleDepartmentIds(user) {
-  if (!user || !user.role) return { unrestricted: false, ids: [] };
+  if (!user || !user.role) return { unrestricted: false, ids: [], branchIds: [] };
   if (isUnrestricted(user.role)) return { unrestricted: true };
-  if (!isScoped(user.role)) return { unrestricted: false, ids: [] };
+  if (!isScoped(user.role)) return { unrestricted: false, ids: [], branchIds: [] };
 
-  let deptId = null;
-  if (user.employee_id) {
-    try {
-      const [[row]] = await sequelize.query(
-        'SELECT department_id FROM employees WHERE id = ? LIMIT 1',
-        { replacements: [user.employee_id] }
-      );
-      deptId = row?.department_id || null;
-    } catch { deptId = null; }
+  // La sede pertenece a la CUENTA. Se consulta en cada resolución para que
+  // un cambio administrativo tenga efecto inmediato sin depender de un JWT
+  // potencialmente desactualizado.
+  let branchId = null;
+  try {
+    const [[row]] = await sequelize.query(
+      'SELECT branch_id FROM users WHERE id = ? AND active = 1 LIMIT 1',
+      { replacements: [user.id] }
+    );
+    branchId = row?.branch_id || null;
+  } catch { branchId = null; }
+
+  if (!branchId) return { unrestricted: false, ids: [], branchIds: [] };
+
+  try {
+    const [rows] = await sequelize.query(
+      'SELECT id FROM departments WHERE active = 1 AND branch_id = ? ORDER BY id',
+      { replacements: [branchId] }
+    );
+    return {
+      unrestricted: false,
+      ids: rows.map(r => Number(r.id)).filter(Number.isInteger),
+      branchIds: [Number(branchId)],
+    };
+  } catch {
+    return { unrestricted: false, ids: [], branchIds: [] };
   }
-  if (!deptId) return { unrestricted: false, ids: [] };
-
-  const ids = await _expandDescendants(deptId);
-  return { unrestricted: false, ids };
 }
 
 /**

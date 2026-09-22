@@ -28,15 +28,14 @@ function mkRes() {
   res.json = jest.fn(function () { return this; });
   return res;
 }
-// Resolución de alcance de un manager (empresa 9 / sucursal 2 / depto 4).
+// Resolución de alcance de un manager por SEDE (empresa 9 / sucursal 2 / depto 4).
 function mockScopeResolution() {
   sequelize.query
-    .mockResolvedValueOnce([[{ department_id: 4 }]]) // deptScope: employees.department_id
-    .mockResolvedValueOnce([[{ id: 4 }]])            // CTE descendientes
-    .mockResolvedValueOnce([[{ branch_id: 2 }]])     // orgScope: employees.branch_id
+    .mockResolvedValueOnce([[{ branch_id: 2 }]])     // users.branch_id
+    .mockResolvedValueOnce([[{ id: 4 }]])            // departamentos activos de la sede
     .mockResolvedValueOnce([[{ company_id: 9 }]]);   // branches.company_id
 }
-const MANAGER = { id: 11, role: 'manager', employee_id: 500 };
+const MANAGER = { id: 11, role: 'manager', employee_id: null };
 
 beforeEach(() => jest.clearAllMocks());
 

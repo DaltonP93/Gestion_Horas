@@ -23,19 +23,23 @@ describe('getOrgScope', () => {
     expect(sequelize.query).not.toHaveBeenCalled();
   });
 
-  test('rol con alcance deriva depto + sucursal + empresa', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValueOnce({ unrestricted: false, ids: [4, 5] });
-    sequelize.query
-      .mockResolvedValueOnce([[{ branch_id: 2 }]])   // employees.branch_id
-      .mockResolvedValueOnce([[{ company_id: 9 }]]); // branches.company_id
-    const s = await orgScope.getOrgScope({ role: 'manager', employee_id: 7 });
+  test('rol con alcance deriva deptos + sede + empresa desde users.branch_id', async () => {
+    departmentScope.getVisibleDepartmentIds.mockResolvedValueOnce({
+      unrestricted: false, ids: [4, 5], branchIds: [2],
+    });
+    sequelize.query.mockResolvedValueOnce([[{ company_id: 9 }]]); // branches.company_id
+    const s = await orgScope.getOrgScope({ id: 7, role: 'manager', employee_id: null });
     expect(s).toEqual({ unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [4, 5] });
+    expect(String(sequelize.query.mock.calls[0][0])).not.toMatch(/FROM employees/i);
   });
 
-  test('rol sin empleado/sucursal → conjuntos vacíos', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValueOnce({ unrestricted: false, ids: [] });
-    const s = await orgScope.getOrgScope({ role: 'manager', employee_id: null });
+  test('rol sin sede → conjuntos vacíos', async () => {
+    departmentScope.getVisibleDepartmentIds.mockResolvedValueOnce({
+      unrestricted: false, ids: [], branchIds: [],
+    });
+    const s = await orgScope.getOrgScope({ id: 7, role: 'manager', employee_id: 999 });
     expect(s).toEqual({ unrestricted: false, companyIds: [], branchIds: [], departmentIds: [] });
+    expect(sequelize.query).not.toHaveBeenCalled();
   });
 
   test('empleado común → sin alcance', async () => {
@@ -46,11 +50,11 @@ describe('getOrgScope', () => {
   });
 
   test('degrada si branches.company_id no existe (076 no aplicada)', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValueOnce({ unrestricted: false, ids: [1] });
-    sequelize.query
-      .mockResolvedValueOnce([[{ branch_id: 2 }]])
-      .mockRejectedValueOnce(Object.assign(new Error('no col'), { code: 'ER_BAD_FIELD_ERROR' }));
-    const s = await orgScope.getOrgScope({ role: 'manager', employee_id: 7 });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValueOnce({
+      unrestricted: false, ids: [1], branchIds: [2],
+    });
+    sequelize.query.mockRejectedValueOnce(Object.assign(new Error('no col'), { code: 'ER_BAD_FIELD_ERROR' }));
+    const s = await orgScope.getOrgScope({ id: 7, role: 'manager', employee_id: null });
     expect(s.branchIds).toEqual([2]);
     expect(s.companyIds).toEqual([]);
   });

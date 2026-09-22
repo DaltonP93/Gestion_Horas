@@ -127,7 +127,7 @@ export default function SupervisorPage() {
             {loading && <tr><td colSpan={6} className="text-center py-8 text-slate-400 dark:text-white/30">Cargando...</td></tr>}
             {!loading && team.length === 0 && (
               <tr><td colSpan={6} className="text-center py-8 text-slate-400 dark:text-white/30">
-                No tienes equipo asignado. Pide al admin que te designe como manager/coordinador de un departamento.
+                No tienes una sede asignada. Pide al administrador que configure tu sede.
               </td></tr>
             )}
             {team.map(t => {
