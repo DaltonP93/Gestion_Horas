@@ -26,6 +26,7 @@ const guards = [];
 jest.mock('../src/middleware/auth', () => ({
   authenticate: (_req, _res, next) => next(),
   authorize: () => (_req, _res, next) => next(),
+  requirePermission: () => (_req, _res, next) => next(),
   requireSuperAdmin: (req, res, next) => {
     guards.push('requireSuperAdmin');
     if (req.user?.role !== 'super_admin') return res.status(403).json({ error: 'Prohibido' });

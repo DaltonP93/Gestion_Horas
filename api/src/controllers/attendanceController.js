@@ -465,7 +465,12 @@ async function getDashboardStats(req, res) {
         },
         recentLogs: [],
         date: today,
-        _scope: { unrestricted: false, departments: 0 },
+        _scope: {
+          unrestricted: false,
+          departments: 0,
+          branch_ids: scope.branchIds || [],
+          branch_required: !(scope.branchIds || []).length,
+        },
       });
     }
 

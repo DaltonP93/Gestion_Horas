@@ -5,11 +5,12 @@
 const router  = require('express').Router();
 const { insertId } = require('../utils/insertId');
 const net     = require('net');
-const { authenticate, authorize, requireSuperAdmin } = require('../middleware/auth');
+const { authenticate, authorize, requireSuperAdmin, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const { reprocessUnmapped, linkEmployeeDevice } = require('../services/deviceMapping');
 const audit = require('../services/audit');
 const { fetchPushStatus, logBridgeFailure, newCorrelationId } = require('../services/bridgeClient');
+const { getOrgScope } = require('../services/orgScope');
 
 router.use(authenticate);
 
@@ -976,10 +977,20 @@ router.post('/bridge/discovery/probe',
 // GET /api/devices/sync-status — estado por reloj: marcas de HOY + última lectura
 // registrada (device_sync_runs). Para Config → Relojes: ver si cada reloj aporta
 // marcas, su último error, intentos y duración. Read-only.
-router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) => {
+router.get('/sync-status', requirePermission('dashboard', 'view'), async (req, res) => {
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(new Date());
   try {
-    // Marcas/empleados de hoy por reloj.
+    const scope = await getOrgScope(req.user);
+    const branchIds = scope.unrestricted ? [] : (scope.branchIds || []);
+    if (!scope.unrestricted && branchIds.length === 0) {
+      return res.json({ ok: true, date: today, complete: true, items: [], _scope: { branch_ids: [] } });
+    }
+    const branchClause = scope.unrestricted
+      ? ''
+      : `AND d.branch_id IN (${branchIds.map(() => '?').join(',')})`;
+    const branchParams = scope.unrestricted ? [] : branchIds;
+
+    // Marcas/empleados de hoy por reloj, restringidos a la sede del usuario.
     const [marks] = await sequelize.query(`
       SELECT d.id,
              COUNT(al.id) AS marks_today,
@@ -987,8 +998,9 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
              MAX(al.timestamp) AS last_mark
       FROM devices d
       LEFT JOIN attendance_logs al ON al.device_id = d.id AND DATE(al.timestamp) = ?
+      WHERE 1=1 ${branchClause}
       GROUP BY d.id
-    `, { replacements: [today] });
+    `, { replacements: [today, ...branchParams] });
     const marksById = new Map(marks.map(m => [m.id, m]));
 
     // Última corrida registrada por reloj (si existe la tabla de auditoría).
@@ -999,20 +1011,33 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
     if ((tbl?.n || 0) > 0) {
       const [runs] = await sequelize.query(`
         SELECT r.* FROM device_sync_runs r
+        JOIN devices d ON d.id = r.device_id
         JOIN (SELECT device_id, MAX(id) AS mx FROM device_sync_runs GROUP BY device_id) t
           ON t.mx = r.id
-      `);
+        WHERE 1=1 ${branchClause}
+      `, { replacements: branchParams });
       lastRunById = new Map(runs.map(r => [r.device_id, r]));
     }
 
     const [devices] = await sequelize.query(
-      "SELECT id, name, ip_address, status, last_sync FROM devices WHERE ip_address IS NOT NULL AND TRIM(ip_address) <> '' ORDER BY id"
+      `SELECT d.id, d.name, d.ip_address, d.status, d.last_sync, d.branch_id
+         FROM devices d
+        WHERE d.ip_address IS NOT NULL AND TRIM(d.ip_address) <> ''
+          ${branchClause}
+        ORDER BY d.id`,
+      { replacements: branchParams }
     );
 
     // Relojes con un trabajo de lectura en curso (para el estado 'reading').
     let activeJobDev = new Set();
     try {
-      const [aj] = await sequelize.query("SELECT DISTINCT device_id FROM sync_jobs WHERE status IN ('queued','running')");
+      const [aj] = await sequelize.query(
+        `SELECT DISTINCT sj.device_id
+           FROM sync_jobs sj
+           JOIN devices d ON d.id = sj.device_id
+          WHERE sj.status IN ('queued','running') ${branchClause}`,
+        { replacements: branchParams }
+      );
       activeJobDev = new Set(aj.map(r => r.device_id));
     } catch { /* tabla puede no existir */ }
     // Recomendación operativa según el error de la última lectura.
@@ -1069,7 +1094,13 @@ router.get('/sync-status', authorize('admin','gestor','hr'), async (req, res) =>
         } : null,
       };
     });
-    res.json({ ok: true, date: today, complete: items.every(i => !i.suspect), items });
+    res.json({
+      ok: true,
+      date: today,
+      complete: items.every(i => !i.suspect),
+      items,
+      _scope: scope.unrestricted ? { unrestricted: true } : { branch_ids: branchIds },
+    });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
   }

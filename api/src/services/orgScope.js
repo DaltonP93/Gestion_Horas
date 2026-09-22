@@ -11,9 +11,10 @@
  *   - Roles NO restringidos (super_admin, admin, gth, hr): alcance global
  *     (`{ unrestricted: true }`). Es un bypass EXPLÍCITO y documentado; las
  *     pruebas lo verifican.
- *   - Roles con alcance (manager, coordinator, supervisor, gestor): ven sólo
- *     su departamento + descendientes, su sucursal y la empresa de esa
- *     sucursal. Sin empleado/sucursal vinculada ⇒ conjuntos vacíos (nada).
+ *   - Roles con alcance (manager, coordinator, supervisor, gestor): la SEDE
+ *     configurada en users.branch_id define el universo visible. El empleado
+ *     vinculado es independiente y no participa en autorización.
+ *     Sin sede configurada ⇒ conjuntos vacíos (fail-closed).
  *   - Cualquier otro rol (p. ej. employee): sin alcance (nada).
  *
  * Los writers usan `assert*InScope` para RECHAZAR referencias fuera de alcance
@@ -46,30 +47,19 @@ async function getOrgScope(user) {
 
   const dept = await departmentScope.getVisibleDepartmentIds(user);
   const departmentIds = dept.unrestricted ? [] : (dept.ids || []);
+  const branchIds = dept.unrestricted ? [] : (dept.branchIds || []);
 
-  let branchIds = [];
   let companyIds = [];
-  if (user.employee_id) {
-    let branchId = null;
+  const branchId = branchIds[0] || null;
+  if (branchId) {
     try {
-      const [[row]] = await sequelize.query(
-        'SELECT branch_id FROM employees WHERE id = ? LIMIT 1',
-        { replacements: [user.employee_id] },
+      const [[b]] = await sequelize.query(
+        'SELECT company_id FROM branches WHERE id = ? LIMIT 1',
+        { replacements: [branchId] },
       );
-      branchId = row?.branch_id || null;
-    } catch { branchId = null; }
-
-    if (branchId) {
-      branchIds = [branchId];
-      try {
-        const [[b]] = await sequelize.query(
-          'SELECT company_id FROM branches WHERE id = ? LIMIT 1',
-          { replacements: [branchId] },
-        );
-        if (b?.company_id) companyIds = [b.company_id];
-      } catch {
-        // branches.company_id aún no existe (076 no aplicada) → sin empresa.
-      }
+      if (b?.company_id) companyIds = [Number(b.company_id)];
+    } catch {
+      // branches.company_id aún no existe (076 no aplicada) → sin empresa.
     }
   }
   return { unrestricted: false, companyIds, branchIds, departmentIds };

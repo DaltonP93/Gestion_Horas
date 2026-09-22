@@ -16,6 +16,7 @@ jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 jest.mock('../src/middleware/auth', () => ({
   authenticate: (_req, _res, next) => next(),
   authorize: () => (_req, _res, next) => next(),
+  requirePermission: () => (_req, _res, next) => next(),
   requireSuperAdmin: (_req, _res, next) => next(),
 }));
 

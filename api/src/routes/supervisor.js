@@ -1,8 +1,9 @@
 /**
  * supervisor.js — Vista de equipo para el usuario logueado.
  *
- * El "equipo" = empleados de todos los departamentos donde
- *   users.id = departments.manager_id  OR  departments.coordinator_id
+ * El "equipo" = empleados visibles dentro de la SEDE asignada al usuario
+ * (users.branch_id), respetando el mismo alcance canónico del resto del sistema.
+ * El vínculo users.employee_id es independiente y no define este alcance.
  *
  *  GET /api/supervisor/team-overview?date=YYYY-MM-DD
  *  GET /api/supervisor/team-status
@@ -11,23 +12,26 @@
 const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const { getVisibleDepartmentIds } = require('../services/departmentScope');
 
 router.use(authenticate);
 
-async function getTeamDeptIds(userId) {
-  const [rows] = await sequelize.query(
-    'SELECT id FROM departments WHERE active = 1 AND (manager_id = ? OR coordinator_id = ?)',
-    { replacements: [userId, userId] }
-  );
-  return rows.map(r => r.id);
+async function getTeamDeptIds(user) {
+  const scope = await getVisibleDepartmentIds(user);
+  if (scope.unrestricted) {
+    const [rows] = await sequelize.query(
+      'SELECT id FROM departments WHERE active = 1 ORDER BY id'
+    );
+    return rows.map(r => Number(r.id));
+  }
+  return (scope.ids || []).map(Number);
 }
 
 // KPIs del equipo + lista con status del día
 router.get('/team-overview', async (req, res) => {
   try {
-    const userId = req.user.id;
     const date = req.query.date || new Date().toISOString().slice(0, 10);
-    const deptIds = await getTeamDeptIds(userId);
+    const deptIds = await getTeamDeptIds(req.user);
     if (deptIds.length === 0)
       return res.json({ departments: [], team: [], kpis: { total: 0, present: 0, late: 0, absent: 0, permission: 0 } });
 
@@ -69,8 +73,7 @@ router.get('/team-overview', async (req, res) => {
 // Permisos pendientes para aprobar (de mi equipo)
 router.get('/pending-approvals', async (req, res) => {
   try {
-    const userId = req.user.id;
-    const deptIds = await getTeamDeptIds(userId);
+    const deptIds = await getTeamDeptIds(req.user);
     if (deptIds.length === 0) return res.json([]);
     const placeholders = deptIds.map(() => '?').join(',');
 

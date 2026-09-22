@@ -12,6 +12,40 @@ const { sequelize } = require('../config/database');
 const logger  = require('../config/logger');
 const { isDefaultAdminPassword } = require('../config/securityPreflight');
 
+const BRANCH_SCOPED_ROLES = new Set(['manager', 'coordinator', 'supervisor', 'gestor']);
+const USER_ROLES = new Set(['super_admin', 'admin', 'gth', 'hr', 'manager', 'coordinator', 'gestor', 'supervisor', 'employee']);
+
+function assertRoleAllowed(actor, nextRole, currentRole = null) {
+  if (!USER_ROLES.has(nextRole)) {
+    const err = new Error('Rol inválido'); err.status = 400; err.code = 'INVALID_ROLE'; throw err;
+  }
+  if (actor?.role !== 'super_admin' && (nextRole === 'super_admin' || currentRole === 'super_admin')) {
+    const err = new Error('Sólo un super-administrador puede gestionar cuentas super_admin');
+    err.status = 403; err.code = 'SUPER_ADMIN_REQUIRED'; throw err;
+  }
+}
+
+async function validateUserBranch(role, branchId) {
+  const bid = branchId == null || branchId === '' ? null : Number(branchId);
+  if (BRANCH_SCOPED_ROLES.has(role) && !bid) {
+    const err = new Error('La sede es obligatoria para este rol');
+    err.status = 400; err.code = 'BRANCH_REQUIRED';
+    throw err;
+  }
+  if (bid) {
+    const [[b]] = await sequelize.query(
+      'SELECT id FROM branches WHERE id = ? AND active = 1 LIMIT 1',
+      { replacements: [bid] }
+    );
+    if (!b) {
+      const err = new Error('Sede inválida o inactiva');
+      err.status = 400; err.code = 'INVALID_BRANCH';
+      throw err;
+    }
+  }
+  return bid;
+}
+
 router.use(authenticate);
 
 // GET /api/users — listar todos
@@ -33,11 +67,13 @@ router.get('/', authorize('admin'), requirePermission('usuarios', 'view'), async
     const [rows] = await sequelize.query(`
       SELECT
         u.id, u.username, u.email, u.full_name, u.role, u.active,
-        u.last_login, u.created_at,
+        u.last_login, u.created_at, u.branch_id,
+        b.name AS branch_name, b.code AS branch_code,
         e.id AS employee_id,
         CONCAT(e.first_name,' ',e.last_name) AS employee_name
       FROM users u
       LEFT JOIN employees e ON u.employee_id = e.id
+      LEFT JOIN branches b ON b.id = u.branch_id
       ${where}
       ORDER BY u.role, u.full_name
     `, { replacements: params });
@@ -79,16 +115,18 @@ router.get('/lookup', authorize('admin', 'gth', 'hr', 'coordinator', 'manager', 
 
 // GET /api/users/:id
 router.get('/:id', async (req, res) => {
-  // Solo admin puede ver a cualquier usuario; otros solo a sí mismos
-  if (req.user.role !== 'admin' && req.user.id !== +req.params.id) {
+  // Admin/super_admin pueden ver cualquier usuario; otros sólo a sí mismos.
+  if (!['admin', 'super_admin'].includes(req.user.role) && req.user.id !== +req.params.id) {
     return res.status(403).json({ error: 'Sin permisos' });
   }
   const [rows] = await sequelize.query(
     `SELECT u.id, u.username, u.email, u.full_name, u.role, u.active,
-            u.last_login, u.employee_id,
+            u.last_login, u.employee_id, u.branch_id,
+            b.name AS branch_name, b.code AS branch_code,
             CONCAT(e.first_name,' ',e.last_name) AS employee_name
      FROM users u
      LEFT JOIN employees e ON u.employee_id = e.id
+     LEFT JOIN branches b ON b.id = u.branch_id
      WHERE u.id = ?`,
     { replacements: [req.params.id] }
   );
@@ -98,7 +136,7 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/users — crear usuario
 router.post('/', authorize('admin'), requirePermission('usuarios', 'create'), async (req, res) => {
-  const { username, email, password, full_name, role = 'hr', employee_id } = req.body;
+  const { username, email, password, full_name, role = 'hr', employee_id, branch_id } = req.body;
 
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'username, email y password son requeridos' });
@@ -112,15 +150,18 @@ router.post('/', authorize('admin'), requirePermission('usuarios', 'create'), as
   }
 
   try {
+    assertRoleAllowed(req.user, role);
+    const resolvedBranchId = await validateUserBranch(role, branch_id);
     const hash = await bcrypt.hash(password, 12);
     const [result] = await sequelize.query(
-      `INSERT INTO users (username, email, password_hash, full_name, role, employee_id)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      { replacements: [username, email, hash, full_name || username, role, employee_id || null] }
+      `INSERT INTO users (username, email, password_hash, full_name, role, employee_id, branch_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      { replacements: [username, email, hash, full_name || username, role, employee_id || null, resolvedBranchId] }
     );
     logger.info(`Usuario creado: ${username} (${role})`);
     res.status(201).json({ id: insertId(result), message: 'Usuario creado' });
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     if (err.original?.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'El username o email ya existe' });
     }
@@ -130,20 +171,34 @@ router.post('/', authorize('admin'), requirePermission('usuarios', 'create'), as
 
 // PUT /api/users/:id — actualizar
 router.put('/:id', authorize('admin'), requirePermission('usuarios', 'update'), async (req, res) => {
-  const { full_name, email, role, active, employee_id } = req.body;
+  const { full_name, email, role, active, employee_id, branch_id } = req.body;
   try {
+    const [[current]] = await sequelize.query(
+      'SELECT role, branch_id FROM users WHERE id = ? LIMIT 1',
+      { replacements: [req.params.id] }
+    );
+    if (!current) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const nextRole = role || current.role;
+    assertRoleAllowed(req.user, nextRole, current.role);
+    const branchProvided = Object.prototype.hasOwnProperty.call(req.body, 'branch_id');
+    const candidateBranch = branchProvided ? branch_id : current.branch_id;
+    const resolvedBranchId = await validateUserBranch(nextRole, candidateBranch);
+
     await sequelize.query(
       `UPDATE users SET
         full_name   = COALESCE(?, full_name),
         email       = COALESCE(?, email),
         role        = COALESCE(?, role),
         active      = COALESCE(?, active),
-        employee_id = COALESCE(?, employee_id)
+        employee_id = COALESCE(?, employee_id),
+        branch_id   = ?
        WHERE id = ?`,
-      { replacements: [full_name, email, role, active, employee_id, req.params.id] }
+      { replacements: [full_name, email, role, active, employee_id, resolvedBranchId, req.params.id] }
     );
-    res.json({ message: 'Usuario actualizado' });
+    res.json({ message: 'Usuario actualizado', branch_id: resolvedBranchId });
   } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     res.status(500).json({ error: 'Error al actualizar usuario' });
   }
 });
@@ -152,9 +207,11 @@ router.put('/:id', authorize('admin'), requirePermission('usuarios', 'update'), 
 router.put('/:id/password', async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
-  // Solo admin puede cambiar sin currentPassword
+  // Admin/super_admin pueden cambiar contraseñas ajenas; admin no puede
+  // administrar credenciales de una cuenta super_admin.
   const isSelf = req.user.id === +req.params.id;
-  if (!isSelf && req.user.role !== 'admin') {
+  const isAdminActor = ['admin', 'super_admin'].includes(req.user.role);
+  if (!isSelf && !isAdminActor) {
     return res.status(403).json({ error: 'Sin permisos' });
   }
   if (!newPassword || newPassword.length < 8) {
@@ -167,13 +224,16 @@ router.put('/:id/password', async (req, res) => {
 
   try {
     const [rows] = await sequelize.query(
-      'SELECT password_hash FROM users WHERE id = ?',
+      'SELECT password_hash, role FROM users WHERE id = ?',
       { replacements: [req.params.id] }
     );
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!isSelf && req.user.role !== 'super_admin' && rows[0].role === 'super_admin') {
+      return res.status(403).json({ error: 'Sólo un super-administrador puede gestionar cuentas super_admin', code: 'SUPER_ADMIN_REQUIRED' });
+    }
 
-    // Si es el propio usuario, verificar contraseña actual
-    if (isSelf && req.user.role !== 'admin') {
+    // Si es el propio usuario y no es admin/super_admin, verificar contraseña actual.
+    if (isSelf && !isAdminActor) {
       if (!currentPassword) return res.status(400).json({ error: 'Contraseña actual requerida' });
       const valid = await bcrypt.compare(currentPassword, rows[0].password_hash);
       if (!valid) return res.status(401).json({ error: 'Contraseña actual incorrecta' });
@@ -194,6 +254,14 @@ router.put('/:id/password', async (req, res) => {
 router.delete('/:id', authorize('admin'), requirePermission('usuarios', 'delete'), async (req, res) => {
   if (+req.params.id === req.user.id) {
     return res.status(400).json({ error: 'No puedes desactivar tu propia cuenta' });
+  }
+  const [[target]] = await sequelize.query(
+    'SELECT role FROM users WHERE id = ? LIMIT 1',
+    { replacements: [req.params.id] }
+  );
+  if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (req.user.role !== 'super_admin' && target.role === 'super_admin') {
+    return res.status(403).json({ error: 'Sólo un super-administrador puede gestionar cuentas super_admin', code: 'SUPER_ADMIN_REQUIRED' });
   }
   await sequelize.query(
     'UPDATE users SET active = 0 WHERE id = ?',
