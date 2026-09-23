@@ -14,9 +14,9 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
+from runtime_config import load_runtime_environment, resolve_api_key
 
-load_dotenv()
+load_runtime_environment()
 
 # ─── DB ──────────────────────────────────────────────────────────
 DB_URL = (
@@ -43,14 +43,15 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
-# Sin default inseguro: si API_KEY no está configurada, el servicio rechaza
-# todas las peticiones autenticadas (fail-closed) en vez de aceptar una clave
-# conocida por defecto.
-API_KEY = os.getenv("API_KEY")
+# Sin default inseguro: admite la variable propia de Analytics o la clave
+# compartida que ya usa el BFF. En PM2, el resolver consulta sólo
+# ANALYTICS_API_KEY desde api/.env sin exportar el resto de sus secretos.
+API_KEY = resolve_api_key()
 if not API_KEY:
     import logging
     logging.getLogger("uvicorn.error").warning(
-        "API_KEY no configurada: los endpoints protegidos rechazarán todas las peticiones."
+        "API_KEY/ANALYTICS_API_KEY no configurada: los endpoints protegidos "
+        "rechazarán todas las peticiones."
     )
 
 def verify_key(

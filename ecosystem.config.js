@@ -1,15 +1,21 @@
 /**
  * PM2 Ecosystem — SisHoras
- * Uso en producción:
- *   pm2 start ecosystem.config.js
- *   pm2 reload ecosystem.config.js --update-env
+ *
+ * Las rutas se resuelven desde la release que contiene este archivo. En un
+ * cambio de release inmutable no usar reload: PM2 conserva el cwd anterior.
+ * Seguir deploy/RUNBOOK-release-inmutable-pm2.md.
  */
+const path = require('node:path');
+
+const RELEASE_ROOT = __dirname;
+const fromRelease = (...parts) => path.join(RELEASE_ROOT, ...parts);
+
 module.exports = {
   apps: [
     {
       name: 'sishoras-api',
-      cwd: './api',
-      script: 'src/index.js',
+      cwd: fromRelease('api'),
+      script: fromRelease('api', 'src', 'index.js'),
       instances: 1,
       exec_mode: 'fork',
       watch: false,
@@ -18,8 +24,8 @@ module.exports = {
         PORT: 4000,
         TZ: 'America/Asuncion',   // Paraguay — corrige timestamps en logs y queries
       },
-      error_file: '../logs/api-error.log',
-      out_file:   '../logs/api-out.log',
+      error_file: fromRelease('logs', 'api-error.log'),
+      out_file:   fromRelease('logs', 'api-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       max_memory_restart: '512M',
     },
@@ -29,8 +35,8 @@ module.exports = {
       // el worker corre pero no lee relojes hasta ponerlo en true Y activar
       // la sincronización desde Configuración → Relojes.
       name: 'sishoras-sync-worker',
-      cwd: './api',
-      script: 'src/workers/syncWorker.js',
+      cwd: fromRelease('api'),
+      script: fromRelease('api', 'src', 'workers', 'syncWorker.js'),
       instances: 1,
       exec_mode: 'fork',
       watch: false,
@@ -41,8 +47,8 @@ module.exports = {
         // defecto 'false' (auto-polling BLOQUEADO). La cola manual funciona igual.
         ZKTECO_AUTO_POLL: process.env.ZKTECO_AUTO_POLL || 'false',
       },
-      error_file: '../logs/sync-worker-error.log',
-      out_file:   '../logs/sync-worker-out.log',
+      error_file: fromRelease('logs', 'sync-worker-error.log'),
+      out_file:   fromRelease('logs', 'sync-worker-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       // Lecturas de relojes con buffers grandes (Comedor ~82k registros) pueden
       // superar brevemente 256M durante la lectura multi-intento y disparar el
@@ -56,8 +62,8 @@ module.exports = {
     },
     {
       name: 'sishoras-web',
-      cwd: './web',
-      script: 'node_modules/.bin/next',
+      cwd: fromRelease('web'),
+      script: fromRelease('web', 'node_modules', '.bin', 'next'),
       args: 'start',
       instances: 1,
       exec_mode: 'fork',
@@ -67,15 +73,15 @@ module.exports = {
         PORT: 3000,
         TZ: 'America/Asuncion',
       },
-      error_file: '../logs/web-error.log',
-      out_file:   '../logs/web-out.log',
+      error_file: fromRelease('logs', 'web-error.log'),
+      out_file:   fromRelease('logs', 'web-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       max_memory_restart: '512M',
     },
     {
       name: 'sishoras-bridge',
-      cwd: './bridge',
-      script: 'src/index.js',
+      cwd: fromRelease('bridge'),
+      script: fromRelease('bridge', 'src', 'index.js'),
       instances: 1,
       exec_mode: 'fork',
       watch: false,
@@ -85,26 +91,26 @@ module.exports = {
         BRIDGE_API_PORT: 8081,   // API del bridge (8080 es el PUSH de los relojes)
         BRIDGE_BIND: '127.0.0.1',
       },
-      error_file: '../logs/bridge-error.log',
-      out_file:   '../logs/bridge-out.log',
+      error_file: fromRelease('logs', 'bridge-error.log'),
+      out_file:   fromRelease('logs', 'bridge-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       max_memory_restart: '256M',
     },
     {
       // Analytics (FastAPI). Requiere el entorno virtual local: analytics/.venv
       name: 'sishoras-analytics',
-      cwd: './analytics',
-      script: '.venv/bin/uvicorn',
+      cwd: fromRelease('analytics'),
+      script: fromRelease('analytics', '.venv', 'bin', 'uvicorn'),
       args: 'main:app --host 127.0.0.1 --port 5000',
-      interpreter: '.venv/bin/python',
+      interpreter: fromRelease('analytics', '.venv', 'bin', 'python'),
       instances: 1,
       exec_mode: 'fork',
       watch: false,
       env: {
         TZ: 'America/Asuncion',
       },
-      error_file: '../logs/analytics-error.log',
-      out_file:   '../logs/analytics-out.log',
+      error_file: fromRelease('logs', 'analytics-error.log'),
+      out_file:   fromRelease('logs', 'analytics-out.log'),
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       max_memory_restart: '512M',
     },
