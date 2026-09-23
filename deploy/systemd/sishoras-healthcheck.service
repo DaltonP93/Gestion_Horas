@@ -1,0 +1,26 @@
+[Unit]
+Description=SisHoras production health gate
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/libexec/sishoras/check-production-health.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=PATH=/opt/node22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/etc/sishoras/health.env
+ExecStart=/usr/local/libexec/sishoras/check-production-health.sh
+TimeoutStartSec=2min
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
