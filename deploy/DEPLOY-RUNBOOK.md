@@ -1,7 +1,8 @@
 # Runbook de despliegue, migraciones y backup/restore — SisHoras
 
-> **Alcance:** procedimiento operativo para levantar el stack, correr migraciones,
-> respaldar y restaurar la BD. Complementa `deploy/DEPLOY.md` (instalación en host).
+> **Alcance:** procedimiento operativo del stack Docker, migraciones y backup/restore.
+> Para producción en host con PM2 y releases inmutables, usar
+> `deploy/RUNBOOK-release-inmutable-pm2.md`. Complementa `deploy/DEPLOY.md`.
 > **No** autoriza por sí solo tocar producción: cada acción sobre datos reales
 > requiere autorización explícita del propietario. att2000 es **READ-ONLY**.
 >
