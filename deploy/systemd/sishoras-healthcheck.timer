@@ -1,0 +1,13 @@
+[Unit]
+Description=SisHoras health gate every five minutes
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*-*-* *:0/5:00
+RandomizedDelaySec=30s
+AccuracySec=15s
+Persistent=true
+Unit=sishoras-healthcheck.service
+
+[Install]
+WantedBy=timers.target

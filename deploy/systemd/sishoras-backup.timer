@@ -1,0 +1,12 @@
+[Unit]
+Description=SisHoras backup every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:15:00 America/Asuncion
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=sishoras-backup.service
+
+[Install]
+WantedBy=timers.target

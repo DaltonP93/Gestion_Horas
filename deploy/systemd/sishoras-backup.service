@@ -1,0 +1,30 @@
+[Unit]
+Description=SisHoras MySQL verified backup
+Documentation=file:/usr/local/share/doc/sishoras/BACKUP_RESTORE.md
+After=network-online.target mysql.service
+Wants=network-online.target
+ConditionPathExists=/etc/sishoras/backup.env
+ConditionPathExists=/usr/local/libexec/sishoras/backup-mysql.sh
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/sishoras/backup.env
+ExecStart=/usr/local/libexec/sishoras/backup-mysql.sh
+UMask=0077
+TimeoutStartSec=30min
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/sishoras
+ReadWritePaths=/var/backups /run/lock
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

@@ -1,62 +1,104 @@
 #!/usr/bin/env bash
-# scripts/restore-mysql.sh
-# Restaura la BD `asistencia` desde un backup .sql.gz creado por
-# backup-mysql.sh. Es DESTRUCTIVO: sobrescribe los datos de la base destino.
-#
-# Uso:
-#   DB_PASSWORD=... ./scripts/restore-mysql.sh <archivo.sql.gz>
-#   DB_PASSWORD=... ./scripts/restore-mysql.sh <archivo.sql.gz> --yes   # sin prompt
-#
-# Variables de entorno (mismas que el resto del proyecto):
-#   DB_NAME (default asistencia), DB_HOST (localhost), DB_PORT (3306),
-#   DB_USER (root), DB_PASSWORD.
-#
-# NOTA: el dump lo genera `mysqldump <db>` (sin --databases), así que NO trae
-# CREATE DATABASE: la base destino debe existir. En el stack de compose la crea
-# el contenedor mysql (MYSQL_DATABASE); en un host, crearla antes si no existe.
-
+# Restore MySQL fail-closed. Nunca crea ni elimina la base destino.
 set -Eeuo pipefail
+umask 077
+
+log() {
+  printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+fail() {
+  log "ERROR: $*"
+  exit 1
+}
 
 usage() {
-  echo "Uso: DB_PASSWORD=... $0 <archivo.sql.gz> [--yes]"
-  echo "  Restaura el backup sobre DB_NAME (default: asistencia). DESTRUCTIVO."
+  echo "Uso: DB_NAME=<destino> MYSQL_DEFAULTS_FILE=<0600.cnf> $0 <backup.sql.gz> [--yes]"
+  echo "Para --yes tambien se exige RESTORE_CONFIRMATION=RESTORE:<destino>."
   exit 1
 }
 
 FILE="${1:-}"
-CONFIRM="${2:-}"
-[ -n "$FILE" ] || usage
-[ -f "$FILE" ] || { echo "❌ No existe el archivo: $FILE"; exit 1; }
+NONINTERACTIVE="${2:-}"
+[[ -n "$FILE" ]] || usage
+[[ "$NONINTERACTIVE" == "" || "$NONINTERACTIVE" == "--yes" ]] || usage
 
-DB_NAME="${DB_NAME:-asistencia}"
-DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-3306}"
-DB_USER="${DB_USER:-root}"
+DB_NAME="${DB_NAME:-}"
+MYSQL_DEFAULTS_FILE="${MYSQL_DEFAULTS_FILE:-}"
+RESTORE_MODE="${RESTORE_MODE:-manual}"
+REQUIRE_SHA256="${REQUIRE_SHA256:-1}"
+ALLOW_PRODUCTION_RESTORE="${ALLOW_PRODUCTION_RESTORE:-}"
+PRODUCTION_DATABASES="${PRODUCTION_DATABASES:-}"
 
-# Verificar integridad del gzip ANTES de tocar la base.
-if ! gzip -t "$FILE"; then
-  echo "❌ Backup corrupto (gzip -t falló): $FILE"
-  exit 1
+[[ -n "$DB_NAME" ]] || fail "DB_NAME es obligatorio; no existe un destino por defecto"
+[[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]] || fail "DB_NAME invalido"
+[[ -f "$FILE" && ! -L "$FILE" ]] || fail "backup inexistente o symlink no permitido"
+[[ "$MYSQL_DEFAULTS_FILE" == /* ]] || fail "MYSQL_DEFAULTS_FILE debe ser absoluto"
+[[ -f "$MYSQL_DEFAULTS_FILE" && ! -L "$MYSQL_DEFAULTS_FILE" ]] \
+  || fail "MYSQL_DEFAULTS_FILE inexistente o symlink no permitido"
+[[ "$REQUIRE_SHA256" == 0 || "$REQUIRE_SHA256" == 1 ]] \
+  || fail "REQUIRE_SHA256 debe ser 0 o 1"
+
+MODE=$(stat -c '%a' -- "$MYSQL_DEFAULTS_FILE")
+OWNER=$(stat -c '%u' -- "$MYSQL_DEFAULTS_FILE")
+PERM=$((8#$MODE))
+[[ "$OWNER" -eq "$EUID" ]] || fail "MYSQL_DEFAULTS_FILE debe pertenecer al usuario ejecutor"
+(( (PERM & 077) == 0 )) || fail "MYSQL_DEFAULTS_FILE debe tener modo 0600 o mas restrictivo"
+
+for command_name in mysql gzip gunzip sha256sum stat grep; do
+  command -v "$command_name" >/dev/null 2>&1 \
+    || fail "falta el comando requerido: $command_name"
+done
+
+[[ "$RESTORE_MODE" == "manual" || "$RESTORE_MODE" == "drill" ]] \
+  || fail "RESTORE_MODE debe ser manual o drill"
+
+PROTECTED=0
+if [[ "$RESTORE_MODE" == "manual" ]]; then
+  [[ -n "$PRODUCTION_DATABASES" ]] \
+    || fail "PRODUCTION_DATABASES es obligatorio en modo manual"
+  IFS=',' read -r -a protected_names <<< "$PRODUCTION_DATABASES"
+  for protected_name in "${protected_names[@]}"; do
+    [[ "$protected_name" =~ ^[A-Za-z0-9_]+$ ]] \
+      || fail "PRODUCTION_DATABASES contiene un nombre invalido"
+    [[ "$DB_NAME" == "$protected_name" ]] && PROTECTED=1
+  done
+else
+  [[ "$DB_NAME" == sishoras_restore_drill_* ]] \
+    || fail "RESTORE_MODE=drill exige prefijo sishoras_restore_drill_"
 fi
 
-echo "⚠️  RESTORE DESTRUCTIVO"
-echo "    Archivo : $FILE"
-echo "    Destino : base '$DB_NAME' en $DB_HOST:$DB_PORT (usuario $DB_USER)"
-echo "    Esto SOBRESCRIBE los datos actuales de esa base."
-
-if [ "$CONFIRM" != "--yes" ]; then
-  # Confirmación explícita: hay que tipear el nombre de la base.
-  read -r -p "Para confirmar, escribí el nombre de la base ('$DB_NAME'): " ACK
-  [ "$ACK" = "$DB_NAME" ] || { echo "Cancelado (no coincide)."; exit 1; }
+if (( PROTECTED == 1 )); then
+  [[ "$ALLOW_PRODUCTION_RESTORE" == "I_UNDERSTAND_THIS_OVERWRITES_PRODUCTION" ]] \
+    || fail "restore sobre una base protegida bloqueado"
 fi
 
-# MYSQL_PWD evita exponer la clave en argv/ps.
-export MYSQL_PWD="${DB_PASSWORD:-}"
+SIDECAR="$FILE.sha256"
+if [[ "$REQUIRE_SHA256" == 1 ]]; then
+  [[ -f "$SIDECAR" && ! -L "$SIDECAR" ]] || fail "falta sidecar SHA-256"
+fi
+if [[ -f "$SIDECAR" ]]; then
+  (cd "$(dirname -- "$FILE")" \
+    && sha256sum -c --status "$(basename -- "$SIDECAR")") \
+    || fail "checksum SHA-256 invalido"
+fi
+gzip -t -- "$FILE" || fail "backup gzip corrupto"
 
-echo "[$(date '+%F %T')] Restaurando '$FILE' → '$DB_NAME'..."
-gunzip -c "$FILE" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" "$DB_NAME"
+EXPECTED_CONFIRMATION="RESTORE:$DB_NAME"
+if [[ "$NONINTERACTIVE" == "--yes" ]]; then
+  [[ "${RESTORE_CONFIRMATION:-}" == "$EXPECTED_CONFIRMATION" ]] \
+    || fail "RESTORE_CONFIRMATION no coincide"
+else
+  echo "Restore destructivo sobre la base destino: $DB_NAME"
+  read -r -p "Escriba $EXPECTED_CONFIRMATION para continuar: " ACK
+  [[ "$ACK" == "$EXPECTED_CONFIRMATION" ]] || fail "confirmacion incorrecta"
+fi
 
-echo "[$(date '+%F %T')] ✅ Restore completo sobre '$DB_NAME'."
-echo "    Verificación sugerida:"
-echo "      mysql -h $DB_HOST -P $DB_PORT -u $DB_USER $DB_NAME -e 'SELECT COUNT(*) FROM employees;'"
-echo "      (desde api/) npm run migrate:status   # confirma la cadena de migraciones"
+STARTED=$(date +%s)
+log "RESTORE_START database=$DB_NAME file=$(basename -- "$FILE")"
+gunzip -c -- "$FILE" \
+  | mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" "$DB_NAME"
+mysql --defaults-extra-file="$MYSQL_DEFAULTS_FILE" "$DB_NAME" \
+  --batch --skip-column-names -e 'SELECT 1' | grep -qx 1
+DURATION=$(( $(date +%s) - STARTED ))
+log "RESTORE_OK database=$DB_NAME duration_seconds=$DURATION"

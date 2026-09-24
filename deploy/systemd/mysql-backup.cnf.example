@@ -1,0 +1,8 @@
+# Copiar a una ruta privada fuera del repositorio.
+# Propietario root:root, modo 0600. Sustituir placeholders sin registrarlos.
+[client]
+host=REPLACE_ME
+port=REPLACE_ME
+user=REPLACE_ME
+password=REPLACE_ME
+protocol=tcp

@@ -13,6 +13,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ops-scripts:
+    name: OPS — backup, restore y health gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Sintaxis de scripts operativos
+        run: |
+          bash -n scripts/backup-mysql.sh
+          bash -n scripts/restore-mysql.sh
+          bash -n scripts/restore-drill-mysql.sh
+          bash -n scripts/check-production-health.sh
+          bash -n scripts/tests/ops-scripts.test.sh
+      - name: Contratos fail-closed sin infraestructura real
+        run: bash scripts/tests/ops-scripts.test.sh
+
   bridge-tests:
     name: Bridge — tests (TZ=${{ matrix.tz }})
     runs-on: ubuntu-latest
@@ -129,7 +147,9 @@ jobs:
       - name: Instalar dependencias
         run: pip install --no-cache-dir -r requirements.txt
       - name: Sintaxis (py_compile)
-        run: python -m py_compile main.py
+        run: python -m py_compile main.py runtime_config.py
+      - name: Unit tests de configuración
+        run: python -m unittest discover -s tests -v
       - name: Import de la app (sin conectar a datos reales)
         # create_engine() es perezoso: no abre conexión hasta el primer query,
         # así que importar el módulo valida que la app arma sin tocar MySQL ni
