@@ -16,6 +16,8 @@ const { overrideWorkedFromEngine, engineWorkedTotal, ymd } = require('../service
 const wf = require('../services/permissionWorkflow');
 const audit = require('../services/audit');
 const { todayInCompanyTZ } = require('../utils/civilDate');
+const { finalizeUpload } = require('../utils/uploadSniff');
+const { resolveSelfEmployeeId } = require('../services/permissionAccess');
 
 const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
 
@@ -25,10 +27,11 @@ if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const photoStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename:    (_req, file,  cb) => {
-    const ext  = path.extname(file.originalname).toLowerCase();
+  // Nombre neutro: la extensión la fija finalizeUpload según el CONTENIDO real
+  // (nunca la extensión ni el mimetype que declara el cliente).
+  filename:    (_req, _file, cb) => {
     const base = crypto.randomBytes(8).toString('hex');
-    cb(null, `avatar_${Date.now()}_${base}${ext}`);
+    cb(null, `avatar_${Date.now()}_${base}.upload`);
   },
 });
 const photoUpload = multer({
@@ -181,12 +184,22 @@ router.patch('/profile', async (req, res) => {
 router.post('/photo', photoUpload.single('photo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No se recibió ninguna imagen' });
-    const url = `/uploads/${req.file.filename}`;
+    let saved;
+    try {
+      saved = await finalizeUpload(req.file, ['jpg', 'png', 'webp']);
+    } catch (e) {
+      if (e.status === 400) return res.status(400).json({ error: 'Solo se permiten imágenes JPEG, PNG o WebP' });
+      throw e;
+    }
+    const url = `/uploads/${saved.filename}`;
 
-    if (req.user.employee_id) {
+    // Vínculo leído de la base: un claim del JWT desactualizado no debe
+    // escribir la foto de otro empleado.
+    const selfEmployeeId = await resolveSelfEmployeeId(req.user);
+    if (selfEmployeeId) {
       await sequelize.query(
         'UPDATE employees SET photo_url = ? WHERE id = ?',
-        { replacements: [url, req.user.employee_id] }
+        { replacements: [url, selfEmployeeId] }
       );
     } else {
       await sequelize.query(
@@ -198,7 +211,7 @@ router.post('/photo', photoUpload.single('photo'), async (req, res) => {
     audit.log({ req, user: req.user, action: 'profile.photo_change', entity: 'user', entity_id: req.user.id, details: {} });
     res.json({ ok: true, url, message: 'Foto actualizada' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 

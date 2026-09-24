@@ -8,6 +8,8 @@ const { insertId } = require('../utils/insertId');
 const path = require('path');
 const fs   = require('fs');
 const multer = require('multer');
+const crypto = require('crypto');
+const { finalizeUpload } = require('../utils/uploadSniff');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const wf = require('../services/permissionWorkflow');
@@ -27,10 +29,10 @@ if (!fs.existsSync(PERM_UPLOAD_DIR)) fs.mkdirSync(PERM_UPLOAD_DIR, { recursive: 
 
 const permStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, PERM_UPLOAD_DIR),
-  filename: (_req, file, cb) => {
-    const ts = Date.now();
-    const safe = file.originalname.replace(/[^\w.\-]/g, '_').slice(-80);
-    cb(null, `perm_${ts}_${safe}`);
+  // Nombre neutro y no predecible; la extensión la fija finalizeUpload según
+  // el CONTENIDO real. El nombre original sólo se guarda como dato (columna).
+  filename: (_req, _file, cb) => {
+    cb(null, `perm_${Date.now()}_${crypto.randomBytes(8).toString('hex')}.upload`);
   },
 });
 const permUpload = multer({
@@ -385,10 +387,20 @@ router.post('/:id/attachment', authorizeAttachment, permUpload.single('file'), a
   try {
     if (!req.file) return res.status(400).json({ error: 'Archivo requerido (field "file")' });
 
+    let saved;
+    try {
+      saved = await finalizeUpload(req.file, ['pdf', 'jpg', 'png', 'webp']);
+    } catch (e) {
+      if (e.status === 400) return res.status(400).json({ error: 'Tipo de archivo no permitido (PDF/JPG/PNG/WebP)' });
+      throw e;
+    }
+
     const perm = req.permissionForAttachment;
     const user = req.user;
 
-    const url = `/uploads/permissions/${req.file.filename}`;
+    // Ruta lógica interna: el estático público NO la sirve (uploadsGuard); la
+    // descarga es GET /api/permissions/:id/attachment, con alcance.
+    const url = `/uploads/permissions/${saved.filename}`;
     await sequelize.query(
       `UPDATE permissions SET
          attachment_url      = ?,
@@ -397,7 +409,7 @@ router.post('/:id/attachment', authorizeAttachment, permUpload.single('file'), a
          attachment_mime     = ?
        WHERE id = ?`,
       { replacements: [
-        url, req.file.originalname, req.file.size, req.file.mimetype, req.params.id
+        url, req.file.originalname, req.file.size, saved.mime, req.params.id
       ]}
     );
 
@@ -412,10 +424,51 @@ router.post('/:id/attachment', authorizeAttachment, permUpload.single('file'), a
       url,
       filename: req.file.originalname,
       size:     req.file.size,
-      mime:     req.file.mimetype,
+      mime:     saved.mime,
+      download: `/api/permissions/${perm.id}/attachment`,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/permissions/:id/attachment ──────────────────────
+// Descarga autenticada del justificativo. Mismo alcance que el detalle:
+// fuera de alcance ≡ inexistente (404). Siempre como descarga (attachment),
+// con tipo de una lista cerrada y nosniff.
+const ATTACHMENT_MIMES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
+router.get('/:id/attachment', async (req, res) => {
+  try {
+    const [[perm]] = await sequelize.query(
+      `SELECT p.id, p.employee_id, e.department_id,
+              p.attachment_url, p.attachment_filename, p.attachment_mime
+         FROM permissions p
+         JOIN employees e ON p.employee_id = e.id
+        WHERE p.id = ?`,
+      { replacements: [req.params.id] }
+    );
+    const ctx = perm ? await access.getAccessContext(req.user) : null;
+    if (!perm || !access.canActOnEmployee(ctx, { id: perm.employee_id, department_id: perm.department_id })
+        || !perm.attachment_url) {
+      return res.status(404).json({ error: 'Adjunto no encontrado' });
+    }
+    // Sólo archivos dentro del directorio de justificativos (sin traversal).
+    const name = path.basename(String(perm.attachment_url));
+    if (!perm.attachment_url.startsWith('/uploads/permissions/') || !name || name.startsWith('.')) {
+      return res.status(404).json({ error: 'Adjunto no encontrado' });
+    }
+    const full = path.join(PERM_UPLOAD_DIR, name);
+    if (!fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
+
+    const mime = ATTACHMENT_MIMES.has(perm.attachment_mime) ? perm.attachment_mime : 'application/octet-stream';
+    const downloadName = String(perm.attachment_filename || name).replace(/[^\w.\- ]/g, '_').slice(-120);
+    res.setHeader('Content-Type', mime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+    fs.createReadStream(full).pipe(res);
+  } catch (err) {
+    logInternalError(logger, { event: 'permissions attachment download', route: 'permissions GET /:id/attachment', err, req });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
