@@ -12,6 +12,9 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const wf = require('../services/permissionWorkflow');
 const notif = require('../services/notifications');
+const access = require('../services/permissionAccess');
+const { logInternalError } = require('../utils/logInternalError');
+const logger = require('../config/logger');
 
 router.use(authenticate);
 
@@ -42,29 +45,41 @@ const permUpload = multer({
 // ─── GET /api/permissions ──────────────────────────────────────
 // Listado filtrable por estado / empleado / departamento
 router.get('/', async (req, res) => {
-  const { status, approval_state, employeeId, department_id } = req.query;
-  let where = 'WHERE 1=1';
-  const params = [];
-  if (status)         { where += ' AND p.status = ?';           params.push(status); }
-  if (approval_state) { where += ' AND p.approval_state = ?';   params.push(approval_state); }
-  if (employeeId)     { where += ' AND p.employee_id = ?';      params.push(employeeId); }
-  if (department_id)  { where += ' AND e.department_id = ?';    params.push(department_id); }
+  try {
+    const { status, approval_state, employeeId, department_id } = req.query;
+    let where = 'WHERE 1=1';
+    const params = [];
+    if (status)         { where += ' AND p.status = ?';           params.push(status); }
+    if (approval_state) { where += ' AND p.approval_state = ?';   params.push(approval_state); }
+    if (employeeId)     { where += ' AND p.employee_id = ?';      params.push(employeeId); }
+    if (department_id)  { where += ' AND e.department_id = ?';    params.push(department_id); }
 
-  const [rows] = await sequelize.query(`
-    SELECT p.*,
-      CONCAT(e.first_name,' ',e.last_name) AS employee_name,
-      e.code AS employee_code,
-      e.department_id,
-      d.name AS department
-    FROM permissions p
-    JOIN employees e ON p.employee_id = e.id
-    LEFT JOIN departments d ON e.department_id = d.id
-    ${where}
-    ORDER BY p.created_at DESC
-    LIMIT 500
-  `, { replacements: params });
+    // Alcance del actor: global RR.HH. → todo; con alcance → sus deptos + lo
+    // propio; resto → sólo lo propio. Los filtros del cliente se INTERSECTAN.
+    const ctx = await access.getAccessContext(req.user);
+    const scope = access.listFilter(ctx, { empAlias: 'e', permAlias: 'p' });
+    where += scope.clause;
+    params.push(...scope.params);
 
-  res.json(rows);
+    const [rows] = await sequelize.query(`
+      SELECT p.*,
+        CONCAT(e.first_name,' ',e.last_name) AS employee_name,
+        e.code AS employee_code,
+        e.department_id,
+        d.name AS department
+      FROM permissions p
+      JOIN employees e ON p.employee_id = e.id
+      LEFT JOIN departments d ON e.department_id = d.id
+      ${where}
+      ORDER BY p.created_at DESC
+      LIMIT 500
+    `, { replacements: params });
+
+    res.json(rows);
+  } catch (err) {
+    logInternalError(logger, { event: 'permissions GET /', route: 'permissions GET /', err, req });
+    res.status(500).json({ error: 'Error interno' });
+  }
 });
 
 // ─── GET /api/permissions/inbox ─────────────────────────────────
@@ -100,6 +115,12 @@ router.get('/:id', async (req, res) => {
 
   if (!perm) return res.status(404).json({ error: 'Permiso no encontrado' });
 
+  // Fuera de alcance ≡ inexistente (404): no se filtra la existencia.
+  const ctx = await access.getAccessContext(req.user);
+  if (!access.canActOnEmployee(ctx, { id: perm.employee_id, department_id: perm.department_id })) {
+    return res.status(404).json({ error: 'Permiso no encontrado' });
+  }
+
   const [events] = await sequelize.query(`
     SELECT e.*, u.full_name AS actor_name, u.role AS actor_role
     FROM permission_approval_events e
@@ -121,10 +142,17 @@ router.post('/', async (req, res) => {
 
   try {
     const [[emp]] = await sequelize.query(
-      'SELECT department_id FROM employees WHERE id = ?',
+      'SELECT id, department_id FROM employees WHERE id = ?',
       { replacements: [employee_id] }
     );
-    const department_id = emp?.department_id || null;
+    // El empleado debe existir y estar dentro del alcance del actor (un rol
+    // sin alcance de gestión sólo puede solicitar para sí mismo). Fuera de
+    // alcance ≡ inexistente (404).
+    const ctx = await access.getAccessContext(req.user);
+    if (!emp || !access.canActOnEmployee(ctx, emp)) {
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
+    const department_id = emp.department_id || null;
 
     const needs = await wf.computeNeedsForNewPermission({
       department_id, permission_type: type,
@@ -298,7 +326,8 @@ router.post('/:id/cancel', async (req, res) => {
       return res.status(409).json({ error: 'Ya finalizó' });
     }
 
-    const isOwner = req.user.employee_id && req.user.employee_id === perm.employee_id;
+    const selfEmployeeId = await access.resolveSelfEmployeeId(req.user);
+    const isOwner = selfEmployeeId != null && selfEmployeeId === Number(perm.employee_id);
     const isPowerUser = ['super_admin','admin','gth'].includes(req.user.role);
     if (!isOwner && !isPowerUser) return res.status(403).json({ error: 'No autorizado' });
 
@@ -318,26 +347,46 @@ router.post('/:id/cancel', async (req, res) => {
 
 // ─── POST /api/permissions/:id/attachment ─────────────────────
 // Subir justificativo (PDF / imagen). Solo el dueño o admin/hr/gth.
-router.post('/:id/attachment', permUpload.single('file'), async (req, res) => {
+// Autorización ANTES de que multer escriba el archivo en disco: si el actor
+// no puede adjuntar, no queda ningún archivo huérfano.
+//   - roles globales de RR.HH. (unrestricted): cualquier solicitud;
+//   - coordinator/manager: sólo solicitudes de empleados en su alcance;
+//   - dueño (users.employee_id leído de la base): la propia.
+const ATTACH_SCOPED_ROLES = new Set(['coordinator', 'manager']);
+async function authorizeAttachment(req, res, next) {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Archivo requerido (field "file")' });
-
     const [[perm]] = await sequelize.query(
-      `SELECT p.id, p.employee_id, e.code AS employee_code
+      `SELECT p.id, p.employee_id, e.department_id
          FROM permissions p
          JOIN employees e ON p.employee_id = e.id
         WHERE p.id = ?`,
       { replacements: [req.params.id] }
     );
-    if (!perm) return res.status(404).json({ error: 'Permiso no encontrado' });
-
-    // Autorización: dueño del permiso o roles privilegiados
-    const user = req.user;
-    const isPrivileged = ['admin', 'hr', 'gth', 'coordinator', 'manager'].includes(user.role);
-    const isOwner = user.employee_code && user.employee_code === perm.employee_code;
-    if (!isPrivileged && !isOwner) {
+    const ctx = perm ? await access.getAccessContext(req.user) : null;
+    const emp = perm ? { id: perm.employee_id, department_id: perm.department_id } : null;
+    // Sin visibilidad ≡ inexistente.
+    if (!perm || !access.canActOnEmployee(ctx, emp)) {
+      return res.status(404).json({ error: 'Permiso no encontrado' });
+    }
+    const isOwner = ctx.selfEmployeeId != null && ctx.selfEmployeeId === Number(perm.employee_id);
+    const canAttach = ctx.unrestricted || isOwner || ATTACH_SCOPED_ROLES.has(req.user.role);
+    if (!canAttach) {
       return res.status(403).json({ error: 'No autorizado para adjuntar en este permiso' });
     }
+    req.permissionForAttachment = perm;
+    next();
+  } catch (err) {
+    logInternalError(logger, { event: 'permissions attachment authorize', route: 'permissions POST /:id/attachment', err, req });
+    res.status(500).json({ error: 'Error interno' });
+  }
+}
+
+router.post('/:id/attachment', authorizeAttachment, permUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Archivo requerido (field "file")' });
+
+    const perm = req.permissionForAttachment;
+    const user = req.user;
 
     const url = `/uploads/permissions/${req.file.filename}`;
     await sequelize.query(
