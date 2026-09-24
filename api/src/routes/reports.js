@@ -1,5 +1,7 @@
 const router = require('express').Router();
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requirePermission } = require('../middleware/auth');
+const enforceEmployeeScope = require('../middleware/enforceEmployeeScope');
+const audit = require('../services/audit');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { dbTimeHHmm } = require('../utils/dbTime');
@@ -292,33 +294,82 @@ router.post('/marcadas/email', async (req, res) => {
 });
 
 // ─── POST /api/reports/attendance/justify ─────────────────────────
-// Justificar una ausencia / tardanza
-router.post('/attendance/justify', async (req, res) => {
-  const { employeeId, date, justification, justificationType } = req.body;
-  if (!employeeId || !date || !justification) {
-    return res.status(400).json({ error: 'employeeId, date y justification son requeridos' });
-  }
-  // Estado DERIVADO de la justificación (misma regla que el writer del motor):
-  // una 'injustificada' es una AUSENCIA (→ 'absent'); cualquier otra es un
-  // permiso (→ 'permission'). Se aplica sobre un día NO trabajado —incluidos los
-  // estados nuevos unconfigured/non_working, no sólo 'absent'—; un día
-  // present/late (trabajado) no se pisa.
-  const jt = justificationType || 'other';
-  const newStatus = jt === 'injustificada' ? 'absent' : 'permission';
-  await sequelize.query(`
-    INSERT INTO daily_summary (employee_id, date, justification, justification_type, status)
-    VALUES (?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      justification      = VALUES(justification),
-      justification_type = VALUES(justification_type),
-      status = CASE
-        WHEN status IN ('present','late') THEN status
-        ELSE VALUES(status)
-      END
-  `, { replacements: [employeeId, date, justification, jt, newStatus] });
+// Justificar una ausencia / tardanza.
+//
+// Escribe daily_summary (impacta asistencia, planillas y nómina), por eso:
+//   - requiere asistencia.update (por defecto sólo RR.HH.; super_admin/admin
+//     por bypass del permiso);
+//   - el empleado debe estar en el alcance del actor (enforceEmployeeScope:
+//     fuera de alcance o inexistente ≡ 404);
+//   - valida fecha civil real, texto y tipo;
+//   - deja auditoría (sin el texto libre).
+// Tipos: los del alta masiva (justificationsBulk) + 'other', el default
+// histórico de este endpoint.
+const JUSTIFICATION_TYPES = new Set([
+  'permiso', 'vacaciones', 'enfermedad', 'reposo',
+  'licencia_especial', 'sin_goce', 'injustificada', 'otro', 'other',
+]);
+function isCivilDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
 
-  res.json({ message: 'Justificación registrada' });
-});
+router.post('/attendance/justify',
+  requirePermission('asistencia', 'update'),
+  enforceEmployeeScope({ from: 'body', key: 'employeeId' }),
+  asyncHandler(async (req, res) => {
+    const { employeeId: rawEmployeeId, date, justification, justificationType } = req.body || {};
+    const employeeId = Number(rawEmployeeId);
+    if (!Number.isInteger(employeeId) || employeeId <= 0 || !date || !justification) {
+      return res.status(400).json({ error: 'employeeId, date y justification son requeridos' });
+    }
+    if (!isCivilDate(date)) {
+      return res.status(400).json({ error: 'date debe ser una fecha válida (YYYY-MM-DD)' });
+    }
+    if (typeof justification !== 'string' || !justification.trim() || justification.length > 1000) {
+      return res.status(400).json({ error: 'justification inválida' });
+    }
+    // Estado DERIVADO de la justificación (misma regla que el writer del motor):
+    // una 'injustificada' es una AUSENCIA (→ 'absent'); cualquier otra es un
+    // permiso (→ 'permission'). Se aplica sobre un día NO trabajado —incluidos los
+    // estados nuevos unconfigured/non_working, no sólo 'absent'—; un día
+    // present/late (trabajado) no se pisa.
+    const jt = justificationType || 'other';
+    if (!JUSTIFICATION_TYPES.has(jt)) {
+      return res.status(400).json({ error: 'justificationType inválido' });
+    }
+
+    // Roles globales no pasan por el chequeo de enforceEmployeeScope: el
+    // empleado igual debe existir (404, mismo mensaje).
+    const [[emp]] = await sequelize.query(
+      'SELECT id FROM employees WHERE id = ? LIMIT 1',
+      { replacements: [employeeId] }
+    );
+    if (!emp) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+    const newStatus = jt === 'injustificada' ? 'absent' : 'permission';
+    await sequelize.query(`
+      INSERT INTO daily_summary (employee_id, date, justification, justification_type, status)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        justification      = VALUES(justification),
+        justification_type = VALUES(justification_type),
+        status = CASE
+          WHEN status IN ('present','late') THEN status
+          ELSE VALUES(status)
+        END
+    `, { replacements: [employeeId, date, justification.trim(), jt, newStatus] });
+
+    audit.log({
+      req, user: req.user, action: 'attendance.justify',
+      entity: 'employee', entity_id: employeeId,
+      details: { employee_id: employeeId, date, type: jt },
+    });
+
+    res.json({ message: 'Justificación registrada' });
+  }));
 
 // ─── GET /api/reports/employee/:id/analytics ──────────────────────
 // Datos de analytics profundos por empleado: tendencias, comparativas, heatmap

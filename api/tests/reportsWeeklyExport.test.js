@@ -6,7 +6,10 @@
  */
 
 jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() } }));
-jest.mock('../src/middleware/auth', () => ({ authenticate: (_req, _res, next) => next() }));
+jest.mock('../src/middleware/auth', () => ({
+  authenticate: (_req, _res, next) => next(),
+  requirePermission: () => (_req, _res, next) => next(),
+}));
 jest.mock('../src/services/departmentScope', () => ({
   getVisibleDepartmentIds: jest.fn().mockResolvedValue({ unrestricted: true }),
   applyDepartmentScope: jest.fn(),
