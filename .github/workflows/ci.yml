@@ -299,6 +299,15 @@ jobs:
         env:
           IT_DB: '1'
           FASE_E_LOCK_LEASE_SEC: '3'
+      # Contención (PR #236): rutas reales de justificación y licencias con JWT,
+      # capacidades, alcance por departamento y audit_events REALES sobre dos
+      # empresas sintéticas. Denegados → sin escritura; justificación → evento
+      # real sin texto libre. Sin mocks de alcance ni inserts de auditoría.
+      - name: IT reales contención (justificación + licencias)
+        run: npx jest tests/it/contention.it.test.js --runInBand
+        env:
+          IT_DB: '1'
+          JWT_SECRET: it-contention-ci-only-secret-0123456789
 
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el
