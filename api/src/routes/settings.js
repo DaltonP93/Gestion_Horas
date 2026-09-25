@@ -10,6 +10,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const { invalidatePublicAssets } = require('../middleware/uploadsGuard');
+const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
 const audit = require('../services/audit');
 
 // ─── Keys permitidas ────────────────────────────────────────────
@@ -226,6 +228,7 @@ router.put('/', authenticate, authorize('admin', 'gth', 'gestor'), requirePermis
     }
     audit.log({ req, user: req.user, action: 'settings_update', entity: 'settings',
       details: { keys: Object.keys(updates).filter(k => SETTING_KEYS.includes(k)) } });
+    invalidatePublicAssets();
     res.json({ ok: true, count, message: `${count} configuración(es) guardada(s)` });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -239,6 +242,7 @@ router.post('/reset', authenticate, authorize('admin', 'gth'), requirePermission
       `DELETE FROM notification_settings WHERE setting_key IN (${SETTING_KEYS.map(() => '?').join(',')})`,
       { replacements: SETTING_KEYS }
     );
+    invalidatePublicAssets();
     res.json({ ok: true, message: 'Apariencia restaurada a valores por defecto' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -304,6 +308,7 @@ router.post('/signature-canvas',
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
         { replacements: [key, publicUrl] }
       );
+      invalidatePublicAssets();
       res.json({ ok: true, url: publicUrl, key });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -372,7 +377,7 @@ router.post('/upload', authenticate, authorize('admin', 'gth'), requirePermissio
         `INSERT INTO notification_settings (setting_key, setting_value) VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
         { replacements: [key, publicUrl] }
-      ).then(done).catch(e => res.status(500).json({ error: e.message }));
+      ).then(() => { invalidatePublicAssets(); done(); }).catch(() => res.status(500).json({ error: 'Error interno' }));
     } else {
       done();
     }
@@ -381,6 +386,25 @@ router.post('/upload', authenticate, authorize('admin', 'gth'), requirePermissio
 
 // ─── Webhooks Slack / Teams ──────────────────────────────────────
 const WEBHOOK_KEYS = ['slack_webhook_url', 'teams_webhook_url', 'webhook_notify_absences', 'webhook_notify_late', 'webhook_notify_device_down', 'webhook_notify_backup'];
+
+// GET /api/settings/assets/:kind — firma o sello institucional, servidos con
+// autorización (ya no son públicos). Sólo admin/gth con configuracion.view.
+const PRIVATE_ASSET_KEYS = { signature: 'system_signature_url', seal: 'system_seal_url' };
+router.get('/assets/:kind', authenticate, authorize('admin', 'gth'), requirePermission('configuracion', 'view'), async (req, res) => {
+  try {
+    const key = PRIVATE_ASSET_KEYS[req.params.kind];
+    if (!key) return res.status(404).json({ error: 'No encontrado' });
+    const [[row]] = await sequelize.query(
+      'SELECT setting_value FROM notification_settings WHERE setting_key = ? LIMIT 1',
+      { replacements: [key] }
+    );
+    const full = resolvePrivatePath(row?.setting_value, { namePattern: /^[\w.-]+\.(png|jpg|jpeg|webp)$/i });
+    if (!full) { res.setHeader('Cache-Control', 'no-store'); return res.status(404).json({ error: 'No encontrado' }); }
+    return sendPrivateFile(res, full, { inline: true });
+  } catch {
+    return res.status(500).json({ error: 'Error interno' });
+  }
+});
 
 router.get('/webhooks',
   authorize('admin', 'super_admin'),

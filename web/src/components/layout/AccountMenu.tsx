@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import AuthImage from '@/components/AuthImage'
 import { useRouter } from 'next/navigation'
 import {
   UserCircle2, SlidersHorizontal, ShieldCheck, LogOut,
@@ -67,8 +68,10 @@ export default function AccountMenu() {
     fetch(apiUrl('/api/me'), { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
+        // La foto es privada: sólo se registra si existe; se carga por
+        // /api/me/photo con autorización (AuthImage).
         const u = d?.employee?.photo_url || d?.user?.photo_url
-        if (u) setPhoto(u.startsWith('http') ? u : apiUrl(u))
+        if (u) setPhoto(u)
       })
       .catch(() => {})
   }, [user?.id])
@@ -130,8 +133,12 @@ export default function AccountMenu() {
 
   const Avatar = ({ size }: { size: number }) => (
     photo
-      ? <img src={photo} alt="" width={size} height={size}
-             className="rounded-full object-cover" style={{ width: size, height: size }} />
+      ? <AuthImage src="/api/me/photo" version={photo} alt="" width={size} height={size}
+             className="rounded-full object-cover" style={{ width: size, height: size }}
+             fallback={<span
+               className="rounded-full flex items-center justify-center bg-blue-600 text-white font-semibold"
+               style={{ width: size, height: size, fontSize: size * 0.4 }}
+               aria-hidden="true">{initials}</span>} />
       : <span
           className="rounded-full flex items-center justify-center bg-blue-600 text-white font-semibold"
           style={{ width: size, height: size, fontSize: size * 0.4 }}

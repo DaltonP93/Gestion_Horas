@@ -26,6 +26,7 @@ const fs   = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
 const { finalizeUpload } = require('../utils/uploadSniff');
+const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const wf = require('../services/permissionWorkflow');
@@ -448,17 +449,24 @@ router.post('/:id/attachment', authorizeAttachment, permUpload.single('file'), a
     // Ruta lógica interna: el estático público NO la sirve (uploadsGuard); la
     // descarga es GET /api/permissions/:id/attachment, con alcance.
     const url = `/uploads/permissions/${saved.filename}`;
-    await sequelize.query(
-      `UPDATE permissions SET
-         attachment_url      = ?,
-         attachment_filename = ?,
-         attachment_size     = ?,
-         attachment_mime     = ?
-       WHERE id = ?`,
-      { replacements: [
-        url, req.file.originalname, req.file.size, saved.mime, req.params.id
-      ]}
-    );
+    // Si la persistencia falla se retira SÓLO el archivo nuevo; el adjunto
+    // anterior (si lo había) sigue referenciado y no se toca.
+    try {
+      await sequelize.query(
+        `UPDATE permissions SET
+           attachment_url      = ?,
+           attachment_filename = ?,
+           attachment_size     = ?,
+           attachment_mime     = ?
+         WHERE id = ?`,
+        { replacements: [
+          url, req.file.originalname, req.file.size, saved.mime, req.params.id
+        ]}
+      );
+    } catch (e) {
+      await fs.promises.unlink(saved.path).catch(() => {});
+      throw e;
+    }
 
     await wf.logEvent({
       permission_id: perm.id, actor_id: user.id,
@@ -475,7 +483,8 @@ router.post('/:id/attachment', authorizeAttachment, permUpload.single('file'), a
       download: `/api/permissions/${perm.id}/attachment`,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logInternalError(logger, { event: 'permissions attachment upload', route: 'permissions POST /:id/attachment', err, req });
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
@@ -500,19 +509,11 @@ router.get('/:id/attachment', async (req, res) => {
       return res.status(404).json({ error: 'Adjunto no encontrado' });
     }
     // Sólo archivos dentro del directorio de justificativos (sin traversal).
-    const name = path.basename(String(perm.attachment_url));
-    if (!perm.attachment_url.startsWith('/uploads/permissions/') || !name || name.startsWith('.')) {
-      return res.status(404).json({ error: 'Adjunto no encontrado' });
-    }
-    const full = path.join(PERM_UPLOAD_DIR, name);
+    const full = resolvePrivatePath(String(perm.attachment_url), { subdir: 'permissions' });
+    if (!full) return res.status(404).json({ error: 'Adjunto no encontrado' });
     if (!fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
-
     const mime = ATTACHMENT_MIMES.has(perm.attachment_mime) ? perm.attachment_mime : 'application/octet-stream';
-    const downloadName = String(perm.attachment_filename || name).replace(/[^\w.\- ]/g, '_').slice(-120);
-    res.setHeader('Content-Type', mime);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
-    fs.createReadStream(full).pipe(res);
+    sendPrivateFile(res, full, { mime, downloadName: perm.attachment_filename || path.basename(full) });
   } catch (err) {
     logInternalError(logger, { event: 'permissions attachment download', route: 'permissions GET /:id/attachment', err, req });
     res.status(500).json({ error: 'Error interno' });

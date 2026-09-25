@@ -1,5 +1,6 @@
 'use client'
 import { useState, useRef, useEffect } from 'react'
+import AuthImage from '@/components/AuthImage'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { PenLine, Upload, Stamp, Save, Trash2, Pencil, Image as ImageIcon } from 'lucide-react'
 import { api, apiUrl } from '@/lib/api'
@@ -152,7 +153,7 @@ export default function FirmaDigitalPage() {
 
         {signatureUrl ? (
           <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
-            <img src={apiUrl(signatureUrl)} alt="Firma" className="h-20 max-w-[300px] object-contain bg-white p-2 rounded dark:bg-white/[0.04]" />
+            <AuthImage src="/api/settings/assets/signature" version={signatureUrl} alt="Firma" className="h-20 max-w-[300px] object-contain bg-white p-2 rounded dark:bg-white/[0.04]" />
             <div className="flex-1">
               <p className="text-sm text-slate-700 font-medium dark:text-white/80">Firma actual</p>
               <p className="text-xs text-slate-400 font-mono dark:text-white/30">{signatureUrl}</p>
@@ -215,7 +216,7 @@ export default function FirmaDigitalPage() {
 
         {sealUrl ? (
           <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100 dark:bg-white/[0.03] dark:border-white/[0.06]">
-            <img src={apiUrl(sealUrl)} alt="Sello" className="h-20 w-20 object-contain bg-white p-2 rounded dark:bg-white/[0.04]" />
+            <AuthImage src="/api/settings/assets/seal" version={sealUrl} alt="Sello" className="h-20 w-20 object-contain bg-white p-2 rounded dark:bg-white/[0.04]" />
             <div className="flex-1">
               <p className="text-sm text-slate-700 font-medium dark:text-white/80">Sello actual</p>
               <p className="text-xs text-slate-400 font-mono dark:text-white/30">{sealUrl}</p>

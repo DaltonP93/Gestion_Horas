@@ -12,6 +12,7 @@
  * `routes/me.js` (`/api/me/documents*`).
  */
 
+const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
 const router  = require('express').Router({ mergeParams: true });
 const { insertId } = require('../utils/insertId');
 const multer  = require('multer');
@@ -148,16 +149,14 @@ router.get('/:docId/download',
       { replacements: [docId, employeeId] }
     );
     if (!doc) return res.status(404).json({ error: 'Documento no encontrado' });
-    const full = path.join(UPLOAD_DIR, doc.path);
-    if (!fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
+    const full = resolvePrivatePath(`/uploads/${doc.path}`, { subdir: 'employee-documents' });
+    if (!full || !fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
 
     audit.log({
       req, user: req.user, action: 'employee.document.download',
       entity: 'employee', entity_id: employeeId, details: { id: doc.id },
     });
-    res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${doc.filename.replace(/"/g, '')}"`);
-    fs.createReadStream(full).pipe(res);
+    sendPrivateFile(res, full, { mime: doc.mime, downloadName: doc.filename });
   })
 );
 

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { UserCircle2, Camera, Save, CheckCircle, AlertCircle, ShieldAlert, Download } from 'lucide-react'
 import { api, apiUrl } from '@/lib/api'
+import AuthImage from '@/components/AuthImage'
 
 interface MeResponse {
   user: { id: number; username: string; email: string | null; full_name: string | null; role: string; photo_url?: string | null; employee_id: number | null }
@@ -29,8 +30,9 @@ export default function MiPerfilPage() {
         phone:      emp?.phone || '',
         address:    emp?.address || '',
       })
+      // Foto privada: se guarda la referencia (versión) y se carga con AuthImage.
       const p = emp?.photo_url || data.user.photo_url
-      if (p) setPhoto(p.startsWith('http') ? p : apiUrl(p))
+      if (p) setPhoto(p)
     } catch (e: any) { setError(e.response?.data?.error || e.message) }
   }
   useEffect(() => {
@@ -65,7 +67,7 @@ export default function MiPerfilPage() {
     fd.append('photo', file)
     try {
       const { data } = await api.post('/api/me/photo', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
-      if (data.url) setPhoto(data.url.startsWith('http') ? data.url : apiUrl(data.url))
+      if (data.url) setPhoto(data.url)
       setMsg('Foto actualizada.')
     } catch (e: any) { setError(e.response?.data?.error || e.message) }
   }
@@ -91,7 +93,8 @@ export default function MiPerfilPage() {
       <section className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 dark:bg-white/[0.04] dark:border-white/[0.06]">
         <div className="flex items-center gap-4">
           {photo
-            ? <img src={photo} alt="" className="w-20 h-20 rounded-full object-cover" />
+            ? <AuthImage src="/api/me/photo" version={photo} alt="" className="w-20 h-20 rounded-full object-cover"
+                fallback={<div className="w-20 h-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-semibold">{initials}</div>} />
             : <div className="w-20 h-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-2xl font-semibold">{initials}</div>}
           <div>
             <button onClick={() => fileRef.current?.click()}

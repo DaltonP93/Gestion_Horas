@@ -18,6 +18,7 @@ const audit = require('../services/audit');
 const { todayInCompanyTZ } = require('../utils/civilDate');
 const { finalizeUpload } = require('../utils/uploadSniff');
 const { resolveSelfEmployeeId } = require('../services/permissionAccess');
+const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
 
 const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
 
@@ -194,18 +195,24 @@ router.post('/photo', photoUpload.single('photo'), async (req, res) => {
     const url = `/uploads/${saved.filename}`;
 
     // Vínculo leído de la base: un claim del JWT desactualizado no debe
-    // escribir la foto de otro empleado.
-    const selfEmployeeId = await resolveSelfEmployeeId(req.user);
-    if (selfEmployeeId) {
-      await sequelize.query(
-        'UPDATE employees SET photo_url = ? WHERE id = ?',
-        { replacements: [url, selfEmployeeId] }
-      );
-    } else {
-      await sequelize.query(
-        'UPDATE users SET photo_url = ? WHERE id = ?',
-        { replacements: [url, req.user.id] }
-      );
+    // escribir la foto de otro empleado. Si la persistencia falla se retira
+    // SÓLO el archivo nuevo (la foto anterior sigue referenciada y no se toca).
+    try {
+      const selfEmployeeId = await resolveSelfEmployeeId(req.user);
+      if (selfEmployeeId) {
+        await sequelize.query(
+          'UPDATE employees SET photo_url = ? WHERE id = ?',
+          { replacements: [url, selfEmployeeId] }
+        );
+      } else {
+        await sequelize.query(
+          'UPDATE users SET photo_url = ? WHERE id = ?',
+          { replacements: [url, req.user.id] }
+        );
+      }
+    } catch (e) {
+      await fs.promises.unlink(saved.path).catch(() => {});
+      throw e;
     }
 
     audit.log({ req, user: req.user, action: 'profile.photo_change', entity: 'user', entity_id: req.user.id, details: {} });
@@ -214,6 +221,26 @@ router.post('/photo', photoUpload.single('photo'), async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
+// ─── GET /api/me/photo ──────────────────────────────────────────
+// Foto propia servida con autorización (el estático público ya no la expone).
+// Empleado vinculado (desde la base) → employees.photo_url; si no, users.photo_url.
+const AVATAR_NAME = /^avatar_\d+_[0-9a-f]+\.[a-z0-9]{1,5}$/;
+router.get('/photo', asyncHandler(async (req, res) => {
+  const selfEmployeeId = await resolveSelfEmployeeId(req.user);
+  let url = null;
+  if (selfEmployeeId) {
+    const [[e]] = await sequelize.query('SELECT photo_url FROM employees WHERE id = ? LIMIT 1', { replacements: [selfEmployeeId] });
+    url = e?.photo_url || null;
+  }
+  if (!url) {
+    const [[u]] = await sequelize.query('SELECT photo_url FROM users WHERE id = ? AND active = 1 LIMIT 1', { replacements: [req.user.id] });
+    url = u?.photo_url || null;
+  }
+  const full = resolvePrivatePath(url, { namePattern: AVATAR_NAME });
+  if (!full) { res.setHeader('Cache-Control', 'no-store'); return res.status(404).json({ error: 'Sin foto' }); }
+  return sendPrivateFile(res, full, { inline: true });
+}));
 
 // ─── GET /api/me/security ───────────────────────────────────────
 // "Seguridad de mi cuenta": último acceso, 2FA y sesiones activas reales.
@@ -663,19 +690,14 @@ router.get('/documents/:id/download', asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Documento no encontrado' });
   }
 
-  const path = require('path');
-  const fs   = require('fs');
-  const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '..', '..', 'uploads'));
-  const full = path.join(UPLOAD_DIR, doc.path);
-  if (!fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
+  const full = resolvePrivatePath(`/uploads/${doc.path}`, { subdir: 'employee-documents' });
+  if (!full || !fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
 
   audit.log({
     req, user: req.user, action: 'me.document.download',
     entity: 'employee_document', entity_id: doc.id, details: {},
   });
-  res.setHeader('Content-Type', doc.mime || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename="${doc.filename.replace(/"/g, '')}"`);
-  fs.createReadStream(full).pipe(res);
+  sendPrivateFile(res, full, { mime: doc.mime, downloadName: doc.filename });
 }));
 
 // ─── GET /api/me/payslip/pdf?year=&month= ───────────────────────
