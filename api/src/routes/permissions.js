@@ -2,6 +2,22 @@
  * permissions.js
  * Workflow de 2 niveles + GTH final.
  * Transiciones controladas por permissionWorkflow.js.
+ *
+ * Matriz de acceso (services/permissionAccess). "Propio" = solicitud del
+ * empleado vinculado al usuario (leído de la base). "Gestión" = capacidad
+ * `permisos` + empleado dentro del alcance. Usuario inactivo → 403 en todo.
+ *
+ *   Operación                        Propio              Otras personas
+ *   GET    /            (listado)    mis_permisos.view   permisos.view + alcance
+ *   GET    /:id         (detalle)    mis_permisos.view   permisos.view + alcance   (sino 404)
+ *   POST   /            (alta)       mis_permisos.create permisos.create + alcance (sin capacidad 403; fuera de alcance 404)
+ *   POST   /:id/cancel               mis_permisos.update rol super_admin/admin/gth + permisos.update + alcance
+ *   POST   /:id/attachment (carga)   mis_permisos.update permisos.update + alcance + (rol global o coordinator/manager)
+ *   GET    /:id/attachment (descarga) mis_permisos.view  permisos.view + alcance   (sino 404)
+ *   DELETE /:id/attachment           —                   rol admin/hr/gth + permisos.update + alcance
+ *   PUT|PATCH /:id/approve|reject    workflow (permissionWorkflow.canUserActOn) — sin cambios
+ *   GET    /inbox                    workflow — sin cambios
+ * No hay rutas de modificación de campos ni de borrado de solicitudes.
  */
 const router = require('express').Router();
 const { insertId } = require('../utils/insertId');
@@ -15,6 +31,7 @@ const { sequelize } = require('../config/database');
 const wf = require('../services/permissionWorkflow');
 const notif = require('../services/notifications');
 const access = require('../services/permissionAccess');
+const { parsePositiveId } = require('../utils/strictId');
 const { logInternalError } = require('../utils/logInternalError');
 const logger = require('../config/logger');
 
@@ -44,6 +61,9 @@ const permUpload = multer({
   },
 });
 
+const inactive = (res) => res.status(403).json({ error: 'Usuario inactivo o inexistente' });
+const empOf = (row) => ({ id: row.employee_id, department_id: row.department_id });
+
 // ─── GET /api/permissions ──────────────────────────────────────
 // Listado filtrable por estado / empleado / departamento
 router.get('/', async (req, res) => {
@@ -59,6 +79,10 @@ router.get('/', async (req, res) => {
     // Alcance del actor: global RR.HH. → todo; con alcance → sus deptos + lo
     // propio; resto → sólo lo propio. Los filtros del cliente se INTERSECTAN.
     const ctx = await access.getAccessContext(req.user);
+    if (!ctx.active) return inactive(res);
+    if (!access.canListAny(ctx)) {
+      return res.status(403).json({ error: "Sin permisos (view) sobre módulo 'permisos'" });
+    }
     const scope = access.listFilter(ctx, { empAlias: 'e', permAlias: 'p' });
     where += scope.clause;
     params.push(...scope.params);
@@ -119,7 +143,8 @@ router.get('/:id', async (req, res) => {
 
   // Fuera de alcance ≡ inexistente (404): no se filtra la existencia.
   const ctx = await access.getAccessContext(req.user);
-  if (!access.canActOnEmployee(ctx, { id: perm.employee_id, department_id: perm.department_id })) {
+  if (!ctx.active) return inactive(res);
+  if (!access.canOnEmployee(ctx, 'view', empOf(perm))) {
     return res.status(404).json({ error: 'Permiso no encontrado' });
   }
 
@@ -143,16 +168,33 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    const [[emp]] = await sequelize.query(
-      'SELECT id, department_id FROM employees WHERE id = ?',
-      { replacements: [employee_id] }
-    );
-    // El empleado debe existir y estar dentro del alcance del actor (un rol
-    // sin alcance de gestión sólo puede solicitar para sí mismo). Fuera de
-    // alcance ≡ inexistente (404).
     const ctx = await access.getAccessContext(req.user);
-    if (!emp || !access.canActOnEmployee(ctx, emp)) {
-      return res.status(404).json({ error: 'Empleado no encontrado' });
+    if (!ctx.active) return inactive(res);
+    const targetId = parsePositiveId(employee_id);
+    if (targetId === null) return res.status(400).json({ error: 'employee_id inválido' });
+
+    let emp;
+    if (access.isOwn(ctx, targetId)) {
+      const [[own]] = await sequelize.query(
+        'SELECT id, department_id FROM employees WHERE id = ?', { replacements: [targetId] }
+      );
+      emp = own;
+      if (!emp || !access.canOnEmployee(ctx, 'create', emp)) {
+        return res.status(403).json({ error: "Sin permisos (create) sobre módulo 'mis_permisos'" });
+      }
+    } else {
+      // Otra persona: primero la capacidad (403 sin revelar nada), luego
+      // existencia + alcance (fuera de alcance ≡ inexistente → 404).
+      if (!ctx.can.others.create) {
+        return res.status(403).json({ error: "Sin permisos (create) sobre módulo 'permisos'" });
+      }
+      const [[other]] = await sequelize.query(
+        'SELECT id, department_id FROM employees WHERE id = ?', { replacements: [targetId] }
+      );
+      emp = other;
+      if (!emp || !access.canManage(ctx, 'create', emp)) {
+        return res.status(404).json({ error: 'Empleado no encontrado' });
+      }
     }
     const department_id = emp.department_id || null;
 
@@ -178,7 +220,7 @@ router.post('/', async (req, res) => {
           sla_due_at)
        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? HOUR))`,
       { replacements: [
-          employee_id, type, date_from, date_to, reason || null,
+          targetId, type, date_from, date_to, reason || null,
           needs.applied_rule_id,
           needs.needs_level1, needs.needs_level2, needs.needs_final,
           slaHours,
@@ -316,6 +358,7 @@ router.put('/:id/reject',    rejectHandler);
 router.patch('/:id/reject',  rejectHandler);
 
 // ─── POST /api/permissions/:id/cancel ─────────────────────────
+const CANCEL_POWER_ROLES = new Set(['super_admin', 'admin', 'gth']);
 // Cancela la propia solicitud (solo el solicitante o GTH/admin/super).
 router.post('/:id/cancel', async (req, res) => {
   try {
@@ -328,10 +371,12 @@ router.post('/:id/cancel', async (req, res) => {
       return res.status(409).json({ error: 'Ya finalizó' });
     }
 
-    const selfEmployeeId = await access.resolveSelfEmployeeId(req.user);
-    const isOwner = selfEmployeeId != null && selfEmployeeId === Number(perm.employee_id);
-    const isPowerUser = ['super_admin','admin','gth'].includes(req.user.role);
-    if (!isOwner && !isPowerUser) return res.status(403).json({ error: 'No autorizado' });
+    const ctx = await access.getAccessContext(req.user);
+    if (!ctx.active) return inactive(res);
+    const emp = empOf(perm);
+    const ownOk = access.isOwn(ctx, emp.id) && ctx.can.own.update;
+    const powerOk = CANCEL_POWER_ROLES.has(ctx.actor.role) && access.canManage(ctx, 'update', emp);
+    if (!ownOk && !powerOk) return res.status(403).json({ error: 'No autorizado' });
 
     await sequelize.query(
       `UPDATE permissions SET approval_state='cancelled', status='rejected' WHERE id=?`,
@@ -364,15 +409,17 @@ async function authorizeAttachment(req, res, next) {
         WHERE p.id = ?`,
       { replacements: [req.params.id] }
     );
-    const ctx = perm ? await access.getAccessContext(req.user) : null;
-    const emp = perm ? { id: perm.employee_id, department_id: perm.department_id } : null;
+    const ctx = await access.getAccessContext(req.user);
+    if (!ctx.active) return inactive(res);
+    const emp = perm ? empOf(perm) : null;
     // Sin visibilidad ≡ inexistente.
-    if (!perm || !access.canActOnEmployee(ctx, emp)) {
+    if (!perm || !access.canOnEmployee(ctx, 'view', emp)) {
       return res.status(404).json({ error: 'Permiso no encontrado' });
     }
-    const isOwner = ctx.selfEmployeeId != null && ctx.selfEmployeeId === Number(perm.employee_id);
-    const canAttach = ctx.unrestricted || isOwner || ATTACH_SCOPED_ROLES.has(req.user.role);
-    if (!canAttach) {
+    const ownOk = access.isOwn(ctx, emp.id) && ctx.can.own.update;
+    const manageOk = access.canManage(ctx, 'update', emp)
+      && (ctx.unrestricted || ATTACH_SCOPED_ROLES.has(ctx.actor.role));
+    if (!ownOk && !manageOk) {
       return res.status(403).json({ error: 'No autorizado para adjuntar en este permiso' });
     }
     req.permissionForAttachment = perm;
@@ -447,9 +494,9 @@ router.get('/:id/attachment', async (req, res) => {
         WHERE p.id = ?`,
       { replacements: [req.params.id] }
     );
-    const ctx = perm ? await access.getAccessContext(req.user) : null;
-    if (!perm || !access.canActOnEmployee(ctx, { id: perm.employee_id, department_id: perm.department_id })
-        || !perm.attachment_url) {
+    const ctx = await access.getAccessContext(req.user);
+    if (!ctx.active) return inactive(res);
+    if (!perm || !access.canOnEmployee(ctx, 'view', empOf(perm)) || !perm.attachment_url) {
       return res.status(404).json({ error: 'Adjunto no encontrado' });
     }
     // Sólo archivos dentro del directorio de justificativos (sin traversal).
@@ -476,10 +523,16 @@ router.get('/:id/attachment', async (req, res) => {
 router.delete('/:id/attachment', authorize('admin', 'hr', 'gth'), async (req, res) => {
   try {
     const [[perm]] = await sequelize.query(
-      'SELECT attachment_url FROM permissions WHERE id = ?',
+      `SELECT p.attachment_url, p.employee_id, e.department_id
+         FROM permissions p JOIN employees e ON p.employee_id = e.id
+        WHERE p.id = ?`,
       { replacements: [req.params.id] }
     );
-    if (!perm) return res.status(404).json({ error: 'Permiso no encontrado' });
+    const ctx = await access.getAccessContext(req.user);
+    if (!ctx.active) return inactive(res);
+    if (!perm || !access.canManage(ctx, 'update', empOf(perm))) {
+      return res.status(404).json({ error: 'Permiso no encontrado' });
+    }
 
     if (perm.attachment_url) {
       const filePath = path.join(

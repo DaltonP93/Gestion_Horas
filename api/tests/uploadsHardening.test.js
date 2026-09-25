@@ -164,7 +164,16 @@ describe('GET /api/permissions/:id/attachment — descarga autenticada', () => {
     };
     sequelize.query.mockImplementation(async (sql, opts = {}) => {
       const rp = opts.replacements || [];
-      if (/FROM users WHERE id = \? AND active = 1/.test(sql)) return [[{ employee_id: rp[0] === 7 ? 100 : null }].filter((r) => r.employee_id)];
+      if (/FROM users WHERE id = \? LIMIT 1/.test(sql)) {
+        const usersById = {
+          7: { id: 7, role: 'employee', active: 1, employee_id: 100 },
+          5: { id: 5, role: 'manager', active: 1, employee_id: null },
+          1: { id: 1, role: 'hr', active: 1, employee_id: null },
+        };
+        const row = usersById[rp[0]];
+        return [row ? [row] : []];
+      }
+      if (/FROM user_permissions/.test(sql)) return [[]];
       if (/FROM permissions p/.test(sql)) { const r = rows[rp[0]]; return [r ? [r] : []]; }
       return [[]];
     });

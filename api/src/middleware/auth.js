@@ -1,6 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { sequelize } = require('../config/database');
-const { defaultsForRole } = require('../services/permissionMatrix');
+const { hasCapability, ACTION_FIELD } = require('../services/capabilities');
 
 // Verificar token JWT.
 // Acepta el token desde:
@@ -86,27 +85,14 @@ function authenticateServiceKey(req, res, next) {
  *  - Respeta la ruta: si falla, 403.
  */
 function requirePermission(moduleKey, action) {
-  const field = {
-    view:   'can_view',
-    create: 'can_create',
-    update: 'can_update',
-    delete: 'can_delete',
-  }[action];
-  if (!field) throw new Error(`Acción inválida: ${action}`);
+  // La regla vive en services/capabilities (misma fuente que usan las rutas
+  // que combinan capacidad + alcance a nivel objeto).
+  if (!ACTION_FIELD[action]) throw new Error(`Acción inválida: ${action}`);
 
   return async (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'No autenticado' });
-    if (req.user.role === 'super_admin' || req.user.role === 'admin') return next();
-
     try {
-      const [rows] = await sequelize.query(
-        'SELECT can_view, can_create, can_update, can_delete FROM user_permissions WHERE user_id = ? AND module = ? LIMIT 1',
-        { replacements: [req.user.id, moduleKey] }
-      );
-      const flags = rows.length
-        ? rows[0]
-        : defaultsForRole(req.user.role)[moduleKey];
-      if (!flags || !flags[field]) {
+      if (!(await hasCapability(req.user, moduleKey, action))) {
         return res.status(403).json({
           error: `Sin permisos (${action}) sobre módulo '${moduleKey}'`,
         });

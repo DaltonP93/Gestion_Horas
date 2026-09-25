@@ -1,65 +1,120 @@
 'use strict';
 
 /**
- * permissionAccess.js — alcance de lectura/escritura sobre solicitudes de
- * permiso/licencia (tabla `permissions`).
+ * permissionAccess.js — capacidad funcional + alcance sobre solicitudes de
+ * permiso/licencia (tabla `permissions`). Fuente única para listado, detalle,
+ * alta, cancelación y adjuntos.
  *
- * Reglas (una sola fuente para listado, detalle, alta y adjuntos):
- *   - Roles globales de RR.HH. (super_admin, admin, gth, hr): todas.
- *   - Roles con alcance (manager, coordinator, supervisor, gestor): las de
- *     empleados dentro de su alcance departamental (misma fuente que
- *     `enforceEmployeeScope`) + las propias.
- *   - Cualquier otro rol (p. ej. employee): sólo las propias.
+ * Dos requisitos independientes:
+ *   1. CAPACIDAD funcional (services/capabilities, misma regla que
+ *      requirePermission, incluida la denegación explícita por usuario):
+ *        - `mis_permisos` → autoservicio sobre las solicitudes PROPIAS;
+ *        - `permisos`     → gestión de solicitudes de OTRAS personas.
+ *   2. ALCANCE (sólo para otras personas): roles globales de RR.HH. → todos;
+ *      roles con alcance → empleados de sus departamentos visibles (misma
+ *      fuente que enforceEmployeeScope); resto → nadie.
+ *   Tener empleados en alcance NUNCA concede la capacidad.
  *
- * "Propias" se resuelve SIEMPRE desde la base (`users.employee_id` con
- * `active = 1`), nunca desde el JWT: el claim puede estar desactualizado o
- * vacío tras un refresh.
+ * Identidad desde la base, no desde el token: se leen `role`, `active` y
+ * `employee_id` vigentes del usuario. Usuario inexistente o inactivo → sin
+ * acceso. Una solicitud propia también es alcanzable por la vía de gestión
+ * (si el actor tiene `permisos` y su propio departamento está en alcance).
  *
- * Fuera de alcance se responde igual que "no existe" (404) para no filtrar la
- * existencia del recurso.
+ * Fuera de alcance / sin visibilidad ≡ inexistente (404) a nivel objeto.
  */
 
 const { sequelize } = require('../config/database');
 const { getVisibleDepartmentIds, canSeeEmployee } = require('./departmentScope');
+const { getCapabilityFlags } = require('./capabilities');
 
-/** employee_id vinculado al usuario activo, o null. */
-async function resolveSelfEmployeeId(user) {
+const OWN_MODULE = 'mis_permisos';
+const OTHERS_MODULE = 'permisos';
+
+/** Fila vigente del usuario o null. */
+async function loadActor(user) {
   if (!user || !user.id) return null;
   const [[row]] = await sequelize.query(
-    'SELECT employee_id FROM users WHERE id = ? AND active = 1 LIMIT 1',
+    'SELECT id, role, active, employee_id FROM users WHERE id = ? LIMIT 1',
     { replacements: [user.id] },
   );
-  const id = Number(row?.employee_id);
+  return row || null;
+}
+
+/** employee_id vinculado al usuario ACTIVO, o null. */
+async function resolveSelfEmployeeId(user) {
+  const row = await loadActor(user);
+  if (!row || Number(row.active) !== 1) return null;
+  const id = Number(row.employee_id);
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 /**
  * Contexto de acceso del actor.
- * @returns {{unrestricted:boolean, deptScope:object|null, selfEmployeeId:number|null}}
+ * @returns {{active:false} | {active:true, actor:{id:number,role:string},
+ *   unrestricted:boolean, deptScope:object, selfEmployeeId:number|null,
+ *   can:{own:object, others:object}}}
  */
 async function getAccessContext(user) {
-  const deptScope = await getVisibleDepartmentIds(user);
-  if (deptScope && deptScope.unrestricted) {
-    return { unrestricted: true, deptScope, selfEmployeeId: null };
-  }
-  const selfEmployeeId = await resolveSelfEmployeeId(user);
-  return { unrestricted: false, deptScope, selfEmployeeId };
+  const row = await loadActor(user);
+  if (!row || Number(row.active) !== 1) return { active: false };
+  const actor = { id: Number(row.id), role: row.role };
+  const [deptScope, flags] = await Promise.all([
+    getVisibleDepartmentIds(actor),
+    getCapabilityFlags(actor, [OWN_MODULE, OTHERS_MODULE]),
+  ]);
+  const selfId = Number(row.employee_id);
+  return {
+    active: true,
+    actor,
+    unrestricted: !!(deptScope && deptScope.unrestricted),
+    deptScope,
+    selfEmployeeId: Number.isInteger(selfId) && selfId > 0 ? selfId : null,
+    can: { own: flags[OWN_MODULE], others: flags[OTHERS_MODULE] },
+  };
+}
+
+function isOwn(ctx, employeeId) {
+  return !!ctx.selfEmployeeId && Number(employeeId) === ctx.selfEmployeeId;
+}
+
+/** Vía de gestión: capacidad `permisos` + alcance. */
+function canManage(ctx, action, emp) {
+  if (!ctx.active || !emp || !ctx.can.others[action]) return false;
+  return ctx.unrestricted || canSeeEmployee(ctx.deptScope, emp);
 }
 
 /**
- * Fragmento SQL para acotar un listado. `empAlias` es el alias de employees
- * y `permAlias` el de permissions en la consulta.
+ * ¿Puede el actor ejecutar `action` sobre solicitudes del empleado `emp`
+ * ({id, department_id})? Propio: `mis_permisos` o la vía de gestión.
+ */
+function canOnEmployee(ctx, action, emp) {
+  if (!ctx || !ctx.active || !emp) return false;
+  if (isOwn(ctx, emp.id) && ctx.can.own[action]) return true;
+  return canManage(ctx, action, emp);
+}
+
+/** ¿Tiene alguna forma de ver solicitudes? (para 403 explícito en listado) */
+function canListAny(ctx) {
+  return !!(ctx && ctx.active && (ctx.can.own.view || ctx.can.others.view));
+}
+
+/**
+ * Fragmento SQL que acota el listado a lo que el actor puede ver.
+ * `empAlias`/`permAlias`: alias de employees y permissions en la consulta.
  */
 function listFilter(ctx, { empAlias = 'e', permAlias = 'p' } = {}) {
-  if (ctx.unrestricted) return { clause: '', params: [] };
+  if (!ctx || !ctx.active) return { clause: ' AND 1=0', params: [] };
   const parts = [];
   const params = [];
-  const ids = (ctx.deptScope && ctx.deptScope.ids) || [];
-  if (ids.length) {
-    parts.push(`${empAlias}.department_id IN (${ids.map(() => '?').join(',')})`);
-    params.push(...ids);
+  if (ctx.can.others.view) {
+    if (ctx.unrestricted) return { clause: '', params: [] };
+    const ids = (ctx.deptScope && ctx.deptScope.ids) || [];
+    if (ids.length) {
+      parts.push(`${empAlias}.department_id IN (${ids.map(() => '?').join(',')})`);
+      params.push(...ids);
+    }
   }
-  if (ctx.selfEmployeeId) {
+  if (ctx.can.own.view && ctx.selfEmployeeId) {
     parts.push(`${permAlias}.employee_id = ?`);
     params.push(ctx.selfEmployeeId);
   }
@@ -67,20 +122,14 @@ function listFilter(ctx, { empAlias = 'e', permAlias = 'p' } = {}) {
   return { clause: ` AND (${parts.join(' OR ')})`, params };
 }
 
-/**
- * ¿Puede el actor ver/operar sobre el empleado `emp` ({id, department_id})?
- * Se usa para el detalle de una solicitud y para el alta a nombre de otro.
- */
-function canActOnEmployee(ctx, emp) {
-  if (!emp) return false;
-  if (ctx.unrestricted) return true;
-  if (ctx.selfEmployeeId && Number(emp.id) === ctx.selfEmployeeId) return true;
-  return canSeeEmployee(ctx.deptScope, emp);
-}
-
 module.exports = {
+  OWN_MODULE,
+  OTHERS_MODULE,
   resolveSelfEmployeeId,
   getAccessContext,
+  isOwn,
+  canManage,
+  canOnEmployee,
+  canListAny,
   listFilter,
-  canActOnEmployee,
 };
