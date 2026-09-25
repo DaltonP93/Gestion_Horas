@@ -129,13 +129,40 @@ describe('roles scoped', () => {
     expect(sequelize.query).not.toHaveBeenCalled();
   });
 
-  test('id no numérico → next() (no decide el middleware)', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [3] });
-    const { nexted } = await run(enforceEmployeeScope('employeeId'), {
-      user: { role: 'supervisor' }, params: { employeeId: 'abc' },
+  // Fail-closed: un id PRESENTE pero no canónico no se deja pasar (el handler
+  // podría reinterpretarlo distinto que el control de alcance).
+  test.each([['abc'], ['1e2'], ['0x10'], ['1.5'], ['10abc'], ['0'], ['-1'], ['9007199254740993']])(
+    'id presente no canónico %p → 400, sin consultar ni llamar next()', async (bad) => {
+      departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [3] });
+      const { nexted, res } = await run(enforceEmployeeScope('employeeId'), {
+        user: { role: 'supervisor' }, params: { employeeId: bad },
+      });
+      expect(nexted).toBe(false);
+      expect(res.statusCode).toBe(400);
+      expect(sequelize.query).not.toHaveBeenCalled();
     });
-    expect(nexted).toBe(true);
-    expect(sequelize.query).not.toHaveBeenCalled();
+
+  test('también 400 para roles globales (la validación precede al bypass)', async () => {
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    const { nexted, res } = await run(enforceEmployeeScope({ from: 'body', key: 'employee_id' }), {
+      user: { role: 'admin' }, params: {}, body: { employee_id: [5] },
+    });
+    expect(nexted).toBe(false);
+    expect(res.statusCode).toBe(400);
+  });
+
+  test('id válido: publica req.scopedEmployeeId (global y con alcance)', async () => {
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    const reqA = { user: { role: 'admin' }, params: { employeeId: '5' } };
+    await run(enforceEmployeeScope('employeeId'), reqA);
+    expect(reqA.scopedEmployeeId).toBe(5);
+
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [4] });
+    sequelize.query.mockResolvedValueOnce([[{ department_id: 4 }]]);
+    const reqB = { user: { role: 'supervisor' }, params: {}, body: { employee_id: 7 } };
+    await run(enforceEmployeeScope({ from: 'body', key: 'employee_id' }), reqB);
+    expect(reqB.scopedEmployeeId).toBe(7);
+    expect(sequelize.query.mock.calls[0][1].replacements).toEqual([7]);
   });
 });
 

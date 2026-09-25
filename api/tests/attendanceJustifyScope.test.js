@@ -29,7 +29,12 @@ let calls;
 beforeEach(() => {
   jest.clearAllMocks();
   overrides = {};
-  employees = { 100: { id: 100, department_id: 1 }, 200: { id: 200, department_id: 2 } };
+  employees = {
+    1: { id: 1, department_id: 1 },
+    100: { id: 100, department_id: 1 },
+    200: { id: 200, department_id: 2 },
+    256: { id: 256, department_id: 2 },
+  };
   calls = [];
   sequelize.query.mockImplementation(async (sql, opts = {}) => {
     const rp = opts.replacements || [];
@@ -166,5 +171,87 @@ describe('escritura y auditoría', () => {
     const persisted = JSON.parse(audit.sanitizeDetails(arg.details));
     expect(persisted).toEqual({ employee_id: 100, date: '2026-09-10', type: 'enfermedad' });
     expect(JSON.stringify(arg.details)).not.toMatch(/Certificado/);
+  });
+});
+
+describe('identificador del empleado: un único valor validado', () => {
+  const invalid = [
+    ['notación exponencial', '1e2'],
+    ['hexadecimal', '0x100'],
+    ['decimal string', '100.0'],
+    ['decimal number', 100.5],
+    ['sufijo', '100abc'],
+    ['espacios', ' 100'],
+    ['ceros a la izquierda', '0100'],
+    ['cero', 0],
+    ['cero string', '0'],
+    ['negativo', -100],
+    ['negativo string', '-100'],
+    ['fuera de rango seguro (string)', '9007199254740993'],
+    ['fuera de rango seguro (number)', 9007199254740992],
+    ['array', [100]],
+    ['objeto', { id: 100 }],
+    ['booleano', true],
+  ];
+
+  test.each(invalid)('%s → 400, sin escritura ni auditoría (rol global)', async (_n, bad) => {
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    const res = await run({ user: { id: 1, role: 'admin' }, body: body({ employeeId: bad }) });
+    expect(res.statusCode).toBe(400);
+    expect(inserted()).toBe(false);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  test.each(invalid)('%s → 400, sin escritura ni auditoría (rol con alcance con override)', async (_n, bad) => {
+    overrides[5] = { can_view: 1, can_create: 0, can_update: 1, can_delete: 0 };
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [1], branchIds: [1] });
+    const res = await run({ user: { id: 5, role: 'manager' }, body: body({ employeeId: bad }) });
+    expect(res.statusCode).toBe(400);
+    expect(inserted()).toBe(false);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  test("'1e2' no puede autorizarse contra el empleado 1 (en alcance) y escribirse sobre el 100", async () => {
+    overrides[5] = { can_view: 1, can_create: 0, can_update: 1, can_delete: 0 };
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [1], branchIds: [1] });
+    const res = await run({ user: { id: 5, role: 'manager' }, body: body({ employeeId: '1e2' }) });
+    expect(res.statusCode).toBe(400);
+    expect(calls.some((c) => /INSERT INTO daily_summary/.test(c.sql) && c.rp[0] === 100)).toBe(false);
+  });
+
+  test("'0x100' no puede escribir sobre el 256 (fuera de alcance)", async () => {
+    overrides[5] = { can_view: 1, can_create: 0, can_update: 1, can_delete: 0 };
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [1], branchIds: [1] });
+    const res = await run({ user: { id: 5, role: 'manager' }, body: body({ employeeId: '0x100' }) });
+    expect(res.statusCode).toBe(400);
+    expect(inserted()).toBe(false);
+  });
+
+  test('id válido como string se autoriza y se escribe con el MISMO valor numérico', async () => {
+    overrides[5] = { can_view: 1, can_create: 0, can_update: 1, can_delete: 0 };
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [1], branchIds: [1] });
+    const res = await run({ user: { id: 5, role: 'manager' }, body: body({ employeeId: '100' }) });
+    expect(res.statusCode).toBe(200);
+    const scopeQ = calls.find((c) => /SELECT department_id FROM employees WHERE id = \?/.test(c.sql));
+    const ins = calls.find((c) => /INSERT INTO daily_summary/.test(c.sql));
+    expect(scopeQ.rp[0]).toBe(100);
+    expect(ins.rp[0]).toBe(100);
+    expect(audit.log.mock.calls[0][0].entity_id).toBe(100);
+  });
+
+  test('empleado fuera de alcance con id válido → 404, sin escritura ni auditoría', async () => {
+    overrides[5] = { can_view: 1, can_create: 0, can_update: 1, can_delete: 0 };
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [1], branchIds: [1] });
+    const res = await run({ user: { id: 5, role: 'manager' }, body: body({ employeeId: 200 }) });
+    expect(res.statusCode).toBe(404);
+    expect(inserted()).toBe(false);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  test('sin asistencia.update el alcance no alcanza (requisitos independientes)', async () => {
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: false, ids: [1], branchIds: [1] });
+    const res = await run({ user: { id: 5, role: 'manager' }, body: body({ employeeId: 100 }) });
+    expect(res.statusCode).toBe(403);
+    expect(inserted()).toBe(false);
   });
 });

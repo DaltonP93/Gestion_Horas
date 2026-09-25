@@ -320,9 +320,11 @@ router.post('/attendance/justify',
   requirePermission('asistencia', 'update'),
   enforceEmployeeScope({ from: 'body', key: 'employeeId' }),
   asyncHandler(async (req, res) => {
-    const { employeeId: rawEmployeeId, date, justification, justificationType } = req.body || {};
-    const employeeId = Number(rawEmployeeId);
-    if (!Number.isInteger(employeeId) || employeeId <= 0 || !date || !justification) {
+    const { date, justification, justificationType } = req.body || {};
+    // Id ya validado (utils/strictId) y autorizado por enforceEmployeeScope:
+    // se opera SÓLO sobre ese valor; la entrada original no se reinterpreta.
+    const employeeId = req.scopedEmployeeId;
+    if (employeeId == null || !date || !justification) {
       return res.status(400).json({ error: 'employeeId, date y justification son requeridos' });
     }
     if (!isCivilDate(date)) {
