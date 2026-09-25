@@ -234,7 +234,7 @@ export default function FaceEnroll({ employeeId, onEnrolled, readOnly = false }:
           <span className="min-w-0 truncate">
             Rostro registrado {enrolled.at ? `— ${new Date(enrolled.at).toLocaleDateString('es')}` : ''}
           </span>
-          {enrolled.photo_url && (
+          {enrolled.photo_url?.startsWith('data:') && (
             /* eslint-disable-next-line @next/next/no-img-element */
             <img src={enrolled.photo_url} alt="Rostro registrado" className="ml-auto h-10 w-10 shrink-0 rounded-full object-cover" />
           )}

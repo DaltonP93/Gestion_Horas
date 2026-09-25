@@ -23,15 +23,17 @@
  *   enforceEmployeeScope({ from: 'query', key: 'employee_id' })
  *   enforceEmployeeScope((req) => req.body.employee_id) → función a medida
  *
- * Cuando el id no puede resolverse (ausente o no numérico) el middleware NO
- * decide: llama a next() y deja que el handler aplique su propia validación
- * (p.ej. el 400 de "employee_id requerido"). Sólo bloquea cuando hay un id
- * concreto que resulta inexistente o fuera de alcance.
+ * Id AUSENTE: el middleware no decide y llama a next() (el handler responde su
+ * propio 400). Id PRESENTE pero no canónico (ver utils/strictId): 400 para
+ * todos los roles. Id válido: se publica en `req.scopedEmployeeId`, que es el
+ * ÚNICO valor sobre el que debe operar el handler, y se bloquea con 404 si
+ * resulta inexistente o fuera de alcance.
  */
 
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 const { getVisibleDepartmentIds, canSeeEmployee } = require('../services/departmentScope');
+const { parsePositiveId, isAbsent } = require('../utils/strictId');
 
 function resolveRawId(source, req) {
   if (typeof source === 'function') return source(req);
@@ -49,17 +51,26 @@ function resolveRawId(source, req) {
 
 function enforceEmployeeScope(source = 'employeeId') {
   const mw = asyncHandler(async (req, res, next) => {
+    const rawId = resolveRawId(source, req);
+
+    // Sin id: no decidimos acá; el handler valida (400 propio).
+    if (isAbsent(rawId)) return next();
+
+    // Id presente pero no canónico ('1e2', '0x10', '1.5', '10abc', arrays,
+    // objetos…) → 400 para todos los roles. Nunca se deja pasar: el handler
+    // podría reinterpretar el valor original de otra forma que el control.
+    const employeeId = parsePositiveId(rawId);
+    if (employeeId === null) {
+      return res.status(400).json({ error: 'Identificador de empleado inválido' });
+    }
+    // Valor ÚNICO validado: el handler opera sobre éste, no sobre la entrada.
+    req.scopedEmployeeId = employeeId;
+
     const scope = await getVisibleDepartmentIds(req.user);
 
     // Roles globales de RR.HH.: acceso amplio. No pagamos una consulta extra —
     // el propio handler ya resuelve el 404 de "no encontrado" si aplica.
     if (scope && scope.unrestricted) return next();
-
-    const rawId = resolveRawId(source, req);
-    const employeeId = Number.parseInt(rawId, 10);
-
-    // Sin id resoluble: no decidimos acá; el handler valida (400 propio).
-    if (rawId == null || rawId === '' || Number.isNaN(employeeId)) return next();
 
     const [[emp]] = await sequelize.query(
       'SELECT department_id FROM employees WHERE id = ? LIMIT 1',
