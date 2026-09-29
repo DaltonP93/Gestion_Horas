@@ -67,21 +67,9 @@ describeIT('contención: justificación y licencias con persistencia real', () =
 
   beforeAll(async () => {
     conn = await makeConn();
-    // ── Deriva de esquema PREEXISTENTE (fuera del alcance de este PR) ──────
-    // En un replay limpio (init.sql + migraciones) la 011 ya crea
-    // permissions.level1_at y la 024 usa esa misma columna como guarda, así
-    // que nunca agrega permissions.sla_due_at, que POST /api/permissions sí
-    // escribe (el alta devolvería 500 por esquema, no por autorización). No se
-    // toca el historial de migraciones: se agrega la columna que la 024
-    // declara, sólo en esta base descartable, y se deja constancia.
-    const [slaCol] = await conn.query(
-      "SELECT COUNT(*) AS n FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'permissions' AND COLUMN_NAME = 'sla_due_at'",
-    );
-    if (Number(slaCol[0].n) === 0) {
-      // eslint-disable-next-line no-console
-      console.warn('[it] deriva 011/024: permissions.sla_due_at ausente en el replay; se agrega en la base efímera');
-      await conn.query('ALTER TABLE permissions ADD COLUMN sla_due_at DATETIME NULL');
-    }
+    // El esquema sale SÓLO de init.sql + migraciones (la 087 agrega
+    // permissions.sla_due_at, que la 024 omitía en instalaciones nuevas): la
+    // suite no altera el esquema.
     // ── Organización: dos empresas con su sede y departamento ──────────────
     ids.coA = await insert('INSERT INTO companies (code, legal_name) VALUES (?, ?)', [`${TAG}-A`, 'Empresa A IT']);
     ids.coB = await insert('INSERT INTO companies (code, legal_name) VALUES (?, ?)', [`${TAG}-B`, 'Empresa B IT']);
