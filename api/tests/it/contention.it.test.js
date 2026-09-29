@@ -261,8 +261,8 @@ describeIT('contención: justificación y licencias con persistencia real', () =
       expect((await call('GET', `/api/permissions/${ids.pB1}`, ids.gthDenied)).status).toBe(404);
     });
 
-    test('usuario inactivo con token todavía válido → 403', async () => {
-      expect((await listIds(ids.empOff)).status).toBe(403);
+    test('usuario inactivo con token todavía válido → 401 (authenticate lee la identidad vigente)', async () => {
+      expect((await listIds(ids.empOff)).status).toBe(401);
     });
   });
 });

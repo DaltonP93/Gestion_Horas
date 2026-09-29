@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { hasCapability, ACTION_FIELD } = require('../services/capabilities');
+const { loadCurrentIdentity } = require('../services/currentIdentity');
 
 // Verificar token JWT.
 // Acepta el token desde:
@@ -9,7 +10,7 @@ const { hasCapability, ACTION_FIELD } = require('../services/capabilities');
 // La opción 2 es necesaria porque <a href> y window.open() no permiten
 // agregar headers personalizados. Se restringe implícitamente a GET, ya que
 // solo descargas usan ese flujo.
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   let token = null;
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
@@ -21,12 +22,28 @@ function authenticate(req, res, next) {
   if (!token) {
     return res.status(401).json({ error: 'Token requerido' });
   }
+  let claims;
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-    next();
+    claims = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
   } catch (err) {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
+  // Identidad VIGENTE (services/currentIdentity): rol, estado y empleado se
+  // leen de la base; el token sólo prueba quién es. Una cuenta inexistente o
+  // desactivada deja de operar aunque su token siga vigente (401: el cliente
+  // intenta refrescar y el refresh también la rechaza). Si la lectura falla
+  // no se decide con los datos del token: 503.
+  let identity;
+  try {
+    identity = await loadCurrentIdentity(claims && claims.id);
+  } catch (err) {
+    return res.status(503).json({ error: 'No se pudo verificar la sesión' });
+  }
+  if (!identity) {
+    return res.status(401).json({ error: 'Sesión inválida', code: 'SESSION_REVOKED' });
+  }
+  req.user = { ...claims, ...identity };
+  next();
 }
 
 // Verificar rol requerido.

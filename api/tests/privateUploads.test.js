@@ -77,6 +77,9 @@ function installDb() {
       const v = world.settings[rp[0]];
       return [v != null ? [{ setting_value: v }] : []];
     }
+    if (/SELECT id, username, role, active, employee_id FROM users WHERE id = \? LIMIT 1/.test(sql)) {
+      const u = world.users[rp[0]]; return [u ? [{ username: `u${u.id}`, ...u }] : []];
+    }
     if (/SELECT id, role, active, employee_id FROM users WHERE id = \? LIMIT 1/.test(sql)) {
       const u = world.users[rp[0]]; return [u ? [u] : []];
     }
@@ -272,6 +275,55 @@ describe('endpoints privados', () => {
     expect(r.headers.get('content-disposition')).toMatch(/^attachment; filename="certificado\.pdf"/);
     privateHeaders(r);
     expect((await get('/api/permissions/10/attachment', 8)).status).toBe(404);
+  });
+});
+
+describe('identidad vigente: token emitido ANTES del cambio de rol/estado', () => {
+  // El token se firma con el rol viejo y recién después se cambia la cuenta.
+  const withToken = (p, tok) => fetch(base + p, { headers: { Authorization: `Bearer ${tok}` } });
+
+  test('admin degradado a employee: foto de otro empleado → 403, sin cuerpo de imagen', async () => {
+    const tok = token(1);
+    world.users[1].role = 'employee';
+    world.users[1].employee_id = 200;
+    const r = await withToken('/api/employees/100/photo', tok);
+    expect(r.status).toBe(403);
+    expect(r.headers.get('content-type')).not.toMatch(/^image\//);
+  });
+
+  test('admin degradado a employee: firma de configuración → 403', async () => {
+    const tok = token(1);
+    world.users[1].role = 'employee';
+    const r = await withToken('/api/settings/assets/signature', tok);
+    expect(r.status).toBe(403);
+    expect(r.headers.get('content-type')).not.toMatch(/^image\//);
+  });
+
+  test('hr desactivado: selfie de asistencia → 401 (sesión revocada)', async () => {
+    const tok = token(2);
+    world.users[2].active = 0;
+    const r = await withToken('/api/attendance/logs/900/selfie', tok);
+    expect(r.status).toBe(401);
+    expect((await r.json()).code).toBe('SESSION_REVOKED');
+  });
+
+  test('usuario eliminado: 401', async () => {
+    const tok = token(2);
+    delete world.users[2];
+    expect((await withToken('/api/attendance/logs/900/selfie', tok)).status).toBe(401);
+  });
+
+  test('error al leer la identidad → 503; no se decide con el token', async () => {
+    const tok = token(1);
+    failNext = /FROM users WHERE id = \? LIMIT 1/;
+    const r = await withToken('/api/settings/assets/signature', tok);
+    expect(r.status).toBe(503);
+  });
+
+  test('ascenso posterior al token también rige (employee → hr ve la selfie)', async () => {
+    const tok = token(7);
+    world.users[7].role = 'hr';
+    expect((await withToken('/api/attendance/logs/900/selfie', tok)).status).toBe(200);
   });
 });
 

@@ -6,7 +6,15 @@
 process.env.JWT_SECRET = 'test-secret-settings';
 
 const mockQuery = jest.fn();
-jest.mock('../src/config/database', () => ({ sequelize: { query: (...a) => mockQuery(...a) } }));
+// Identidad vigente (authenticate → users): cuenta activa con el rol del token.
+let mockActor = null;
+jest.mock('../src/config/database', () => ({
+  sequelize: {
+    query: (sql, opts) => (/FROM users WHERE id = \? LIMIT 1/.test(sql)
+      ? Promise.resolve([[mockActor]])
+      : mockQuery(sql, opts)),
+  },
+}));
 jest.mock('../src/config/logger', () => ({ info() {}, warn() {}, error() {} }));
 jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 
@@ -54,7 +62,7 @@ beforeEach(() => {
   });
 });
 
-const token = (role) => jwt.sign({ id: 1, role, email: 'a@b.c' }, process.env.JWT_SECRET, { algorithm: 'HS256' });
+const token = (role) => (mockActor = { id: 1, username: 'u1', role, active: 1, employee_id: null }, jwt.sign({ id: 1, role, email: 'a@b.c' }, process.env.JWT_SECRET, { algorithm: 'HS256' }));
 const get = (path, tok) => fetch(base + path, tok ? { headers: { Authorization: `Bearer ${tok}` } } : undefined);
 
 describe('GET /api/settings (público, sin token)', () => {

@@ -308,6 +308,13 @@ jobs:
         env:
           IT_DB: '1'
           JWT_SECRET: it-contention-ci-only-secret-0123456789
+      # Identidad vigente: JWT emitido ANTES de degradar/desactivar la cuenta y
+      # reutilizado; archivos privados y justificación con la base real.
+      - name: IT reales identidad vigente (token previo al cambio)
+        run: npx jest tests/it/currentIdentity.it.test.js --runInBand
+        env:
+          IT_DB: '1'
+          JWT_SECRET: it-identity-ci-only-secret-0123456789
 
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el

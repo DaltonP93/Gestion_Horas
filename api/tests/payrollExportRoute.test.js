@@ -4,15 +4,24 @@
  * RBAC de los endpoints de export de nómina montados en el router real de
  * `/api/payroll` (middleware de auth REAL: JWT + authorize + requirePermission).
  *
- *   - Rol fuera de admin/hr/gth (+super_admin) → 403 (sin tocar la BD).
+ *   - Rol fuera de admin/hr/gth (+super_admin) → 403 (sólo se lee la identidad
+ *     vigente del usuario; ninguna consulta de datos).
  *   - admin (autorizado a montos) → export CON salario_base.
  *   - gth (autorizado al endpoint y a montos, confirmado por el propietario) → export CON salario_base.
  *   - vía X-API-Key (integración) → SIEMPRE sin salario_base, sin importar el rol.
  *   - JSON expone schema_version y metadatos de período.
  */
 
+// La identidad vigente (authenticate → users) se responde aparte con el MISMO
+// rol del token (cuenta activa sin cambios); el resto va a `mockDb`.
+const mockDb = jest.fn();
+let mockActor = null;
 jest.mock('../src/config/database', () => ({
-  sequelize: { query: jest.fn() },
+  sequelize: {
+    query: (sql, opts) => (/FROM users WHERE id = \? LIMIT 1/.test(sql)
+      ? Promise.resolve([[mockActor]])
+      : mockDb(sql, opts)),
+  },
 }));
 jest.mock('../src/services/workdayConfig', () => ({
   loadWorkdayConfig: jest.fn(async () => ({ forDate: () => null, historyFor: () => [] })),
@@ -24,7 +33,7 @@ process.env.JWT_SECRET = 'test-secret-payroll-export';
 const express = require('express');
 const http = require('http');
 const jwt = require('jsonwebtoken');
-const { sequelize } = require('../src/config/database');
+const sequelize = { query: mockDb };
 const payrollRouter = require('../src/routes/payroll');
 
 const NOCTURNO = [
@@ -40,6 +49,7 @@ const BASE_ROW = {
 };
 
 function token(role) {
+  mockActor = { id: 1, username: 'u1', role, active: 1, employee_id: null };
   return jwt.sign({ id: 1, role }, process.env.JWT_SECRET, { algorithm: 'HS256' });
 }
 
@@ -67,7 +77,7 @@ describe('RBAC /api/payroll/export.* ', () => {
     });
   }
 
-  test('rol employee → 403 (authorize corta antes de la BD)', async () => {
+  test('rol employee → 403 (authorize corta antes de consultar datos)', async () => {
     const { status } = await get('/api/payroll/export.json?year=2025&month=1', 'employee');
     expect(status).toBe(403);
     expect(sequelize.query).not.toHaveBeenCalled();
