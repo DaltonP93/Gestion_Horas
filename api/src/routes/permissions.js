@@ -513,7 +513,7 @@ router.get('/:id/attachment', async (req, res) => {
     if (!full) return res.status(404).json({ error: 'Adjunto no encontrado' });
     if (!fs.existsSync(full)) return res.status(410).json({ error: 'Archivo ya no está disponible' });
     const mime = ATTACHMENT_MIMES.has(perm.attachment_mime) ? perm.attachment_mime : 'application/octet-stream';
-    sendPrivateFile(res, full, { mime, downloadName: perm.attachment_filename || path.basename(full) });
+    return sendPrivateFile(res, full, { mime, downloadName: perm.attachment_filename || path.basename(full) });
   } catch (err) {
     logInternalError(logger, { event: 'permissions attachment download', route: 'permissions GET /:id/attachment', err, req });
     res.status(500).json({ error: 'Error interno' });

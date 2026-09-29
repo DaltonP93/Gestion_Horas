@@ -188,7 +188,7 @@ router.get('/:docId/download',
       req, user: req.user, action: 'employee.document.download',
       entity: 'employee', entity_id: employeeId, details: { id: doc.id },
     });
-    sendPrivateFile(res, full, { mime: doc.mime, downloadName: doc.filename });
+    return sendPrivateFile(res, full, { mime: doc.mime, downloadName: doc.filename });
   })
 );
 

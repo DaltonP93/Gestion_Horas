@@ -14,6 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { pipeline } = require('stream');
 
 const UPLOADS_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox";
 const SAFE_MIMES = new Set([
@@ -53,25 +54,91 @@ function resolvePrivatePath(url, { subdir = null, namePattern = null } = {}) {
 }
 
 /**
+ * Envía el archivo con manejo completo de errores (sin depender del manejador
+ * global de excepciones):
+ *   - se ABRE antes de fijar cabeceras: si desapareció entre la comprobación
+ *     y la apertura, o no es un archivo regular → 404 no-store;
+ *   - error de lectura antes del primer byte → 500 controlado (JSON);
+ *   - error o cancelación del cliente durante la transferencia → se corta la
+ *     conexión y se cierra el descriptor (stream.pipeline).
+ * Nunca rechaza: resuelve cuando la respuesta terminó o se abortó.
+ *
  * @param {object} res
  * @param {string} fullPath
  * @param {{mime?:string, downloadName?:string, inline?:boolean}} opts
+ * @returns {Promise<void>}
  */
-function sendPrivateFile(res, fullPath, { mime, downloadName, inline = false } = {}) {
-  if (!fullPath || !fs.existsSync(fullPath)) {
+async function sendPrivateFile(res, fullPath, { mime, downloadName, inline = false } = {}) {
+  const notFound = () => {
+    if (res.headersSent) return;
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(404).json({ error: 'Archivo no encontrado' });
+    res.status(404).json({ error: 'Archivo no encontrado' });
+  };
+  if (!fullPath) return notFound();
+
+  let fh;
+  let size;
+  try {
+    fh = await fs.promises.open(fullPath, 'r');
+    const st = await fh.stat();
+    if (!st.isFile()) throw Object.assign(new Error('no es un archivo'), { code: 'ENOTFILE' });
+    size = st.size;
+  } catch {
+    if (fh) await fh.close().catch(() => {});
+    return notFound();
   }
+
   const guessed = MIME_BY_EXT[path.extname(fullPath).toLowerCase()];
   const type = SAFE_MIMES.has(mime) ? mime : (guessed || 'application/octet-stream');
   const name = String(downloadName || path.basename(fullPath)).replace(/[^\w.\- ]/g, '_').slice(-120);
   res.setHeader('Content-Type', type);
+  res.setHeader('Content-Length', String(size));
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', UPLOADS_CSP);
   const disposition = inline && type.startsWith('image/') ? 'inline' : 'attachment';
   res.setHeader('Content-Disposition', `${disposition}; filename="${name}"`);
-  return fs.createReadStream(fullPath).pipe(res);
+
+  // autoClose: el FileHandle se cierra al terminar o al destruirse el stream.
+  const stream = fh.createReadStream();
+  // Un error nunca queda sin listener (pipeline agrega el suyo después).
+  stream.on('error', () => {});
+
+  // Primer bloque ANTES de enviar cabeceras: si la lectura falla acá se
+  // responde de forma controlada en vez de cortar la conexión.
+  let first;
+  try {
+    first = await new Promise((resolve, reject) => {
+      const done = (fn, v) => { stream.off('data', onData); stream.off('end', onEnd); stream.off('error', onErr); fn(v); };
+      const onData = (chunk) => { stream.pause(); done(resolve, chunk); };
+      const onEnd = () => done(resolve, null);
+      const onErr = (e) => done(reject, e);
+      stream.on('data', onData);
+      stream.once('end', onEnd);
+      stream.once('error', onErr);
+    });
+  } catch {
+    stream.destroy();
+    if (!res.headersSent) {
+      res.removeHeader('Content-Length');
+      res.removeHeader('Content-Disposition');
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(500).json({ error: 'No se pudo leer el archivo' });
+    }
+    return undefined;
+  }
+  if (first === null) { res.end(); return undefined; }
+
+  res.write(first);
+  return new Promise((resolve) => {
+    pipeline(stream, res, (err) => {
+      // Con la transferencia ya empezada, pipeline destruye la respuesta: el
+      // cliente ve una respuesta incompleta, nunca un archivo "completo"
+      // truncado. La cancelación del cliente destruye el stream (cierra el fd).
+      if (err && !res.destroyed) res.destroy();
+      resolve();
+    });
+  });
 }
 
 module.exports = { resolvePrivatePath, sendPrivateFile, uploadDir, SAFE_MIMES };

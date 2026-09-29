@@ -697,7 +697,7 @@ router.get('/documents/:id/download', asyncHandler(async (req, res) => {
     req, user: req.user, action: 'me.document.download',
     entity: 'employee_document', entity_id: doc.id, details: {},
   });
-  sendPrivateFile(res, full, { mime: doc.mime, downloadName: doc.filename });
+  return sendPrivateFile(res, full, { mime: doc.mime, downloadName: doc.filename });
 }));
 
 // ─── GET /api/me/payslip/pdf?year=&month= ───────────────────────
