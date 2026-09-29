@@ -6,8 +6,10 @@
  * en un UPLOAD_DIR temporal. Sólo la base está simulada (datos sintéticos).
  *
  *   - el tipo lo decide el CONTENIDO (extensión y MIME declarados no bastan);
- *   - PDF sin terminador, imagen truncada, ZIP truncado, ZIP que no es OOXML
- *     y paquetes con macros → 400 sin archivo;
+ *   - PDF sin terminador, imagen truncada, ZIP truncado, ZIP que no es OOXML,
+ *     nombres OOXML correctos con contenido no XML, cabecera local corrupta,
+ *     entrada ilegible, paquetes con macros y bomba de compresión → 400 sin
+ *     archivo, sin INSERT y sin auditoría;
  *   - PDF, PNG, DOCX y XLSX legítimos → 201 con la extensión y el MIME reales;
  *   - autorización (rol, capacidad, id, existencia) ANTES de escribir en disco;
  *   - fallo del SELECT o del INSERT → sin huérfanos; los archivos previos de
@@ -17,7 +19,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const zlib = require('zlib');
+const { readZip } = require('../src/utils/ooxml');
+const { makeZip, centralEntries, dataOffset } = require('./helpers/zipTools');
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sishoras-docs-'));
 process.env.UPLOAD_DIR = TMP;
@@ -78,34 +81,45 @@ const PDF_OK = Buffer.from(`%PDF-1.7\n${'x'.repeat(200)}\n%%EOF\n`);
 const PDF_TRUNC = Buffer.from(`%PDF-1.7\n${'x'.repeat(200)}\n`);
 const png = () => sharp({ create: { width: 16, height: 16, channels: 3, background: { r: 1, g: 2, b: 3 } } }).png().toBuffer();
 
-/** ZIP mínimo (método STORE) con las entradas dadas. */
-function makeZip(entries) {
-  const locals = []; const centrals = []; let offset = 0;
-  for (const [name, content] of Object.entries(entries)) {
-    const data = Buffer.from(content);
-    const nm = Buffer.from(name);
-    const crc = zlib.crc32(data);
-    const lh = Buffer.alloc(30);
-    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt32LE(crc, 14);
-    lh.writeUInt32LE(data.length, 18); lh.writeUInt32LE(data.length, 22); lh.writeUInt16LE(nm.length, 26);
-    const ch = Buffer.alloc(46);
-    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt32LE(crc, 16);
-    ch.writeUInt32LE(data.length, 20); ch.writeUInt32LE(data.length, 24); ch.writeUInt16LE(nm.length, 28);
-    ch.writeUInt32LE(offset, 42);
-    locals.push(lh, nm, data); centrals.push(ch, nm);
-    offset += 30 + nm.length + data.length;
-  }
-  const cd = Buffer.concat(centrals);
-  const eocd = Buffer.alloc(22);
-  const n = Object.keys(entries).length;
-  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(n, 8); eocd.writeUInt16LE(n, 10);
-  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, cd, eocd]);
-}
-const CT = '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>';
-const DOCX = () => makeZip({ '[Content_Types].xml': CT, '_rels/.rels': '<r/>', 'word/document.xml': '<w:document/>' });
-const DOCM = () => makeZip({ '[Content_Types].xml': CT, 'word/document.xml': '<w:document/>', 'word/vbaProject.bin': 'VBA' });
+// DOCX real generado por LibreOffice Writer (tests/fixtures/ooxml/README.md) y
+// variantes inválidas construidas a partir de él.
+const DOCX_REAL = fs.readFileSync(path.join(__dirname, 'fixtures', 'ooxml', 'sintetico-libreoffice.docx'));
+const rebuildDocx = (mutate) => {
+  const m = new Map(readZip(DOCX_REAL));
+  mutate(m);
+  return makeZip([...m.entries()]);
+};
+// Caso de la revisión 1: nombres correctos, contenido que no es XML.
+const NAMES_OK_NOT_XML = () => makeZip({ '[Content_Types].xml': 'no soy xml', 'word/document.xml': 'tampoco' });
+// Caso de la revisión 2: directorio central intacto, cabecera local de
+// word/document.xml corrupta.
+const LOCAL_HEADER_CORRUPT = () => {
+  const buf = Buffer.from(DOCX_REAL);
+  const e = centralEntries(buf).find((x) => x.name === 'word/document.xml');
+  buf.writeUInt32LE(0xdeadbeef, e.localOffset);
+  return buf;
+};
+// Entrada ilegible: flujo DEFLATE corrupto.
+const DEFLATE_CORRUPT = () => {
+  const m = new Map(readZip(DOCX_REAL));
+  const buf = makeZip([...m.entries()], { deflate: true });
+  const off = dataOffset(buf, 'word/document.xml');
+  buf.fill(0xff, off, off + 32);
+  return buf;
+};
+// Macros por contenido: tipo macroEnabled en la parte principal (docm renombrado).
+const DOCM_RENAMED = () => rebuildDocx((m) => {
+  m.set('[Content_Types].xml', Buffer.from(m.get('[Content_Types].xml').toString().replace(
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
+    'application/vnd.ms-word.document.macroEnabled.main+xml')));
+});
 const NOT_OOXML = () => makeZip({ 'hola.txt': 'no soy un documento' });
+// Límite del lector: bomba de compresión.
+const ZIP_BOMB = () => {
+  const m = new Map(readZip(DOCX_REAL));
+  m.set('word/media/ceros.txt', Buffer.alloc(8 * 1024 * 1024));
+  return makeZip([...m.entries()], { deflate: true });
+};
 async function realXlsx() {
   const ExcelJS = require('exceljs');
   const wb = new ExcelJS.Workbook();
@@ -144,9 +158,14 @@ describe('contenido', () => {
     ['texto presentado como PDF (extensión y MIME de PDF)', () => Buffer.from('esto es texto plano, no un PDF '.repeat(10)), 'cert.pdf', 'application/pdf'],
     ['PDF sin terminador %%EOF', () => PDF_TRUNC, 'cert.pdf', 'application/pdf'],
     ['PNG truncado', async () => (await png()).subarray(0, 40), 'foto.png', 'image/png'],
-    ['ZIP truncado presentado como DOCX', () => DOCX().subarray(0, 60), 'c.docx', MIME_DOCX],
+    ['ZIP truncado presentado como DOCX', () => DOCX_REAL.subarray(0, 60), 'c.docx', MIME_DOCX],
     ['ZIP que no es OOXML presentado como DOCX', NOT_OOXML, 'c.docx', MIME_DOCX],
-    ['paquete con macros presentado como DOCX', DOCM, 'c.docx', MIME_DOCX],
+    ['nombres correctos con contenido que no es XML', NAMES_OK_NOT_XML, 'c.docx', MIME_DOCX],
+    ['cabecera local corrupta con directorio central intacto', LOCAL_HEADER_CORRUPT, 'c.docx', MIME_DOCX],
+    ['entrada DEFLATE ilegible', DEFLATE_CORRUPT, 'c.docx', MIME_DOCX],
+    ['document.xml no XML dentro del paquete real', () => rebuildDocx((m) => m.set('word/document.xml', Buffer.from('texto plano'))), 'c.docx', MIME_DOCX],
+    ['paquete con macros (docm renombrado a .docx)', DOCM_RENAMED, 'c.docx', MIME_DOCX],
+    ['bomba de compresión (límite del lector)', ZIP_BOMB, 'c.docx', MIME_DOCX],
     ['texto con MIME de XLSX', () => Buffer.from('a,b,c\n1,2,3\n'), 'x.xlsx', MIME_XLSX],
   ])('%s → 400, sin archivo nuevo ni INSERT', async (_n, make, name, type) => {
     const r = await post(100, 1, { buf: await make(), name, type });
@@ -159,7 +178,7 @@ describe('contenido', () => {
   test.each([
     ['PDF', () => PDF_OK, 'cert.pdf', 'application/pdf', 'pdf', 'application/pdf'],
     ['PNG', png, 'foto.png', 'image/png', 'png', 'image/png'],
-    ['DOCX', DOCX, 'contrato.docx', MIME_DOCX, 'docx', MIME_DOCX],
+    ['DOCX (generado por LibreOffice Writer)', () => DOCX_REAL, 'contrato.docx', MIME_DOCX, 'docx', MIME_DOCX],
     ['XLSX (generado con exceljs)', realXlsx, 'planilla.xlsx', MIME_XLSX, 'xlsx', MIME_XLSX],
     ['PNG declarado como PDF: manda el contenido', png, 'raro.pdf', 'application/pdf', 'png', 'image/png'],
   ])('%s legítimo → 201 con extensión y MIME reales', async (_n, make, name, type, ext, mime) => {
