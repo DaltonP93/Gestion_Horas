@@ -32,11 +32,14 @@ jobs:
         run: bash scripts/tests/ops-scripts.test.sh
 
   uploads-nginx:
-    # /uploads en nginx AISLADO (127.0.0.1, puertos altos, archivos temporales)
-    # con las configuraciones VERSIONADAS del repo: despliegue (código nuevo) y
-    # recuperación (guard de ef82b32 y main 7638fa9 sin guard). Sólo los
-    # recursos de marca listados responden; lo privado queda en 404.
-    name: Uploads — nginx aislado (despliegue y recuperación)
+    # /uploads y recursos de marca en nginx AISLADO (127.0.0.1, puertos altos,
+    # archivos temporales) con las configuraciones VERSIONADAS del repo.
+    # Con el código nuevo, DESPUÉS del arranque, cambia cada recurso de marca
+    # desde el endpoint real (subir, reemplazar, restablecer) y verifica la URL
+    # anunciada por nginx, sin tocar su configuración. Recuperación con el guard
+    # de ef82b32 y main 7638fa9 sin guard: la marca nueva sigue visible y lo
+    # privado queda en 404.
+    name: Uploads — nginx aislado (marca desde la app, despliegue y recuperación)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -47,7 +50,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
-      - name: Dependencias de la API (express para los backends de prueba)
+      - name: Dependencias de la API (router real de ajustes para el backend de prueba)
         working-directory: api
         run: npm ci || npm install
       - name: nginx disponible
@@ -55,20 +58,9 @@ jobs:
           command -v nginx || (sudo apt-get update -q && sudo apt-get install -y -q nginx-light)
           sudo systemctl stop nginx 2>/dev/null || true
           nginx -v
-      - name: Sintaxis del generador y de la prueba
-        run: |
-          bash -n scripts/gen-nginx-uploads-allowlist.sh
-          bash -n deploy/tests/nginx-uploads-isolated.sh
-      - name: Generador fail-closed (valores inválidos → no escribe, exit 3)
-        run: |
-          set +e
-          printf '/uploads/selfies/selfie_1_1.jpg\n' > /tmp/bad.txt
-          scripts/gen-nginx-uploads-allowlist.sh --upstream http://127.0.0.1:4000 --from-file /tmp/bad.txt -o /tmp/out.conf
-          RC=$?
-          set -e
-          [ "$RC" = "3" ] || { echo "❌ esperado exit 3, obtuvo $RC"; exit 1; }
-          [ ! -e /tmp/out.conf ] || { echo "❌ escribió pese a valores inválidos"; exit 1; }
-      - name: nginx aislado — despliegue y recuperación
+      - name: Sintaxis de la prueba
+        run: bash -n deploy/tests/nginx-uploads-isolated.sh
+      - name: nginx aislado — marca desde la app, despliegue y recuperación
         run: sudo -E env "PATH=$PATH" bash deploy/tests/nginx-uploads-isolated.sh
 
   bridge-tests:

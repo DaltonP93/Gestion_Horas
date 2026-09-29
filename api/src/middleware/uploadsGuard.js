@@ -12,6 +12,8 @@
  *   cachea brevemente; `invalidatePublicAssets()` la refresca al cambiar la
  *   configuración. Si la lectura falla → no se sirve nada (fail-closed).
  * - Sólo archivos en la raíz de uploads (un segmento), con extensión de imagen.
+ * - Además, `brand/<archivo-imagen>`: la carpeta de recursos de marca es pública
+ *   por diseño (services/brandAssets: sólo recibe cargas de marca).
  * - Lo servido lleva nosniff, CSP sandbox y caché pública acotada.
  */
 
@@ -77,7 +79,13 @@ function invalidatePublicAssets() {
 /** ¿La ruta pedida es un recurso público configurado? */
 async function isPublicUploadPath(reqPath) {
   const rel = normalizedRelPath(reqPath);
-  if (!rel || rel.includes('/')) return false;
+  if (!rel) return false;
+  const parts = rel.split('/');
+  if (parts.length === 2 && parts[0] === 'brand') {
+    // require diferido: evita el ciclo con services/brandAssets.
+    return require('../services/brandAssets').BRAND_NAME_RE.test(parts[1]);
+  }
+  if (parts.length !== 1) return false;
   if (!PUBLIC_EXTENSIONS.has(path.posix.extname(rel).toLowerCase())) return false;
   try {
     return (await loadPublicNames()).has(rel);

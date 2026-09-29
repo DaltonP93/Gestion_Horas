@@ -10,7 +10,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
-const { invalidatePublicAssets } = require('../middleware/uploadsGuard');
+const { invalidatePublicAssets, setPublicUploadHeaders } = require('../middleware/uploadsGuard');
+const brand = require('../services/brandAssets');
 const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
 const audit = require('../services/audit');
 
@@ -187,7 +188,9 @@ router.get('/', async (req, res) => {
     const settings = { ...PUBLIC_DEFAULTS };
     // Doble resguardo: aunque la query ya filtra, sólo copiamos claves públicas.
     for (const row of rows) if (PUBLIC_KEY_SET.has(row.setting_key)) settings[row.setting_key] = row.setting_value;
-    res.json(settings);
+    // Marca: los valores heredados en la raíz de uploads se anuncian por la ruta
+    // pública estable /api/settings/brand/:kind (services/brandAssets).
+    res.json(brand.presentSettings(settings));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -206,7 +209,7 @@ router.get('/admin', authenticate, authorize('admin', 'gth', 'gestor'), requireP
     );
     const settings = { ...DEFAULTS };
     for (const row of rows) settings[row.setting_key] = row.setting_value;
-    res.json(settings);
+    res.json(brand.presentSettings(settings));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -216,13 +219,36 @@ router.get('/admin', authenticate, authorize('admin', 'gth', 'gestor'), requireP
 router.put('/', authenticate, authorize('admin', 'gth', 'gestor'), requirePermission('configuracion', 'update'), async (req, res) => {
   try {
     const updates = req.body || {};
-    let count = 0;
+    // Marca: se valida TODO antes de escribir. Un ajuste de marca sólo puede
+    // apuntar a uploads/brand/ (o conservarse/vaciarse): no se puede publicar
+    // un archivo privado cambiando la URL a mano.
+    const brandKeys = Object.keys(updates).filter((k) => brand.BRAND_KEYS.includes(k));
+    const current = {};
+    if (brandKeys.length) {
+      const [rows] = await sequelize.query(
+        `SELECT setting_key, setting_value FROM notification_settings WHERE setting_key IN (${brandKeys.map(() => '?').join(',')})`,
+        { replacements: brandKeys }
+      );
+      for (const r of rows || []) current[r.setting_key] = r.setting_value;
+    }
+    const writes = [];
     for (const [key, value] of Object.entries(updates)) {
       if (!SETTING_KEYS.includes(key)) continue;
+      if (brand.BRAND_KEYS.includes(key)) {
+        const d = brand.checkIncomingValue(key, value, current[key] ?? DEFAULTS[key]);
+        if (d.action === 'reject') return res.status(400).json({ error: d.error, key });
+        if (d.action === 'skip') continue;
+        writes.push([key, d.value]);
+      } else {
+        writes.push([key, value == null ? '' : String(value)]);
+      }
+    }
+    let count = 0;
+    for (const [key, value] of writes) {
       await sequelize.query(
         `INSERT INTO notification_settings (setting_key, setting_value) VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
-        { replacements: [key, value == null ? '' : String(value)] }
+        { replacements: [key, value] }
       );
       count++;
     }
@@ -253,8 +279,11 @@ router.post('/reset', authenticate, authorize('admin', 'gth'), requirePermission
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '..', '..', 'uploads'));
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
+// Recursos de marca → uploads/brand/ (público por diseño). Firma, sello y
+// cualquier otra carga → raíz de uploads (privada; se sirve autenticada).
+const isBrandKind = (req) => Object.prototype.hasOwnProperty.call(brand.BRAND_KINDS, String(req.query.kind || ''));
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  destination: (req, _file, cb) => cb(null, isBrandKind(req) ? brand.ensureBrandDir() : UPLOAD_DIR),
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     const base = crypto.randomBytes(6).toString('hex');
@@ -271,9 +300,14 @@ const ALLOWED_MIME = [
 const upload = multer({
   storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (_req, file, cb) => {
+  fileFilter: (req, file, cb) => {
     if (!ALLOWED_MIME.includes(file.mimetype)) {
       return cb(new Error(`Tipo de archivo no permitido: ${file.mimetype}`));
+    }
+    // El nombre publicado en uploads/brand debe tener extensión de imagen.
+    const ext = path.extname(file.originalname).toLowerCase().slice(1);
+    if (isBrandKind(req) && !brand.BRAND_EXTENSIONS.includes(ext)) {
+      return cb(new Error('Extensión de imagen no permitida'));
     }
     cb(null, true);
   },
@@ -351,8 +385,8 @@ router.post('/upload', authenticate, authorize('admin', 'gth'), requirePermissio
       return res.status(400).json({ error: 'No se pudo verificar el archivo' });
     }
 
-    const publicUrl = `/uploads/${req.file.filename}`;
     const kind = (req.query.kind || '').toString();
+    const publicUrl = isBrandKind(req) ? `/uploads/brand/${req.file.filename}` : `/uploads/${req.file.filename}`;
     const kindToKey = {
       logo:       'system_logo_url',
       favicon:    'system_favicon_url',
@@ -377,7 +411,10 @@ router.post('/upload', authenticate, authorize('admin', 'gth'), requirePermissio
         `INSERT INTO notification_settings (setting_key, setting_value) VALUES (?, ?)
          ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
         { replacements: [key, publicUrl] }
-      ).then(() => { invalidatePublicAssets(); done(); }).catch(() => res.status(500).json({ error: 'Error interno' }));
+      ).then(() => { invalidatePublicAssets(); done(); }).catch(() => {
+        // La persistencia falló: se retira el archivo recién subido.
+        fs.promises.unlink(req.file.path).catch(() => {}).then(() => res.status(500).json({ error: 'Error interno' }));
+      });
     } else {
       done();
     }
@@ -386,6 +423,35 @@ router.post('/upload', authenticate, authorize('admin', 'gth'), requirePermissio
 
 // ─── Webhooks Slack / Teams ──────────────────────────────────────
 const WEBHOOK_KEYS = ['slack_webhook_url', 'teams_webhook_url', 'webhook_notify_absences', 'webhook_notify_late', 'webhook_notify_device_down', 'webhook_notify_backup'];
+
+// GET /api/settings/brand/:kind — PÚBLICO. Sirve el recurso de marca vigente
+// (logo | favicon | pwa_icon | login_bg). Existe para los valores heredados que
+// quedaron en la raíz de uploads antes de uploads/brand/ (nginx no publica la
+// raíz). Sólo resuelve las cuatro claves de marca: firma y sello no son
+// alcanzables por acá. Ver services/brandAssets.
+router.get('/brand/:kind', async (req, res) => {
+  const key = brand.BRAND_KINDS[req.params.kind];
+  const notFound = () => { res.setHeader('Cache-Control', 'no-store'); return res.status(404).json({ error: 'No encontrado' }); };
+  if (!key) return notFound();
+  try {
+    const [[row]] = await sequelize.query(
+      'SELECT setting_value FROM notification_settings WHERE setting_key = ? LIMIT 1',
+      { replacements: [key] }
+    );
+    const value = row && row.setting_value;
+    const brandName = brand.brandFileName(value);
+    const legacyName = brand.legacyFileName(value);
+    const full = brandName ? path.join(brand.brandDir(), brandName)
+      : legacyName ? resolvePrivatePath(`/uploads/${legacyName}`) : null;
+    if (!full || !fs.existsSync(full)) return notFound();
+    setPublicUploadHeaders(res);
+    return res.sendFile(full, { dotfiles: 'deny', headers: { 'Cache-Control': 'public, max-age=3600' } }, (err) => {
+      if (err && !res.headersSent) notFound();
+    });
+  } catch {
+    return notFound();
+  }
+});
 
 // GET /api/settings/assets/:kind — firma o sello institucional, servidos con
 // autorización (ya no son públicos). Sólo admin/gth con configuracion.view.

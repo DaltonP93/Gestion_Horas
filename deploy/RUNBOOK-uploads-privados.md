@@ -7,7 +7,7 @@
 
 | Antes | Después |
 |---|---|
-| `/uploads/*` servía cualquier imagen de la raíz (avatares, firma, sello) y nginx agregaba `Cache-Control: public, immutable` + `expires 7d`. | **nginx** bloquea `/uploads/` por defecto y sólo deja pasar, por **nombre exacto**, los recursos de marca configurados en Apariencia (logo, favicon, icono PWA, fondo de login). La API aplica además su propia lista positiva. Todo lo demás responde `404`. |
+| `/uploads/*` servía cualquier imagen de la raíz (avatares, firma, sello) y nginx agregaba `Cache-Control: public, immutable` + `expires 7d`. | **nginx** bloquea `/uploads/` y sólo publica `/uploads/brand/<imagen>`: la carpeta a la que van **únicamente** los recursos de marca subidos desde Apariencia (logo, favicon, icono PWA, fondo de login). Los logos heredados de la raíz se sirven por `/api/settings/brand/:kind`. Todo lo demás responde `404`. Cambiar la marca desde la aplicación no requiere tocar nginx. |
 | Fotos personales, firma y sello por URL pública. | Por endpoints autenticados con capacidad y alcance: `GET /api/me/photo`, `GET /api/employees/:id/photo`, `GET /api/settings/assets/:kind` (firma/sello), `GET /api/attendance/logs/:id/selfie`, `GET /api/permissions/:id/attachment`. Respuestas con `Cache-Control: private, no-store`. |
 | Tipo del archivo según extensión/MIME del cliente. | Tipo según contenido; imágenes decodificadas por completo (dependencia `sharp` en la API), PDF con cabecera y terminador, DOCX/XLSX con estructura OOXML válida y sin macros. |
 | Rol/estado del usuario tomados del JWT (hasta 1 h). | La API lee rol, estado y empleado vigentes de `users` en cada solicitud: una cuenta desactivada o degradada deja de acceder aunque su token siga vigente. |
@@ -19,9 +19,10 @@ referencia interna; sólo cambia quién puede leerlas y por dónde.
 ## Antes de desplegar
 
 1. **Backup verificado** según `docs/BACKUP_RESTORE.md` (SHA-256, gzip, restaurabilidad).
-2. **Recursos de marca**: en Apariencia, confirmar que logo/favicon/icono PWA/fondo
-   apunten a `/uploads/<archivo>` (un solo segmento, extensión de imagen). Un
-   recurso fuera de esa forma dejará de servirse: volver a subirlo desde Apariencia.
+2. **Recursos de marca**: no requieren acción. Los ya configurados en la raíz de
+   uploads se siguen viendo por `/api/settings/brand/<kind>`; los que se suban
+   después van a `uploads/brand/`. Un valor que no sea una imagen de un solo
+   segmento en `/uploads/` dejará de servirse: volver a subirlo desde Apariencia.
 3. **Dependencias**: `npm ci` en `api/` instala `sharp` (binarios precompilados
    desde el registro npm, igual que ya ocurre en `web/`). Verificar
    `node -e "require('sharp')"` en la release nueva antes de conmutar.
@@ -29,58 +30,46 @@ referencia interna; sólo cambia quién puede leerlas y por dónde.
    autenticados. Una web vieja contra la API nueva mostrará iniciales en lugar de
    fotos (sin error funcional). Desplegar ambas en la misma release.
 
-## nginx (default deny + lista exacta)
+## nginx (bloqueo por defecto + carpeta pública de marca)
 
-Logos y firmas comparten el formato de nombre (`<epoch>_<hex>.<ext>`): un bloqueo
-por prefijo no alcanza. nginx sirve **sólo** los nombres listados en
-`/etc/nginx/snippets/sishoras-uploads-public.conf`; el resto de `/uploads/`
-responde `404` en nginx, sin llegar a la API. Esta capa no depende del código de
-la API y sigue vigente si se vuelve a una release anterior.
+nginx responde `404` a todo `/uploads/` **salvo** `/uploads/brand/<archivo>`
+(un segmento, extensión de imagen, sólo GET, reescrito a la ruta canónica).
+`uploads/brand/` recibe **únicamente** cargas de marca desde Apariencia; firma,
+sello, fotos, selfies, documentos y adjuntos se guardan fuera de ella y se
+sirven sólo por endpoints autenticados. La API impide además que un ajuste de
+marca apunte a otro archivo de `/uploads` (PUT → 400).
 
-1. **Revisar el nginx real** (antes de tocar nada; sólo lectura):
+- **Cambios de marca**: subir, reemplazar o restablecer desde Apariencia se
+  refleja de inmediato; nginx no se toca.
+- **Logos heredados** (ya configurados en la raíz antes de este cambio): no se
+  mueven. La API los anuncia como `/api/settings/brand/<kind>?v=…` (ruta
+  pública que resuelve el ajuste vigente, sólo para las cuatro claves de
+  marca). Al volver a subirlos desde Apariencia pasan a `uploads/brand/`.
+
+1. **Revisar el nginx real** (sólo lectura, antes de tocar nada):
 
    ```bash
    sudo nginx -T 2>/dev/null | grep -nE 'uploads|alias |root |proxy_cache|expires'
    ```
 
-   No debe quedar otra `location` que sirva `/uploads` (ni un `alias`/`root` a la
+   No debe quedar otra `location` que sirva `/uploads` (ni `alias`/`root` a la
    carpeta de uploads, ni `proxy_cache`/`expires` sobre `/uploads/` o `/api/`).
-   Si aparece, se reemplaza por el bloque del repo.
 
-2. **Generar la lista exacta** desde la base (un único `SELECT` de lectura sobre
-   `notification_settings`; usuario de sólo lectura en un defaults-file `0600`):
-
-   ```bash
-   sudo DB_NAME=asistencia MYSQL_DEFAULTS_FILE=/root/.sishoras-ro.cnf \
-     scripts/gen-nginx-uploads-allowlist.sh --upstream http://127.0.0.1:4000 \
-     -o /etc/nginx/snippets/sishoras-uploads-public.conf
-   sudo cat /etc/nginx/snippets/sishoras-uploads-public.conf   # revisar: sólo logo/favicon/PWA/fondo
-   ```
-
-   Si algún valor no es un recurso público válido el script **no escribe** y sale
-   con código 3 (corregirlo en Apariencia o usar `--skip-invalid` conscientemente).
-   Stack de compose: `--upstream http://api:4000 -o deploy/nginx-snippets/sishoras-uploads-public.conf`
-   (montado por `docker-compose.yml`). El archivo versionado está vacío a
-   propósito: sin regenerarlo no se sirve nada de `/uploads/` (login sin logo,
-   nada privado expuesto).
-
-3. **Aplicar** el bloque `/uploads/` de `deploy/nginx-sishoras.conf` (include del
-   snippet + `location /uploads/ { return 404; }`) y recargar:
+2. **Aplicar** los dos bloques `/uploads/` de `deploy/nginx-sishoras.conf`
+   (compose: `deploy/nginx.compose.conf`; no requiere archivos montados extra)
+   y recargar:
 
    ```bash
    sudo nginx -t && sudo systemctl reload nginx
    ```
 
-4. **Cambios de marca posteriores**: al subir un logo/favicon nuevo en
-   Apariencia hay que **regenerar** el snippet (paso 2) y recargar nginx; hasta
-   entonces el recurso nuevo responde 404 (falla cerrada).
-
 **Prueba aislada reproducible** (no toca el sistema): `deploy/tests/nginx-uploads-isolated.sh`
-levanta nginx en 127.0.0.1 con las dos configuraciones del repo y verifica
-despliegue (código nuevo) y recuperación (guard de `ef82b32` y main `7638fa9`
-sin guard): logo/favicon 200; firma/sello numéricos, fotos, selfies,
-documentos, justificativos, carpetas desconocidas y rutas con recorrido 404.
-También corre en CI.
+levanta nginx en 127.0.0.1 con las dos configuraciones del repo. Con el código
+nuevo, **después del arranque**, cambia cada recurso de marca desde el endpoint
+real (subir, reemplazar, restablecer) y verifica la URL anunciada por nginx;
+comprueba el logo heredado y que la firma no se pueda publicar. Luego repite
+con el guard de `ef82b32` y main `7638fa9` sin guard (recuperación): la marca
+nueva sigue visible y lo privado queda en 404. También corre en CI.
 
 ## Copias ya cacheadas (no se retiran con una cabecera)
 
@@ -106,8 +95,11 @@ Con la configuración anterior, toda respuesta `2xx` de `/uploads/` salió con
 
 ```bash
 BASE=https://<dominio>
-# Público configurado → 200, Cache-Control: public, max-age=3600
-curl -sI "$BASE/uploads/<logo-configurado>" | grep -iE '^HTTP|cache-control'
+# Marca: la URL que anuncia GET /api/settings (system_logo_url, etc.) → 200,
+# Cache-Control: public, max-age=3600 (/uploads/brand/... o /api/settings/brand/...)
+LOGO=$(curl -s "$BASE/api/settings" | node -pe 'JSON.parse(require("fs").readFileSync(0)).system_logo_url')
+[ -n "$LOGO" ] && curl -sI "$BASE$LOGO" | grep -iE '^HTTP|cache-control'
+# Cambiar el logo desde Apariencia y repetir: la URL nueva responde sin tocar nginx.
 # Privados por URL directa → 404, Cache-Control: no-store (incluida la firma con nombre numérico)
 for p in "<firma-configurada-epoch_hex.png>" "<avatar_...png>" "permissions/<archivo>" "selfies/<archivo>" "employee-documents/<archivo>"; do
   curl -s -o /dev/null -w "%{http_code} $p\n" "$BASE/uploads/$p"
@@ -121,23 +113,23 @@ empleado y firma/sello en Configuración › Firma.
 
 ## Recuperación conservando los controles de acceso
 
-La protección de `/uploads/` vive en **nginx** (default deny + lista exacta), no
-en el código de la API. Por eso:
+La protección de `/uploads/` vive en **nginx** (bloqueo por defecto + carpeta
+pública de marca), no en el código de la API. Por eso:
 
 1. **No se revierte la configuración de nginx** al volver a una release anterior
-   de la API o de la web. El bloque `/uploads/` y el snippet generado se
-   mantienen tal cual. (El runbook anterior proponía bloquear sólo prefijos
-   `avatar_`/`signature_`/`seal_` y tres carpetas: no cubría firmas y sellos
-   subidos por formulario, que se guardan en la raíz con nombre numérico.)
-2. **Problema sólo de la web**: volver a la release web anterior. Las fotos y la
-   firma dejan de verse en la web vieja (degradación aceptada), nada se expone.
-3. **Problema en la API**: preferir corregir hacia adelante. Si hay que volver a
-   la release anterior, hacerlo **sin** tocar nginx; verificar inmediatamente con
-   los `curl` de la sección anterior que lo privado sigue en 404 y el logo en 200.
-   Con la release anterior, la revocación inmediata de sesiones (identidad
-   vigente) y la validación de documentos por contenido dejan de aplicar: es una
-   degradación de la API, no una reapertura de `/uploads/`.
+   de la API o de la web.
+2. **Con la release anterior de la API**: los recursos de marca subidos a
+   `uploads/brand/` siguen visibles (nginx los publica y la API anterior los
+   sirve como estático); lo privado sigue en 404 porque nginx lo corta antes.
+   Degradaciones aceptadas mientras dure la recuperación: los logos heredados
+   de la raíz no se ven (la ruta `/api/settings/brand/:kind` no existe en la
+   versión anterior), una carga de marca hecha con la versión anterior se guarda
+   en la raíz y no se publica, y dejan de aplicar la revocación inmediata de
+   sesiones y la validación de documentos por contenido. Ninguna reabre
+   archivos privados.
+3. **Problema sólo de la web**: volver a la release web anterior; las fotos y la
+   firma dejan de verse en la web vieja, nada se expone.
 4. **Si hubiera que retirar el bloqueo de nginx** (no recomendado), el único
-   reemplazo aceptable es otro bloqueo por defecto con lista exacta; nunca un
-   `location /uploads/` que haga proxy de todo.
+   reemplazo aceptable es otro bloqueo por defecto; nunca un `location /uploads/`
+   que haga proxy de todo.
 5. La restauración de base (si fuera necesaria) sigue `docs/BACKUP_RESTORE.md`.

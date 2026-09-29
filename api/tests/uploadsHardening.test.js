@@ -180,24 +180,27 @@ describe('cableado', () => {
   });
 
   test.each(['nginx-sishoras.conf', 'nginx.compose.conf'])(
-    '%s: /uploads bloqueado por defecto (404, no-store), sólo la lista exacta pasa a la API',
+    '%s: /uploads bloqueado por defecto (404, no-store); sólo uploads/brand/<imagen> pasa a la API',
     (file) => {
       const conf = fs.readFileSync(path.join(__dirname, '..', '..', 'deploy', file), 'utf8');
-      const start = conf.indexOf('location /uploads/');
+      const start = conf.indexOf('location /uploads/ {');
       const block = conf.slice(start, conf.indexOf('}', start));
       expect(block).toMatch(/return 404;/);
       expect(block).not.toMatch(/proxy_pass|expires|public|immutable|proxy_cache\s/i);
-      // La única cabecera permitida en el bloque por defecto es no-store.
       const headers = block.match(/add_header[^;]*;/g) || [];
       expect(headers).toEqual(['add_header Cache-Control "no-store" always;']);
-      expect(conf).toMatch(/include \/etc\/nginx\/snippets\/sishoras-uploads-public\.conf;/);
-      expect(conf.indexOf('sishoras-uploads-public.conf')).toBeLessThan(start);
+      // Única excepción: la carpeta pública de marca, un segmento con extensión
+      // de imagen, reescrita a la ruta canónica y sólo GET.
+      const brandLocs = conf.match(/location ~ \^\/uploads\/[^\n]*\{/g) || [];
+      expect(brandLocs).toEqual(['location ~ ^/uploads/brand/(?<brand_file>[A-Za-z0-9_-]+\\.(?:png|jpg|jpeg|webp|gif|ico|svg))$ {']);
+      const bStart = conf.indexOf(brandLocs[0]);
+      const bBlock = conf.slice(bStart, conf.indexOf('\n    }', bStart));
+      expect(bBlock).toMatch(/limit_except GET \{ deny all; \}/);
+      expect(bBlock).toMatch(/rewrite \^ \/uploads\/brand\/\$brand_file break;/);
+      // Ninguna otra location sirve /uploads ni hay alias/root a la carpeta.
+      expect((conf.match(/^\s*location\s[^\n{]*uploads/gm) || []).length).toBe(2);
       expect(conf).not.toMatch(/alias\s+[^;]*uploads|root\s+[^;]*uploads/);
+      expect(conf).not.toMatch(/sishoras-uploads-public/);
     },
   );
-
-  test('el snippet versionado no publica nada (default deny hasta regenerarlo)', () => {
-    const snip = fs.readFileSync(path.join(__dirname, '..', '..', 'deploy', 'nginx-snippets', 'sishoras-uploads-public.conf'), 'utf8');
-    expect(snip.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'))).toEqual([]);
-  });
 });
