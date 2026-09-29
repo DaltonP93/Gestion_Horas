@@ -186,6 +186,10 @@ services:
       # conf.d/*.conf dentro de su http{}. HTTP-only: el TLS lo termina el nginx
       # del host (deploy/nginx-sishoras.conf) o un balanceador delante del stack.
       - ./deploy/nginx.compose.conf:/etc/nginx/conf.d/default.conf:ro
+      # Lista EXACTA de recursos públicos de /uploads/ (default deny). El archivo
+      # versionado está vacío; regenerarlo con scripts/gen-nginx-uploads-allowlist.sh
+      # --upstream http://api:4000 (ver deploy/RUNBOOK-uploads-privados.md).
+      - ./deploy/nginx-snippets/sishoras-uploads-public.conf:/etc/nginx/snippets/sishoras-uploads-public.conf:ro
     networks:
       - asistencia_net
 

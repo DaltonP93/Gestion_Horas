@@ -179,11 +179,25 @@ describe('cableado', () => {
     expect(perm).toMatch(/finalizeUpload\(req\.file, \['pdf', 'jpg', 'png', 'webp'\]\)/);
   });
 
-  test('nginx no agrega caché pública propia a /uploads', () => {
-    const conf = fs.readFileSync(path.join(__dirname, '..', '..', 'deploy', 'nginx-sishoras.conf'), 'utf8');
-    const block = conf.slice(conf.indexOf('location /uploads/'), conf.indexOf('}', conf.indexOf('location /uploads/')));
-    expect(block).not.toMatch(/expires|Cache-Control|public|immutable/i);
-    expect(block).toMatch(/proxy_pass/);
-    expect(conf).not.toMatch(/alias\s+[^;]*uploads/);
+  test.each(['nginx-sishoras.conf', 'nginx.compose.conf'])(
+    '%s: /uploads bloqueado por defecto (404, no-store), sólo la lista exacta pasa a la API',
+    (file) => {
+      const conf = fs.readFileSync(path.join(__dirname, '..', '..', 'deploy', file), 'utf8');
+      const start = conf.indexOf('location /uploads/');
+      const block = conf.slice(start, conf.indexOf('}', start));
+      expect(block).toMatch(/return 404;/);
+      expect(block).not.toMatch(/proxy_pass|expires|public|immutable|proxy_cache\s/i);
+      // La única cabecera permitida en el bloque por defecto es no-store.
+      const headers = block.match(/add_header[^;]*;/g) || [];
+      expect(headers).toEqual(['add_header Cache-Control "no-store" always;']);
+      expect(conf).toMatch(/include \/etc\/nginx\/snippets\/sishoras-uploads-public\.conf;/);
+      expect(conf.indexOf('sishoras-uploads-public.conf')).toBeLessThan(start);
+      expect(conf).not.toMatch(/alias\s+[^;]*uploads|root\s+[^;]*uploads/);
+    },
+  );
+
+  test('el snippet versionado no publica nada (default deny hasta regenerarlo)', () => {
+    const snip = fs.readFileSync(path.join(__dirname, '..', '..', 'deploy', 'nginx-snippets', 'sishoras-uploads-public.conf'), 'utf8');
+    expect(snip.split('\n').filter((l) => l.trim() && !l.trim().startsWith('#'))).toEqual([]);
   });
 });
