@@ -5,7 +5,9 @@
  * versionado en tests/fixtures/ooxml; XLSX de ExcelJS). Negativos construidos
  * a partir de ellos: nombres correctos con contenido inválido, cabecera local
  * corrupta, CRC, entrada ilegible/truncada, macros por contenido, DOCTYPE,
- * rutas peligrosas, duplicados y límites del lector.
+ * rutas peligrosas, duplicados y límites del lector. Parser XML estricto:
+ * caracteres prohibidos (literales y referenciados), prefijos no declarados,
+ * normalización de atributos y reglas OPC/macros sobre valores interpretados.
  */
 
 const fs = require('fs');
@@ -223,4 +225,85 @@ describe('verificador XML', () => {
     ['& suelto', '<a>a & b</a>'], ['texto fuera de la raíz', 'x<a/>'], ['comentario con --', '<a><!-- a -- b --></a>'],
     ['DOCTYPE', '<!DOCTYPE a><a/>'], ['UTF-8 inválido', Buffer.from([0x3c, 0x61, 0x3e, 0xff, 0x3c, 0x2f, 0x61, 0x3e])],
   ])('rechaza %s', (_n, s) => (Buffer.isBuffer(s) ? expect(() => scanXml(s)).toThrow() : ko(s)));
+});
+
+describe('parser XML estricto (XML 1.0 + Namespaces)', () => {
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  const ok = (x) => expect(() => scanXml(Buffer.from(x))).not.toThrow();
+  const ko = (x, re = /XML mal formado/) => expect(() => scanXml(Buffer.from(x))).toThrow(re);
+
+  test.each([
+    ['NUL literal', `<w:t ${W}>a\u0000b</w:t>`],
+    ['referencia decimal a NUL', `<w:t ${W}>a&#0;b</w:t>`],
+    ['referencia hexadecimal a U+0001', `<w:t ${W}>a&#x1;b</w:t>`],
+    ['referencia a U+FFFE', `<w:t ${W}>&#xFFFE;</w:t>`],
+    ['carácter de control literal en un atributo', `<w:t ${W} w:x="a\u0001b"/>`],
+    ['referencia a NUL dentro de un atributo', '<a x="&#0;"/>'],
+    ['prefijo de elemento no declarado', `<w:t ${W}><n:x/></w:t>`],
+    ['prefijo de atributo no declarado', `<w:t ${W} n:x="1"/>`],
+    ['prefijo de la raíz no declarado', '<w:document/>'],
+    ['atributo duplicado por nombre expandido', '<a xmlns:p="urn:x" xmlns:q="urn:x" p:v="1" q:v="2"/>'],
+    ['< dentro de un atributo', '<a x="<"/>'],
+  ])('rechaza %s', (_n, x) => ko(x));
+
+  test('rechaza DOCTYPE aunque no declare entidades, y un subconjunto interno', () => {
+    ko('<!DOCTYPE a><a/>', /DOCTYPE/);
+    ko('<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>', /DOCTYPE/);
+  });
+  test('sólo XML 1.0 y codificación declarada coherente con los bytes', () => {
+    ko('<?xml version="1.1"?><a>&#x1;</a>', /Versión XML/);
+    ko('<?xml version="1.0" encoding="UTF-16"?><a/>', /Codificación/);
+    ko('<?xml version="1.0" encoding="ISO-8859-1"?><a/>', /Codificación/);
+    ok('<?xml version="1.0" encoding="utf-8" standalone="yes"?><a/>');
+    const u16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('<?xml version="1.0" encoding="UTF-16"?><a/>', 'utf16le')]);
+    expect(() => scanXml(u16)).not.toThrow();
+  });
+  test('entrega nombres locales con namespace resuelto y atributos normalizados', () => {
+    const seen = [];
+    const { root } = scanXml(Buffer.from(
+      '<p:R xmlns:p="urn:r" xmlns:o="urn:o" T="a&#101;&amp;&lt;b" o:X="otro"><p:C Id="&#x72;1"/></p:R>'),
+    (el, depth) => seen.push([el.name, el.uri, { ...el.attrs }, depth]));
+    expect(root).toMatchObject({ name: 'R', uri: 'urn:r' });
+    expect(seen).toEqual([['R', 'urn:r', { T: 'ae&<b' }, 0], ['C', 'urn:r', { Id: 'r1' }, 1]]);
+  });
+});
+
+describe('OPC y macros sobre valores ya interpretados', () => {
+  const setPart = (name, fn) => (m) => m.set(name, Buffer.from(fn(m.get(name).toString('utf8'))));
+
+  test('Target con referencia numérica equivalente a word/document.xml → docx', () => {
+    expect(validateOoxmlPackage(rebuild(DOCX, setPart('_rels/.rels',
+      (x) => x.replace('Target="word/document.xml"', 'Target="word/docum&#101;nt.xml"'))))).toBe('docx');
+  });
+  test('Type de la relación principal escrito con referencias → se reconoce', () => {
+    expect(validateOoxmlPackage(rebuild(DOCX, setPart('_rels/.rels',
+      (x) => x.replace('/relationships/officeDocument"', '/relationships/offic&#x65;Document"'))))).toBe('docx');
+  });
+  test('tipo macroEnabled escrito con referencias → rechazo por macros', () => {
+    expectReject(rebuild(DOCX, setPart('[Content_Types].xml', (x) => x.replace(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
+      'application/vnd.ms-word.document.macroEnabl&#101;d.main+xml'))), /macros/);
+  });
+  test('relación vbaProject escrita con referencias → rechazo por macros', () => {
+    expectReject(rebuild(DOCX, setPart('word/_rels/document.xml.rels', (x) => x.replace('</Relationships>',
+      '<Relationship Id="rVba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaPr&#111;ject" Target="vbaProject.bin"/></Relationships>'))), /macros/);
+  });
+  test('TargetMode External escrito con referencias → rechazo', () => {
+    expectReject(rebuild(DOCX, setPart('_rels/.rels', (x) => x.replace(
+      'Target="word/document.xml"', 'Target="word/document.xml" TargetMode="Ext&#101;rnal"'))), /externa/);
+  });
+  test('raíz de la parte principal con otro prefijo ligado al namespace correcto → docx', () => {
+    expect(validateOoxmlPackage(rebuild(DOCX, (m) => m.set('word/document.xml', Buffer.from(
+      '<?xml version="1.0"?><x:document xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><x:body/></x:document>'))))).toBe('docx');
+  });
+  test('raíz "document" en un namespace ajeno → parte principal inválida', () => {
+    expectReject(rebuild(DOCX, (m) => m.set('word/document.xml', Buffer.from(
+      '<?xml version="1.0"?><w:document xmlns:w="urn:otro"><w:body/></w:document>'))), /Parte principal inválida/);
+  });
+  test('Default/Override fuera del namespace de tipos de contenido no cuentan', () => {
+    expectReject(rebuild(DOCX, setPart('[Content_Types].xml', (x) => x
+      .replace('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" xmlns:z="urn:z">')
+      .replace(/<Override /g, '<z:Override '))), /sin tipo de contenido|Tipo de documento/);
+  });
 });

@@ -14,11 +14,12 @@
  *     CRC-32 verificado; límites de entradas, tamaño por entrada, total y
  *     ratio de compresión; nombres sin rutas absolutas, `..`, `\` ni NUL y
  *     sin duplicados.
- *  2. XML: todas las partes .xml/.rels deben estar bien formadas. Se rechaza
- *     cualquier DOCTYPE/ENTITY (no se resuelven referencias externas: el
- *     verificador no expande entidades salvo las cinco predefinidas y las
- *     numéricas).
- *  3. OPC: `[Content_Types].xml` y `_rels/.rels` válidos; la relación
+ *  2. XML: todas las partes .xml/.rels se analizan con un parser estricto
+ *     (saxes, XML 1.0 + Namespaces): caracteres permitidos (también los
+ *     referenciados), prefijos declarados, atributos normalizados. Se rechaza
+ *     cualquier DOCTYPE/ENTITY y no se accede a recursos externos.
+ *  3. OPC (sobre nombres con namespace resuelto y valores ya interpretados):
+ *     `[Content_Types].xml` y `_rels/.rels` válidos; la relación
  *     `officeDocument` apunta a la parte principal, cuyo tipo de contenido
  *     decide DOCX o XLSX; su elemento raíz y namespace deben corresponder.
  *     Toda parte tiene tipo declarado y todo Override apunta a una parte real.
@@ -27,9 +28,15 @@
  *     dentro → rechazo, sin importar cómo se llamen las partes.
  *
  * Todo error se informa como `OoxmlError` (el llamador responde 400).
+ *
+ * Dependencia: `saxes` ^5.0.1 (ISC, JavaScript puro, engines node >=10, única
+ * dependencia `xmlchars`). Ya estaba instalada en runtime como dependencia de
+ * exceljs; se declara directa sin cambiar la versión del lock. Compatible con
+ * Node 22 (CI API/Web/Bridge en Node 22).
  */
 
 const zlib = require('zlib');
+const { SaxesParser } = require('saxes');
 
 const LIMITS = Object.freeze({
   maxEntries: 2000,
@@ -178,109 +185,70 @@ function readZip(buf) {
   return out;
 }
 
-// ── 2. Verificador XML (sin DOCTYPE ni entidades externas) ────────────────
-
-const NAME = '[A-Za-z_][A-Za-z0-9_.\\-]*(?::[A-Za-z_][A-Za-z0-9_.\\-]*)?';
-const RE_START = new RegExp(`<(${NAME})((?:\\s+${NAME}\\s*=\\s*(?:"[^"<]*"|'[^'<]*'))*)\\s*(/?)>`, 'y');
-const RE_ATTR = new RegExp(`(${NAME})\\s*=\\s*(?:"([^"<]*)"|'([^'<]*)')`, 'g');
-const RE_END = new RegExp(`</(${NAME})\\s*>`, 'y');
-const RE_ENTITY = /&(?:lt|gt|amp|quot|apos|#[0-9]{1,7}|#x[0-9A-Fa-f]{1,6});/y;
+// ── 2. Parser XML estricto (saxes: XML 1.0 + Namespaces) ─────────────────
+//
+// saxes es un parser SAX conforme: rechaza caracteres no permitidos por XML
+// 1.0 (literales o referenciados, p. ej. NUL o &#0;), prefijos no declarados,
+// atributos duplicados (también por nombre expandido), entidades desconocidas
+// y todo error de buena formación. Entrega los atributos ya normalizados
+// (referencias resueltas) con su namespace resuelto. No lee recursos externos
+// ni procesa DTD: cualquier DOCTYPE se rechaza aquí mismo.
 
 function decodeText(buf) {
   try {
-    if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le', { fatal: true }).decode(buf.slice(2));
-    if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) return new TextDecoder('utf-16be', { fatal: true }).decode(buf.slice(2));
+    if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) return { text: new TextDecoder('utf-16le', { fatal: true }).decode(buf.slice(2)), family: 'utf16' };
+    if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) return { text: new TextDecoder('utf-16be', { fatal: true }).decode(buf.slice(2)), family: 'utf16' };
     const s = new TextDecoder('utf-8', { fatal: true }).decode(buf);
-    return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+    return { text: s.charCodeAt(0) === 0xfeff ? s.slice(1) : s, family: 'utf8' };
   } catch {
     throw bad('Codificación XML inválida');
   }
 }
 
-function checkEntities(s) {
-  let i = s.indexOf('&');
-  while (i !== -1) {
-    RE_ENTITY.lastIndex = i;
-    if (!RE_ENTITY.test(s)) throw bad('XML mal formado');
-    i = s.indexOf('&', RE_ENTITY.lastIndex);
-  }
+function encodingFamily(declared) {
+  const e = declared.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (e === 'utf8') return 'utf8';
+  if (e === 'utf16' || e === 'utf16le' || e === 'utf16be') return 'utf16';
+  return null;
 }
 
 /**
- * Verifica que el XML esté bien formado. `onStart(name, attrs, depth)` recibe
- * cada elemento de apertura (attrs: objeto). Devuelve { root: {name, attrs} }.
+ * Analiza el XML con un parser estricto. `onStart(el, depth)` recibe cada
+ * elemento de apertura: `el = { name, uri, attrs }` con `name` = nombre local,
+ * `uri` = namespace resuelto y `attrs` = atributos SIN prefijo (los que usa
+ * OPC), con sus valores ya normalizados. Devuelve { root: el }.
  * @param {Buffer} buf
  */
 function scanXml(buf, onStart) {
-  const s = decodeText(buf);
-  if (/<!DOCTYPE|<!ENTITY/i.test(s)) throw bad('DOCTYPE/ENTITY no admitido');
-  const stack = [];
+  const { text, family } = decodeText(buf);
+  const parser = new SaxesParser({ xmlns: true });
   let root = null;
-  let rootClosed = false;
-  let i = 0;
-  if (s.startsWith('<?xml')) {
-    const e = s.indexOf('?>');
-    if (e === -1) throw bad('XML mal formado');
-    i = e + 2;
-  }
-  while (i < s.length) {
-    const lt = s.indexOf('<', i);
-    const text = s.slice(i, lt === -1 ? s.length : lt);
-    if (text.length) {
-      if (stack.length === 0 && /\S/.test(text)) throw bad('XML mal formado');
-      if (text.includes('>') && /\]\]>/.test(text)) throw bad('XML mal formado');
-      checkEntities(text);
+  let depth = 0;
+  parser.on('error', () => { throw bad('XML mal formado'); });
+  parser.on('doctype', () => { throw bad('DOCTYPE/ENTITY no admitido'); });
+  parser.on('xmldecl', (d) => {
+    if (d.version !== '1.0') throw bad('Versión XML no admitida');
+    if (d.encoding !== undefined && encodingFamily(d.encoding) !== family) throw bad('Codificación XML inválida');
+  });
+  parser.on('opentag', (node) => {
+    const attrs = Object.create(null);
+    for (const a of Object.values(node.attributes)) {
+      if (a.uri === '') attrs[a.local] = a.value;
     }
-    if (lt === -1) break;
-    if (s.startsWith('<!--', lt)) {
-      const e = s.indexOf('-->', lt + 4);
-      if (e === -1 || s.slice(lt + 4, e).includes('--')) throw bad('XML mal formado');
-      i = e + 3;
-    } else if (s.startsWith('<![CDATA[', lt)) {
-      if (stack.length === 0) throw bad('XML mal formado');
-      const e = s.indexOf(']]>', lt + 9);
-      if (e === -1) throw bad('XML mal formado');
-      i = e + 3;
-    } else if (s.startsWith('<?', lt)) {
-      const e = s.indexOf('?>', lt + 2);
-      if (e === -1 || /^xml[\s?]/i.test(s.slice(lt + 2, lt + 6))) throw bad('XML mal formado');
-      i = e + 2;
-    } else if (s.startsWith('</', lt)) {
-      RE_END.lastIndex = lt;
-      const m = RE_END.exec(s);
-      if (!m || stack.pop() !== m[1]) throw bad('XML mal formado');
-      if (stack.length === 0) rootClosed = true;
-      i = RE_END.lastIndex;
-    } else {
-      RE_START.lastIndex = lt;
-      const m = RE_START.exec(s);
-      if (!m) throw bad('XML mal formado');
-      if (rootClosed) throw bad('XML mal formado');
-      const attrs = {};
-      RE_ATTR.lastIndex = 0;
-      let a;
-      while ((a = RE_ATTR.exec(m[2])) !== null) {
-        if (Object.prototype.hasOwnProperty.call(attrs, a[1])) throw bad('XML mal formado');
-        const v = a[2] !== undefined ? a[2] : a[3];
-        checkEntities(v);
-        attrs[a[1]] = v;
-      }
-      if (!root) root = { name: m[1], attrs };
-      if (onStart) onStart(m[1], attrs, stack.length);
-      if (m[3] !== '/') stack.push(m[1]);
-      else if (stack.length === 0) rootClosed = true;
-      i = RE_START.lastIndex;
-    }
+    const el = { name: node.local, uri: node.uri, attrs };
+    if (!root) root = el;
+    if (onStart) onStart(el, depth);
+    depth += 1;
+  });
+  parser.on('closetag', () => { depth -= 1; });
+  try {
+    parser.write(text).close();
+  } catch (err) {
+    if (err instanceof OoxmlError) throw err;
+    throw bad('XML mal formado');
   }
-  if (!root || stack.length || !rootClosed) throw bad('XML mal formado');
+  if (!root) throw bad('XML mal formado');
   return { root };
-}
-
-const localName = (n) => (n.includes(':') ? n.split(':')[1] : n);
-const prefixOf = (n) => (n.includes(':') ? n.split(':')[0] : null);
-function nsOf(root) {
-  const p = prefixOf(root.name);
-  return root.attrs[p ? `xmlns:${p}` : 'xmlns'] || null;
 }
 
 // ── 3/4. Paquete OPC ──────────────────────────────────────────────────────
@@ -331,10 +299,11 @@ function validateOoxmlPackage(buf) {
   const entries = readZip(buf);
   const names = [...entries.keys()];
 
-  // Todas las partes XML deben estar bien formadas.
+  // Todas las partes XML deben estar bien formadas (se conserva su raíz).
+  const xmlRoots = new Map();
   for (const n of names) {
     // (Las partes VML heredadas no son XML estricto: se validan sólo por CRC/tipo.)
-    if (/\.(xml|rels)$/i.test(n)) scanXml(entries.get(n));
+    if (/\.(xml|rels)$/i.test(n)) xmlRoots.set(n, scanXml(entries.get(n)).root);
   }
 
   // [Content_Types].xml
@@ -342,12 +311,12 @@ function validateOoxmlPackage(buf) {
   if (!ct) throw bad('Falta [Content_Types].xml');
   const defaults = new Map();
   const overrides = new Map();
-  const ctRoot = scanXml(ct, (name, attrs, depth) => {
-    if (depth !== 1) return;
-    if (localName(name) === 'Default' && attrs.Extension && attrs.ContentType) defaults.set(attrs.Extension.toLowerCase(), attrs.ContentType);
-    if (localName(name) === 'Override' && attrs.PartName && attrs.ContentType) overrides.set(attrs.PartName.replace(/^\//, '').toLowerCase(), attrs.ContentType);
+  const ctRoot = scanXml(ct, ({ name, uri, attrs }, depth) => {
+    if (depth !== 1 || uri !== NS_CT) return;
+    if (name === 'Default' && attrs.Extension && attrs.ContentType) defaults.set(attrs.Extension.toLowerCase(), attrs.ContentType);
+    if (name === 'Override' && attrs.PartName && attrs.ContentType) overrides.set(attrs.PartName.replace(/^\//, '').toLowerCase(), attrs.ContentType);
   }).root;
-  if (localName(ctRoot.name) !== 'Types' || nsOf(ctRoot) !== NS_CT) throw bad('[Content_Types].xml inválido');
+  if (ctRoot.name !== 'Types' || ctRoot.uri !== NS_CT) throw bad('[Content_Types].xml inválido');
   const typeOf = (part) => overrides.get(part.toLowerCase())
     || defaults.get((part.split('.').pop() || '').toLowerCase()) || null;
 
@@ -370,8 +339,8 @@ function validateOoxmlPackage(buf) {
   for (const n of names) {
     if (!/(^|\/)_rels\/[^/]*\.rels$/i.test(n)) continue;
     const baseDir = n.replace(/_rels\/[^/]*\.rels$/i, '');
-    const relRoot = scanXml(entries.get(n), (name, attrs, depth) => {
-      if (depth !== 1 || localName(name) !== 'Relationship') return;
+    const relRoot = scanXml(entries.get(n), ({ name, uri, attrs }, depth) => {
+      if (depth !== 1 || uri !== NS_REL || name !== 'Relationship') return;
       if (isMacroRel(attrs.Type)) throw bad('Documento con macros no permitido');
       if (n === '_rels/.rels' && REL_OFFICE_DOC.has(attrs.Type)) {
         officeRels += 1;
@@ -379,7 +348,7 @@ function validateOoxmlPackage(buf) {
         mainPart = resolveTarget(attrs.Target, baseDir);
       }
     }).root;
-    if (localName(relRoot.name) !== 'Relationships' || nsOf(relRoot) !== NS_REL) throw bad('Relaciones inválidas');
+    if (relRoot.name !== 'Relationships' || relRoot.uri !== NS_REL) throw bad('Relaciones inválidas');
   }
   if (!entries.has('_rels/.rels')) throw bad('Faltan las relaciones del paquete');
   if (officeRels !== 1 || !mainPart) throw bad('Parte principal no declarada');
@@ -389,8 +358,9 @@ function validateOoxmlPackage(buf) {
   const mainType = typeOf(mainName);
   const kind = Object.keys(KINDS).find((k) => KINDS[k].contentType === mainType);
   if (!kind) throw bad('Tipo de documento no admitido');
-  const mainRoot = scanXml(entries.get(mainName)).root;
-  if (localName(mainRoot.name) !== KINDS[kind].root || !KINDS[kind].ns.includes(nsOf(mainRoot))) {
+  const mainRoot = xmlRoots.get(mainName);
+  if (!mainRoot) throw bad('Parte principal inválida');
+  if (mainRoot.name !== KINDS[kind].root || !KINDS[kind].ns.includes(mainRoot.uri)) {
     throw bad('Parte principal inválida');
   }
 

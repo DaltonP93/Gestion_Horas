@@ -239,3 +239,38 @@ describe('fallas de base', () => {
     expect(audit.log).not.toHaveBeenCalled();
   });
 });
+
+// Casos de la revisión de 585bfb0 (parser XML): se incorporan tal como se
+// entregaron; sólo se quitó el volcado por consola.
+describe('revisión independiente del parser XML OOXML', () => {
+  test.each([
+    ['NUL literal en texto XML', 'antes\x00despues'],
+    ['referencia XML a NUL', 'antes&#0;despues'],
+    ['prefijo XML no declarado', '<noDeclarado:etiqueta/>'],
+  ])('%s debe rechazarse sin persistir', async (label, fragment) => {
+    const xml = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>'
+      + fragment + '</w:t></w:r></w:p></w:body></w:document>';
+    const buf = rebuildDocx((m) => m.set('word/document.xml', Buffer.from(xml)));
+    const r = await post(100, 1, { buf, name: 'sintetico.docx', type: MIME_DOCX });
+    const evidence = { label, httpStatus: r.status, insertCount: inserts.length, auditCount: audit.log.mock.calls.length,
+      newFileCount: docFiles().filter((f) => f !== 'doc_1_previo.pdf').length };
+    expect(evidence).toMatchObject({ httpStatus: 400, insertCount: 0, auditCount: 0, newFileCount: 0 });
+  });
+
+  test('referencia numérica XML válida en Target conserva su significado', async () => {
+    const buf = rebuildDocx((m) => {
+      const old = m.get('_rels/.rels').toString('utf8');
+      expect(old).toContain('Target="word/document.xml"');
+      m.set('_rels/.rels', Buffer.from(old.replace('Target="word/document.xml"', 'Target="word/docum&#101;nt.xml"')));
+    });
+    const r = await post(100, 1, { buf, name: 'valido.docx', type: MIME_DOCX });
+    expect({ httpStatus: r.status, body: await r.json() }).toMatchObject({ httpStatus: 201 });
+    expect(inserts).toHaveLength(1);
+  });
+
+  test('DOCX original de LibreOffice sigue aceptado como control positivo', async () => {
+    const r = await post(100, 1, { buf: DOCX_REAL, name: 'control.docx', type: MIME_DOCX });
+    expect(r.status).toBe(201);
+    expect(inserts).toHaveLength(1);
+  });
+});
