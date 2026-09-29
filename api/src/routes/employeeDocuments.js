@@ -59,9 +59,10 @@ const DOC_TYPES = ['pdf', 'png', 'jpg', 'webp', 'docx', 'xlsx'];
 function uploadSingle(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (!err) return next();
-    if (req.file && req.file.path) fs.unlink(req.file.path, () => {});
     const tooBig = err.code === 'LIMIT_FILE_SIZE';
-    return res.status(tooBig ? 413 : 400).json({ error: tooBig ? 'Archivo demasiado grande' : 'Tipo de archivo no permitido' });
+    const reply = () => res.status(tooBig ? 413 : 400).json({ error: tooBig ? 'Archivo demasiado grande' : 'Tipo de archivo no permitido' });
+    if (req.file && req.file.path) return fs.promises.unlink(req.file.path).catch(() => {}).then(reply);
+    return reply();
   });
 }
 
@@ -88,7 +89,14 @@ router.post('/',
     if (!req.file) return res.status(400).json({ error: 'Archivo requerido' });
     const employeeId = req.scopedEmployeeId;
     let newFile = req.file.path; // archivo creado por ESTA solicitud
-    const discard = () => { if (newFile) fs.unlink(newFile, () => {}); newFile = null; };
+    // Se espera el borrado antes de responder: al recibir la respuesta no queda
+    // ningún archivo de esta solicitud en disco.
+    const discard = async () => {
+      if (!newFile) return;
+      const f = newFile;
+      newFile = null;
+      await fs.promises.unlink(f).catch(() => {});
+    };
 
     try {
       const category = String(req.body.category || 'other').toLowerCase();
@@ -97,11 +105,11 @@ router.post('/',
       const note     = req.body.note ? String(req.body.note).slice(0, 500) : null;
 
       if (!isValidCategory(category)) {
-        discard();
+        await discard();
         return res.status(400).json({ error: 'Categoría inválida' });
       }
       if (!isValidPeriod(period)) {
-        discard();
+        await discard();
         return res.status(400).json({ error: "Período inválido (formato 'YYYY-MM')" });
       }
 
@@ -138,7 +146,7 @@ router.post('/',
 
       return res.status(201).json({ id: insertId(r), title, category, period, visible_to_employee: !!visible });
     } catch (err) {
-      discard();
+      await discard();
       return res.status(500).json({ error: 'No se pudo guardar el documento' });
     }
   })

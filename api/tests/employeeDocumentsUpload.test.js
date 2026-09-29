@@ -215,8 +215,6 @@ describe('fallas de base', () => {
     const r = await post(100, 1, { buf: await png(), name: 'foto.png', type: 'image/png' });
     expect(r.status).toBe(500);
     expect(await r.text()).not.toMatch(/ER_LOCK/);
-    // unlink es asíncrono: margen breve.
-    await new Promise((res) => setTimeout(res, 50));
     expect(docFiles()).toEqual(['doc_1_previo.pdf']);
     expect(fs.readFileSync(path.join(DOC_DIR, 'doc_1_previo.pdf')).equals(PDF_OK)).toBe(true);
     expect(audit.log).not.toHaveBeenCalled();
