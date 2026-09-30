@@ -7,7 +7,7 @@
  *
  *   node scripts/diagnose-company-links.js            # resumen legible
  *   node scripts/diagnose-company-links.js --json     # salida JSON
- *   node scripts/diagnose-company-links.js --limit 20 # filas de muestra por hallazgo (default 50)
+ *   node scripts/diagnose-company-links.js --limit 20 # filas de sedes/departamentos por hallazgo (default 50)
  *
  * Reporta:
  *   1. Sedes sin empresa (`branches.company_id IS NULL`), con cuántos
@@ -16,17 +16,18 @@
  *      la empresa de su sede. Aparte, los casos INDETERMINADOS (el centro de
  *      costo o la sede no tienen empresa, o la sede no existe): no se pueden
  *      comparar y se listan sin clasificarlos.
- *   3. Empleados en sedes sin empresa (conteo por sede y estado + ids de
- *      muestra). Aparte, empleados cuya sede no existe (`employees.branch_id`
- *      no tiene FK).
+ *   3. Empleados en sedes sin empresa: SÓLO conteos agregados por sede y
+ *      estado. Aparte, los mismos conteos para empleados cuya sede no existe
+ *      (`employees.branch_id` no tiene FK).
  *
  * GARANTÍAS:
  *   - Sólo SELECT, dentro de una transacción READ ONLY que termina en ROLLBACK:
  *     el servidor rechaza cualquier escritura en esa sesión.
  *   - No corrige nada: sin backfill, sin asociaciones fabricadas. Asociar una
  *     sede a una empresa es una decisión del dueño de los datos.
- *   - No imprime nombres ni datos personales: sólo ids, códigos de sede/
- *     departamento, estados y conteos.
+ *   - No imprime datos personales: ni nombres ni ids ni códigos de empleados.
+ *     De los empleados sólo salen conteos agregados por sede y estado; de
+ *     sedes y departamentos, sus ids/códigos organizacionales.
  *   - Si el esquema de FASE F (migración 076) no está aplicado, lo informa y
  *     termina sin error: sin `branches.company_id` no hay vínculo que evaluar.
  *
@@ -101,38 +102,26 @@ async function diagnoseCompanyLinks(conn, { limit = 50 } = {}) {
      WHERE b.company_id IS NULL
      GROUP BY e.branch_id, e.status
      ORDER BY e.branch_id, e.status`);
-  const employeesSample = await rows(conn, `
-    SELECT e.id, e.branch_id, e.status
-      FROM employees e
-      JOIN branches b ON b.id = e.branch_id
-     WHERE b.company_id IS NULL
-     ORDER BY e.id
-     LIMIT ${lim}`);
-  const employeesOrphanByStatus = await rows(conn, `
-    SELECT e.status, COUNT(*) AS n
+  const employeesOrphanByBranch = await rows(conn, `
+    SELECT e.branch_id, e.status, COUNT(*) AS n
       FROM employees e
       LEFT JOIN branches b ON b.id = e.branch_id
      WHERE b.id IS NULL
-     GROUP BY e.status
-     ORDER BY e.status`);
-  const employeesOrphanSample = await rows(conn, `
-    SELECT e.id, e.branch_id, e.status
-      FROM employees e
-      LEFT JOIN branches b ON b.id = e.branch_id
-     WHERE b.id IS NULL
-     ORDER BY e.id
-     LIMIT ${lim}`);
+     GROUP BY e.branch_id, e.status
+     ORDER BY e.branch_id, e.status`);
 
   const num = (r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'bigint' ? Number(v) : v]));
   const sum = (list) => list.reduce((a, r) => a + Number(r.n), 0);
+  // Conteo agregado: sólo sede, estado y cantidad (nunca ids de empleados).
+  const countRow = (r) => ({ branch_id: r.branch_id == null ? null : Number(r.branch_id), status: r.status, n: Number(r.n) });
   return {
     schema,
     findings: {
       branches_without_company: { total: branchesWithoutCompany.length, rows: branchesWithoutCompany.slice(0, lim).map(num) },
       departments_cost_center_company_mismatch: { total: departmentMismatch.length, rows: departmentMismatch.slice(0, lim).map(num) },
       departments_cost_center_company_indeterminate: { total: departmentIndeterminate.length, rows: departmentIndeterminate.slice(0, lim).map(num) },
-      employees_in_branch_without_company: { total: sum(employeesByBranch), by_branch_status: employeesByBranch.map(num), sample: employeesSample.map(num) },
-      employees_with_missing_branch: { total: sum(employeesOrphanByStatus), by_status: employeesOrphanByStatus.map(num), sample: employeesOrphanSample.map(num) },
+      employees_in_branch_without_company: { total: sum(employeesByBranch), by_branch_status: employeesByBranch.map(countRow) },
+      employees_with_missing_branch: { total: sum(employeesOrphanByBranch), by_branch_status: employeesOrphanByBranch.map(countRow) },
     },
   };
 }
@@ -145,7 +134,7 @@ function printHuman(result) {
   const f = result.findings;
   const section = (title, block, cols) => {
     console.log(`\n${title}: ${block.total}`);
-    for (const r of block.rows || block.sample || []) console.log('  ' + cols.map((c) => `${c}=${r[c]}`).join('  '));
+    for (const r of block.rows) console.log('  ' + cols.map((c) => `${c}=${r[c]}`).join('  '));
   };
   section('1. Sedes sin empresa', f.branches_without_company, ['id', 'code', 'active', 'employees']);
   section('2. Departamentos con centro de costo de OTRA empresa que su sede', f.departments_cost_center_company_mismatch,
@@ -155,11 +144,9 @@ function printHuman(result) {
   const emp = f.employees_in_branch_without_company;
   console.log(`\n3. Empleados en sedes sin empresa: ${emp.total}`);
   for (const r of emp.by_branch_status) console.log(`  branch_id=${r.branch_id}  status=${r.status}  n=${r.n}`);
-  if (emp.sample.length) console.log(`  ids de muestra: ${emp.sample.map((r) => r.id).join(', ')}`);
   const orphan = f.employees_with_missing_branch;
   console.log(`\n3b. Empleados cuya sede no existe: ${orphan.total}`);
-  for (const r of orphan.by_status) console.log(`  status=${r.status}  n=${r.n}`);
-  if (orphan.sample.length) console.log(`  ids de muestra: ${orphan.sample.map((r) => `${r.id}(branch_id=${r.branch_id})`).join(', ')}`);
+  for (const r of orphan.by_branch_status) console.log(`  branch_id=${r.branch_id}  status=${r.status}  n=${r.n}`);
   console.log('\nSólo lectura: no se modificó nada. Las asociaciones faltantes las decide el dueño de los datos.');
 }
 

@@ -11,12 +11,19 @@ los módulos que exponían datos sensibles sin alcance:
 
 | Módulo | Regla |
 |---|---|
-| `contracts.js` | Alertas, historial, alta, edición y borrado filtrados por `departmentScope`. En edición/borrado el empleado sale del contrato **guardado**; el body no puede cambiarlo. |
-| `employeeNotes.js` | `employee`: sólo sus notas con visibilidad `employee`. Roles por sede: empleados de su alcance y visibilidades `managers`/`employee`. Roles globales: sin cambio. Edición y borrado validan empleado y visibilidad de la nota guardada. |
+| `contracts.js` | Alertas, historial, alta, edición y borrado filtrados por `departmentScope`. En edición/borrado el empleado sale del contrato **guardado**; el body no puede cambiarlo. El empleado debe existir también para roles globales. |
+| `employeeNotes.js` | `employee`: sólo sus notas con visibilidad `employee`. Roles por sede: empleados de su alcance y visibilidades `managers`/`employee`; crean `managers` por defecto y no pueden crear ni cambiar a `hr_only` (403). Roles globales: sin cambio (`hr_only` por defecto). Edición y borrado validan empleado y visibilidad de la nota guardada. |
 | `legal.js`, `legalData.js` | **Transitorio:** sólo roles globales de RR.HH. (`requireGlobalHR`) hasta que exista la configuración patronal por empresa (§4). |
 
 Rechazos: 404 (ajeno e inexistente indistinguibles) o 403 por rol, sin datos en el
 cuerpo, sin escritura y sin auditoría de éxito.
+
+**Consistencia transaccional (contratos y notas):** en alta, edición y borrado, la
+lectura del recurso, la autorización y la mutación ocurren en una sola transacción:
+contrato/nota y empleado con `SELECT … FOR UPDATE`, alcance del actor (cuenta, sede,
+departamentos) con `FOR SHARE`. Un cambio concurrente de departamento o un borrado
+concurrente se resuelve sobre el valor vigente: rechazo o `affectedRows = 0` →
+rollback y 404; la auditoría se registra sólo después del commit.
 
 ## 2. Relevamiento: `PATCH /api/onboarding/tasks/:taskId` (sin cambios de código)
 
@@ -66,6 +73,18 @@ Reproducido sobre MySQL aislado (datos sintéticos, dos empresas):
 Para medir el uso real en producción, sin escribir: `onboarding_tasks.completed_by`
 (quién marcó `done`) comparado con `assignee_id` y con `users.role`. Sólo cubre las
 tareas completadas; no hay auditoría de los demás cambios.
+
+**Decisiones adoptadas para el próximo lote (aún NO implementadas):**
+
+- `supervisor` no es administrador general de onboarding.
+- Un `supervisor` o cualquier responsable que no sea rol de gestión sólo opera sus
+  propias tareas asignadas (estado y notas), mediante una futura vista "Mis tareas".
+- `manager`/`coordinator`/`gestor` gestionan procesos sólo dentro de su alcance.
+- `super_admin`/`admin`/`gth`/`hr` mantienen alcance global.
+- Un `manager` sólo asigna responsables activos del mismo alcance que el proceso; los
+  roles globales asignan globalmente.
+- `assignee_id`, proceso y empleado se validan en el servidor.
+- Listado, detalle y `PATCH` aplican exactamente el mismo alcance.
 
 ## 3. Contrato del futuro selector de empresa (obligatorio)
 
@@ -127,7 +146,8 @@ selector de empresa.
 `api/scripts/diagnose-company-links.js` lista sedes sin empresa, departamentos cuyo
 centro de costo pertenece a otra empresa (y los indeterminados), empleados en sedes
 sin empresa y empleados con sede inexistente. Transacción `READ ONLY` con `ROLLBACK`,
-sin backfill ni asociaciones fabricadas, sin datos personales en la salida.
+sin backfill ni asociaciones fabricadas. De los empleados sólo emite conteos agregados
+por sede y estado (ni ids, ni códigos, ni nombres), en la salida normal y en `--json`.
 
 ## 7. Orden sugerido
 
