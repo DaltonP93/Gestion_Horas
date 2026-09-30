@@ -499,4 +499,31 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
       expect(await rows(ids.empA)).toHaveLength(1);
     });
   });
+  describe('companyFilter con includeNull (base real)', () => {
+    test('alcance inválido o vacío no habilita las filas sin empresa; alcances autorizados sí', async () => {
+      const [cn] = await conn.query('INSERT INTO cost_centers (company_id, code, name, active) VALUES (NULL, ?, ?, 1)', [`${ids.uniq}CCN`, 'CC sin empresa']);
+      try {
+        const run = async (scope) => {
+          const f = orgScope.companyFilter(scope, 'company_id', { includeNull: true });
+          const [rows] = await conn.query(`SELECT id FROM cost_centers WHERE id IN (?, ?, ?) ${f.clause}`, [ids.ccA, ids.ccB, cn.insertId, ...f.params]);
+          return rows.map((r) => r.id).sort((a, b) => a - b);
+        };
+        for (const bad of [undefined, null, { unrestricted: false, companyIds: ['1'] }, { unrestricted: true },
+          await orgScope.getOrgScope(who(ids.mgrGhost, 'manager'))]) {
+          expect(await run(bad)).toEqual([]);
+        }
+        await conn.query('UPDATE branches SET active = 0 WHERE id = ?', [ids.branchA]);
+        try {
+          expect(await run(await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB)))).toEqual([]);
+        } finally {
+          await conn.query('UPDATE branches SET active = 1 WHERE id = ?', [ids.branchA]);
+        }
+        // Controles positivos.
+        expect(await run(await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB)))).toEqual([ids.ccA, cn.insertId].sort((a, b) => a - b));
+        expect(await run(await orgScope.getOrgScope(who(ids.admin, 'admin')))).toEqual([ids.ccA, ids.ccB, cn.insertId].sort((a, b) => a - b));
+      } finally {
+        await conn.query('DELETE FROM cost_centers WHERE id = ?', [cn.insertId]);
+      }
+    });
+  });
 });

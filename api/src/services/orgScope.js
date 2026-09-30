@@ -124,9 +124,17 @@ function scopeFilter(ids, col, { includeNull = false } = {}) {
   return { clause: `AND (${col} IN (${ph})${nullPart})`, params: [...list] };
 }
 
+/**
+ * Filtro por empresa del alcance. El alcance se valida ANTES de `includeNull`:
+ * ausente, nulo, mal formado, literal global no emitido o vacío (sin sede
+ * activa) → `AND 1=0`; nunca habilita las filas sin empresa.
+ */
 function companyFilter(scope, col = 'id', opts = {}) {
   if (isGlobal(scope)) return { clause: '', params: [] };
-  return scopeFilter(sets(scope).companyIds, col, opts);
+  if (!isValidScope(scope)) return { clause: 'AND 1=0', params: [] };
+  const { companyIds, branchIds } = sets(scope);
+  if (!companyIds.length && !branchIds.length) return { clause: 'AND 1=0', params: [] };
+  return scopeFilter(companyIds, col, opts);
 }
 
 function canSeeCompany(scope, company) {

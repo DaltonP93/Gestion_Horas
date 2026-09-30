@@ -391,9 +391,12 @@ jobs:
       # rutas HTTP reales (companies, cost-centers, branches) sobre dos
       # empresas sintéticas: permitido (empresa propia, admin) y denegado
       # (ajeno, sin sede, sede inexistente/inactiva, cuenta inactiva) sin filas
-      # ni auditoría; reactivar la sede recupera el alcance. El proceso de
-      # prueba habilita sus propios writers de gobierno. Falla si alguna prueba
-      # queda omitida.
+      # ni auditoría; reactivar la sede recupera el alcance. Lecturas de
+      # Departamentos por HTTP con alcance; createAssignment exige alcance en el
+      # servicio (denegado sin INSERT ni cierre de vigencia); companyFilter con
+      # includeNull no habilita filas sin empresa ante un alcance inválido o
+      # vacío. El proceso de prueba habilita sus propios writers de gobierno.
+      # Falla si alguna prueba queda omitida.
       - name: IT reales alcance organizacional (orgScope)
         run: |
           set -o pipefail
