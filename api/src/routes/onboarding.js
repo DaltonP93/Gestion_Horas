@@ -15,23 +15,92 @@
  *   POST   /api/onboarding/:id/complete         → cerrar proceso
  *   POST   /api/onboarding/:id/cancel           → cancelar proceso
  *
+ *   GET    /api/onboarding/:id/assignee-candidates → responsables asignables (filtrados)
+ *
  * Tareas
- *   PATCH  /api/onboarding/tasks/:taskId        → actualizar estado/assignee/notas
+ *   PATCH  /api/onboarding/tasks/:taskId        → actualizar estado/assignee/notas/fecha
+ *
+ * ROLES
+ *   - Gestión global: super_admin, admin, gth, hr.
+ *   - Gestión con alcance: manager, coordinator, gestor (departamentos activos
+ *     de su sede, services/departmentScope).
+ *   - supervisor y employee NO administran onboarding (403).
+ *   - Consultar plantillas: roles de gestión. Crear/editar/desactivar
+ *     plantillas y crear/completar/cancelar procesos: sólo gestión global.
+ *   - Listado, detalle, candidatos y PATCH aplican el MISMO alcance: el del
+ *     empleado del proceso. Para un rol con alcance, un proceso/tarea
+ *     inexistente y uno fuera de alcance responden el mismo 404.
+ *
+ * CONSISTENCIA: PATCH de tarea, alta, completar y cancelar corren en una
+ * transacción: tarea → proceso → empleado se bloquean con FOR UPDATE (en ese
+ * orden), el alcance del actor y el responsable con FOR SHARE. Rechazo o
+ * `affectedRows = 0` → rollback, sin escritura ni auditoría; la auditoría se
+ * registra sólo después del commit. Se mantiene el autocompletado del
+ * proceso cuando no quedan tareas pendientes (sin reapertura ni estados
+ * nuevos).
  */
 const router  = require('express').Router();
 const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const { sendMail } = require('../services/emailService');
+const audit = require('../services/audit');
+const { getVisibleDepartmentIds, applyDepartmentScope, canSeeEmployee, isGlobal } = require('../services/departmentScope');
+const { findEmployeeInScope, rollbackQuietly } = require('../services/employeeScopeLock');
+const { parsePositiveId } = require('../utils/strictId');
+const V = require('../services/onboardingValidation');
 
 router.use(authenticate);
 
 const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin'];
 const MGR_ROLES   = [...ADMIN_ROLES, 'manager', 'coordinator', 'gestor'];
 
+const PROCESS_NOT_FOUND = { error: 'Proceso no encontrado' };
+const TASK_NOT_FOUND = { error: 'Tarea no encontrada' };
+const TEMPLATE_NOT_FOUND = { error: 'Plantilla no encontrada' };
+const INVALID_ASSIGNEE = { error: 'Responsable inválido', code: 'INVALID_ASSIGNEE' };
+const badInput = (res, error) => res.status(400).json({ error, code: 'INVALID_INPUT' });
+const serverError = (res) => res.status(500).json({ error: 'Error interno' });
+
+/**
+ * ¿Puede el actor asignar esta cuenta como responsable? Cuenta existente y
+ * ACTIVA; un rol con alcance, además, sólo cuentas vinculadas a un empleado
+ * de su alcance. Dentro de una transacción la fila se lee con FOR SHARE: una
+ * desactivación concurrente espera al commit (o la asignación espera la suya).
+ */
+async function assigneeAllowed(scope, assigneeId, transaction) {
+  const [[u]] = await sequelize.query(
+    `SELECT u.id, u.active, e.department_id
+       FROM users u LEFT JOIN employees e ON e.id = u.employee_id
+      WHERE u.id = ? LIMIT 1${transaction ? ' FOR SHARE' : ''}`,
+    { replacements: [assigneeId], transaction }
+  );
+  if (!u || !Number(u.active)) return false;
+  if (isGlobal(scope)) return true;
+  return u.department_id != null && canSeeEmployee(scope, { department_id: Number(u.department_id) });
+}
+
+/** Proceso visible para el actor (alcance del empleado del proceso) o null. */
+async function findProcessInScope(user, processId) {
+  const scope = await getVisibleDepartmentIds(user);
+  const sc = applyDepartmentScope('WHERE p.id = ?', [processId], scope, 'e.department_id');
+  const [[p]] = await sequelize.query(`
+    SELECT p.*,
+           CONCAT(e.first_name,' ',e.last_name) AS employee_name, e.code AS employee_code,
+           d.name AS department_name,
+           t.name AS template_name, t.type AS template_type
+    FROM onboarding_processes p
+    JOIN employees e ON e.id = p.employee_id
+    LEFT JOIN departments d ON d.id = e.department_id
+    JOIN onboarding_templates t ON t.id = p.template_id
+    ${sc.where}
+  `, { replacements: sc.params });
+  return p ? { process: p, scope } : null;
+}
+
 // ─── TEMPLATES ───────────────────────────────────────────────────────────────
 
-router.get('/templates', async (req, res) => {
+router.get('/templates', authorize(...MGR_ROLES), async (req, res) => {
   try {
     const showAll = req.query.all === '1';
     const [rows] = await sequelize.query(`
@@ -43,22 +112,23 @@ router.get('/templates', async (req, res) => {
       ORDER BY t.type, t.name
     `);
     res.json({ ok: true, data: rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
-router.get('/templates/:id', async (req, res) => {
+router.get('/templates/:id', authorize(...MGR_ROLES), async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de plantilla inválido');
     const [[t]] = await sequelize.query(
       'SELECT * FROM onboarding_templates WHERE id = ?', { replacements: [id] }
     );
-    if (!t) return res.status(404).json({ error: 'Template no encontrado' });
+    if (!t) return res.status(404).json(TEMPLATE_NOT_FOUND);
     const [tasks] = await sequelize.query(
       'SELECT * FROM onboarding_template_tasks WHERE template_id = ? ORDER BY sort_order, id',
       { replacements: [id] }
     );
     res.json({ ok: true, data: { ...t, tasks } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
 router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
@@ -85,42 +155,62 @@ router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
     }
     await t.commit();
     res.status(201).json({ ok: true, id: templateId });
-  } catch (err) { await t.rollback(); res.status(500).json({ error: err.message }); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
+/** Plantilla existente bloqueada (FOR UPDATE) dentro de `transaction`, o null. */
+async function lockTemplate(id, transaction) {
+  const [[row]] = await sequelize.query(
+    'SELECT id FROM onboarding_templates WHERE id = ? LIMIT 1 FOR UPDATE', { replacements: [id], transaction }
+  );
+  return row || null;
+}
+
 router.put('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
+  let t;
   try {
-    const id = parseInt(req.params.id, 10);
-    const allowed = ['name', 'description', 'active'];
-    const sets = []; const vals = [];
-    for (const k of allowed) {
-      if (req.body[k] !== undefined) { sets.push(`${k} = ?`); vals.push(req.body[k]); }
-    }
-    if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
-    await sequelize.query(`UPDATE onboarding_templates SET ${sets.join(', ')} WHERE id = ?`,
-      { replacements: [...vals, id] });
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de plantilla inválido');
+    const v = V.validateTemplateUpdate(req.body);
+    if (!v.ok) return badInput(res, v.error);
+    t = await sequelize.transaction();
+    if (!(await lockTemplate(id, t))) { await rollbackQuietly(t); return res.status(404).json(TEMPLATE_NOT_FOUND); }
+    const keys = Object.keys(v.value);
+    await sequelize.query(
+      `UPDATE onboarding_templates SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      { replacements: [...keys.map((k) => v.value[k]), id], transaction: t }
+    );
+    await t.commit();
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 router.delete('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
+  let t;
   try {
-    await sequelize.query('UPDATE onboarding_templates SET active = 0 WHERE id = ?',
-      { replacements: [parseInt(req.params.id, 10)] });
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de plantilla inválido');
+    t = await sequelize.transaction();
+    if (!(await lockTemplate(id, t))) { await rollbackQuietly(t); return res.status(404).json(TEMPLATE_NOT_FOUND); }
+    await sequelize.query('UPDATE onboarding_templates SET active = 0 WHERE id = ?', { replacements: [id], transaction: t });
+    await t.commit();
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 // ─── PROCESOS ────────────────────────────────────────────────────────────────
 
 router.get('/', authorize(...MGR_ROLES), async (req, res) => {
   try {
-    const { status = 'active', type, employee_id } = req.query;
+    const q = V.validateProcessListQuery(req.query);
+    if (!q.ok) return badInput(res, q.error);
     const conds = []; const params = [];
-    if (status)      { conds.push('p.status = ?');      params.push(status); }
-    if (type)        { conds.push('p.type = ?');         params.push(type); }
-    if (employee_id) { conds.push('p.employee_id = ?'); params.push(employee_id); }
-    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+    if (q.value.status)     { conds.push('p.status = ?');      params.push(q.value.status); }
+    if (q.value.type)       { conds.push('p.type = ?');        params.push(q.value.type); }
+    if (q.value.employeeId) { conds.push('p.employee_id = ?'); params.push(q.value.employeeId); }
+    // Mismo alcance que el detalle y el PATCH: el del empleado del proceso.
+    const sc = applyDepartmentScope(`WHERE 1=1${conds.map((c) => ` AND ${c}`).join('')}`, params,
+      await getVisibleDepartmentIds(req.user), 'e.department_id');
 
     const [rows] = await sequelize.query(`
       SELECT p.id, p.type, p.status, p.start_date, p.created_at, p.completed_at,
@@ -135,32 +225,20 @@ router.get('/', authorize(...MGR_ROLES), async (req, res) => {
       JOIN employees e ON e.id = p.employee_id
       LEFT JOIN departments d ON d.id = e.department_id
       JOIN onboarding_templates t ON t.id = p.template_id
-      ${where}
+      ${sc.where}
       ORDER BY p.created_at DESC
       LIMIT 100
-    `, { replacements: params });
+    `, { replacements: sc.params });
     res.json({ ok: true, data: rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
-router.get('/:id', async (req, res) => {
+router.get('/:id', authorize(...MGR_ROLES), async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    const [[p]] = await sequelize.query(`
-      SELECT p.*,
-             CONCAT(e.first_name,' ',e.last_name) AS employee_name, e.code AS employee_code,
-             d.name AS department_name,
-             t.name AS template_name, t.type AS template_type
-      FROM onboarding_processes p
-      JOIN employees e ON e.id = p.employee_id
-      LEFT JOIN departments d ON d.id = e.department_id
-      JOIN onboarding_templates t ON t.id = p.template_id
-      WHERE p.id = ?
-    `, { replacements: [id] });
-    if (!p) return res.status(404).json({ error: 'Proceso no encontrado' });
-
-    const isMgr = MGR_ROLES.includes(req.user.role);
-    if (!isMgr) return res.status(403).json({ error: 'Sin permiso' });
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de proceso inválido');
+    const found = await findProcessInScope(req.user, id);
+    if (!found) return res.status(404).json(PROCESS_NOT_FOUND);
 
     const [tasks] = await sequelize.query(`
       SELECT ot.*, u.full_name AS assignee_name, cb.full_name AS completed_by_name
@@ -171,123 +249,183 @@ router.get('/:id', async (req, res) => {
       ORDER BY ot.sort_order, ot.id
     `, { replacements: [id] });
 
-    res.json({ ok: true, data: { ...p, tasks } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json({ ok: true, data: { ...found.process, tasks } });
+  } catch (err) { serverError(res); }
+});
+
+// Responsables asignables para las tareas de un proceso: cuentas ACTIVAS; un
+// rol con alcance sólo ve cuentas vinculadas a empleados de su alcance.
+router.get('/:id/assignee-candidates', authorize(...MGR_ROLES), async (req, res) => {
+  try {
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de proceso inválido');
+    const found = await findProcessInScope(req.user, id);
+    if (!found) return res.status(404).json(PROCESS_NOT_FOUND);
+    let rows;
+    if (isGlobal(found.scope)) {
+      [rows] = await sequelize.query(
+        `SELECT u.id, u.full_name, u.username, u.role FROM users u
+          WHERE u.active = 1 ORDER BY u.full_name, u.id LIMIT 500`
+      );
+    } else {
+      const sc = applyDepartmentScope('WHERE u.active = 1', [], found.scope, 'e.department_id');
+      [rows] = await sequelize.query(
+        `SELECT u.id, u.full_name, u.username, u.role FROM users u
+           JOIN employees e ON e.id = u.employee_id
+          ${sc.where} ORDER BY u.full_name, u.id LIMIT 500`,
+        { replacements: sc.params }
+      );
+    }
+    res.json({ ok: true, data: rows });
+  } catch (err) { serverError(res); }
 });
 
 router.post('/', authorize(...ADMIN_ROLES), async (req, res) => {
-  const { template_id, employee_id, start_date, assignees = {} } = req.body || {};
-  if (!template_id || !employee_id || !start_date)
-    return res.status(400).json({ error: 'template_id, employee_id y start_date son requeridos' });
-
+  const v = V.validateProcessCreate(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  const { templateId, employeeId, startDate, assignees } = v.value;
+  let t;
   try {
+    t = await sequelize.transaction();
     const [[tmpl]] = await sequelize.query(
-      'SELECT * FROM onboarding_templates WHERE id = ? AND active = 1', { replacements: [template_id] }
+      'SELECT id, type FROM onboarding_templates WHERE id = ? AND active = 1 LIMIT 1 FOR SHARE',
+      { replacements: [templateId], transaction: t }
     );
-    if (!tmpl) return res.status(400).json({ error: 'Template no encontrado o inactivo' });
-
+    if (!tmpl) { await rollbackQuietly(t); return res.status(404).json(TEMPLATE_NOT_FOUND); }
+    if (!(await findEmployeeInScope(req.user, employeeId, { transaction: t, lock: true }))) {
+      await rollbackQuietly(t);
+      return res.status(404).json({ error: 'Empleado no encontrado' });
+    }
     const [templateTasks] = await sequelize.query(
-      'SELECT * FROM onboarding_template_tasks WHERE template_id = ? ORDER BY sort_order, id',
-      { replacements: [template_id] }
+      'SELECT id, title, description, due_days FROM onboarding_template_tasks WHERE template_id = ? ORDER BY sort_order, id',
+      { replacements: [templateId], transaction: t }
     );
+    const taskIds = new Set(templateTasks.map((x) => Number(x.id)));
+    if ([...assignees.keys()].some((k) => !taskIds.has(k))) {
+      await rollbackQuietly(t);
+      return badInput(res, 'assignees referencia tareas que no son de la plantilla');
+    }
+    const scope = await getVisibleDepartmentIds(req.user, { transaction: t });
+    for (const uid of new Set(assignees.values())) {
+      if (!(await assigneeAllowed(scope, uid, t))) { await rollbackQuietly(t); return res.status(400).json(INVALID_ASSIGNEE); }
+    }
 
-    const t = await sequelize.transaction();
-    try {
-      const [r] = await sequelize.query(
-        `INSERT INTO onboarding_processes (template_id, employee_id, type, start_date, created_by)
-         VALUES (?, ?, ?, ?, ?)`,
-        { replacements: [template_id, employee_id, tmpl.type, start_date, req.user.id], transaction: t }
+    const [r] = await sequelize.query(
+      `INSERT INTO onboarding_processes (template_id, employee_id, type, start_date, created_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      { replacements: [templateId, employeeId, tmpl.type, startDate, req.user.id], transaction: t }
+    );
+    const processId = insertId(r);
+    for (let i = 0; i < templateTasks.length; i++) {
+      const task = templateTasks[i];
+      // Fecha civil: start_date + due_days, sin pasar por la zona horaria.
+      const dueStr = V.addDaysCivil(startDate, task.due_days || 3);
+      await sequelize.query(
+        `INSERT INTO onboarding_tasks
+           (process_id, title, description, assignee_id, due_date, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        { replacements: [processId, task.title, task.description || null, assignees.get(Number(task.id)) || null, dueStr, i], transaction: t }
       );
-      const processId = insertId(r);
-      const startDt = new Date(start_date);
+    }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'onboarding_process_create', entity: 'onboarding_processes', entity_id: processId, details: { employee_id: employeeId, type: tmpl.type, count: templateTasks.length } });
 
-      for (let i = 0; i < templateTasks.length; i++) {
-        const task = templateTasks[i];
-        const due = new Date(startDt);
-        due.setDate(due.getDate() + (task.due_days || 3));
-        const dueStr = due.toISOString().split('T')[0];
-        // assignees puede ser { [task_template_id]: user_id }
-        const assigneeId = assignees[task.id] || null;
-        await sequelize.query(
-          `INSERT INTO onboarding_tasks
-             (process_id, title, description, assignee_id, due_date, sort_order)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          { replacements: [processId, task.title, task.description || null, assigneeId, dueStr, i], transaction: t }
-        );
-      }
+    // Notificar por email a assignees (best-effort)
+    notifyAssignees(processId).catch(() => {});
+
+    res.status(201).json({ ok: true, id: processId });
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
+});
+
+/** Completar / cancelar: proceso bloqueado, sólo desde 'active'. */
+function closeProcessHandler(targetStatus, action) {
+  return async (req, res) => {
+    let t;
+    try {
+      const id = parsePositiveId(req.params.id);
+      if (id === null) return badInput(res, 'Identificador de proceso inválido');
+      t = await sequelize.transaction();
+      const [[p]] = await sequelize.query(
+        'SELECT id, status FROM onboarding_processes WHERE id = ? LIMIT 1 FOR UPDATE',
+        { replacements: [id], transaction: t }
+      );
+      if (!p) { await rollbackQuietly(t); return res.status(404).json(PROCESS_NOT_FOUND); }
+      if (p.status !== 'active') { await rollbackQuietly(t); return res.status(409).json({ error: 'El proceso no está activo' }); }
+      const [r] = await sequelize.query(
+        `UPDATE onboarding_processes SET status = ?${targetStatus === 'completed' ? ', completed_at = NOW()' : ''}
+          WHERE id = ? AND status = 'active'`,
+        { replacements: [targetStatus, id], transaction: t }
+      );
+      if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(409).json({ error: 'El proceso no está activo' }); }
       await t.commit();
+      audit.log({ req, user: req.user, action, entity: 'onboarding_processes', entity_id: id, details: { status: targetStatus } });
+      res.json({ ok: true });
+    } catch (err) { await rollbackQuietly(t); serverError(res); }
+  };
+}
 
-      // Notificar por email a assignees (best-effort)
-      notifyAssignees(processId).catch(() => {});
-
-      res.status(201).json({ ok: true, id: processId });
-    } catch (err) { await t.rollback(); throw err; }
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-router.post('/:id/complete', authorize(...ADMIN_ROLES), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    await sequelize.query(
-      `UPDATE onboarding_processes SET status='completed', completed_at=NOW() WHERE id=?`,
-      { replacements: [id] }
-    );
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-router.post('/:id/cancel', authorize(...ADMIN_ROLES), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    await sequelize.query(
-      `UPDATE onboarding_processes SET status='cancelled' WHERE id=?`,
-      { replacements: [id] }
-    );
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+router.post('/:id/complete', authorize(...ADMIN_ROLES), closeProcessHandler('completed', 'onboarding_process_complete'));
+router.post('/:id/cancel', authorize(...ADMIN_ROLES), closeProcessHandler('cancelled', 'onboarding_process_cancel'));
 
 // ─── TAREAS ───────────────────────────────────────────────────────────────────
 
-router.patch('/tasks/:taskId', async (req, res) => {
+router.patch('/tasks/:taskId', authorize(...MGR_ROLES), async (req, res) => {
+  const taskId = parsePositiveId(req.params.taskId);
+  if (taskId === null) return badInput(res, 'Identificador de tarea inválido');
+  const v = V.validateTaskPatch(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  const patch = v.value;
+  let t;
   try {
-    const taskId = parseInt(req.params.taskId, 10);
+    t = await sequelize.transaction();
+    const scope = await getVisibleDepartmentIds(req.user, { transaction: t });
+    // Orden de bloqueo: tarea → proceso → empleado (todo desde lo GUARDADO).
     const [[task]] = await sequelize.query(
-      'SELECT ot.*, p.status AS process_status FROM onboarding_tasks ot JOIN onboarding_processes p ON p.id = ot.process_id WHERE ot.id = ?',
-      { replacements: [taskId] }
+      'SELECT id, process_id FROM onboarding_tasks WHERE id = ? LIMIT 1 FOR UPDATE',
+      { replacements: [taskId], transaction: t }
     );
-    if (!task) return res.status(404).json({ error: 'Tarea no encontrada' });
-    if (task.process_status !== 'active')
-      return res.status(409).json({ error: 'El proceso no está activo' });
-
-    const allowed = ['status', 'assignee_id', 'notes', 'due_date'];
-    const sets = []; const vals = [];
-    for (const k of allowed) {
-      if (req.body[k] !== undefined) { sets.push(`${k} = ?`); vals.push(req.body[k]); }
+    if (!task) { await rollbackQuietly(t); return res.status(404).json(TASK_NOT_FOUND); }
+    const [[proc]] = await sequelize.query(
+      'SELECT id, employee_id, status FROM onboarding_processes WHERE id = ? LIMIT 1 FOR UPDATE',
+      { replacements: [task.process_id], transaction: t }
+    );
+    const emp = proc && await findEmployeeInScope(req.user, Number(proc.employee_id), { transaction: t, lock: true });
+    // Inexistente y fuera de alcance: el mismo 404 (antes de revelar el estado).
+    if (!emp) { await rollbackQuietly(t); return res.status(404).json(TASK_NOT_FOUND); }
+    if (proc.status !== 'active') { await rollbackQuietly(t); return res.status(409).json({ error: 'El proceso no está activo' }); }
+    if (patch.assignee_id != null && !(await assigneeAllowed(scope, patch.assignee_id, t))) {
+      await rollbackQuietly(t);
+      return res.status(400).json(INVALID_ASSIGNEE);
     }
-    // Si se marca done, registrar quién y cuándo
-    if (req.body.status === 'done') {
-      sets.push('completed_at = NOW()'); sets.push('completed_by = ?'); vals.push(req.user.id);
-    }
-    if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
 
-    await sequelize.query(`UPDATE onboarding_tasks SET ${sets.join(', ')} WHERE id = ?`,
-      { replacements: [...vals, taskId] });
+    const fields = Object.keys(patch);
+    const sets = fields.map((k) => `${k} = ?`); const vals = fields.map((k) => patch[k]);
+    // Si se marca done, registrar quién y cuándo (contrato actual).
+    if (patch.status === 'done') { sets.push('completed_at = NOW()', 'completed_by = ?'); vals.push(req.user.id); }
+    const [r] = await sequelize.query(
+      `UPDATE onboarding_tasks SET ${sets.join(', ')} WHERE id = ? AND process_id = ?`,
+      { replacements: [...vals, taskId, proc.id], transaction: t }
+    );
+    if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(404).json(TASK_NOT_FOUND); }
 
-    // Si todas las tareas están done/skipped → auto-completar proceso
+    // Si todas las tareas están done/skipped → auto-completar proceso (contrato actual).
     const [[{ pending }]] = await sequelize.query(
       `SELECT COUNT(*) AS pending FROM onboarding_tasks
-       WHERE process_id = ? AND status NOT IN ('done','skipped')`,
-      { replacements: [task.process_id] }
+        WHERE process_id = ? AND status NOT IN ('done','skipped')`,
+      { replacements: [proc.id], transaction: t }
     );
-    if (pending === 0) {
-      await sequelize.query(
-        `UPDATE onboarding_processes SET status='completed', completed_at=NOW() WHERE id=?`,
-        { replacements: [task.process_id] }
+    let closed = false;
+    if (Number(pending) === 0) {
+      const [c] = await sequelize.query(
+        `UPDATE onboarding_processes SET status='completed', completed_at=NOW() WHERE id = ? AND status = 'active'`,
+        { replacements: [proc.id], transaction: t }
       );
+      closed = !!(c && c.affectedRows);
     }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'onboarding_task_update', entity: 'onboarding_tasks', entity_id: taskId, details: { fields, status: patch.status, closed } });
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 // ─── Email a responsables al crear proceso ───────────────────────────────────
