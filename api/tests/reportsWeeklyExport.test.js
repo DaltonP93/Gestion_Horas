@@ -11,9 +11,10 @@ jest.mock('../src/middleware/auth', () => ({
   requirePermission: () => (_req, _res, next) => next(),
 }));
 jest.mock('../src/services/departmentScope', () => ({
-  getVisibleDepartmentIds: jest.fn().mockResolvedValue({ unrestricted: true }),
+  getVisibleDepartmentIds: jest.fn(async () => require('../src/services/scopeGrant').issueGlobal()),
   applyDepartmentScope: jest.fn(),
   canSeeEmployee: jest.fn(),
+  isGlobal: (s) => require('../src/services/scopeGrant').isGlobal(s),
 }));
 // Evita arrastrar el grafo pesado (cron/pdf/mail) al requerir el router.
 jest.mock('../src/services/scheduler', () => ({

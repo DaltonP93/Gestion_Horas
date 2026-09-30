@@ -24,7 +24,7 @@
  */
 
 const { sequelize } = require('../config/database');
-const { getVisibleDepartmentIds, canSeeEmployee } = require('./departmentScope');
+const { getVisibleDepartmentIds, canSeeEmployee, isGlobal } = require('./departmentScope');
 const { getCapabilityFlags } = require('./capabilities');
 
 const OWN_MODULE = 'mis_permisos';
@@ -66,7 +66,7 @@ async function getAccessContext(user) {
   return {
     active: true,
     actor,
-    unrestricted: !!(deptScope && deptScope.unrestricted),
+    unrestricted: isGlobal(deptScope),
     deptScope,
     selfEmployeeId: Number.isInteger(selfId) && selfId > 0 ? selfId : null,
     can: { own: flags[OWN_MODULE], others: flags[OTHERS_MODULE] },

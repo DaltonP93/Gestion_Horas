@@ -11,6 +11,7 @@ jest.mock('../src/services/departmentScope', () => ({
 const { sequelize } = require('../src/config/database');
 const departmentScope = require('../src/services/departmentScope');
 const orgScope = require('../src/services/orgScope');
+const { issuedGlobal } = require('./helpers/scopes');
 
 beforeEach(() => jest.clearAllMocks());
 
@@ -19,6 +20,7 @@ describe('getOrgScope', () => {
     for (const role of ['super_admin', 'admin', 'gth', 'hr']) {
       const s = await orgScope.getOrgScope({ role, employee_id: 1 });
       expect(s).toEqual({ unrestricted: true });
+      expect(orgScope.isGlobal(s)).toBe(true); // emitido por el servidor
     }
     expect(sequelize.query).not.toHaveBeenCalled();
   });
@@ -62,9 +64,10 @@ describe('getOrgScope', () => {
 
 describe('filtros y asserts', () => {
   const scope = { unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [4, 5] };
+  const GLOBAL = issuedGlobal();
 
-  test('companyFilter sin alcance → sin cláusula', () => {
-    expect(orgScope.companyFilter({ unrestricted: true }, 'id')).toEqual({ clause: '', params: [] });
+  test('companyFilter con alcance global emitido → sin cláusula', () => {
+    expect(orgScope.companyFilter(GLOBAL, 'id')).toEqual({ clause: '', params: [] });
   });
 
   test('companyFilter con alcance → IN (...)', () => {
@@ -78,10 +81,10 @@ describe('filtros y asserts', () => {
     expect(f.clause).toBe('AND 1=0');
   });
 
-  test('assertCompanyInScope: dentro pasa, fuera 403, null pasa, unrestricted pasa', () => {
+  test('assertCompanyInScope: dentro pasa, fuera 403, null pasa, global emitido pasa', () => {
     expect(() => orgScope.assertCompanyInScope(scope, 9)).not.toThrow();
     expect(() => orgScope.assertCompanyInScope(scope, null)).not.toThrow();
-    expect(() => orgScope.assertCompanyInScope({ unrestricted: true }, 999)).not.toThrow();
+    expect(() => orgScope.assertCompanyInScope(GLOBAL, 999)).not.toThrow();
     try { orgScope.assertCompanyInScope(scope, 999); throw new Error('no lanzó'); }
     catch (e) { expect(e.status).toBe(403); expect(e.code).toBe('OUT_OF_SCOPE'); }
   });
@@ -97,6 +100,6 @@ describe('filtros y asserts', () => {
     expect(orgScope.canSeeCostCenter(scope, { company_id: 9 })).toBe(true);
     expect(orgScope.canSeeCostCenter(scope, { company_id: 1 })).toBe(false);
     expect(orgScope.canSeeCostCenter(scope, { company_id: null })).toBe(false);
-    expect(orgScope.canSeeCostCenter({ unrestricted: true }, { company_id: null })).toBe(true);
+    expect(orgScope.canSeeCostCenter(GLOBAL, { company_id: null })).toBe(true);
   });
 });

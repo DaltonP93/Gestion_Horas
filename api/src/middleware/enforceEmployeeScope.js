@@ -32,7 +32,7 @@
 
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
-const { getVisibleDepartmentIds, canSeeEmployee } = require('../services/departmentScope');
+const { getVisibleDepartmentIds, canSeeEmployee, isGlobal } = require('../services/departmentScope');
 const { parsePositiveId, isAbsent } = require('../utils/strictId');
 
 function resolveRawId(source, req) {
@@ -70,7 +70,7 @@ function enforceEmployeeScope(source = 'employeeId') {
 
     // Roles globales de RR.HH.: acceso amplio. No pagamos una consulta extra —
     // el propio handler ya resuelve el 404 de "no encontrado" si aplica.
-    if (scope && scope.unrestricted) return next();
+    if (isGlobal(scope)) return next();
 
     const [[emp]] = await sequelize.query(
       'SELECT department_id FROM employees WHERE id = ? LIMIT 1',

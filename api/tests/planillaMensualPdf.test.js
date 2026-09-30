@@ -20,9 +20,10 @@ jest.mock('../src/middleware/auth', () => ({
   requirePermission: () => (_req, _res, next) => next(),
 }));
 jest.mock('../src/services/departmentScope', () => ({
-  getVisibleDepartmentIds: async () => ({ unrestricted: true }),
+  getVisibleDepartmentIds: async () => require('../src/services/scopeGrant').issueGlobal(),
   applyDepartmentScope: (where, params) => ({ where, params }),
   canSeeEmployee: async () => true,
+  isGlobal: (s) => require('../src/services/scopeGrant').isGlobal(s),
   scopeToClause: () => ({ clause: '', params: [], empty: false }),
 }));
 // El total trabajado ahora lo calcula el motor de jornada (SÓLO LECTURA). Sin

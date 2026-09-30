@@ -67,6 +67,11 @@ router.get('/:id', requirePermission('empresas', 'view'), asyncHandler(async (re
 
 router.post('/', requirePermission('empresas', 'create'), validate(createSchema), asyncHandler(async (req, res) => {
   governance.assertWriteEnabled();
+  // Una empresa nueva no cabe en ningún alcance acotado: sólo un rol global.
+  const scope = await orgScope.getOrgScope(req.user);
+  if (!orgScope.isGlobal(scope)) {
+    return res.status(403).json({ error: 'Crear empresas requiere alcance global', code: 'OUT_OF_SCOPE' });
+  }
   const { reason, ...data } = req.body;
   let id;
   try {

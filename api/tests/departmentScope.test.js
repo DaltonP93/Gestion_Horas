@@ -1,3 +1,4 @@
+const { issuedGlobal } = require('./helpers/scopes');
 const {
   isScoped,
   isUnrestricted,
@@ -36,7 +37,7 @@ describe('departmentScope.isScoped / isUnrestricted', () => {
 
 describe('departmentScope.applyDepartmentScope', () => {
   test('unrestricted → no-op', () => {
-    const out = applyDepartmentScope('WHERE 1=1', [], { unrestricted: true });
+    const out = applyDepartmentScope('WHERE 1=1', [], issuedGlobal());
     expect(out.where).toBe('WHERE 1=1');
     expect(out.params).toEqual([]);
   });
@@ -54,17 +55,19 @@ describe('departmentScope.applyDepartmentScope', () => {
     expect(out.where).toContain('x.dept IN (?)');
     expect(out.params).toEqual([9]);
   });
-  test('scope falsy → no-op defensivo', () => {
-    const out = applyDepartmentScope('WHERE 1=1', ['x'], null);
-    expect(out.where).toBe('WHERE 1=1');
-    expect(out.params).toEqual(['x']);
+  test('alcance ausente/nulo/literal no emitido → 0 filas (alcance obligatorio)', () => {
+    for (const bad of [null, undefined, { unrestricted: true }, { ids: [1] }, 'admin']) {
+      const out = applyDepartmentScope('WHERE 1=1', ['x'], bad);
+      expect(out.where).toBe('WHERE 1=1 AND 1=0');
+      expect(out.params).toEqual(['x']);
+    }
   });
 });
 
 describe('departmentScope.canSeeEmployee', () => {
   test('unrestricted ve a todos', () => {
-    expect(canSeeEmployee({ unrestricted: true }, { department_id: 1 })).toBe(true);
-    expect(canSeeEmployee({ unrestricted: true }, { department_id: null })).toBe(true);
+    expect(canSeeEmployee(issuedGlobal(), { department_id: 1 })).toBe(true);
+    expect(canSeeEmployee(issuedGlobal(), { department_id: null })).toBe(true);
   });
   test('scoped ve sólo empleados de su lista de deptos', () => {
     const s = { unrestricted: false, ids: [3, 4] };

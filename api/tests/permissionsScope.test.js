@@ -36,6 +36,7 @@ jest.mock('../src/services/notifications', () => ({
   notifyPermissionCreated: jest.fn().mockResolvedValue(),
 }));
 
+const { issuedGlobal } = require('./helpers/scopes');
 const { sequelize } = require('../src/config/database');
 const departmentScope = require('../src/services/departmentScope');
 const router = require('../src/routes/permissions');
@@ -90,7 +91,7 @@ const NONE = { unrestricted: false, ids: [], branchIds: [] };
 function installMocks() {
   departmentScope.getVisibleDepartmentIds.mockImplementation(async (actor) => {
     if (world.scopes[actor.id]) return world.scopes[actor.id];
-    if (['super_admin', 'admin', 'gth', 'hr'].includes(actor.role)) return { unrestricted: true };
+    if (['super_admin', 'admin', 'gth', 'hr'].includes(actor.role)) return issuedGlobal();
     if (['manager', 'coordinator', 'supervisor', 'gestor'].includes(actor.role)) return SCOPED;
     return NONE;
   });

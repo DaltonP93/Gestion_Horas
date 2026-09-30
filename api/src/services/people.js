@@ -88,7 +88,7 @@ async function validateCandidateRefs(scope, data) {
   const orgScope = require('./orgScope');
   const companyId = data.company_id ?? null;
   const branchId = data.branch_id ?? null;
-  if (scope && !scope.unrestricted && companyId == null && branchId == null) {
+  if (!orgScope.isGlobal(scope) && companyId == null && branchId == null) {
     throw httpError(403, 'OUT_OF_SCOPE', 'Un rol con alcance no puede crear un candidato sin empresa/sucursal');
   }
   if (branchId != null) {
@@ -150,7 +150,7 @@ async function convertCandidate(id, employeeId, scope) {
     throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
   }
   // El EMPLEADO destino debe estar dentro del alcance del actor (403 si no).
-  if (scope && !scope.unrestricted) {
+  if (!orgScope.isGlobal(scope)) {
     const empRefs = await orgScope.loadEmployeeOrgRefs(employeeId);
     if (!orgScope.canSeeEmployeeRefs(scope, empRefs)) {
       throw httpError(403, 'OUT_OF_SCOPE', 'El empleado destino está fuera de tu alcance');
@@ -167,7 +167,7 @@ async function convertCandidate(id, employeeId, scope) {
     if (!cand) throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
     // El CANDIDATO debe estar dentro del alcance del actor. Si no, se responde
     // 404 (no se filtra existencia de candidatos de otra empresa/sucursal).
-    if (scope && !scope.unrestricted && !orgScope.canSeeCandidateRefs(scope, cand)) {
+    if (!orgScope.isGlobal(scope) && !orgScope.canSeeCandidateRefs(scope, cand)) {
       throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
     }
     if (cand.converted_employee_id) {

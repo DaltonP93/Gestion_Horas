@@ -1,3 +1,4 @@
+const { issuedGlobal } = require('./helpers/scopes');
 /**
  * monthlyWorkedFromEngine.test.js
  *
@@ -31,9 +32,10 @@ jest.mock('../src/middleware/auth', () => ({
   requirePermission: () => (_req, _res, next) => next(),
 }));
 jest.mock('../src/services/departmentScope', () => ({
-  getVisibleDepartmentIds: async () => ({ unrestricted: true }),
+  getVisibleDepartmentIds: async () => require('../src/services/scopeGrant').issueGlobal(),
   applyDepartmentScope: (where, params) => ({ where, params }),
   canSeeEmployee: async () => true,
+  isGlobal: (s) => require('../src/services/scopeGrant').isGlobal(s),
 }));
 
 const express = require('express');
@@ -73,7 +75,7 @@ describe('monthlyWorkedByEmployee — trabajado del mes por el motor', () => {
     sequelize.query
       .mockResolvedValueOnce([[{ employee_id: 7, employee_name: 'Ada Nocturna', code: '007', department: 'Vigilancia' }]])
       .mockResolvedValueOnce([NOCTURNO]);
-    const marc = await generateMarcadasReport({ dateFrom: '2025-01-01', dateTo: '2025-01-31' });
+    const marc = await generateMarcadasReport({ dateFrom: '2025-01-01', dateTo: '2025-01-31', scope: issuedGlobal() });
 
     sequelize.query.mockReset();
     sequelize.query.mockResolvedValueOnce([NOCTURNO]);

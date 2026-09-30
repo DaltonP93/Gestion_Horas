@@ -13,6 +13,7 @@
  */
 
 const { sequelize } = require('../config/database');
+const scopeGrant = require('./scopeGrant');
 
 const UNRESTRICTED_ROLES = new Set(['super_admin', 'admin', 'gth', 'hr']);
 const SCOPED_ROLES = new Set(['manager', 'coordinator', 'supervisor', 'gestor']);
@@ -63,14 +64,14 @@ async function _expandDescendants(rootId) {
 
 /**
  * getVisibleDepartmentIds(user)
- *   → { unrestricted: true }                (admin/hr/gth/super_admin)
+ *   → alcance global emitido (scopeGrant)   (admin/hr/gth/super_admin)
  *   → { unrestricted: false, ids: [...] }   (manager/coord/supervisor/gestor)
  *   → { unrestricted: false, ids: [] }      (rol scoped sin empleado/depto → nada)
  * Roles no reconocidos (p.ej. 'employee') → { unrestricted: false, ids: [] }.
  */
 async function getVisibleDepartmentIds(user) {
   if (!user || !user.role) return { unrestricted: false, ids: [], branchIds: [] };
-  if (isUnrestricted(user.role)) return { unrestricted: true };
+  if (isUnrestricted(user.role)) return scopeGrant.issueGlobal();
   if (!isScoped(user.role)) return { unrestricted: false, ids: [], branchIds: [] };
 
   // La sede pertenece a la CUENTA. Se consulta en cada resolución para que
@@ -103,14 +104,39 @@ async function getVisibleDepartmentIds(user) {
 }
 
 /**
+ * Alcance global para TAREAS INTERNAS del servidor sin usuario (p. ej. el
+ * reporte programado). No depende de datos de la solicitud. Una prueba
+ * estática restringe qué módulos pueden llamarlo.
+ */
+function systemScope() {
+  return scopeGrant.issueGlobal();
+}
+
+/**
+ * ¿Es un alcance GLOBAL emitido por el servidor? Un objeto armado a mano con
+ * `unrestricted: true`, `null` o `undefined` NO lo es (ver scopeGrant.js).
+ */
+function isGlobal(scope) {
+  return scopeGrant.isGlobal(scope);
+}
+
+/**
+ * Departamentos visibles de un alcance RESTRINGIDO bien formado; cualquier
+ * otro valor (ausente, nulo, mal formado) → [] (fail-closed).
+ */
+function visibleIds(scope) {
+  return scopeGrant.isRestricted(scope, ['ids'], ['branchIds']) ? scope.ids : [];
+}
+
+/**
  * Compone una cláusula SQL a partir de un scope resuelto.
- *   - unrestricted: no-op (retorna { where, params }).
- *   - ids vacío: fuerza `AND 1=0` (0 filas).
+ *   - global emitido por el servidor: no-op (retorna { where, params }).
+ *   - ids vacío, alcance ausente o inválido: fuerza `AND 1=0` (0 filas).
  *   - ids no vacío: `AND col IN (?, ?, …)`.
  */
 function applyDepartmentScope(where, params, scope, col = 'e.department_id') {
-  if (!scope || scope.unrestricted) return { where, params };
-  const ids = scope.ids || [];
+  if (isGlobal(scope)) return { where, params };
+  const ids = visibleIds(scope);
   if (!ids.length) return { where: `${where} AND 1=0`, params };
   const placeholders = ids.map(() => '?').join(',');
   return {
@@ -121,13 +147,14 @@ function applyDepartmentScope(where, params, scope, col = 'e.department_id') {
 
 /**
  * canSeeEmployee(scope, employee) — helper puro para chequeos por-id.
- * Retorna `true` cuando el scope es unrestricted o el `department_id`
- * del empleado está en la lista visible. `department_id` `null` sólo
- * es visible con unrestricted (roles scoped no ven "sin depto").
+ * Retorna `true` cuando el scope es global (emitido por el servidor) o el
+ * `department_id` del empleado está en la lista visible. `department_id`
+ * `null` sólo es visible con alcance global (roles scoped no ven "sin depto").
+ * Alcance ausente o inválido → `false`.
  */
 function canSeeEmployee(scope, employee) {
-  if (!scope || scope.unrestricted) return true;
-  const ids = scope.ids || [];
+  if (isGlobal(scope)) return true;
+  const ids = visibleIds(scope);
   if (!ids.length) return false;
   const deptId = employee?.department_id ?? null;
   if (deptId == null) return false;
@@ -139,6 +166,8 @@ module.exports = {
   SCOPED_ROLES,
   isScoped,
   isUnrestricted,
+  isGlobal,
+  systemScope,
   getVisibleDepartmentIds,
   applyDepartmentScope,
   canSeeEmployee,

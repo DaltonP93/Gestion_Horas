@@ -20,11 +20,37 @@
  */
 const { describeIT, makeConn, closeAppDb } = require('./helper');
 
+// Proceso de PRUEBA contra MySQL aislado: se habilitan los writers de gobierno
+// sólo en este proceso para ejercer las rutas reales de escritura (el flag
+// operativo del servidor no se toca). JWT de prueba.
+process.env.GOVERNANCE_WRITE_ENABLED = 'true';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'it-orgscope-secret-0123456789abcdef';
+
 describeIT('orgScope (integración) — alcance por empresa', () => {
   let conn;
   let orgScope;
   let governance;
+  let server;
+  let base;
   const ids = {};
+  const jwt = require('jsonwebtoken');
+  const token = (userId, role) => jwt.sign({ id: userId, role }, process.env.JWT_SECRET, { algorithm: 'HS256', expiresIn: '5m' });
+  const http = (method, url, userId, role, body) => fetch(base + url, {
+    method,
+    headers: { Authorization: `Bearer ${token(userId, role)}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const count = async (sql, params) => Number((await conn.query(sql, params))[0][0].n);
+  const auditCount = (userId) => count('SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ?', [userId]);
+  /** Espera a que aparezca el evento de auditoría del control positivo (audit.log es asíncrono). */
+  async function waitAudit(userId, action, entityId) {
+    for (let i = 0; i < 100; i += 1) {
+      const n = await count('SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = ? AND entity_id = ?', [userId, action, String(entityId)]);
+      if (n > 0) return;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`sin evento ${action}`);
+  }
 
   async function insertUser(tag, role, { branchId = null, employeeId = null, active = 1 } = {}) {
     const [r] = await conn.query(
@@ -82,12 +108,41 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
     ids.coordA = await insertUser('cA', 'coordinator', { branchId: ids.branchA });
     ids.employeeA = await insertUser('eA', 'employee', { branchId: ids.branchA, employeeId: ids.empA });
     ids.admin = await insertUser('ad', 'admin');
+
+    // Capacidades EXPLÍCITAS para los gerentes: el permiso funcional está
+    // otorgado; lo que decide es el ALCANCE.
+    for (const uid of [ids.mgrA, ids.mgrNoBranch]) {
+      for (const module of ['empresas', 'centros_costo']) {
+        await conn.query(
+          'INSERT INTO user_permissions (user_id, module, can_view, can_create, can_update, can_delete) VALUES (?, ?, 1, 1, 1, 0)',
+          [uid, module],
+        );
+      }
+    }
+
+    const express = require('express');
+    const app = express();
+    app.use(express.json());
+    app.use('/api/companies', require('../../src/routes/companies'));
+    app.use('/api/cost-centers', require('../../src/routes/costCenters'));
+    app.use('/api/branches', require('../../src/routes/branches'));
+    // eslint-disable-next-line no-unused-vars
+    app.use((err, _req, res, _next) => res.status(err.status || 500).json({ error: err.message, code: err.code }));
+    await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); });
+    base = `http://127.0.0.1:${server.address().port}`;
   });
 
   afterAll(async () => {
+    if (server) await new Promise((r) => server.close(r));
     if (conn) {
       const userIds = [ids.mgrA, ids.mgrNoBranch, ids.mgrInactive, ids.coordA, ids.employeeA, ids.admin].filter(Boolean);
-      if (userIds.length) await conn.query('DELETE FROM users WHERE id IN (?)', [userIds]);
+      if (userIds.length) {
+        await conn.query('DELETE FROM user_permissions WHERE user_id IN (?)', [userIds]);
+        await conn.query('DELETE FROM audit_events WHERE user_id IN (?)', [userIds]);
+        await conn.query('DELETE FROM cost_centers WHERE created_by IN (?)', [userIds]);
+        await conn.query('DELETE FROM companies WHERE created_by IN (?)', [userIds]);
+        await conn.query('DELETE FROM users WHERE id IN (?)', [userIds]);
+      }
       await conn.query('DELETE FROM cost_centers WHERE id IN (?, ?)', [ids.ccA, ids.ccB]);
       await conn.query('DELETE FROM employees WHERE id IN (?, ?)', [ids.empA, ids.empB]);
       await conn.query('DELETE FROM departments WHERE id IN (?, ?, ?)', [ids.deptA, ids.deptAOff, ids.deptB]);
@@ -186,6 +241,85 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
       }
       const back = await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB));
       expect(back.companyIds).toEqual([ids.companyA]);
+    });
+  });
+  describe('alcance obligatorio (base real)', () => {
+    test.each([
+      ['ausente', undefined],
+      ['null', null],
+      ['literal { unrestricted: true } no emitido', { unrestricted: true }],
+      ['mal formado', { unrestricted: false, companyIds: ['1'] }],
+    ])('servicio con alcance %s → sin filas y sin lectura por id', async (_label, bad) => {
+      expect(await governance.listCompanies(bad)).toEqual([]);
+      expect(await governance.listCostCenters(bad)).toEqual([]);
+      expect(await governance.getCompany(ids.companyA, bad)).toBeNull();
+      expect(await governance.getCostCenter(ids.ccA, bad)).toBeNull();
+    });
+
+    test('el mismo servicio con el global emitido para admin ve ambas empresas (control positivo)', async () => {
+      const scope = await orgScope.getOrgScope(who(ids.admin, 'admin'));
+      const seen = (await governance.listCompanies(scope)).map((r) => r.id);
+      expect(seen).toEqual(expect.arrayContaining([ids.companyA, ids.companyB]));
+      expect((await governance.getCompany(ids.companyB, scope)).id).toBe(ids.companyB);
+    });
+  });
+
+  describe('rutas HTTP: permitido y denegado sin escritura (base real)', () => {
+    test('manager de A: lee su empresa, no la ajena', async () => {
+      const list = await (await http('GET', '/api/companies', ids.mgrA, 'manager')).json();
+      const seen = list.data.map((r) => r.id);
+      expect(seen).toContain(ids.companyA);
+      expect(seen).not.toContain(ids.companyB);
+      expect((await http('GET', `/api/companies/${ids.companyA}`, ids.mgrA, 'manager')).status).toBe(200);
+      expect((await http('GET', `/api/companies/${ids.companyB}`, ids.mgrA, 'manager')).status).toBe(404);
+      const cc = (await (await http('GET', '/api/cost-centers', ids.mgrA, 'manager')).json()).data.map((r) => r.id);
+      expect(cc).toContain(ids.ccA);
+      expect(cc).not.toContain(ids.ccB);
+    });
+
+    test('manager de A con permiso de alta: denegado todo lo que sale de su alcance, sin filas ni auditoría', async () => {
+      const auditBefore = await auditCount(ids.mgrA);
+      const code = `${ids.uniq}NEW`;
+
+      // Crear una empresa exige alcance global aunque tenga el permiso.
+      const r1 = await http('POST', '/api/companies', ids.mgrA, 'manager', { code, legal_name: 'IT nueva' });
+      expect(r1.status).toBe(403);
+      expect(await count('SELECT COUNT(*) AS n FROM companies WHERE code = ?', [code])).toBe(0);
+
+      // Editar la empresa ajena → 404 y sin cambios.
+      const r2 = await http('PATCH', `/api/companies/${ids.companyB}`, ids.mgrA, 'manager', { legal_name: 'pisada' });
+      expect(r2.status).toBe(404);
+      expect((await conn.query('SELECT legal_name FROM companies WHERE id = ?', [ids.companyB]))[0][0].legal_name).toBe('ITScope B');
+
+      // Centro de costo en la empresa ajena o sin empresa → 403 sin fila.
+      for (const body of [{ company_id: ids.companyB, code: `${code}CB`, name: 'x' }, { code: `${code}CN`, name: 'x' }]) {
+        const r = await http('POST', '/api/cost-centers', ids.mgrA, 'manager', body);
+        expect(r.status).toBe(403);
+        expect(await count('SELECT COUNT(*) AS n FROM cost_centers WHERE code = ?', [body.code])).toBe(0);
+      }
+
+      // Mover un centro propio a la empresa ajena → 403 sin cambio.
+      const r3 = await http('PATCH', `/api/cost-centers/${ids.ccA}`, ids.mgrA, 'manager', { company_id: ids.companyB });
+      expect(r3.status).toBe(403);
+      expect(Number((await conn.query('SELECT company_id FROM cost_centers WHERE id = ?', [ids.ccA]))[0][0].company_id)).toBe(ids.companyA);
+
+      // Control positivo del mismo usuario: centro en SU empresa → 201 + evento.
+      const ok = await http('POST', '/api/cost-centers', ids.mgrA, 'manager', { company_id: ids.companyA, code: `${code}CA`, name: 'propio' });
+      expect(ok.status).toBe(201);
+      const created = await ok.json();
+      await waitAudit(ids.mgrA, 'cost_center.create', created.id);
+      // El único evento nuevo es el del control positivo.
+      expect(await auditCount(ids.mgrA)).toBe(auditBefore + 1);
+    });
+
+    test('admin (global emitido): crea empresa y ve ambas (control positivo)', async () => {
+      const code = `${ids.uniq}ADM`;
+      const r = await http('POST', '/api/companies', ids.admin, 'admin', { code, legal_name: 'IT admin' });
+      expect(r.status).toBe(201);
+      const { id } = await r.json();
+      await waitAudit(ids.admin, 'company.create', id);
+      const seen = (await (await http('GET', '/api/companies', ids.admin, 'admin')).json()).data.map((x) => x.id);
+      expect(seen).toEqual(expect.arrayContaining([ids.companyA, ids.companyB, id]));
     });
   });
 });

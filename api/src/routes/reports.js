@@ -14,7 +14,9 @@ const {
   getVisibleDepartmentIds,
   applyDepartmentScope,
   canSeeEmployee,
+  isGlobal,
 } = require('../services/departmentScope');
+const scopeGrant = require('../services/scopeGrant');
 
 router.use(authenticate);
 
@@ -23,8 +25,8 @@ router.use(authenticate);
 // - Cuando es scoped sin depto vinculado → fuerza 0 filas (mismo criterio que
 //   applyDepartmentScope, para no filtrar datos de otros supervisores).
 function scopeToClause(scope, col = 'e.department_id') {
-  if (!scope || scope.unrestricted) return { clause: '', params: [], empty: false };
-  const ids = scope.ids || [];
+  if (isGlobal(scope)) return { clause: '', params: [], empty: false };
+  const ids = scopeGrant.isRestricted(scope, ['ids'], ['branchIds']) ? scope.ids : [];
   if (!ids.length) return { clause: 'AND 1=0', params: [], empty: true };
   return {
     clause: `AND ${col} IN (${ids.map(() => '?').join(',')})`,

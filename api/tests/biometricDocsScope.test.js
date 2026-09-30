@@ -29,6 +29,7 @@ jest.mock('../src/services/departmentScope', () => {
 // audit.log no debe tocar nada durante estos tests.
 jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 
+const { issuedGlobal } = require('./helpers/scopes');
 const { sequelize } = require('../src/config/database');
 const departmentScope = require('../src/services/departmentScope');
 const faceRouter = require('../src/routes/faceRecognition');
@@ -88,7 +89,7 @@ describe('H-1 biometría: GET /:employeeId/descriptor', () => {
   });
 
   test('rol global → el handler devuelve el descriptor', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     sequelize.query.mockResolvedValueOnce([[{
       face_descriptor: null, face_photo_url: null, face_enrolled_at: null,
     }]]);
@@ -132,7 +133,7 @@ describe('H-3 documentos RR.HH.: GET /:id/documents', () => {
   });
 
   test('rol global → lista documentos', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     sequelize.query.mockResolvedValueOnce([[]]); // sin documentos
     const { res } = await runChain(stack(), {
       user: { role: 'hr' }, params: { id: '7' },

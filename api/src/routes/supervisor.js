@@ -12,19 +12,20 @@
 const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
-const { getVisibleDepartmentIds } = require('../services/departmentScope');
+const { getVisibleDepartmentIds, isGlobal } = require('../services/departmentScope');
+const scopeGrant = require('../services/scopeGrant');
 
 router.use(authenticate);
 
 async function getTeamDeptIds(user) {
   const scope = await getVisibleDepartmentIds(user);
-  if (scope.unrestricted) {
+  if (isGlobal(scope)) {
     const [rows] = await sequelize.query(
       'SELECT id FROM departments WHERE active = 1 ORDER BY id'
     );
     return rows.map(r => Number(r.id));
   }
-  return (scope.ids || []).map(Number);
+  return scopeGrant.isRestricted(scope, ['ids'], ['branchIds']) ? scope.ids : [];
 }
 
 // KPIs del equipo + lista con status del día

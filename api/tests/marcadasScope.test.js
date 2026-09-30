@@ -20,6 +20,7 @@
  * este archivo protege no cambia —cada valor tiene que llegar a SU columna,
  * porque el enlace es posicional— pero ahora hay que verificarla en las dos.
  */
+const { issuedGlobal } = require('./helpers/scopes');
 
 jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn() },
@@ -75,17 +76,17 @@ describe('generateMarcadasReport — scope de departamento', () => {
       .mockResolvedValue([[]]);
   });
 
-  test('sin scope: no inyecta cláusula IN', async () => {
-    await generateMarcadasReport({ dateFrom: '2026-07-01', dateTo: '2026-07-31' });
-    const { sql, replacements } = padron();
-    expect(sql).not.toMatch(/department_id IN/);
-    expect(replacements).toEqual([]);
+  test('sin scope: resultado vacío, no lee el padrón (alcance obligatorio)', async () => {
+    // Sin alcance NO se lee el padrón completo: alcance obligatorio.
+    const out = await generateMarcadasReport({ dateFrom: '2026-07-01', dateTo: '2026-07-31' });
+    expect(out.data).toEqual([]);
+    expect(sequelize.query).not.toHaveBeenCalled();
   });
 
   test('scope unrestricted: sigue siendo no-op', async () => {
     await generateMarcadasReport({
       dateFrom: '2026-07-01', dateTo: '2026-07-31',
-      scope: { unrestricted: true },
+      scope: issuedGlobal(),
     });
     expect(padron().sql).not.toMatch(/department_id IN/);
   });
@@ -128,7 +129,7 @@ describe('generateMarcadasReport — scope de departamento', () => {
     // una defensa más fuerte que el orden: el padrón no tiene placeholders de
     // fecha y los marcajes no tienen placeholders de departamento.
     await generateMarcadasReport({
-      dateFrom: '2026-07-01', dateTo: '2026-07-31', deptId: 7,
+      dateFrom: '2026-07-01', dateTo: '2026-07-31', deptId: 7, scope: issuedGlobal(),
     });
 
     const p = padron();
@@ -147,7 +148,7 @@ describe('generateMarcadasReport — scope de departamento', () => {
 
   test('employeeId + deptId: orden correcto con dos filtros', async () => {
     await generateMarcadasReport({
-      dateFrom: '2026-07-01', dateTo: '2026-07-31', employeeId: 42, deptId: 7,
+      dateFrom: '2026-07-01', dateTo: '2026-07-31', employeeId: 42, deptId: 7, scope: issuedGlobal(),
     });
     const { sql, replacements } = padron();
     expect(replacements).toEqual([42, 7]);
@@ -160,7 +161,7 @@ describe('generateMarcadasReport — scope de departamento', () => {
   test('la consulta de marcajes es sargable: rango sobre la columna, sin DATE()', async () => {
     // `DATE(al.timestamp) BETWEEN ? AND ?` obliga a evaluar la función sobre
     // cada fila y no puede usar idx_emp_ts.
-    await generateMarcadasReport({ dateFrom: '2026-07-01', dateTo: '2026-07-31' });
+    await generateMarcadasReport({ dateFrom: '2026-07-01', dateTo: '2026-07-31', scope: issuedGlobal() });
     const { sql } = marcajes();
     expect(sql).toMatch(/al\.timestamp >= \? AND al\.timestamp < \?/);
     expect(sql).not.toMatch(/DATE\(al\.timestamp\) BETWEEN/);
@@ -182,7 +183,7 @@ describe('generateMarcadasReport — scope de departamento', () => {
   test('padrón vacío: no emite la consulta de marcajes', async () => {
     sequelize.query.mockReset();
     sequelize.query.mockResolvedValue([[]]);
-    const out = await generateMarcadasReport({ dateFrom: '2026-07-01', dateTo: '2026-07-31' });
+    const out = await generateMarcadasReport({ dateFrom: '2026-07-01', dateTo: '2026-07-31', scope: issuedGlobal() });
     expect(out.data).toEqual([]);
     expect(sequelize.query).toHaveBeenCalledTimes(1);
   });

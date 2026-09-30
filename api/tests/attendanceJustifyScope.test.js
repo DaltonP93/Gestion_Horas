@@ -17,6 +17,7 @@ jest.mock('../src/services/audit', () => {
   return { ...actual, log: jest.fn() };
 });
 
+const { issuedGlobal } = require('./helpers/scopes');
 const { sequelize } = require('../src/config/database');
 const departmentScope = require('../src/services/departmentScope');
 const audit = require('../src/services/audit');
@@ -118,14 +119,14 @@ describe('quién puede', () => {
   });
 
   test('hr (asistencia.update por defecto) → 200', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     const res = await run({ user: { id: 2, role: 'hr' }, body: body() });
     expect(res.statusCode).toBe(200);
   });
 });
 
 describe('validación', () => {
-  beforeEach(() => departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true }));
+  beforeEach(() => departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal()));
 
   test.each([
     ['fecha inexistente', { date: '2026-02-31' }],
@@ -155,7 +156,7 @@ describe('validación', () => {
 });
 
 describe('escritura y auditoría', () => {
-  beforeEach(() => departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true }));
+  beforeEach(() => departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal()));
 
   test('inserta con texto recortado y estado derivado; injustificada → absent', async () => {
     await run({ user: { id: 1, role: 'admin' }, body: body({ justificationType: 'injustificada' }) });
@@ -195,7 +196,7 @@ describe('identificador del empleado: un único valor validado', () => {
   ];
 
   test.each(invalid)('%s → 400, sin escritura ni auditoría (rol global)', async (_n, bad) => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     const res = await run({ user: { id: 1, role: 'admin' }, body: body({ employeeId: bad }) });
     expect(res.statusCode).toBe(400);
     expect(inserted()).toBe(false);

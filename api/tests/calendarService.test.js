@@ -2,6 +2,7 @@
  * calendarService.test.js — kill-switch, resolutor read-only, degradación ante
  * tabla ausente e integración READ-ONLY con jornada.
  */
+const { issuedGlobal } = require('./helpers/scopes');
 jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() } }));
 jest.mock('../src/services/workdayConfig', () => ({
   loadWorkdayConfig: jest.fn(),
@@ -49,7 +50,7 @@ describe('resolveEffective (read-only) usa work_days del calendario', () => {
       .mockResolvedValueOnce([[{ d: '2026-01-06' }]])
       // exceptionsInRange
       .mockResolvedValueOnce([[{ d: '2026-01-04', kind: 'working' }]]);
-    const r = await svc.resolveEffective(1, '2026-01-04', '2026-01-06');
+    const r = await svc.resolveEffective(1, '2026-01-04', '2026-01-06', { scope: issuedGlobal() });
     expect(r.total_days).toBe(3);
     expect(r.work_days).toEqual([2, 3, 4, 5, 6]);
     const byDate = Object.fromEntries(r.days.map((d) => [d.date, d]));
@@ -223,7 +224,7 @@ describe('createCalendar — fechas civiles reales', () => {
 });
 
 describe('validateCalendarRefs — alcance (no crear calendario global con scope)', () => {
-  const SCOPED = { unrestricted: false, companyIds: [9], branchIds: [2] };
+  const SCOPED = { unrestricted: false, companyIds: [9], branchIds: [2], departmentIds: [] };
 
   test('★ rol con alcance + global (company_id null, branch_id null) → 403 OUT_OF_SCOPE', async () => {
     await expect(svc.validateCalendarRefs(SCOPED, {}))
@@ -233,6 +234,6 @@ describe('validateCalendarRefs — alcance (no crear calendario global con scope
   });
 
   test('rol global (unrestricted) SÍ puede crear un calendario global', async () => {
-    await expect(svc.validateCalendarRefs({ unrestricted: true }, {})).resolves.toBeUndefined();
+    await expect(svc.validateCalendarRefs(issuedGlobal(), {})).resolves.toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@ const { insertId } = require('../utils/insertId');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const { asyncHandler } = require('../utils/asyncHandler');
-const { getOrgScope } = require('../services/orgScope');
+const { getOrgScope, isGlobal, isValidScope } = require('../services/orgScope');
 const governance = require('../services/governance');
 const audit = require('../services/audit');
 
@@ -19,8 +19,8 @@ router.get('/', asyncHandler(async (req, res) => {
   const params = [];
   if (active !== undefined) { where.push('b.active = ?'); params.push(active === '1' ? 1 : 0); }
   const scope = await getOrgScope(req.user);
-  if (!scope.unrestricted) {
-    const branchIds = scope.branchIds || [];
+  if (!isGlobal(scope)) {
+    const branchIds = isValidScope(scope) ? (scope.branchIds || []) : [];
     if (!branchIds.length) return res.json([]);
     where.push('b.id IN (' + branchIds.map(() => '?').join(',') + ')');
     params.push(...branchIds);
@@ -40,7 +40,7 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const scope = await getOrgScope(req.user);
   const branchId = Number(req.params.id);
-  if (!scope.unrestricted && !(scope.branchIds || []).includes(branchId)) {
+  if (!isGlobal(scope) && !(isValidScope(scope) && (scope.branchIds || []).includes(branchId))) {
     return res.status(404).json({ error: 'Sede no encontrada' });
   }
   const [[row]] = await sequelize.query(

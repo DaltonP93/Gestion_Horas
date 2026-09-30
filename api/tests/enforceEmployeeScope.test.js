@@ -19,6 +19,7 @@ jest.mock('../src/services/departmentScope', () => {
   return { ...actual, getVisibleDepartmentIds: jest.fn() };
 });
 
+const { issuedGlobal } = require('./helpers/scopes');
 const { sequelize } = require('../src/config/database');
 const departmentScope = require('../src/services/departmentScope');
 const enforceEmployeeScope = require('../src/middleware/enforceEmployeeScope');
@@ -52,7 +53,7 @@ beforeEach(() => {
 
 describe('roles globales (unrestricted)', () => {
   test('unrestricted → next(), sin consulta de departamento', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     const { nexted } = await run(enforceEmployeeScope('employeeId'), {
       user: { role: 'admin' }, params: { employeeId: '5' },
     });
@@ -143,7 +144,7 @@ describe('roles scoped', () => {
     });
 
   test('también 400 para roles globales (la validación precede al bypass)', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     const { nexted, res } = await run(enforceEmployeeScope({ from: 'body', key: 'employee_id' }), {
       user: { role: 'admin' }, params: {}, body: { employee_id: [5] },
     });
@@ -152,7 +153,7 @@ describe('roles scoped', () => {
   });
 
   test('id válido: publica req.scopedEmployeeId (global y con alcance)', async () => {
-    departmentScope.getVisibleDepartmentIds.mockResolvedValue({ unrestricted: true });
+    departmentScope.getVisibleDepartmentIds.mockResolvedValue(issuedGlobal());
     const reqA = { user: { role: 'admin' }, params: { employeeId: '5' } };
     await run(enforceEmployeeScope('employeeId'), reqA);
     expect(reqA.scopedEmployeeId).toBe(5);
