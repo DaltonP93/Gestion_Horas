@@ -6,7 +6,7 @@ import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
-import { canManageNotes } from '@/lib/employeeNotesRoles'
+import { canManageNotes, allowedNoteVisibilities, defaultNoteVisibility } from '@/lib/employeeNotesRoles'
 
 const TYPES: { value: string; label: string; icon: any; color: string }[] = [
   { value: 'observation',  label: 'Observación',          icon: MessageSquare, color: 'bg-slate-100 text-slate-700' },
@@ -27,11 +27,16 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
   const qc = useQueryClient()
   const user = useCurrentUser()
   const isManager = canManageNotes(user?.role)
+  const visibilityOptions = allowedNoteVisibilities(user?.role)
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({
-    type: 'observation', visibility: 'hr_only',
+    type: 'observation', visibility: '',
     title: '', body: '', pinned: false,
   })
+  // Sin elección explícita (o con una no permitida para el rol) se usa el
+  // default del rol, que se resuelve al render: el usuario puede cargarse
+  // después del primer render.
+  const visibility = visibilityOptions.includes(form.visibility as any) ? form.visibility : defaultNoteVisibility(user?.role)
 
   const { data, isLoading } = useQuery<any>({
     queryKey: ['employee-notes', employeeId],
@@ -45,12 +50,13 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
     try {
       await api.post('/api/employee-notes', {
         ...form,
+        visibility,
         pinned: form.pinned ? 1 : 0,
         employee_id: employeeId,
       })
       qc.invalidateQueries({ queryKey: ['employee-notes', employeeId] })
       setShowForm(false)
-      setForm({ type: 'observation', visibility: 'hr_only', title: '', body: '', pinned: false })
+      setForm({ type: 'observation', visibility: '', title: '', body: '', pinned: false })
     } catch (err: any) {
       alert(err?.response?.data?.error || 'Error al crear nota')
     }
@@ -98,11 +104,9 @@ export default function EmployeeNotes({ employeeId }: { employeeId: number }) {
               className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
               {TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
-            <select value={form.visibility} onChange={e => setForm(f => ({ ...f, visibility: e.target.value }))}
+            <select value={visibility} onChange={e => setForm(f => ({ ...f, visibility: e.target.value }))}
               className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white dark:bg-white/[0.04] dark:border-white/[0.08]">
-              <option value="hr_only">Solo RRHH</option>
-              <option value="managers">Supervisores</option>
-              <option value="employee">Visible al empleado</option>
+              {visibilityOptions.map(v => <option key={v} value={v}>{VISIBILITY_LABELS[v].label}</option>)}
             </select>
           </div>
           <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}

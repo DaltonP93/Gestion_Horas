@@ -405,6 +405,31 @@ jobs:
         env:
           IT_DB: '1'
 
+      # Datos sensibles por empleado (contratos, notas, planillas legales) con
+      # HTTP real y MySQL real: dos empresas, roles globales, por sede y
+      # employee; los rechazos no filtran datos, no ejecutan INSERT/UPDATE/
+      # DELETE (contadores Com_* del servidor) ni dejan auditoría. Falla si
+      # alguna prueba queda omitida.
+      - name: IT reales datos sensibles por empleado
+        run: |
+          set -o pipefail
+          npx jest tests/it/sensitiveData.it.test.js --runInBand --json --outputFile=/tmp/sensitive-it.json
+          node -e 'const r=require("/tmp/sensitive-it.json"); console.log(`sensitiveData IT: ${r.numPassedTests} pasadas, ${r.numPendingTests + r.numTodoTests} omitidas, ${r.numFailedTests} fallidas`); if (!r.success || r.numPassedTests === 0 || r.numPendingTests + r.numTodoTests > 0) process.exit(1)'
+        env:
+          IT_DB: '1'
+
+      # Diagnóstico de SOLO LECTURA de vínculos sede ↔ empresa ↔ centro de
+      # costo: el CLI real detecta sedes sin empresa, departamentos cuyo centro
+      # de costo es de otra empresa y empleados en sedes sin empresa, sin
+      # escribir (contadores Com_* del servidor) ni imprimir datos personales.
+      - name: IT diagnóstico vínculos sede-empresa (solo lectura)
+        run: |
+          set -o pipefail
+          npx jest tests/it/companyLinksDiagnostic.it.test.js --runInBand --json --outputFile=/tmp/company-links-it.json
+          node -e 'const r=require("/tmp/company-links-it.json"); console.log(`companyLinks IT: ${r.numPassedTests} pasadas, ${r.numPendingTests + r.numTodoTests} omitidas, ${r.numFailedTests} fallidas`); if (!r.success || r.numPassedTests === 0 || r.numPendingTests + r.numTodoTests > 0) process.exit(1)'
+        env:
+          IT_DB: '1'
+
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el
   # runner aplica 072→ de verdad; luego se reaplica y se compara el esquema

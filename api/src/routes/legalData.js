@@ -12,14 +12,19 @@
  *   POST /api/legal-data/import   (multipart, campo "file"; ?dry_run=1)
  *        Carga masiva por código: C.I., N° IPS, salario base y tipo de pago.
  *        Sólo actualiza las celdas provistas (no pisa con vacío).
+ *
+ * TEMPORALMENTE restringido a roles globales de RR.HH. (requireGlobalHR):
+ * la completitud y la carga masiva recorren a todos los empleados y alimentan
+ * planillas con un único encabezado patronal. Se reevalúa cuando exista la
+ * configuración patronal por empresa.
  */
 const router = require('express').Router();
 const multer = require('multer');
 const ExcelJS = require('exceljs');
-const { authenticate, authorize, requirePermission } = require('../middleware/auth');
+const { authenticate, authorize, requirePermission, requireGlobalHR } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 
-router.use(authenticate);
+router.use(authenticate, requireGlobalHR);
 
 const upload = multer({
   storage: multer.memoryStorage(),

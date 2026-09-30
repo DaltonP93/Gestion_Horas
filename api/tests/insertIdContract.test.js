@@ -33,7 +33,12 @@ describe('insertId — normaliza el contrato del INSERT crudo', () => {
 
 // ---- Regresión a nivel handler, sin base ni red ---------------------------
 
-jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() } }));
+jest.mock('../src/config/database', () => ({
+  sequelize: {
+    query: jest.fn(),
+    transaction: jest.fn().mockResolvedValue({ commit: jest.fn().mockResolvedValue(), rollback: jest.fn().mockResolvedValue() }),
+  },
+}));
 jest.mock('../src/middleware/auth', () => ({
   authenticate: (_req, _res, next) => next(),
   authorize: () => (_req, _res, next) => next(),
@@ -102,8 +107,11 @@ describe('POST /api/departments — id real en respuesta', () => {
 describe('audit — entity_id recibe el id real', () => {
   test('POST /api/contracts audita con entity_id numérico, no undefined', async () => {
     const contracts = require('../src/routes/contracts');
-    // Handler de alta de contrato: primer query es el INSERT.
-    sequelize.query.mockResolvedValue([321, 1]);
+    // Handler de alta de contrato: el empleado se verifica (FOR UPDATE) dentro
+    // de la transacción y luego corre el INSERT crudo `[insertId, affected]`.
+    sequelize.query.mockImplementation(async (sql) => (
+      /FROM employees WHERE id = \?/.test(sql) ? [[{ id: 1, department_id: 1 }]] : [321, 1]
+    ));
 
     const res = mkRes();
     await handlerFor(contracts, 'post', '/')(
