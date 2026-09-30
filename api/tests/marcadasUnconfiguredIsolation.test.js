@@ -18,7 +18,11 @@ jest.mock('../src/config/database', () => ({
 jest.mock('../src/config/logger', () => ({ warn: jest.fn(), info: jest.fn(), error: jest.fn() }));
 
 const { sequelize } = require('../src/config/database');
-const { generateMarcadasReport } = require('../src/services/scheduler');
+const scheduler = require('../src/services/scheduler');
+const { issuedGlobal } = require('./helpers/scopes');
+// Estas pruebas miden el cálculo del reporte, no el alcance: corren como un rol
+// global (alcance emitido). El alcance obligatorio se prueba en marcadasScope.
+const generateMarcadasReport = (opts = {}) => scheduler.generateMarcadasReport({ scope: issuedGlobal(), ...opts });
 
 const EMP = {
   employee_id: 1,

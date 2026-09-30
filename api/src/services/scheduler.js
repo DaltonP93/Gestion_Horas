@@ -14,6 +14,8 @@ const { withDayRecalcLock, dayBounds } = require('./recalcLock');
 const engine = require('./workdayEngine');
 const { loadWorkdayConfig } = require('./workdayConfig');
 const workdaySummary = require('./workdaySummaryService');
+const departmentScope = require('./departmentScope');
+const scopeGrant = require('./scopeGrant');
 
 const _jobs = new Map(); // scheduleId → tarea cron activa
 
@@ -115,8 +117,10 @@ async function generateMarcadasReport({ dateFrom, dateTo, employeeId, deptId, sc
   if (employeeId) { empFilter += ' AND e.id = ?'; empParams.push(employeeId); }
   if (deptId)     { empFilter += ' AND e.department_id = ?'; empParams.push(deptId); }
 
-  if (scope && !scope.unrestricted) {
-    const ids = scope.ids || [];
+  // Alcance OBLIGATORIO: sólo un global emitido por el servidor (usuario
+  // global o job del sistema) lee sin filtro; ausente/inválido → vacío.
+  if (!departmentScope.isGlobal(scope)) {
+    const ids = scopeGrant.isRestricted(scope, ['ids'], ['branchIds']) ? scope.ids : [];
     if (!ids.length) {
       // rol scoped sin depto vinculado → resultado vacío coherente
       return { data: [], period: { from, to } };
@@ -465,10 +469,12 @@ async function runScheduledReport(schedule) {
       dateTo   = `${prevY}-${String(prevM).padStart(2,'0')}-${new Date(prevY, prevM, 0).getDate()}`;
     }
 
+    // Job interno del servidor (sin usuario): alcance global EXPLÍCITO.
     const report = await generateMarcadasReport({
       dateFrom, dateTo,
       employeeId: config.employeeId,
       deptId: config.deptId,
+      scope: departmentScope.systemScope(),
     });
 
     // Construir HTML del email

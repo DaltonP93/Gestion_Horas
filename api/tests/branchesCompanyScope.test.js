@@ -1,3 +1,4 @@
+const { issuedGlobal } = require('./helpers/scopes');
 jest.mock('../src/config/database', () => ({
   sequelize: { query: jest.fn(), transaction: jest.fn(async fn => fn({})) },
 }));
@@ -6,7 +7,7 @@ jest.mock('../src/middleware/auth', () => ({
   authorize: jest.fn(() => (_req, _res, next) => next()),
   requirePermission: jest.fn(() => (_req, _res, next) => next()),
 }));
-jest.mock('../src/services/orgScope', () => ({ getOrgScope: jest.fn() }));
+jest.mock('../src/services/orgScope', () => ({ ...jest.requireActual('../src/services/orgScope'), getOrgScope: jest.fn() }));
 jest.mock('../src/services/governance', () => ({ assertWriteEnabled: jest.fn() }));
 jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 
@@ -34,7 +35,7 @@ beforeEach(() => jest.clearAllMocks());
 
 describe('GET /api/branches: alcance por sede', () => {
   test('supervisor sin sede: catálogo vacío sin leer otras sedes', async () => {
-    getOrgScope.mockResolvedValue({ unrestricted: false, branchIds: [] });
+    getOrgScope.mockResolvedValue({ unrestricted: false, companyIds: [], branchIds: [], departmentIds: [] });
     const res = response();
     await handlerFor('get', '/')({ user: actor, query: {} }, res, jest.fn());
     expect(res.json).toHaveBeenCalledWith([]);
@@ -42,7 +43,7 @@ describe('GET /api/branches: alcance por sede', () => {
   });
 
   test('supervisor: SQL restringe por su sede aun al pedir activas', async () => {
-    getOrgScope.mockResolvedValue({ unrestricted: false, branchIds: [3] });
+    getOrgScope.mockResolvedValue({ unrestricted: false, companyIds: [], branchIds: [3], departmentIds: [] });
     sequelize.query.mockResolvedValueOnce([[{ id: 3, company_id: 9 }]]);
     const res = response();
     await handlerFor('get', '/')({ user: actor, query: { active: '1' } }, res, jest.fn());
@@ -54,7 +55,7 @@ describe('GET /api/branches: alcance por sede', () => {
   });
 
   test('global: mantiene catálogo completo', async () => {
-    getOrgScope.mockResolvedValue({ unrestricted: true });
+    getOrgScope.mockResolvedValue(issuedGlobal());
     sequelize.query.mockResolvedValueOnce([[{ id: 3 }, { id: 4 }]]);
     const res = response();
     await handlerFor('get', '/')({ user: { role: 'admin' }, query: {} }, res, jest.fn());
@@ -63,7 +64,7 @@ describe('GET /api/branches: alcance por sede', () => {
   });
 
   test('detalle de sede ajena devuelve 404 sin consultar sus datos', async () => {
-    getOrgScope.mockResolvedValue({ unrestricted: false, branchIds: [3] });
+    getOrgScope.mockResolvedValue({ unrestricted: false, companyIds: [], branchIds: [3], departmentIds: [] });
     const res = response();
     await handlerFor('get', '/:id')({ user: actor, params: { id: '4' } }, res, jest.fn());
     expect(res.status).toHaveBeenCalledWith(404);

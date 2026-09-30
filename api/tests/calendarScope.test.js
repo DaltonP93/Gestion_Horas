@@ -4,6 +4,7 @@
  * los de otra empresa; no puede consultar la jornada de cualquier empleado ni
  * pedir el resolutor por alcance de empresa ajena.
  */
+const { issuedGlobal } = require('./helpers/scopes');
 jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() } }));
 jest.mock('../src/services/workdayConfig', () => ({ loadWorkdayConfig: jest.fn() }));
 jest.mock('../src/middleware/auth', () => ({
@@ -48,7 +49,7 @@ describe('orgScope — visibilidad JERÁRQUICA de calendarios (P1-A)', () => {
     expect(orgScope.canSeeCalendar(S, { company_id: 9, branch_id: 3 })).toBe(false);
     expect(orgScope.canSeeCalendar(S, { company_id: 9, branch_id: null })).toBe(true);      // sólo-empresa propia
     expect(orgScope.canSeeCalendar(S, { company_id: 1, branch_id: null })).toBe(false);     // otra empresa
-    expect(orgScope.canSeeCalendar({ unrestricted: true }, { company_id: 1, branch_id: 3 })).toBe(true);
+    expect(orgScope.canSeeCalendar(issuedGlobal(), { company_id: 1, branch_id: 3 })).toBe(true);
   });
   test('calendarScopeFilter: global + sucursal en scope + sólo-empresa (sin fallback branch)', () => {
     const f = orgScope.calendarScopeFilter(S);

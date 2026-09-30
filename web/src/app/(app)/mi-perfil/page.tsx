@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
+import AuthImage from '@/components/AuthImage'
 import {
   UserCircle2, Mail, Phone, Briefcase, Building2, Calendar, Hash,
   AlertCircle, Pencil, Save, X, Camera, MapPin, CheckCircle2, Loader2,
@@ -134,8 +135,9 @@ export default function MiPerfilPage() {
           <div className="relative group">
             <div className="w-20 h-20 rounded-2xl bg-blue-100 flex items-center justify-center overflow-hidden border-2 border-blue-200">
               {photoUrl ? (
-                <img src={photoUrl} alt="Foto de perfil"
-                  className="w-full h-full object-cover" />
+                <AuthImage src="/api/me/photo" version={photoUrl} alt="Foto de perfil"
+                  className="w-full h-full object-cover"
+                  fallback={<UserCircle2 className="text-blue-400" size={44} />} />
               ) : (
                 <UserCircle2 className="text-blue-400" size={44} />
               )}

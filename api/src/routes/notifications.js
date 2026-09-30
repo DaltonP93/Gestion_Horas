@@ -10,6 +10,7 @@ const { sequelize } = require('../config/database');
 const { sendMail, resetTransporter, buildAlertHtml } = require('../services/emailService');
 const { loadSchedules, registerJob, stopJob, generateMarcadasReport } = require('../services/scheduler');
 const logger = require('../config/logger');
+const { getVisibleDepartmentIds } = require('../services/departmentScope');
 
 router.use(authenticate, authorize('admin', 'hr'));
 
@@ -195,7 +196,10 @@ router.post('/schedules/:id/run', async (req, res) => {
     const from = req.body.dateFrom || pyDateStr(new Date());
     const to   = req.body.dateTo   || from;
 
-    const report = await generateMarcadasReport({ dateFrom: from, dateTo: to, ...cfg });
+    // El alcance lo resuelve el servidor para el usuario (admin/hr); la
+    // configuración guardada no puede aportar uno.
+    const scope = await getVisibleDepartmentIds(req.user);
+    const report = await generateMarcadasReport({ dateFrom: from, dateTo: to, ...cfg, scope });
     res.json({ ok: true, employees: report.data.length, period: report.period });
   } catch (err) {
     res.status(500).json({ error: err.message });

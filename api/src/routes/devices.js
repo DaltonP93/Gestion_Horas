@@ -10,7 +10,7 @@ const { sequelize } = require('../config/database');
 const { reprocessUnmapped, linkEmployeeDevice } = require('../services/deviceMapping');
 const audit = require('../services/audit');
 const { fetchPushStatus, logBridgeFailure, newCorrelationId } = require('../services/bridgeClient');
-const { getOrgScope } = require('../services/orgScope');
+const { getOrgScope, isGlobal, isValidScope } = require('../services/orgScope');
 
 router.use(authenticate);
 
@@ -981,14 +981,15 @@ router.get('/sync-status', requirePermission('dashboard', 'view'), async (req, r
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(new Date());
   try {
     const scope = await getOrgScope(req.user);
-    const branchIds = scope.unrestricted ? [] : (scope.branchIds || []);
-    if (!scope.unrestricted && branchIds.length === 0) {
+    const global = isGlobal(scope);
+    const branchIds = global || !isValidScope(scope) ? [] : (scope.branchIds || []);
+    if (!global && branchIds.length === 0) {
       return res.json({ ok: true, date: today, complete: true, items: [], _scope: { branch_ids: [] } });
     }
-    const branchClause = scope.unrestricted
+    const branchClause = global
       ? ''
       : `AND d.branch_id IN (${branchIds.map(() => '?').join(',')})`;
-    const branchParams = scope.unrestricted ? [] : branchIds;
+    const branchParams = global ? [] : branchIds;
 
     // Marcas/empleados de hoy por reloj, restringidos a la sede del usuario.
     const [marks] = await sequelize.query(`
@@ -1099,7 +1100,7 @@ router.get('/sync-status', requirePermission('dashboard', 'view'), async (req, r
       date: today,
       complete: items.every(i => !i.suspect),
       items,
-      _scope: scope.unrestricted ? { unrestricted: true } : { branch_ids: branchIds },
+      _scope: global ? { unrestricted: true } : { branch_ids: branchIds },
     });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });

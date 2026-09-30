@@ -7,7 +7,10 @@ const {
   getDashboardStats, getByDate, registerManual, registerMobile,
   bridgeWebhook
 } = require('../controllers/attendanceController');
-const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
+const { getVisibleDepartmentIds, applyDepartmentScope, canSeeEmployee } = require('../services/departmentScope');
+const { parsePositiveId } = require('../utils/strictId');
+const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
+const { asyncHandler: asyncHandlerLocal } = require('../utils/asyncHandler');
 
 // DTO del marcaje manual: valida tipos y valores antes del controlador.
 const manualPunchSchema = Joi.object({
@@ -21,6 +24,27 @@ const manualPunchSchema = Joi.object({
 router.post('/bridge/webhook', authenticateServiceKey, bridgeWebhook);
 
 router.use(authenticate);
+
+// Selfie de una marcación, servida con autorización: asistencia.view + el
+// empleado de la marcación dentro del alcance (fuera ≡ inexistente, 404).
+router.get('/logs/:id/selfie', requirePermission('asistencia', 'view'), asyncHandlerLocal(async (req, res) => {
+  const logId = parsePositiveId(req.params.id);
+  if (logId === null) return res.status(400).json({ error: 'Identificador inválido' });
+  const [[row]] = await sequelize.query(
+    `SELECT al.selfie_url, e.id AS employee_id, e.department_id
+       FROM attendance_logs al JOIN employees e ON e.id = al.employee_id
+      WHERE al.id = ? LIMIT 1`,
+    { replacements: [logId] }
+  );
+  const scope = row ? await getVisibleDepartmentIds(req.user) : null;
+  if (!row || !canSeeEmployee(scope, { department_id: row.department_id })) {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(404).json({ error: 'No encontrado' });
+  }
+  const full = resolvePrivatePath(row.selfie_url, { subdir: 'selfies', namePattern: /^selfie_\d+_\d+\.(jpg|png)$/ });
+  if (!full) { res.setHeader('Cache-Control', 'no-store'); return res.status(404).json({ error: 'No encontrado' }); }
+  return sendPrivateFile(res, full, { inline: true });
+}));
 
 router.get('/live',  getDashboardStats);   // estado actual del día — KPIs + últimos marcajes
 router.get('/',                getByDate);            // ?date=&dept=&employeeId=

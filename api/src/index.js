@@ -130,7 +130,11 @@ app.use(cors({
 // Servir uploads locales (logos, favicons, bg)
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'));
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
+// Sólo recursos de marca y avatares (imágenes). Los subdirectorios privados
+// (licencias, selfies, documentos) y cualquier no-imagen responden 404: se
+// sirven únicamente por endpoints autenticados con alcance. Ver uploadsGuard.
+const { uploadsGuard, setPublicUploadHeaders } = require('./middleware/uploadsGuard');
+app.use('/uploads', uploadsGuard, express.static(UPLOAD_DIR, { maxAge: '7d', setHeaders: setPublicUploadHeaders }));
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));

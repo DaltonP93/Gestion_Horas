@@ -53,7 +53,7 @@ router.get('/employee/:id', requirePermission('asignaciones', 'view'), asyncHand
   // Alcance del EMPLEADO objetivo: fuera del alcance departamental/sucursal del
   // actor → 404 (no se filtra existencia entre departamentos/sucursales).
   const scope = await orgScope.getOrgScope(req.user);
-  if (scope && !scope.unrestricted) {
+  if (!orgScope.isGlobal(scope)) {
     const refs = await orgScope.loadEmployeeOrgRefs(id);
     if (!refs || !orgScope.canSeeEmployeeRefs(scope, refs)) {
       return res.status(404).json({ error: 'Empleado no encontrado' });
@@ -70,7 +70,7 @@ router.post('/employee/:id', requirePermission('asignaciones', 'create'), valida
   // Alcance del EMPLEADO objetivo (sólo para roles con alcance): inexistente →
   // 404; existente pero fuera de alcance → 403 OUT_OF_SCOPE (el actor sabe qué
   // employee_id pidió). Los roles globales validan existencia en el servicio.
-  if (scope && !scope.unrestricted) {
+  if (!orgScope.isGlobal(scope)) {
     const refs = await orgScope.loadEmployeeOrgRefs(id);
     if (!refs) return res.status(404).json({ error: 'Empleado no encontrado' });
     if (!orgScope.canSeeEmployeeRefs(scope, refs)) {

@@ -5,7 +5,7 @@ const { withDayRecalcLock, dayBounds } = require('../services/recalcLock');
 const { dbSecondsOfDay, dbDateISO } = require('../utils/dbTime');
 const calc = require('../services/dailySummaryCalc');
 const { LINKED_SQL } = require('../services/rawPunchStats');
-const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
+const { getVisibleDepartmentIds, applyDepartmentScope, isGlobal } = require('../services/departmentScope');
 const { normalizeAttendanceTimestampForDb, attendanceDisplayInstant } = require('../utils/attendanceTime');
 const engine = require('../services/workdayEngine');
 const punchTypeResolver = require('../services/punchTypeResolver');
@@ -405,8 +405,8 @@ async function getDashboardStats(req, res) {
     // conteos operativos globales sin PII (útiles para diagnóstico de
     // sync). Los KPIs de asistencia (present/late/absent/…) sí se acotan.
     const scope = await getVisibleDepartmentIds(req.user);
-    const isScoped = !scope.unrestricted;
-    const emptyScope = isScoped && !(scope.ids || []).length;
+    const isScoped = !isGlobal(scope);
+    const emptyScope = isScoped && !(Array.isArray(scope?.ids) ? scope.ids : []).length;
     const deptClause = isScoped && !emptyScope
       ? `AND e.department_id IN (${scope.ids.map(() => '?').join(',')})`
       : '';
@@ -527,7 +527,7 @@ async function getDashboardStats(req, res) {
 
     res.json({
       stats, recentLogs, date: today,
-      _scope: { unrestricted: !!scope.unrestricted, departments: scope.unrestricted ? null : deptIds.length },
+      _scope: { unrestricted: !isScoped, departments: isScoped ? deptIds.length : null },
     });
   } catch (err) {
     logger.error('Error getDashboardStats:', err);

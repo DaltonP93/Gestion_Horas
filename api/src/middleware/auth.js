@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
-const { sequelize } = require('../config/database');
-const { defaultsForRole } = require('../services/permissionMatrix');
+const { hasCapability, ACTION_FIELD } = require('../services/capabilities');
+const { loadCurrentIdentity } = require('../services/currentIdentity');
 
 // Verificar token JWT.
 // Acepta el token desde:
@@ -10,7 +10,7 @@ const { defaultsForRole } = require('../services/permissionMatrix');
 // La opción 2 es necesaria porque <a href> y window.open() no permiten
 // agregar headers personalizados. Se restringe implícitamente a GET, ya que
 // solo descargas usan ese flujo.
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   let token = null;
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith('Bearer ')) {
@@ -22,12 +22,28 @@ function authenticate(req, res, next) {
   if (!token) {
     return res.status(401).json({ error: 'Token requerido' });
   }
+  let claims;
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
-    next();
+    claims = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
   } catch (err) {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
+  // Identidad VIGENTE (services/currentIdentity): rol, estado y empleado se
+  // leen de la base; el token sólo prueba quién es. Una cuenta inexistente o
+  // desactivada deja de operar aunque su token siga vigente (401: el cliente
+  // intenta refrescar y el refresh también la rechaza). Si la lectura falla
+  // no se decide con los datos del token: 503.
+  let identity;
+  try {
+    identity = await loadCurrentIdentity(claims && claims.id);
+  } catch (err) {
+    return res.status(503).json({ error: 'No se pudo verificar la sesión' });
+  }
+  if (!identity) {
+    return res.status(401).json({ error: 'Sesión inválida', code: 'SESSION_REVOKED' });
+  }
+  req.user = { ...claims, ...identity };
+  next();
 }
 
 // Verificar rol requerido.
@@ -86,27 +102,14 @@ function authenticateServiceKey(req, res, next) {
  *  - Respeta la ruta: si falla, 403.
  */
 function requirePermission(moduleKey, action) {
-  const field = {
-    view:   'can_view',
-    create: 'can_create',
-    update: 'can_update',
-    delete: 'can_delete',
-  }[action];
-  if (!field) throw new Error(`Acción inválida: ${action}`);
+  // La regla vive en services/capabilities (misma fuente que usan las rutas
+  // que combinan capacidad + alcance a nivel objeto).
+  if (!ACTION_FIELD[action]) throw new Error(`Acción inválida: ${action}`);
 
   return async (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: 'No autenticado' });
-    if (req.user.role === 'super_admin' || req.user.role === 'admin') return next();
-
     try {
-      const [rows] = await sequelize.query(
-        'SELECT can_view, can_create, can_update, can_delete FROM user_permissions WHERE user_id = ? AND module = ? LIMIT 1',
-        { replacements: [req.user.id, moduleKey] }
-      );
-      const flags = rows.length
-        ? rows[0]
-        : defaultsForRole(req.user.role)[moduleKey];
-      if (!flags || !flags[field]) {
+      if (!(await hasCapability(req.user, moduleKey, action))) {
         return res.status(403).json({
           error: `Sin permisos (${action}) sobre módulo '${moduleKey}'`,
         });

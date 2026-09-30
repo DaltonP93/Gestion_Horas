@@ -1,4 +1,5 @@
 'use strict';
+const { issuedGlobal } = require('../helpers/scopes');
 
 /**
  * people.it.test.js — INTEGRACIÓN (MySQL real): atomicidad y concurrencia de
@@ -47,8 +48,8 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
     const candId = c.insertId;
 
     const results = await Promise.allSettled([
-      people.convertCandidate(candId, ids.emp),
-      people.convertCandidate(candId, ids.emp2),
+      people.convertCandidate(candId, ids.emp, issuedGlobal()),
+      people.convertCandidate(candId, ids.emp2, issuedGlobal()),
     ]);
     const ok = results.filter((r) => r.status === 'fulfilled');
     const rej = results.filter((r) => r.status === 'rejected');
@@ -65,8 +66,8 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
 
   test('doble creación de asignación concurrente → NUNCA dos vigencias abiertas', async () => {
     const results = await Promise.allSettled([
-      people.createAssignment(ids.emp2, { valid_from: '2026-03-01' }, 1),
-      people.createAssignment(ids.emp2, { valid_from: '2026-04-01' }, 1),
+      people.createAssignment(ids.emp2, { valid_from: '2026-03-01' }, 1, issuedGlobal()),
+      people.createAssignment(ids.emp2, { valid_from: '2026-04-01' }, 1, issuedGlobal()),
     ]);
     // Al menos una tuvo éxito; ninguna dejó dos vigencias abiertas.
     expect(results.some((r) => r.status === 'fulfilled')).toBe(true);
@@ -81,7 +82,7 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
     // Ya hay una vigencia abierta 2026-04-01 (del test anterior). Una nueva con
     // fecha anterior debe rechazarse.
     await expect(
-      people.createAssignment(ids.emp2, { valid_from: '2026-02-01' }, 1),
+      people.createAssignment(ids.emp2, { valid_from: '2026-02-01' }, 1, issuedGlobal()),
     ).rejects.toMatchObject({ status: 409, code: 'ASSIGNMENT_OUT_OF_ORDER' });
   });
 
@@ -94,7 +95,7 @@ describeIT('personas (integración) — atomicidad y concurrencia', () => {
       'INSERT INTO employee_assignments (employee_id, valid_from, created_by) VALUES (?, ?, ?)',
       [ids.emp, '2026-01-01', 1],
     );
-    const r = await people.createAssignment(ids.emp, { valid_from: '2026-06-01' }, 1);
+    const r = await people.createAssignment(ids.emp, { valid_from: '2026-06-01' }, 1, issuedGlobal());
     expect(Number(r.id)).toBeGreaterThan(0);
     expect(r.closed_previous).toBeTruthy();
     // La previa quedó cerrada el día ANTERIOR al nuevo valid_from (TZ-safe con DATE_FORMAT).
@@ -205,7 +206,7 @@ describeIT('personas (integración) — aislamiento por alcance', () => {
   });
 
   test('listCandidates: rol global ve todos (incluido sin alcance)', async () => {
-    const rows = await people.listCandidates({ status: 'offer' }, { unrestricted: true });
+    const rows = await people.listCandidates({ status: 'offer' }, issuedGlobal());
     const ids = rows.map((r) => r.id);
     expect(ids).toEqual(expect.arrayContaining([s.candA, s.candB, s.candN]));
   });
@@ -229,7 +230,7 @@ describeIT('personas (integración) — aislamiento por alcance', () => {
   test('coherencia: sucursal empresa A + centro de costo empresa B → 400 INCOHERENT_SCOPE (sin crear fila)', async () => {
     const before = (await conn.query('SELECT COUNT(*) AS n FROM employee_assignments WHERE employee_id = ?', [s.empA]))[0][0].n;
     await expect(
-      people.createAssignment(s.empA, { valid_from: '2026-02-01', branch_id: s.brA, cost_center_id: s.ccB }, 1, { unrestricted: true }),
+      people.createAssignment(s.empA, { valid_from: '2026-02-01', branch_id: s.brA, cost_center_id: s.ccB }, 1, issuedGlobal()),
     ).rejects.toMatchObject({ status: 400, code: 'INCOHERENT_SCOPE' });
     const after = (await conn.query('SELECT COUNT(*) AS n FROM employee_assignments WHERE employee_id = ?', [s.empA]))[0][0].n;
     expect(Number(after)).toBe(Number(before)); // rollback: no se creó nada
@@ -237,13 +238,13 @@ describeIT('personas (integración) — aislamiento por alcance', () => {
 
   test('coherencia: departamento (vía CC) de empresa B + sucursal empresa A → 400 INCOHERENT_SCOPE', async () => {
     await expect(
-      people.createAssignment(s.empA, { valid_from: '2026-02-01', branch_id: s.brA, department_id: s.dpCCB }, 1, { unrestricted: true }),
+      people.createAssignment(s.empA, { valid_from: '2026-02-01', branch_id: s.brA, department_id: s.dpCCB }, 1, issuedGlobal()),
     ).rejects.toMatchObject({ status: 400, code: 'INCOHERENT_SCOPE' });
   });
 
   test('coherencia: todas de la misma empresa A → crea (201-equivalente)', async () => {
     const r = await people.createAssignment(
-      s.empA, { valid_from: '2026-03-01', branch_id: s.brA, cost_center_id: s.ccA, department_id: s.dpA }, 1, { unrestricted: true },
+      s.empA, { valid_from: '2026-03-01', branch_id: s.brA, cost_center_id: s.ccA, department_id: s.dpA }, 1, issuedGlobal(),
     );
     expect(r.id).toBeGreaterThan(0);
   });

@@ -10,6 +10,8 @@ const {
 const { capsForRole, classifyField } = require('../services/employeeCaps');
 const { validate: validateField, auditValueOf, SENSITIVE_VALUE } = require('../services/employeeFieldValidation');
 const audit = require('../services/audit');
+const enforceEmployeeScope = require('../middleware/enforceEmployeeScope');
+const { resolvePrivatePath, sendPrivateFile } = require('../utils/privateFile');
 const paymentTypes = require('../services/paymentTypes');
 
 // DTO de alta de empleado: campos requeridos + formatos válidos.
@@ -79,6 +81,18 @@ router.get('/departments', asyncHandler(async (req, res) => {
 router.get('/inactive-marks',      requirePermission('empleados', 'view'), getInactiveMarks);
 
 router.get('/',                    requirePermission('empleados', 'view'), getAll);
+// Foto del empleado servida con autorización (empleados.view + alcance; fuera
+// de alcance ≡ inexistente). Opera sobre el id validado por el middleware.
+router.get('/:id/photo',
+  requirePermission('empleados', 'view'),
+  enforceEmployeeScope('id'),
+  asyncHandler(async (req, res) => {
+    const [[e]] = await sequelize.query('SELECT photo_url FROM employees WHERE id = ? LIMIT 1', { replacements: [req.scopedEmployeeId] });
+    const full = e && resolvePrivatePath(e.photo_url, { namePattern: /^avatar_\d+_[0-9a-f]+\.[a-z0-9]{1,5}$/ });
+    if (!full) { res.setHeader('Cache-Control', 'no-store'); return res.status(404).json({ error: 'Sin foto' }); }
+    return sendPrivateFile(res, full, { inline: true });
+  })
+);
 router.get('/:id',                 requirePermission('empleados', 'view'), getById);
 router.post('/',                   authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'create'), validate(createEmployeeSchema), create);
 router.put('/:id',                 authorize('admin', 'hr', 'gth'), requirePermission('empleados', 'update'), guardLegalOnPut, update);

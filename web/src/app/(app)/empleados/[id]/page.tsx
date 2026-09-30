@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import AuthImage from '@/components/AuthImage'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
@@ -225,8 +226,9 @@ export default function EmpleadoDetallePage() {
       <div className="rounded-2xl border border-slate-100 bg-white shadow-sm p-6 space-y-5 dark:border-white/[0.06] dark:bg-white/[0.04]">
         <div className="flex flex-wrap items-start gap-5">
           {emp.photo_url ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={emp.photo_url} alt="" className="h-20 w-20 shrink-0 rounded-2xl object-cover" />
+            <AuthImage src={`/api/employees/${emp.id}/photo`} version={emp.photo_url} alt=""
+              className="h-20 w-20 shrink-0 rounded-2xl object-cover"
+              fallback={<div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 text-3xl font-bold text-white">{emp.first_name?.[0]}{emp.last_name?.[0]}</div>} />
           ) : (
             <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700 text-3xl font-bold text-white">
               {emp.first_name?.[0]}{emp.last_name?.[0]}

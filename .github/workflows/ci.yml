@@ -31,6 +31,38 @@ jobs:
       - name: Contratos fail-closed sin infraestructura real
         run: bash scripts/tests/ops-scripts.test.sh
 
+  uploads-nginx:
+    # /uploads y recursos de marca en nginx AISLADO (127.0.0.1, puertos altos,
+    # archivos temporales) con las configuraciones VERSIONADAS del repo.
+    # Con el código nuevo, DESPUÉS del arranque, cambia cada recurso de marca
+    # desde el endpoint real (subir, reemplazar, restablecer) y verifica la URL
+    # anunciada por nginx, sin tocar su configuración. Recuperación con el guard
+    # de ef82b32 y main 7638fa9 sin guard: la marca nueva sigue visible y lo
+    # privado queda en 404.
+    name: Uploads — nginx aislado (marca desde la app, despliegue y recuperación)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # el modo prev-pr lee el guard de ef82b32 del historial
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      - name: Dependencias de la API (router real de ajustes para el backend de prueba)
+        working-directory: api
+        run: npm ci || npm install
+      - name: nginx disponible
+        run: |
+          command -v nginx || (sudo apt-get update -q && sudo apt-get install -y -q nginx-light)
+          sudo systemctl stop nginx 2>/dev/null || true
+          nginx -v
+      - name: Sintaxis de la prueba
+        run: bash -n deploy/tests/nginx-uploads-isolated.sh
+      - name: nginx aislado — marca desde la app, despliegue y recuperación
+        run: sudo -E env "PATH=$PATH" bash deploy/tests/nginx-uploads-isolated.sh
+
   bridge-tests:
     name: Bridge — tests (TZ=${{ matrix.tz }})
     runs-on: ubuntu-latest
@@ -265,6 +297,43 @@ jobs:
             "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='asistencia' AND TABLE_NAME='daily_summary_backup' AND INDEX_NAME='uq_batch_cell'")
           [ "$UQ" -ge "1" ] || (echo "❌ falta el índice único uq_batch_cell" && exit 1)
 
+      - name: Migración 087 — permissions.sla_due_at (limpia, actualización, con datos, reejecución)
+        # La 024 omite sla_due_at en instalaciones nuevas (su guarda usa level1_at,
+        # que ya crea la 011). La 087 la agrega hacia adelante. Casos:
+        #  A) esta base (init + migraciones) ya la tiene;
+        #  B) base aplicada hasta 086 SIN la columna → 087 la agrega, conserva filas;
+        #  C) base que YA la tiene con datos → 087 no la toca (valor y tipo iguales);
+        #  D) reejecución directa de 087 → esquema sin cambios.
+        run: |
+          set -e
+          R="mysql -h127.0.0.1 -P3306 -uroot -pci_root_pass"
+          COL() { $R -N -e "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='$1' AND TABLE_NAME='permissions' AND COLUMN_NAME='sla_due_at'"; }
+          SHAPE() { $R -N -e "SELECT GROUP_CONCAT(CONCAT(COLUMN_NAME,':',COLUMN_TYPE) ORDER BY ORDINAL_POSITION) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='$1' AND TABLE_NAME='permissions'"; }
+          MIG() { DB_USER=root DB_PASSWORD=ci_root_pass DB_NAME="$1" node scripts/migrate.js "${@:2}"; }
+          [ "$(COL asistencia)" = "1" ] || { echo "❌ A) instalación limpia sin sla_due_at"; exit 1; }
+          for db in asis_087_up asis_087_data; do
+            $R -e "DROP DATABASE IF EXISTS $db; CREATE DATABASE $db CHARACTER SET utf8mb4"
+            $R $db < ../database/init.sql
+            MIG $db --upto=086_employee_assignments_company_snapshot.sql | tail -1
+          done
+          [ "$(COL asis_087_up)" = "0" ] || { echo "❌ B) la base previa ya tenía la columna"; exit 1; }
+          $R asis_087_up -e "INSERT INTO employees (code, first_name, last_name, status) VALUES ('CI1','Sint','Uno','active'); INSERT INTO permissions (employee_id, type, date_from, date_to, reason) VALUES (LAST_INSERT_ID(),'personal','2031-01-01','2031-01-01','fila previa')"
+          MIG asis_087_up | tail -1
+          [ "$(COL asis_087_up)" = "1" ] || { echo "❌ B) 087 no agregó la columna"; exit 1; }
+          [ "$($R -N asis_087_up -e "SELECT COUNT(*) FROM permissions WHERE reason='fila previa'")" = "1" ] || { echo "❌ B) se perdió la fila previa"; exit 1; }
+          $R asis_087_data -e "ALTER TABLE permissions ADD COLUMN sla_due_at DATETIME NULL; INSERT INTO employees (code, first_name, last_name, status) VALUES ('CI2','Sint','Dos','active'); INSERT INTO permissions (employee_id, type, date_from, date_to, sla_due_at) VALUES (LAST_INSERT_ID(),'personal','2031-01-01','2031-01-01','2031-01-03 10:00:00')"
+          BEFORE=$(SHAPE asis_087_data)
+          MIG asis_087_data | tail -1
+          [ "$(SHAPE asis_087_data)" = "$BEFORE" ] || { echo "❌ C) 087 cambió una columna existente"; exit 1; }
+          [ "$($R -N asis_087_data -e "SELECT sla_due_at FROM permissions LIMIT 1")" = "2031-01-03 10:00:00" ] || { echo "❌ C) valor no conservado"; exit 1; }
+          for db in asistencia asis_087_up asis_087_data; do
+            S1=$(SHAPE $db); $R $db < ../database/migrations/087_permissions_sla_due_at.sql > /dev/null
+            [ "$(SHAPE $db)" = "$S1" ] || { echo "❌ D) reejecutar 087 cambió $db"; exit 1; }
+            MIG $db --status | grep -q '0 pendientes' || { echo "❌ D) $db con pendientes"; exit 1; }
+          done
+          $R -e "DROP DATABASE asis_087_up; DROP DATABASE asis_087_data"
+          echo "✅ 087: A/B/C/D verificados"
+
       - name: Reaplicar migrate = no-op (idempotencia del runner completo)
         run: |
           set -e
@@ -299,6 +368,42 @@ jobs:
         env:
           IT_DB: '1'
           FASE_E_LOCK_LEASE_SEC: '3'
+      # Contención (PR #236): rutas reales de justificación y licencias con JWT,
+      # capacidades, alcance por departamento y audit_events REALES sobre dos
+      # empresas sintéticas. Denegados → sin escritura; justificación → evento
+      # real sin texto libre. Sin mocks de alcance ni inserts de auditoría.
+      - name: IT reales contención (justificación + licencias)
+        run: npx jest tests/it/contention.it.test.js --runInBand
+        env:
+          IT_DB: '1'
+          JWT_SECRET: it-contention-ci-only-secret-0123456789
+      # Identidad vigente: JWT emitido ANTES de degradar/desactivar la cuenta y
+      # reutilizado; archivos privados y justificación con la base real.
+      - name: IT reales identidad vigente (token previo al cambio)
+        run: npx jest tests/it/currentIdentity.it.test.js --runInBand
+        env:
+          IT_DB: '1'
+          JWT_SECRET: it-identity-ci-only-secret-0123456789
+      # Alcance organizacional: la sede de la CUENTA (users.branch_id, cuenta
+      # activa, sede existente y ACTIVA) define empresa/sede/departamentos; el
+      # empleado vinculado no amplía nada. Alcance obligatorio: ausente, nulo o
+      # un literal { unrestricted: true } no emitido → sin filas. Servicio y
+      # rutas HTTP reales (companies, cost-centers, branches) sobre dos
+      # empresas sintéticas: permitido (empresa propia, admin) y denegado
+      # (ajeno, sin sede, sede inexistente/inactiva, cuenta inactiva) sin filas
+      # ni auditoría; reactivar la sede recupera el alcance. Lecturas de
+      # Departamentos por HTTP con alcance; createAssignment exige alcance en el
+      # servicio (denegado sin INSERT ni cierre de vigencia); companyFilter con
+      # includeNull no habilita filas sin empresa ante un alcance inválido o
+      # vacío. El proceso de prueba habilita sus propios writers de gobierno.
+      # Falla si alguna prueba queda omitida.
+      - name: IT reales alcance organizacional (orgScope)
+        run: |
+          set -o pipefail
+          npx jest tests/it/orgScope.it.test.js --runInBand --json --outputFile=/tmp/orgscope-it.json
+          node -e 'const r=require("/tmp/orgscope-it.json"); console.log(`orgScope IT: ${r.numPassedTests} pasadas, ${r.numPendingTests + r.numTodoTests} omitidas, ${r.numFailedTests} fallidas`); if (!r.success || r.numPassedTests === 0 || r.numPendingTests + r.numTodoTests > 0) process.exit(1)'
+        env:
+          IT_DB: '1'
 
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el

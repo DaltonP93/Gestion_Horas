@@ -88,7 +88,7 @@ async function validateCandidateRefs(scope, data) {
   const orgScope = require('./orgScope');
   const companyId = data.company_id ?? null;
   const branchId = data.branch_id ?? null;
-  if (scope && !scope.unrestricted && companyId == null && branchId == null) {
+  if (!orgScope.isGlobal(scope) && companyId == null && branchId == null) {
     throw httpError(403, 'OUT_OF_SCOPE', 'Un rol con alcance no puede crear un candidato sin empresa/sucursal');
   }
   if (branchId != null) {
@@ -150,7 +150,7 @@ async function convertCandidate(id, employeeId, scope) {
     throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
   }
   // El EMPLEADO destino debe estar dentro del alcance del actor (403 si no).
-  if (scope && !scope.unrestricted) {
+  if (!orgScope.isGlobal(scope)) {
     const empRefs = await orgScope.loadEmployeeOrgRefs(employeeId);
     if (!orgScope.canSeeEmployeeRefs(scope, empRefs)) {
       throw httpError(403, 'OUT_OF_SCOPE', 'El empleado destino está fuera de tu alcance');
@@ -167,7 +167,7 @@ async function convertCandidate(id, employeeId, scope) {
     if (!cand) throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
     // El CANDIDATO debe estar dentro del alcance del actor. Si no, se responde
     // 404 (no se filtra existencia de candidatos de otra empresa/sucursal).
-    if (scope && !scope.unrestricted && !orgScope.canSeeCandidateRefs(scope, cand)) {
+    if (!orgScope.isGlobal(scope) && !orgScope.canSeeCandidateRefs(scope, cand)) {
       throw httpError(404, 'CANDIDATE_NOT_FOUND', 'Candidato no encontrado');
     }
     if (cand.converted_employee_id) {
@@ -288,8 +288,19 @@ async function validateAssignmentRefs(scope, data, transaction) {
  * impide dos vigencias abiertas y las inserciones retroactivas inválidas incluso
  * partiendo de cero vigencias (el lock es sobre el empleado, no sobre filas que
  * todavía no existen).
+ *
+ * Alcance OBLIGATORIO en el servicio (no sólo en la ruta): un alcance ausente,
+ * nulo o inválido → 403 antes de abrir la transacción; y, tras el lock, el
+ * empleado DESTINATARIO debe estar en el alcance (departamento o sede) salvo
+ * alcance global emitido. Vale aunque no se envíen referencias organizacionales
+ * (siguen siendo opcionales). Toda denegación hace rollback: sin INSERT, sin
+ * cerrar la vigencia anterior y sin commit.
  */
 async function createAssignment(employeeId, data, userId, scope) {
+  const orgScope = require('./orgScope');
+  if (!orgScope.isValidScope(scope)) {
+    throw httpError(403, 'OUT_OF_SCOPE', 'Alcance ausente o inválido');
+  }
   // Fecha civil REAL (no sólo formato) antes de abrir transacción: rechaza
   // 2025-02-29, 2026-13-01, etc. Defensa en profundidad además del schema Joi.
   if (!parseCivilDate(data.valid_from)) {
@@ -299,10 +310,14 @@ async function createAssignment(employeeId, data, userId, scope) {
   const tx = await sequelize.transaction();
   try {
     const [emp] = await sequelize.query(
-      'SELECT id FROM employees WHERE id = ? FOR UPDATE',
+      'SELECT id, department_id, branch_id FROM employees WHERE id = ? FOR UPDATE',
       { replacements: [employeeId], transaction: tx },
     );
     if (!emp.length) throw httpError(400, 'EMPLOYEE_NOT_FOUND', 'employee_id no corresponde a un empleado existente');
+    // Autorización del DESTINATARIO bajo el lock (global emitido → siempre).
+    if (!orgScope.canSeeEmployeeRefs(scope, emp[0])) {
+      throw httpError(403, 'OUT_OF_SCOPE', 'El empleado está fuera de tu alcance');
+    }
 
     // Validación de referencias DENTRO de la transacción, tras el lock del
     // empleado (anti-TOCTOU): existencia + alcance + coherencia mutua de empresa.

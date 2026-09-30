@@ -12,6 +12,7 @@ const {
   getVisibleDepartmentIds,
   applyDepartmentScope,
   canSeeEmployee,
+  isGlobal,
 } = require('../services/departmentScope');
 const {
   maskEmployeeRow,
@@ -132,7 +133,7 @@ async function getAll(req, res) {
 
     res.json({
       data: employees, total, counts, page: +page, limit: +limit, pages: Math.ceil(total / limit),
-      _scope: { unrestricted: !!scope.unrestricted, departments: scope.unrestricted ? null : (scope.ids || []).length },
+      _scope: { unrestricted: isGlobal(scope), departments: isGlobal(scope) ? null : (Array.isArray(scope?.ids) ? scope.ids.length : 0) },
       _privacy: privacyDescriptor({ caps }),
     });
   } catch (err) {

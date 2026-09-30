@@ -86,7 +86,7 @@ router.get('/workday/:empId', requirePermission('calendario', 'view'), asyncHand
   // Alcance del EMPLEADO: no se puede consultar la jornada de cualquier empleado.
   // Fuera de alcance → 404 (no se filtra existencia entre departamentos/sucursales).
   const scope = await orgScope.getOrgScope(req.user);
-  if (scope && !scope.unrestricted) {
+  if (!orgScope.isGlobal(scope)) {
     const refs = await orgScope.loadEmployeeOrgRefs(empId);
     if (!refs || !orgScope.canSeeEmployeeRefs(scope, refs)) {
       return res.status(404).json({ error: 'Empleado no encontrado' });
@@ -195,7 +195,7 @@ router.post('/:id/exceptions', requirePermission('calendario', 'create'), valida
     return res.status(404).json({ error: 'Calendario no encontrado' });
   }
   // Un writer con alcance no puede mutar un calendario GLOBAL (que afecta a todos).
-  if (scope && !scope.unrestricted && cal.company_id == null && cal.branch_id == null) {
+  if (!orgScope.isGlobal(scope) && cal.company_id == null && cal.branch_id == null) {
     return res.status(403).json({ error: 'No podés modificar un calendario global', code: 'OUT_OF_SCOPE' });
   }
   const { reason, ...data } = req.body;

@@ -46,7 +46,7 @@ function isDupError(err) {
 
 // ─── Companies ────────────────────────────────────────────────────────────
 
-async function listCompanies(scope = { unrestricted: true }) {
+async function listCompanies(scope) {
   const f = orgScope.companyFilter(scope, 'id');
   const [rows] = await sequelize.query(
     `SELECT id, code, legal_name, trade_name, tax_id, active, created_at, updated_at
@@ -56,7 +56,7 @@ async function listCompanies(scope = { unrestricted: true }) {
   return rows;
 }
 
-async function getCompany(id, scope = { unrestricted: true }) {
+async function getCompany(id, scope) {
   const [rows] = await sequelize.query(
     `SELECT id, code, legal_name, trade_name, tax_id, active, created_at, updated_at
        FROM companies WHERE id = ? LIMIT 1`,
@@ -98,7 +98,7 @@ async function updateCompany(id, fields) {
 
 // ─── Cost centers ───────────────────────────────────────────────────────────
 
-async function listCostCenters(scope = { unrestricted: true }) {
+async function listCostCenters(scope) {
   // Alcance por la empresa del centro de costo. Un rol con alcance ve sólo los
   // centros de su(s) empresa(s); los centros sin empresa quedan para roles
   // globales (no se filtran con includeNull para no filtrar centros ajenos).
@@ -115,7 +115,7 @@ async function listCostCenters(scope = { unrestricted: true }) {
   return rows;
 }
 
-async function getCostCenter(id, scope = { unrestricted: true }) {
+async function getCostCenter(id, scope) {
   const [rows] = await sequelize.query(
     `SELECT id, company_id, code, name, active, created_at, updated_at
        FROM cost_centers WHERE id = ? LIMIT 1`,

@@ -107,7 +107,7 @@ async function validateCalendarRefs(scope, data) {
   // (pickCalendarForDate lo matchea para cualquier alcance). Un writer con
   // alcance restringido no puede crearlo: sería escribir fuera de su alcance.
   // Simétrico a la guarda de POST /:id/exceptions sobre calendarios globales.
-  if (scope && !scope.unrestricted && companyId == null && branchId == null) {
+  if (!require('./orgScope').isGlobal(scope) && companyId == null && branchId == null) {
     throw httpError(403, 'OUT_OF_SCOPE', 'No podés crear un calendario global');
   }
   if (branchId != null) {
@@ -205,10 +205,8 @@ async function resolveEffective(calendarId, from, to, { workDays, scope } = {}) 
   if (!cal) return null; // calendario inexistente → el caller responde 404
   // ALCANCE: un calendario fuera del alcance del actor se trata como inexistente
   // (404), sin filtrar existencia. Los globales sí son visibles.
-  if (scope) {
-    const orgScope = require('./orgScope');
-    if (!orgScope.canSeeCalendar(scope, cal)) return null;
-  }
+  // Alcance OBLIGATORIO: sin alcance válido el calendario no es visible.
+  if (!require('./orgScope').canSeeCalendar(scope, cal)) return null;
   const effectiveWorkDays = workDays !== undefined ? workDays : parseWorkDays(cal.work_days);
   const [holidaySet, exceptionMap] = await Promise.all([
     holidaysInRange(from, to),

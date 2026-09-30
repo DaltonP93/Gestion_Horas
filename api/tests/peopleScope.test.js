@@ -3,6 +3,7 @@
  * asignaciones por alcance organizacional. Cubre denegaciones cross-scope con
  * la DB mockeada; la variante contra MySQL real está en tests/it/people.it.test.js.
  */
+const { issuedGlobal } = require('./helpers/scopes');
 jest.mock('../src/config/database', () => {
   const query = jest.fn();
   const tx = { commit: jest.fn().mockResolvedValue(), rollback: jest.fn().mockResolvedValue() };
@@ -37,7 +38,7 @@ describe('orgScope — visibilidad JERÁRQUICA de candidatos (P1-A v2)', () => {
     expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: 1, branch_id: null })).toBe(false); // otra empresa
     // Sin alcance → sólo global.
     expect(orgScope.canSeeCandidateRefs(SCOPED, { company_id: null, branch_id: null })).toBe(false);
-    expect(orgScope.canSeeCandidateRefs({ unrestricted: true }, { company_id: null, branch_id: null })).toBe(true);
+    expect(orgScope.canSeeCandidateRefs(issuedGlobal(), { company_id: null, branch_id: null })).toBe(true);
   });
 
   test('empleado: visible por departamento o sucursal', () => {
@@ -54,9 +55,9 @@ describe('orgScope — visibilidad JERÁRQUICA de candidatos (P1-A v2)', () => {
     expect(f.clause).toMatch(/c\.branch_id IS NULL AND c\.company_id IN/);
     expect(f.params).toEqual([2, 9]);
     // unrestricted → sin filtro
-    expect(orgScope.candidateScopeFilter({ unrestricted: true }).clause).toBe('');
+    expect(orgScope.candidateScopeFilter(issuedGlobal()).clause).toBe('');
     // sin ids → 1=0 (nada)
-    expect(orgScope.candidateScopeFilter({ unrestricted: false, companyIds: [], branchIds: [] }).clause).toBe('AND 1=0');
+    expect(orgScope.candidateScopeFilter({ unrestricted: false, companyIds: [], branchIds: [], departmentIds: [] }).clause).toBe('AND 1=0');
   });
 });
 
@@ -72,7 +73,7 @@ describe('listCandidates — filtra por alcance en SQL', () => {
 
   test('unrestricted: sin cláusula de alcance', async () => {
     sequelize.query.mockResolvedValueOnce([[]]);
-    await people.listCandidates({}, { unrestricted: true });
+    await people.listCandidates({}, issuedGlobal());
     expect(sequelize.query.mock.calls[0][0]).not.toMatch(/IN \(/);
   });
 });
@@ -132,7 +133,7 @@ describe('validateCandidateRefs — existencia, alcance y coherencia', () => {
   });
 
   test('rol global SÍ puede crear candidato sin alcance', async () => {
-    await expect(people.validateCandidateRefs({ unrestricted: true }, { company_id: null, branch_id: null }))
+    await expect(people.validateCandidateRefs(issuedGlobal(), { company_id: null, branch_id: null }))
       .resolves.toBeUndefined();
   });
 });
