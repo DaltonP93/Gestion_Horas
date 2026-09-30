@@ -82,7 +82,7 @@ describe('createAssignment — atómica con lock del empleado', () => {
       .mockResolvedValueOnce([8, 1]);                                          // INSERT: forma real [insertId, affectedRows]
     const r = await people.createAssignment(50, { valid_from: '2026-03-01' }, 7, issuedGlobal());
     expect(r).toEqual({ id: 8, company_id: null, closed_previous: 7 });
-    expect(sequelize.query.mock.calls[0][0]).toMatch(/SELECT id FROM employees WHERE id = \? FOR UPDATE/);
+    expect(sequelize.query.mock.calls[0][0]).toMatch(/SELECT id, department_id, branch_id FROM employees WHERE id = \? FOR UPDATE/);
     expect(sequelize.__tx.commit).toHaveBeenCalled();
   });
 

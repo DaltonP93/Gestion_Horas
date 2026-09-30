@@ -149,6 +149,7 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
     if (conn) {
       await conn.query('UPDATE branches SET active = 1 WHERE id = ?', [ids.branchA]);
       if (ids.globalCal) await conn.query('DELETE FROM labor_calendars WHERE id = ?', [ids.globalCal]);
+      await conn.query('DELETE FROM employee_assignments WHERE employee_id IN (?, ?)', [ids.empA, ids.empB]);
       const userIds = [ids.mgrA, ids.mgrNoBranch, ids.mgrInactive, ids.coordA, ids.employeeA, ids.admin, ids.mgrGhost].filter(Boolean);
       if (userIds.length) {
         await conn.query('DELETE FROM user_permissions WHERE user_id IN (?)', [userIds]);
@@ -462,4 +463,40 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
     });
   });
 
+  describe('createAssignment exige alcance en el servicio (base real)', () => {
+    const people = () => require('../../src/services/people');
+    const rows = async (empId) => (await conn.query(
+      'SELECT id, valid_from, valid_to FROM employee_assignments WHERE employee_id = ? ORDER BY valid_from', [empId],
+    ))[0];
+
+    test('denegado sin INSERT ni cierre de la vigencia previa; global y empleado propio sí', async () => {
+      const global = await orgScope.getOrgScope(who(ids.admin, 'admin'));
+      // Vigencia previa abierta del empleado de la sede B, creada como global.
+      await people().createAssignment(ids.empB, { valid_from: '2030-01-01' }, ids.admin, global);
+      const before = await rows(ids.empB);
+      expect(before).toHaveLength(1);
+      expect(before[0].valid_to).toBeNull();
+
+      const mgrA = await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB));
+      for (const [label, scope] of [
+        ['undefined', undefined], ['null', null], ['{}', {}],
+        ['literal global', { unrestricted: true }],
+        ['vacío', { unrestricted: false, companyIds: [], branchIds: [], departmentIds: [] }],
+        ['manager de A sobre empleado de B', mgrA],
+      ]) {
+        let err;
+        try { await people().createAssignment(ids.empB, { valid_from: '2031-01-01' }, ids.mgrA, scope); } catch (e) { err = e; }
+        expect([label, err && err.status, err && err.code]).toEqual([label, 403, 'OUT_OF_SCOPE']);
+        expect(await rows(ids.empB)).toEqual(before);
+      }
+
+      // Controles positivos.
+      const r1 = await people().createAssignment(ids.empB, { valid_from: '2031-01-01' }, ids.admin, global);
+      expect(r1.closed_previous).toBe(before[0].id);
+      expect(await rows(ids.empB)).toHaveLength(2);
+      const r2 = await people().createAssignment(ids.empA, { valid_from: '2031-01-01' }, ids.mgrA, mgrA);
+      expect(r2.id).toBeTruthy();
+      expect(await rows(ids.empA)).toHaveLength(1);
+    });
+  });
 });
