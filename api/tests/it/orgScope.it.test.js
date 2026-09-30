@@ -137,6 +137,7 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
     app.use('/api/companies', require('../../src/routes/companies'));
     app.use('/api/cost-centers', require('../../src/routes/costCenters'));
     app.use('/api/branches', require('../../src/routes/branches'));
+    app.use('/api/departments', require('../../src/routes/departments'));
     // eslint-disable-next-line no-unused-vars
     app.use((err, _req, res, _next) => res.status(err.status || 500).json({ error: err.message, code: err.code }));
     await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); });
@@ -407,4 +408,58 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
       expect(await snapshot()).toEqual(data0);
     });
   });
+  describe('lecturas de Departamentos con alcance (HTTP y autenticación reales)', () => {
+    const list = async (uid, role) => (await (await http('GET', '/api/departments', uid, role)).json()).map((d) => d.id);
+    const bodyOf = async (r) => JSON.stringify(await r.json());
+
+    test('manager de A: su departamento activo sí; el de otra sede no se revela', async () => {
+      const seen = await list(ids.mgrA, 'manager');
+      expect(seen).toContain(ids.deptA);
+      expect(seen).not.toContain(ids.deptB);
+      expect(seen).not.toContain(ids.deptAOff);
+      expect((await http('GET', `/api/departments/${ids.deptA}`, ids.mgrA, 'manager')).status).toBe(200);
+      const own = await (await http('GET', `/api/departments/${ids.deptA}/employees`, ids.mgrA, 'manager')).json();
+      expect(own.map((e) => e.id)).toEqual([ids.empA]);
+      for (const url of [`/api/departments/${ids.deptB}`, `/api/departments/${ids.deptB}/employees`]) {
+        const r = await http('GET', url, ids.mgrA, 'manager');
+        expect([url, r.status]).toEqual([url, 404]);
+        expect(await bodyOf(r)).not.toMatch(new RegExp(`${ids.uniq}eb|Scope EB|ITScope Dept B`, 'i'));
+      }
+    });
+
+    test('sede inexistente → listado vacío; detalle y empleados 404', async () => {
+      expect(await list(ids.mgrGhost, 'manager')).toEqual([]);
+      expect((await http('GET', `/api/departments/${ids.deptA}`, ids.mgrGhost, 'manager')).status).toBe(404);
+      expect((await http('GET', `/api/departments/${ids.deptA}/employees`, ids.mgrGhost, 'manager')).status).toBe(404);
+    });
+
+    test('sede inactiva → sin lecturas; reactivada → las recupera', async () => {
+      await conn.query('UPDATE branches SET active = 0 WHERE id = ?', [ids.branchA]);
+      try {
+        expect(await list(ids.mgrA, 'manager')).toEqual([]);
+        const r1 = await http('GET', `/api/departments/${ids.deptA}`, ids.mgrA, 'manager');
+        const r2 = await http('GET', `/api/departments/${ids.deptA}/employees`, ids.mgrA, 'manager');
+        expect([r1.status, r2.status]).toEqual([404, 404]);
+        expect(await bodyOf(r2)).not.toMatch(new RegExp(`${ids.uniq}ea`, 'i'));
+      } finally {
+        await conn.query('UPDATE branches SET active = 1 WHERE id = ?', [ids.branchA]);
+      }
+      expect(await list(ids.mgrA, 'manager')).toContain(ids.deptA);
+      expect((await http('GET', `/api/departments/${ids.deptA}/employees`, ids.mgrA, 'manager')).status).toBe(200);
+    });
+
+    test('sin alcance (employee, manager sin sede) → vacío y 404', async () => {
+      for (const [uid, role] of [[ids.employeeA, 'employee'], [ids.mgrNoBranch, 'manager']]) {
+        expect(await list(uid, role)).toEqual([]);
+        expect((await http('GET', `/api/departments/${ids.deptA}/employees`, uid, role)).status).toBe(404);
+      }
+    });
+
+    test('admin (control positivo): ve ambos departamentos y sus empleados', async () => {
+      expect(await list(ids.admin, 'admin')).toEqual(expect.arrayContaining([ids.deptA, ids.deptB]));
+      const emps = await (await http('GET', `/api/departments/${ids.deptB}/employees`, ids.admin, 'admin')).json();
+      expect(emps.map((e) => e.id)).toEqual([ids.empB]);
+    });
+  });
+
 });
