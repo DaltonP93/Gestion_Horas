@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
+import { canAdministerOnboarding, canManageOnboardingTasks } from '@/lib/onboardingRoles'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -34,12 +35,14 @@ const TASK_STATUS = {
   skipped:     { label: 'Omitido',      color: 'bg-slate-100 text-slate-400',   icon: <X size={12} /> },
 }
 
-const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin']
-
 // ─── ProcessDetail ───────────────────────────────────────────────────────────
 
-function ProcessDetail({ id, onClose, onUpdated }: {
+function ProcessDetail({ id, onClose, onUpdated, canAdmin, canManageTasks }: {
   id: number; onClose: () => void; onUpdated: () => void
+  /** Completar / cancelar el proceso (gestión global). */
+  canAdmin: boolean
+  /** Cambiar estado y responsable de las tareas (gestión global o con alcance). */
+  canManageTasks: boolean
 }) {
   const [data, setData] = useState<(Process & { tasks: Task[] }) | null>(null)
   const [loading, setLoading] = useState(true)
@@ -49,14 +52,18 @@ function ProcessDetail({ id, onClose, onUpdated }: {
   const load = useCallback(async () => {
     setLoading(true)
     try {
+      // Candidatos filtrados por el servidor según el alcance del actor y el
+      // proceso (no la búsqueda global de usuarios).
       const [r, ru] = await Promise.all([
         api.get(`/api/onboarding/${id}`),
-        api.get('/api/users/lookup').catch(() => ({ data: [] })),
+        canManageTasks
+          ? api.get(`/api/onboarding/${id}/assignee-candidates`).catch(() => ({ data: { data: [] } }))
+          : Promise.resolve({ data: { data: [] } }),
       ])
       setData(r.data.data)
-      setUsers(ru.data?.data || ru.data || [])
+      setUsers(ru.data?.data || [])
     } finally { setLoading(false) }
-  }, [id])
+  }, [id, canManageTasks])
 
   useEffect(() => { load() }, [load])
 
@@ -148,7 +155,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                   </div>
                 </div>
                 {/* Quick action buttons */}
-                {data.status === 'active' && task.status !== 'done' && (
+                {canManageTasks && data.status === 'active' && task.status !== 'done' && (
                   <div className="flex gap-1 shrink-0">
                     {task.status === 'pending' && (
                       <button onClick={() => updateTask(task.id, { status: 'in_progress' })}
@@ -174,7 +181,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                 )}
               </div>
               {/* Assignee selector */}
-              {data.status === 'active' && task.status !== 'done' && (
+              {canManageTasks && data.status === 'active' && task.status !== 'done' && (
                 <select
                   value={task.assignee_id || ''}
                   onChange={e => updateTask(task.id, { assignee_id: e.target.value || null })}
@@ -191,7 +198,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
       </div>
 
       {/* Process actions */}
-      {data.status === 'active' && (
+      {canAdmin && data.status === 'active' && (
         <div className="flex gap-2 pt-2 border-t border-slate-100 dark:border-white/[0.06]">
           <button onClick={() => closeProcess('complete')}
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl py-2 text-sm font-medium flex items-center justify-center gap-1.5">
@@ -421,7 +428,8 @@ export default function OnboardingPage() {
   const [showNewProcess, setShowNewProcess]   = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
 
-  const isAdmin = ADMIN_ROLES.includes(user?.role || '')
+  const isAdmin = canAdministerOnboarding(user?.role)
+  const canManageTasks = canManageOnboardingTasks(user?.role)
 
   const loadProcesses = useCallback(async () => {
     setLoading(true)
@@ -617,6 +625,8 @@ export default function OnboardingPage() {
               id={selectedId}
               onClose={() => setSelectedId(null)}
               onUpdated={loadProcesses}
+              canAdmin={isAdmin}
+              canManageTasks={canManageTasks}
             />
           </div>
         )}

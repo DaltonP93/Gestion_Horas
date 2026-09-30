@@ -74,7 +74,15 @@ Para medir el uso real en producción, sin escribir: `onboarding_tasks.completed
 (quién marcó `done`) comparado con `assignee_id` y con `users.role`. Sólo cubre las
 tareas completadas; no hay auditoría de los demás cambios.
 
-**Decisiones adoptadas para el próximo lote (aún NO implementadas):**
+**Estado (PR de onboarding administrativo):** implementado el flujo administrativo
+con el alcance de abajo — roles de gestión global/con alcance, mismo alcance en
+listado, detalle, candidatos (`GET /api/onboarding/:id/assignee-candidates`) y
+`PATCH`, validación estricta, responsables activos y dentro del alcance, y
+transacciones con bloqueo. **Sigue pendiente** la vista "Mis tareas" para
+responsables sin rol de gestión (no implementada). `GET /api/users/lookup` sigue
+siendo global para Departamentos y Evaluaciones: fuera de este lote.
+
+**Decisiones adoptadas para el próximo lote (base del lote de onboarding):**
 
 - `supervisor` no es administrador general de onboarding.
 - Un `supervisor` o cualquier responsable que no sea rol de gestión sólo opera sus
