@@ -379,4 +379,39 @@ describeIT('datos sensibles por empleado (integración)', () => {
       expect(await count('SELECT COUNT(*) AS n FROM employee_notes WHERE id = ?', [tmp])).toBe(0);
     });
   });
+
+  // ────────────────────────── Planillas legales ────────────────────────────
+  describe('planillas legales (sólo RR.HH. global)', () => {
+    const LEGAL = [
+      '/api/legal/planilla-mtess?year=2026&month=1',
+      '/api/legal/ips-jornales?year=2026&month=1',
+      '/api/legal/planilla-comunicacion?year=2026&month=1',
+      '/api/legal/aguinaldo?year=2026&month=1',
+      '/api/legal-data/completeness',
+      '/api/legal-data/template',
+    ];
+
+    test.each(LEGAL)('rol por sede con permiso de reportes: %s → 403 GLOBAL_HR_ONLY sin datos', async (url) => {
+      const text = await expectRejected({ method: 'GET', url, uid: ids.mgrA, role: 'manager', status: 403 });
+      expect(JSON.parse(text).code).toBe('GLOBAL_HR_ONLY');
+    });
+
+    test('importación de datos legales por rol por sede → 403 sin escritura', async () => {
+      await expectRejected({ method: 'POST', url: '/api/legal-data/import', uid: ids.coordA, role: 'coordinator', status: 403 });
+    });
+
+    test('employee → 403 sin datos', async () => {
+      await expectRejected({ method: 'GET', url: '/api/legal-data/completeness', uid: ids.employeeA, role: 'employee', status: 403 });
+    });
+
+    test('rol global de RR.HH.: exporta ambas empresas (sin cambio)', async () => {
+      const r = await http('GET', '/api/legal/ips-jornales?year=2026&month=1', ids.hr, 'hr');
+      expect(r.status).toBe(200);
+      const codes = (await r.json()).data.map((d) => d.code);
+      expect(codes).toEqual(expect.arrayContaining([`${ids.uniq}A1`, `${ids.uniq}B`]));
+      const c = await http('GET', '/api/legal-data/completeness', ids.admin, 'admin');
+      expect(c.status).toBe(200);
+      expect((await c.json()).incomplete.map((e) => e.id)).toEqual(expect.arrayContaining([ids.empA1, ids.empB]));
+    });
+  });
 });

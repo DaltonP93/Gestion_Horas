@@ -12,16 +12,21 @@
  *       C.I., N° IPS, días trabajados y horas del mes. Alimenta el cálculo de
  *       aportes patronales/obreros.
  *
- * Requiere permiso de ver reportes.
+ * Requiere permiso de ver reportes y, TEMPORALMENTE, un rol global de RR.HH.
+ * (requireGlobalHR: super_admin/admin/gth/hr). Estas planillas recorren a
+ * TODOS los empleados y llevan el encabezado patronal único de
+ * notification_settings; mientras no exista configuración patronal por
+ * empresa, un rol por sede no puede exportarlas (ni siquiera filtradas: el
+ * encabezado sería el de otra empresa).
  */
 const router = require('express').Router();
 const path = require('path');
 const fs = require('fs');
-const { authenticate, requirePermission } = require('../middleware/auth');
+const { authenticate, requirePermission, requireGlobalHR } = require('../middleware/auth');
 const { asyncHandler } = require('../utils/asyncHandler');
 const { sequelize } = require('../config/database');
 
-router.use(authenticate, requirePermission('reportes', 'view'));
+router.use(authenticate, requireGlobalHR, requirePermission('reportes', 'view'));
 
 const MESES = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
