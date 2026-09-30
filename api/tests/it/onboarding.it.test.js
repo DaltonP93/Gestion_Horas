@@ -60,6 +60,9 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       'SELECT t.* FROM onboarding_tasks t JOIN onboarding_processes p ON p.id = t.process_id WHERE p.employee_id IN (?) ORDER BY t.id', [emps()],
     ))[0],
     (await conn.query('SELECT id, name, description, active FROM onboarding_templates WHERE id IN (?) ORDER BY id', [[ids.tpl, ids.tplOff]]))[0],
+    // Totales: ninguna plantilla ni tarea de plantilla creada por un rechazo.
+    await count('SELECT COUNT(*) AS n FROM onboarding_templates'),
+    await count('SELECT COUNT(*) AS n FROM onboarding_template_tasks'),
   ]);
 
   const LEAK_RE = /OnbB|NOTA-B|TAREA-B|onbb@|uB-full/g;
@@ -204,6 +207,12 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
     ids.pRace = await insertProcess(ids.eA2);         // cierre concurrente
     ids.tRace = await insertTask(ids.pRace, 'TAREA-RACE');
     ids.pRace2 = await insertProcess(ids.eA2);        // completar vs cancelar
+    ids.tplZero = await ins("INSERT INTO onboarding_templates (name, type, active) VALUES (?, 'onboarding', 1)", [`${uniq} cero`]);
+    ids.ttZero = await ins('INSERT INTO onboarding_template_tasks (template_id, title, due_days, sort_order) VALUES (?, ?, 0, 0)', [ids.tplZero, 'Mismo día']);
+    ids.ttOne = await ins('INSERT INTO onboarding_template_tasks (template_id, title, due_days, sort_order) VALUES (?, ?, 1, 1)', [ids.tplZero, 'Al día siguiente']);
+    ids.pMeta = await insertProcess(ids.eA2);         // metadatos de finalización
+    ids.tMeta = await insertTask(ids.pMeta, 'TAREA-META');
+    ids.tMetaKeep = await insertTask(ids.pMeta, 'TAREA-META-PENDIENTE'); // mantiene el proceso activo
 
     const express = require('express');
     const app = express();
@@ -225,8 +234,10 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       const userIds = ['admin', 'hr', 'mgrA', 'coordA', 'mgrB', 'supA', 'empA', 'mgrInactive', 'mgrNoBranch', 'uA2', 'uB', 'uInactive', 'uUnlinked']
         .map((k) => ids[k]).filter(Boolean);
       await conn.query('DELETE FROM onboarding_processes WHERE employee_id IN (?)', [emps().filter(Boolean)]);
-      await conn.query('DELETE FROM onboarding_templates WHERE id IN (?)', [[ids.tpl, ids.tplOff].filter(Boolean)]);
+      // Fixtures y plantillas creadas por los tests (todas con el prefijo único).
+      await conn.query('DELETE FROM onboarding_templates WHERE name LIKE ?', [`${ids.uniq}%`]);
       if (userIds.length) {
+        await conn.query('DELETE FROM onboarding_templates WHERE created_by IN (?)', [userIds]);
         await conn.query('DELETE FROM audit_events WHERE user_id IN (?)', [userIds]);
         await conn.query('DELETE FROM users WHERE id IN (?)', [userIds]);
       }
@@ -339,6 +350,18 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       ]);
     });
 
+    test('due_days = 0 vence el mismo día que start_date (MySQL real)', async () => {
+      const r = await http('POST', '/api/onboarding', ids.hr, 'hr', { template_id: ids.tplZero, employee_id: ids.eA3, start_date: '2026-10-05' });
+      expect(r.status).toBe(201);
+      const { id } = await r.json();
+      const [rows] = await conn.query("SELECT title, DATE_FORMAT(due_date, '%Y-%m-%d') AS due FROM onboarding_tasks WHERE process_id = ? ORDER BY sort_order", [id]);
+      evidence.push({ request: 'POST /api/onboarding (plantilla con due_days 0 y 1, start 2026-10-05) (hr)', got: r.status, due: rows.map((x) => x.due) });
+      expect(rows).toEqual([
+        { title: 'Mismo día', due: '2026-10-05' },
+        { title: 'Al día siguiente', due: '2026-10-06' },
+      ]);
+    });
+
     const OK = () => ({ template_id: ids.tpl, employee_id: ids.eA3, start_date: '2026-03-01' });
     test.each([
       ['manager', () => ({ uid: ids.mgrA, role: 'manager', status: 403, body: OK() })],
@@ -368,6 +391,121 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       ['manager completa', () => ({ url: `/api/onboarding/${ids.pA}/complete`, uid: ids.mgrA, role: 'manager', status: 403 })],
     ])('%s → rechazado sin escritura ni auditoría', async (_label, mk) => {
       await expectRejected({ method: 'POST', ...mk() });
+    });
+  });
+
+  // ─────────────────────── Alta de plantillas ───────────────────────
+  describe('POST /templates: validación estricta antes de la transacción', () => {
+    const name = () => `${ids.uniq} nueva`;
+    const tk = (over = {}) => ({ title: 'Tarea', ...over });
+    test.each([
+      ['tasks no arreglo', () => ({ name: name(), tasks: 'x' })],
+      ['tasks objeto', () => ({ name: name(), tasks: { 0: tk() } })],
+      ['tasks vacío', () => ({ name: name(), tasks: [] })],
+      ['tipo inválido', () => ({ name: name(), type: 'otro', tasks: [tk()] })],
+      ['nombre ausente', () => ({ tasks: [tk()] })],
+      ['nombre demasiado largo', () => ({ name: `${ids.uniq}${'x'.repeat(121)}`, tasks: [tk()] })],
+      ['título vacío', () => ({ name: name(), tasks: [tk({ title: '' })] })],
+      ['título demasiado largo', () => ({ name: name(), tasks: [tk({ title: 'x'.repeat(201) })] })],
+      ['una tarea válida y otra inválida (no se omite)', () => ({ name: name(), tasks: [tk(), tk({ title: '   ' })] })],
+      ['due_days negativo', () => ({ name: name(), tasks: [tk({ due_days: -1 })] })],
+      ['due_days fraccionario', () => ({ name: name(), tasks: [tk({ due_days: 1.5 })] })],
+      ['due_days textual', () => ({ name: name(), tasks: [tk({ due_days: '5' })] })],
+      ['due_days fuera de rango', () => ({ name: name(), tasks: [tk({ due_days: 3651 })] })],
+      ['campo desconocido en la plantilla', () => ({ name: name(), active: 0, tasks: [tk()] })],
+      ['campo desconocido en una tarea', () => ({ name: name(), tasks: [tk({ sort_order: 9 })] })],
+      ['descripción no texto', () => ({ name: name(), description: 5, tasks: [tk()] })],
+      ['rol por defecto demasiado largo', () => ({ name: name(), tasks: [tk({ default_assignee_role: 'x'.repeat(61) })] })],
+    ])('%s → 400 sin plantillas ni tareas creadas', async (_label, mk) => {
+      await expectRejected({ method: 'POST', url: '/api/onboarding/templates', uid: ids.hr, role: 'hr', status: 400, code: 'INVALID_INPUT', body: mk() });
+    });
+
+    test('positivo con cero días: 201 y filas exactas; el proceso vence el mismo día', async () => {
+      const r = await http('POST', '/api/onboarding/templates', ids.hr, 'hr', {
+        name: `${ids.uniq} cero dias`, type: 'offboarding', description: null,
+        tasks: [
+          { title: 'Día cero', description: '', default_assignee_role: '', due_days: 0 },
+          { title: 'Sin plazo', description: 'd', default_assignee_role: 'IT' },
+        ],
+      });
+      expect(r.status).toBe(201);
+      const { id } = await r.json();
+      const [[tpl]] = await conn.query('SELECT name, type, description, created_by FROM onboarding_templates WHERE id = ?', [id]);
+      expect(tpl).toEqual({ name: `${ids.uniq} cero dias`, type: 'offboarding', description: null, created_by: ids.hr });
+      const [tasks] = await conn.query(
+        'SELECT title, description, default_assignee_role, due_days, sort_order FROM onboarding_template_tasks WHERE template_id = ? ORDER BY sort_order', [id],
+      );
+      expect(tasks).toEqual([
+        { title: 'Día cero', description: null, default_assignee_role: null, due_days: 0, sort_order: 0 },
+        { title: 'Sin plazo', description: 'd', default_assignee_role: 'IT', due_days: 3, sort_order: 1 },
+      ]);
+      const p = await http('POST', '/api/onboarding', ids.hr, 'hr', { template_id: id, employee_id: ids.eA3, start_date: '2026-10-05' });
+      expect(p.status).toBe(201);
+      const [due] = await conn.query("SELECT DATE_FORMAT(due_date, '%Y-%m-%d') AS due FROM onboarding_tasks WHERE process_id = ? ORDER BY sort_order", [(await p.json()).id]);
+      expect(due.map((x) => x.due)).toEqual(['2026-10-05', '2026-10-08']);
+    });
+  });
+
+  // ─────────────────── Metadatos de finalización ───────────────────
+  describe('PATCH de tareas: metadatos de finalización (proceso activo con otra tarea pendiente)', () => {
+    const OLD = '2020-01-02 03:04:05';
+    const meta = async () => (await conn.query(
+      "SELECT status, completed_by, DATE_FORMAT(completed_at, '%Y-%m-%d %H:%i:%s') AS at FROM onboarding_tasks WHERE id = ?", [ids.tMeta],
+    ))[0][0];
+    // La sesión de la API usa DB_TIMEZONE: NOW() de otra sesión no es comparable.
+    // "Reciente" = dentro de la mayor diferencia horaria posible respecto de UTC.
+    const isRecent = async () => Number((await conn.query(
+      'SELECT ABS(TIMESTAMPDIFF(MINUTE, completed_at, UTC_TIMESTAMP())) <= 14 * 60 + 5 AS ok FROM onboarding_tasks WHERE id = ?', [ids.tMeta],
+    ))[0][0].ok) === 1;
+    const patch = (uid, role, body) => http('PATCH', `/api/onboarding/tasks/${ids.tMeta}`, uid, role, body);
+    /** Deja la tarea finalizada con metadatos conocidos (fecha antigua). */
+    const setDoneOld = () => conn.query("UPDATE onboarding_tasks SET status = 'done', completed_by = ?, completed_at = ? WHERE id = ?", [ids.mgrA, OLD, ids.tMeta]);
+
+    test('a done: registra actor y fecha; el proceso sigue activo', async () => {
+      expect((await patch(ids.mgrA, 'manager', { status: 'done' })).status).toBe(200);
+      const m = await meta();
+      expect({ status: m.status, by: m.completed_by }).toEqual({ status: 'done', by: ids.mgrA });
+      expect(await isRecent()).toBe(true);
+      const [[p]] = await conn.query('SELECT status FROM onboarding_processes WHERE id = ?', [ids.pMeta]);
+      expect(p.status).toBe('active');
+    });
+
+    test.each([
+      ['notas', () => ({ notes: 'nota' })],
+      ['fecha', () => ({ due_date: '2026-11-30' })],
+      ['responsable', () => ({ assignee_id: ids.uA2 })],
+      ['notas, fecha y responsable a null', () => ({ notes: null, due_date: null, assignee_id: null })],
+    ])('PATCH sólo de %s conserva completed_at y completed_by', async (_label, mk) => {
+      await setDoneOld();
+      expect((await patch(ids.coordA, 'coordinator', mk())).status).toBe(200);
+      expect(await meta()).toEqual({ status: 'done', completed_by: ids.mgrA, at: OLD });
+    });
+
+    test.each(['pending', 'in_progress', 'skipped'])('done → %s limpia completed_at y completed_by', async (status) => {
+      await setDoneOld();
+      const r = await patch(ids.coordA, 'coordinator', { status });
+      const m = await meta();
+      evidence.push({ request: `PATCH tasks/tMeta done → ${status} (coordinator)`, got: r.status, completed_by: m.completed_by, completed_at: m.at });
+      expect(r.status).toBe(200);
+      expect(m).toEqual({ status, completed_by: null, at: null });
+    });
+
+    test('volver a done registra el nuevo actor y la nueva fecha', async () => {
+      await setDoneOld();
+      expect((await patch(ids.mgrA, 'manager', { status: 'pending' })).status).toBe(200);
+      expect(await meta()).toEqual({ status: 'pending', completed_by: null, at: null });
+      expect((await patch(ids.hr, 'hr', { status: 'done' })).status).toBe(200);
+      const m = await meta();
+      expect({ status: m.status, by: m.completed_by }).toEqual({ status: 'done', by: ids.hr });
+      expect(m.at > OLD).toBe(true);
+      expect(await isRecent()).toBe(true);
+      await waitAudit(ids.hr, 'onboarding_task_update', ids.tMeta);
+    });
+
+    test('fuera de alcance: manager B no reabre la tarea finalizada → 404, metadatos intactos', async () => {
+      await setDoneOld();
+      await expectRejected({ method: 'PATCH', url: `/api/onboarding/tasks/${ids.tMeta}`, uid: ids.mgrB, role: 'manager', status: 404, body: { status: 'pending' } });
+      expect(await meta()).toEqual({ status: 'done', completed_by: ids.mgrA, at: OLD });
     });
   });
 

@@ -97,3 +97,97 @@ describe('validateTemplateUpdate', () => {
     expect(V.validateTemplateUpdate(body).ok).toBe(false);
   });
 });
+
+describe('taskDueDate (plazo de la tarea desde start_date)', () => {
+  test('due_days = 0 vence el mismo día (no se convierte en el valor por defecto)', () => {
+    expect(V.taskDueDate('2026-10-05', 0)).toBe('2026-10-05');
+  });
+  test('el valor por defecto sólo aplica cuando falta el valor', () => {
+    expect(V.DEFAULT_DUE_DAYS).toBe(3);
+    expect(V.taskDueDate('2026-10-05', null)).toBe('2026-10-08');
+    expect(V.taskDueDate('2026-10-05', undefined)).toBe('2026-10-08');
+    expect(V.taskDueDate('2026-10-05', 30)).toBe('2026-11-04');
+    expect(V.taskDueDate('2026-12-31', 1)).toBe('2027-01-01');
+  });
+});
+
+describe('taskCompletionSets (metadatos de finalización en el PATCH)', () => {
+  test('a done: registra actor y fecha', () => {
+    expect(V.taskCompletionSets({ status: 'done' }, 42))
+      .toEqual({ sets: ['completed_at = NOW()', 'completed_by = ?'], vals: [42] });
+  });
+  test.each(['pending', 'in_progress', 'skipped'])('a %s: limpia ambos campos', (status) => {
+    expect(V.taskCompletionSets({ status }, 42))
+      .toEqual({ sets: ['completed_at = NULL', 'completed_by = NULL'], vals: [] });
+  });
+  test.each([
+    [{ notes: 'n' }], [{ due_date: '2026-10-05' }], [{ assignee_id: 7 }], [{ assignee_id: null, notes: null, due_date: null }],
+  ])('%j (sin cambio de estado): conserva los metadatos', (patch) => {
+    expect(V.taskCompletionSets(patch, 42)).toEqual({ sets: [], vals: [] });
+  });
+});
+
+describe('validateTemplateCreate', () => {
+  const task = (over = {}) => ({ title: 'Crear cuenta', ...over });
+  const body = (over = {}) => ({ name: 'Ingreso', tasks: [task()], ...over });
+
+  test('válido: normaliza, aplica defaults sólo ante ausencia y acepta cero días', () => {
+    const r = V.validateTemplateCreate({
+      name: '  Ingreso  ', type: 'offboarding', description: null,
+      tasks: [
+        { title: ' Día cero ', due_days: 0, description: '', default_assignee_role: '' },
+        { title: 'Sin plazo', description: 'd', default_assignee_role: 'IT' },
+        { title: 'Tope', due_days: V.TEMPLATE_DUE_DAYS_MAX, description: null, default_assignee_role: null },
+      ],
+    });
+    expect(r).toEqual({ ok: true, value: {
+      name: 'Ingreso', type: 'offboarding', description: null,
+      tasks: [
+        { title: 'Día cero', description: null, default_assignee_role: null, due_days: 0 },
+        { title: 'Sin plazo', description: 'd', default_assignee_role: 'IT', due_days: 3 },
+        { title: 'Tope', description: null, default_assignee_role: null, due_days: 3650 },
+      ],
+    } });
+  });
+  test('type ausente → onboarding (contrato actual)', () => {
+    expect(V.validateTemplateCreate(body()).value.type).toBe('onboarding');
+  });
+  test('máximo de due_days documentado', () => {
+    expect(V.TEMPLATE_DUE_DAYS_MAX).toBe(3650);
+  });
+
+  test.each([
+    ['cuerpo no objeto', []],
+    ['cuerpo nulo', null],
+    ['campo desconocido en la plantilla', body({ active: 0 })],
+    ['nombre ausente', body({ name: undefined })],
+    ['nombre vacío', body({ name: '   ' })],
+    ['nombre no texto', body({ name: 5 })],
+    ['nombre demasiado largo', body({ name: 'x'.repeat(121) })],
+    ['tipo inválido', body({ type: 'otro' })],
+    ['tipo nulo', body({ type: null })],
+    ['descripción no texto', body({ description: 5 })],
+    ['tasks ausente', body({ tasks: undefined })],
+    ['tasks no arreglo (texto)', body({ tasks: 'x' })],
+    ['tasks no arreglo (objeto)', body({ tasks: { 0: task() } })],
+    ['tasks vacío', body({ tasks: [] })],
+    ['tarea no objeto', body({ tasks: ['x'] })],
+    ['tarea nula', body({ tasks: [null] })],
+    ['título ausente', body({ tasks: [{ due_days: 1 }] })],
+    ['título vacío', body({ tasks: [task({ title: '  ' })] })],
+    ['título demasiado largo', body({ tasks: [task({ title: 'x'.repeat(201) })] })],
+    ['una tarea válida y otra inválida (no se omite)', body({ tasks: [task(), task({ title: '' })] })],
+    ['descripción de tarea no texto', body({ tasks: [task({ description: 3 })] })],
+    ['rol por defecto no texto', body({ tasks: [task({ default_assignee_role: 1 })] })],
+    ['rol por defecto demasiado largo', body({ tasks: [task({ default_assignee_role: 'x'.repeat(61) })] })],
+    ['due_days negativo', body({ tasks: [task({ due_days: -1 })] })],
+    ['due_days fraccionario', body({ tasks: [task({ due_days: 1.5 })] })],
+    ['due_days textual', body({ tasks: [task({ due_days: '5' })] })],
+    ['due_days nulo', body({ tasks: [task({ due_days: null })] })],
+    ['due_days fuera de rango', body({ tasks: [task({ due_days: 3651 })] })],
+    ['due_days no finito', body({ tasks: [task({ due_days: Infinity })] })],
+    ['campo desconocido en una tarea', body({ tasks: [task({ sort_order: 9 })] })],
+  ])('%s → rechazado', (_label, b) => {
+    expect(V.validateTemplateCreate(b).ok).toBe(false);
+  });
+});
