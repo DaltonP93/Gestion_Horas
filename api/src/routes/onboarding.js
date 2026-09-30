@@ -37,7 +37,12 @@
  * `affectedRows = 0` → rollback, sin escritura ni auditoría; la auditoría se
  * registra sólo después del commit. Se mantiene el autocompletado del
  * proceso cuando no quedan tareas pendientes (sin reapertura ni estados
- * nuevos).
+ * nuevos). `completed_at`/`completed_by` de la tarea se fijan al pasar a
+ * `done` y se limpian al salir de `done`; un PATCH sin estado los conserva.
+ *
+ * PLANTILLAS: el alta se valida entera (plantilla y cada tarea, sin omitir
+ * tareas inválidas) antes de abrir la transacción. `due_days` es un entero
+ * de 0 a 3650; 0 = vence el mismo día que `start_date`; sólo si falta se usa 3.
  */
 const router  = require('express').Router();
 const { insertId } = require('../utils/insertId');
@@ -132,25 +137,25 @@ router.get('/templates/:id', authorize(...MGR_ROLES), async (req, res) => {
 });
 
 router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
-  const { name, type = 'onboarding', description, tasks = [] } = req.body || {};
-  if (!name) return res.status(400).json({ error: 'name es requerido' });
-  if (!tasks.length) return res.status(400).json({ error: 'Se requiere al menos una tarea' });
-
-  const t = await sequelize.transaction();
+  // Todo se valida ANTES de abrir la transacción: un error → 400 sin escribir.
+  const v = V.validateTemplateCreate(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  const { name, type, description, tasks } = v.value;
+  let t;
   try {
+    t = await sequelize.transaction();
     const [r] = await sequelize.query(
       `INSERT INTO onboarding_templates (name, type, description, created_by) VALUES (?, ?, ?, ?)`,
-      { replacements: [name, type, description || null, req.user.id], transaction: t }
+      { replacements: [name, type, description, req.user.id], transaction: t }
     );
     const templateId = insertId(r);
     for (let i = 0; i < tasks.length; i++) {
-      const { title, description: td, default_assignee_role, due_days = 3 } = tasks[i];
-      if (!title) continue;
+      const task = tasks[i];
       await sequelize.query(
         `INSERT INTO onboarding_template_tasks
            (template_id, title, description, default_assignee_role, due_days, sort_order)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        { replacements: [templateId, title, td || null, default_assignee_role || null, due_days, i], transaction: t }
+        { replacements: [templateId, task.title, task.description, task.default_assignee_role, task.due_days, i], transaction: t }
       );
     }
     await t.commit();
@@ -318,8 +323,8 @@ router.post('/', authorize(...ADMIN_ROLES), async (req, res) => {
     const processId = insertId(r);
     for (let i = 0; i < templateTasks.length; i++) {
       const task = templateTasks[i];
-      // Fecha civil: start_date + due_days, sin pasar por la zona horaria.
-      const dueStr = V.addDaysCivil(startDate, task.due_days || 3);
+      // Fecha civil: start_date + due_days (0 = el mismo día), sin zona horaria.
+      const dueStr = V.taskDueDate(startDate, task.due_days);
       await sequelize.query(
         `INSERT INTO onboarding_tasks
            (process_id, title, description, assignee_id, due_date, sort_order)
@@ -399,9 +404,11 @@ router.patch('/tasks/:taskId', authorize(...MGR_ROLES), async (req, res) => {
     }
 
     const fields = Object.keys(patch);
-    const sets = fields.map((k) => `${k} = ?`); const vals = fields.map((k) => patch[k]);
-    // Si se marca done, registrar quién y cuándo (contrato actual).
-    if (patch.status === 'done') { sets.push('completed_at = NOW()', 'completed_by = ?'); vals.push(req.user.id); }
+    // Metadatos de finalización en el MISMO UPDATE: a done → actor y fecha;
+    // a otro estado → NULL; sin cambio de estado → se conservan.
+    const completion = V.taskCompletionSets(patch, req.user.id);
+    const sets = [...fields.map((k) => `${k} = ?`), ...completion.sets];
+    const vals = [...fields.map((k) => patch[k]), ...completion.vals];
     const [r] = await sequelize.query(
       `UPDATE onboarding_tasks SET ${sets.join(', ')} WHERE id = ? AND process_id = ?`,
       { replacements: [...vals, taskId, proc.id], transaction: t }

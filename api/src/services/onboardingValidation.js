@@ -17,8 +17,16 @@ const PROCESS_STATUSES = new Set(['active', 'completed', 'cancelled']);
 const PROCESS_TYPES = new Set(['onboarding', 'offboarding']);
 const TASK_PATCH_FIELDS = new Set(['status', 'assignee_id', 'notes', 'due_date']);
 const TEMPLATE_UPDATE_FIELDS = new Set(['name', 'description', 'active']);
+const TEMPLATE_CREATE_FIELDS = new Set(['name', 'type', 'description', 'tasks']);
+const TEMPLATE_TASK_FIELDS = new Set(['title', 'description', 'default_assignee_role', 'due_days']);
 const NOTES_MAX = 2000;
-const TEMPLATE_NAME_MAX = 120;
+const TEMPLATE_NAME_MAX = 120;          // onboarding_templates.name VARCHAR(120)
+const TEMPLATE_TASK_TITLE_MAX = 200;    // onboarding_template_tasks.title VARCHAR(200)
+const TEMPLATE_TASK_ROLE_MAX = 60;      // default_assignee_role VARCHAR(60)
+/** Plazo máximo de una tarea de plantilla (días desde start_date, ~10 años). */
+const TEMPLATE_DUE_DAYS_MAX = 3650;
+/** Plazo por defecto: sólo cuando el valor falta (0 es "el mismo día"). */
+const DEFAULT_DUE_DAYS = 3;
 
 const fail = (error) => ({ ok: false, error });
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -37,6 +45,23 @@ function addDaysCivil(date, days) {
   const [y, m, d] = date.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
   return dt.toISOString().slice(0, 10);
+}
+
+/** Vencimiento de una tarea: start_date + due_days; 0 = el mismo día. */
+function taskDueDate(startDate, dueDays) {
+  return addDaysCivil(startDate, Number(dueDays ?? DEFAULT_DUE_DAYS));
+}
+
+/**
+ * Metadatos de finalización para el UPDATE del PATCH de tarea:
+ *   - a `done`: `completed_at = NOW()` y `completed_by = actor`;
+ *   - a cualquier otro estado: ambos a NULL;
+ *   - sin cambio de estado: no se tocan.
+ */
+function taskCompletionSets(patch, actorId) {
+  if (!('status' in patch)) return { sets: [], vals: [] };
+  if (patch.status === 'done') return { sets: ['completed_at = NOW()', 'completed_by = ?'], vals: [actorId] };
+  return { sets: ['completed_at = NULL', 'completed_by = NULL'], vals: [] };
 }
 
 /** `null` o id canónico. */
@@ -118,6 +143,57 @@ function validateProcessListQuery(query) {
   return { ok: true, value: out };
 }
 
+/** Texto opcional: `undefined`/`null`/'' → null; si no es texto → error. */
+function optionalText(v, max) {
+  if (v === undefined || v === null || v === '') return { ok: true, value: null };
+  if (typeof v !== 'string' || (max && v.length > max)) return fail('invalid_text');
+  return { ok: true, value: v };
+}
+
+function validateTemplateTask(task, i) {
+  const at = `tasks[${i}]`;
+  if (!isPlainObject(task)) return fail(`${at} debe ser un objeto`);
+  const extra = Object.keys(task).filter((k) => !TEMPLATE_TASK_FIELDS.has(k));
+  if (extra.length) return fail(`${at}: campos no permitidos: ${extra.join(', ')}`);
+  const title = typeof task.title === 'string' ? task.title.trim() : '';
+  if (!title || title.length > TEMPLATE_TASK_TITLE_MAX) return fail(`${at}.title inválido (texto de 1 a ${TEMPLATE_TASK_TITLE_MAX} caracteres)`);
+  const description = optionalText(task.description);
+  if (!description.ok) return fail(`${at}.description inválida`);
+  const role = optionalText(task.default_assignee_role, TEMPLATE_TASK_ROLE_MAX);
+  if (!role.ok) return fail(`${at}.default_assignee_role inválido (texto de hasta ${TEMPLATE_TASK_ROLE_MAX} caracteres)`);
+  let dueDays = DEFAULT_DUE_DAYS;
+  if (task.due_days !== undefined) {
+    const d = task.due_days;
+    if (!Number.isInteger(d) || d < 0 || d > TEMPLATE_DUE_DAYS_MAX) return fail(`${at}.due_days inválido (entero de 0 a ${TEMPLATE_DUE_DAYS_MAX})`);
+    dueDays = d;
+  }
+  return { ok: true, value: { title, description: description.value, default_assignee_role: role.value, due_days: dueDays } };
+}
+
+/**
+ * Alta de plantilla: valida TODO (plantilla y cada tarea) antes de escribir.
+ * Ninguna tarea inválida se omite en silencio: un error rechaza el alta.
+ */
+function validateTemplateCreate(body) {
+  if (!isPlainObject(body)) return fail('El cuerpo debe ser un objeto');
+  const extra = Object.keys(body).filter((k) => !TEMPLATE_CREATE_FIELDS.has(k));
+  if (extra.length) return fail(`Campos no permitidos: ${extra.join(', ')}`);
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name || name.length > TEMPLATE_NAME_MAX) return fail(`name inválido (texto de 1 a ${TEMPLATE_NAME_MAX} caracteres)`);
+  const type = body.type === undefined ? 'onboarding' : body.type;
+  if (typeof type !== 'string' || !PROCESS_TYPES.has(type)) return fail('type inválido (onboarding u offboarding)');
+  const description = optionalText(body.description);
+  if (!description.ok) return fail('description inválida');
+  if (!Array.isArray(body.tasks) || !body.tasks.length) return fail('Se requiere al menos una tarea (tasks debe ser un arreglo)');
+  const tasks = [];
+  for (let i = 0; i < body.tasks.length; i += 1) {
+    const r = validateTemplateTask(body.tasks[i], i);
+    if (!r.ok) return r;
+    tasks.push(r.value);
+  }
+  return { ok: true, value: { name, type, description: description.value, tasks } };
+}
+
 function validateTemplateUpdate(body) {
   if (!isPlainObject(body)) return fail('El cuerpo debe ser un objeto');
   const keys = Object.keys(body).filter((k) => body[k] !== undefined);
@@ -143,6 +219,8 @@ function validateTemplateUpdate(body) {
 
 module.exports = {
   TASK_STATUSES, PROCESS_STATUSES, PROCESS_TYPES, NOTES_MAX,
-  parseCivilDate, addDaysCivil,
-  validateTaskPatch, validateProcessCreate, validateProcessListQuery, validateTemplateUpdate,
+  TEMPLATE_DUE_DAYS_MAX, DEFAULT_DUE_DAYS,
+  parseCivilDate, addDaysCivil, taskDueDate, taskCompletionSets,
+  validateTaskPatch, validateProcessCreate, validateProcessListQuery,
+  validateTemplateCreate, validateTemplateUpdate,
 };
