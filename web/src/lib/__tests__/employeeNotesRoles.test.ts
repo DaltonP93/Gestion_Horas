@@ -25,3 +25,21 @@ describe('canManageNotes', () => {
       .toEqual(['admin', 'gth', 'hr', 'manager', 'super_admin'])
   })
 })
+
+describe('visibilidad de notas por rol (espeja api/src/routes/employeeNotes.js)', () => {
+  const { allowedNoteVisibilities, defaultNoteVisibility } = require('../employeeNotesRoles')
+
+  test('roles globales: las tres visibilidades y `hr_only` por defecto', () => {
+    for (const r of ['super_admin', 'admin', 'gth', 'hr']) {
+      expect(allowedNoteVisibilities(r)).toEqual(['hr_only', 'managers', 'employee'])
+      expect(defaultNoteVisibility(r)).toBe('hr_only')
+    }
+  })
+
+  test('roles por sede: sin `hr_only` y `managers` por defecto', () => {
+    for (const r of ['manager', 'coordinator', 'supervisor', 'gestor', 'employee', null, undefined, '']) {
+      expect(allowedNoteVisibilities(r)).toEqual(['managers', 'employee'])
+      expect(defaultNoteVisibility(r)).toBe('managers')
+    }
+  })
+})

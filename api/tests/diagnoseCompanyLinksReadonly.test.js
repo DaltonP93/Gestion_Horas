@@ -37,6 +37,12 @@ describe('diagnose-company-links.js', () => {
     expect(CODE).not.toMatch(/first_name|last_name|full_name|email|document_number|ips_number|salary|phone|address/i);
   });
 
+  test('no selecciona ni imprime ids de empleados (sólo conteos agregados)', () => {
+    expect(CODE).not.toMatch(/SELECT\s+e\.id\b/i);
+    expect(CODE).not.toMatch(/\bsample\b/);
+    expect(CODE).not.toMatch(/ids de muestra/);
+  });
+
   test('no toca att2000', () => {
     expect(CODE).not.toMatch(/att2000|CHECKINOUT/i);
   });

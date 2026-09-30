@@ -7,7 +7,7 @@
  */
 process.env.JWT_SECRET = 'test-secret-notes-scope-0123456789';
 
-jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() } }));
+jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn(), transaction: jest.fn() } }));
 jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 
 const express = require('express');
@@ -25,16 +25,29 @@ const USERS = {
 const EMPS = { 100: { department_id: 10 }, 101: { department_id: 10 }, 200: { department_id: 20 } };
 let NOTES;
 let writes;
+let events;
+let locks;
+let affected;
 
 function installDb() {
+  sequelize.transaction.mockImplementation(async () => ({
+    commit: jest.fn(async () => { events.push('commit'); }),
+    rollback: jest.fn(async () => { events.push('rollback'); }),
+  }));
+  audit.log.mockImplementation((a) => { events.push(`audit:${a.action}`); });
   sequelize.query.mockImplementation(async (sql, opts = {}) => {
     const rp = opts.replacements || [];
-    if (/^\s*(INSERT|UPDATE|DELETE)/.test(sql)) { writes.push(sql.trim().split(/\s+/)[0]); return /INSERT/.test(sql) ? [77, 1] : [{ affectedRows: 1 }]; }
+    if (/FOR UPDATE/.test(sql)) locks.push({ table: /employee_notes/.test(sql) ? 'note' : 'employee', tx: !!opts.transaction });
+    if (/^\s*(INSERT|UPDATE|DELETE)/.test(sql)) {
+      writes.push(`${sql.trim().split(/\s+/)[0]}${opts.transaction ? '@tx' : ''}`);
+      if (/INSERT/.test(sql)) return [77, 1];
+      return [{ affectedRows: affected }];
+    }
     if (/FROM users WHERE id = \? LIMIT 1/.test(sql)) { const u = USERS[rp[0]]; return [u ? [u] : []]; }
     if (/FROM user_permissions/.test(sql)) return [[{ module: 'empleados', can_view: 1, can_create: 1, can_update: 1, can_delete: 0 }]];
     if (/FROM users u\s+JOIN branches b/.test(sql)) { const u = USERS[rp[0]]; return [u && u.branch_id ? [{ branch_id: u.branch_id }] : []]; }
     if (/SELECT id FROM departments WHERE active = 1 AND branch_id = \?/.test(sql)) return [[{ id: rp[0] === 1 ? 10 : 20 }]];
-    if (/SELECT department_id FROM employees WHERE id = \?/.test(sql)) { const e = EMPS[rp[0]]; return [e ? [e] : []]; }
+    if (/FROM employees WHERE id = \?/.test(sql)) { const e = EMPS[rp[0]]; return [e ? [{ id: rp[0], ...e }] : []]; }
     if (/FROM employee_notes WHERE id = \?/.test(sql)) { const n = NOTES.find((x) => x.id === rp[0]); return [n ? [n] : []]; }
     if (/FROM employee_notes n/.test(sql)) {
       const [emp, ...vis] = rp;
@@ -66,6 +79,9 @@ afterAll(() => new Promise((r) => server.close(r)));
 beforeEach(() => {
   jest.clearAllMocks();
   writes = [];
+  events = [];
+  locks = [];
+  affected = 1;
   NOTES = [
     { id: 1, employee_id: 100, author_id: 1, visibility: 'hr_only', title: 'A-HR' },
     { id: 2, employee_id: 100, author_id: 1, visibility: 'managers', title: 'A-MGR' },
@@ -112,8 +128,11 @@ describe('manager de la sede 1', () => {
   test('dentro de alcance: crea y edita su nota; auditoría sin contenido', async () => {
     expect((await call('POST', '/api/employee-notes', 2, { employee_id: 101, title: 'secreto', body: 'texto libre', visibility: 'managers' })).status).toBe(201);
     expect((await call('PUT', '/api/employee-notes/6', 2, { pinned: 1 })).status).toBe(200);
-    expect(writes).toEqual(['INSERT', 'UPDATE']);
+    expect(writes).toEqual(['INSERT@tx', 'UPDATE@tx']);
     expect(audit.log.mock.calls.map(([a]) => a.action)).toEqual(['employee_note_create', 'employee_note_update']);
+    expect(events).toEqual(['commit', 'audit:employee_note_create', 'commit', 'audit:employee_note_update']);
+    // Nota y empleado leídos con FOR UPDATE dentro de la transacción.
+    expect(locks).toEqual([{ table: 'employee', tx: true }, { table: 'note', tx: true }, { table: 'employee', tx: true }]);
     expect(JSON.stringify(audit.log.mock.calls.map(([a]) => a.details))).not.toMatch(/secreto|texto libre/);
   });
   test('borrar → 403 (sólo RR.HH. global)', async () => {
@@ -132,6 +151,45 @@ describe('roles globales (control positivo)', () => {
     expect((await call('DELETE', '/api/employee-notes/1e2', 5)).status).toBe(400);
     expect(writes).toEqual([]);
     expect((await call('DELETE', '/api/employee-notes/5', 5)).status).toBe(200);
-    expect(writes).toEqual(['DELETE']);
+    expect(writes).toEqual(['DELETE@tx']);
+  });
+  test('empleado inexistente: historial y alta → 404 sin INSERT', async () => {
+    expect((await call('GET', '/api/employee-notes/by-employee/999', 1)).status).toBe(404);
+    expect((await call('POST', '/api/employee-notes', 5, { employee_id: 999, title: 'x' })).status).toBe(404);
+    expect(writes).toEqual([]);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+  test('rol global sin visibility → `hr_only`', async () => {
+    expect((await call('POST', '/api/employee-notes', 5, { employee_id: 200, title: 'x' })).status).toBe(201);
+    const ins = sequelize.query.mock.calls.find(([sql]) => /^\s*INSERT INTO employee_notes/.test(sql));
+    expect(ins[1].replacements[3]).toBe('hr_only');
+  });
+});
+
+describe('visibilidad por rol y consistencia', () => {
+  test('manager sin visibility → `managers`', async () => {
+    expect((await call('POST', '/api/employee-notes', 2, { employee_id: 101, title: 'x' })).status).toBe(201);
+    const ins = sequelize.query.mock.calls.find(([sql]) => /^\s*INSERT INTO employee_notes/.test(sql));
+    expect(ins[1].replacements[3]).toBe('managers');
+  });
+  test('manager con `hr_only` al crear o al editar → 403 VISIBILITY_NOT_ALLOWED sin escritura', async () => {
+    const c = await call('POST', '/api/employee-notes', 2, { employee_id: 101, title: 'x', visibility: 'hr_only' });
+    expect([c.status, (await c.json()).code]).toEqual([403, 'VISIBILITY_NOT_ALLOWED']);
+    const u = await call('PUT', '/api/employee-notes/6', 2, { visibility: 'hr_only' });
+    expect([u.status, (await u.json()).code]).toEqual([403, 'VISIBILITY_NOT_ALLOWED']);
+    expect((await call('PUT', '/api/employee-notes/6', 2, { visibility: 'employee' })).status).toBe(200);
+    expect(writes).toEqual(['UPDATE@tx']);
+  });
+  test('affectedRows = 0 en PUT y DELETE → 404, rollback, sin auditoría', async () => {
+    affected = 0;
+    expect((await call('PUT', '/api/employee-notes/6', 2, { pinned: 1 })).status).toBe(404);
+    expect((await call('DELETE', '/api/employee-notes/5', 5)).status).toBe(404);
+    expect(events).toEqual(['rollback', 'rollback']);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+  test('rechazos dentro de la transacción → rollback sin commit', async () => {
+    expect((await call('PUT', '/api/employee-notes/5', 2, { pinned: 1 })).status).toBe(404);
+    expect((await call('PUT', '/api/employee-notes/2', 2, { pinned: 1 })).status).toBe(403);
+    expect(events).toEqual(['rollback', 'rollback']);
   });
 });

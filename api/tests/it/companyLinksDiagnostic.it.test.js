@@ -127,11 +127,18 @@ describeIT('diagnose-company-links (integración, solo lectura)', () => {
 
   test('3. empleados en sede sin empresa y con sede inexistente', () => {
     const e = result.findings.employees_in_branch_without_company;
-    expect(e.sample.map((r) => r.id)).toContain(ids.eN);
-    expect(e.sample.map((r) => r.id)).not.toContain(ids.eA);
     expect(e.by_branch_status).toEqual(expect.arrayContaining([{ branch_id: ids.brN, status: 'active', n: 1 }]));
+    expect(e.by_branch_status.map((r) => r.branch_id)).not.toContain(ids.brA);
     const g = result.findings.employees_with_missing_branch;
-    expect(g.sample).toEqual(expect.arrayContaining([{ id: ids.eG, branch_id: ids.ghost, status: 'active' }]));
+    expect(g.by_branch_status).toEqual(expect.arrayContaining([{ branch_id: ids.ghost, status: 'active', n: 1 }]));
+  });
+
+  test('sin ids de empleados: las secciones de empleados sólo traen conteos agregados', () => {
+    for (const key of ['employees_in_branch_without_company', 'employees_with_missing_branch']) {
+      const block = result.findings[key];
+      expect(Object.keys(block).sort()).toEqual(['by_branch_status', 'total']);
+      for (const row of block.by_branch_status) expect(Object.keys(row).sort()).toEqual(['branch_id', 'n', 'status']);
+    }
   });
 
   test('sin datos personales en la salida', () => {

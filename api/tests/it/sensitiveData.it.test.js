@@ -96,6 +96,47 @@ describeIT('datos sensibles por empleado (integración)', () => {
     return text;
   }
 
+  /**
+   * Carrera DETERMINISTA contra MySQL real: `lock(c2)` abre una transacción en
+   * otra conexión que bloquea y modifica una fila (sin confirmar). Se dispara
+   * el request, se espera a que la API quede esperando ese bloqueo (o que
+   * termine si no bloquea), y recién entonces se confirma c2. Mide las
+   * escrituras de la API (Com_* del servidor, tomado DESPUÉS de las de c2) y
+   * la auditoría del actor.
+   */
+  async function raceCase({ lock, request, uid }) {
+    const c2 = await makeConn();
+    try {
+      await c2.query('START TRANSACTION');
+      await lock(c2);
+      const beforeAudit = await auditCount(uid);
+      const w0 = await writeCounter();
+      let settled = false;
+      const p = request().then(async (r) => { settled = true; return { status: r.status, text: await r.text() }; });
+      let blocked = false;
+      for (let i = 0; i < 150 && !settled; i += 1) {
+        const [rows] = await conn.query(
+          `SELECT ID FROM information_schema.PROCESSLIST
+            WHERE ID NOT IN (?) AND INFO IS NOT NULL
+              AND (INFO LIKE '%FOR UPDATE%' OR INFO LIKE 'UPDATE %' OR INFO LIKE 'INSERT %' OR INFO LIKE 'DELETE %')`,
+          [[conn.threadId, c2.threadId]],
+        );
+        if (rows.length) { blocked = true; await sleep(100); break; }
+        await sleep(20);
+      }
+      await c2.query('COMMIT');
+      const res = await p;
+      await sleep(150);
+      const out = { ...res, blocked, writes: (await writeCounter()) - w0, audits: (await auditCount(uid)) - beforeAudit };
+      evidence.push({ request: `RACE ${request.label || ''}`, expected: 404, got: out.status, leaked: [...new Set(out.text.match(LEAK_RE) || [])], writes: out.writes, rowsChanged: null, audits: out.audits, blocked });
+      return out;
+    } finally {
+      try { await c2.query('ROLLBACK'); } catch { /* ya confirmada */ }
+      await c2.end();
+    }
+  }
+  const labeled = (label, fn) => Object.assign(fn, { label });
+
   async function insertUser(tag, role, { branchId = null, employeeId = null } = {}) {
     const [r] = await conn.query(
       'INSERT INTO users (username, email, password_hash, full_name, role, employee_id, branch_id, active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
@@ -412,6 +453,143 @@ describeIT('datos sensibles por empleado (integración)', () => {
       const c = await http('GET', '/api/legal-data/completeness', ids.admin, 'admin');
       expect(c.status).toBe(200);
       expect((await c.json()).incomplete.map((e) => e.id)).toEqual(expect.arrayContaining([ids.empA1, ids.empB]));
+    });
+  });
+
+  // ───────────── Existencia, visibilidad y consistencia transaccional ─────────────
+  describe('existencia de empleados para roles globales', () => {
+    test('GET historial de contratos y de notas de un empleado inexistente → 404', async () => {
+      await expectRejected({ method: 'GET', url: '/api/contracts/employee/999999999', uid: ids.admin, role: 'admin', status: 404 });
+      await expectRejected({ method: 'GET', url: '/api/employee-notes/by-employee/999999999', uid: ids.admin, role: 'admin', status: 404 });
+    });
+    test('POST contrato y nota para un empleado inexistente → 404 (nunca 201 ni 500 por FK)', async () => {
+      await expectRejected({
+        method: 'POST', url: '/api/contracts', uid: ids.hr, role: 'hr', status: 404,
+        body: { employee_id: 999999999, type: 'Indefinido', start_date: '2026-02-01' },
+      });
+      await expectRejected({
+        method: 'POST', url: '/api/employee-notes', uid: ids.hr, role: 'hr', status: 404,
+        body: { employee_id: 999999999, title: 'NOTA-INEXISTENTE' },
+      });
+    });
+  });
+
+  describe('visibilidad de notas creadas por roles por sede', () => {
+    test('manager sin visibility → la nota queda `managers` y puede leerla y editarla', async () => {
+      const c = await http('POST', '/api/employee-notes', ids.mgrA, 'manager', { employee_id: ids.empA2, title: 'NOTA-MGR-DEFAULT' });
+      expect(c.status).toBe(201);
+      const { id } = await c.json();
+      const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [id]);
+      expect(row.visibility).toBe('managers');
+      const list = await (await http('GET', `/api/employee-notes/by-employee/${ids.empA2}`, ids.mgrA, 'manager')).json();
+      expect(list.data.map((n) => n.id)).toContain(id);
+      expect((await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { pinned: 1 })).status).toBe(200);
+      ids.nMgrDefault = id;
+    });
+    test('rol global sin visibility → `hr_only` (sin cambio)', async () => {
+      const c = await http('POST', '/api/employee-notes', ids.hr, 'hr', { employee_id: ids.empA2, title: 'NOTA-HR-DEFAULT' });
+      expect(c.status).toBe(201);
+      const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [(await c.json()).id]);
+      expect(row.visibility).toBe('hr_only');
+    });
+    test('manager crea con `hr_only` → 403 sin INSERT ni auditoría', async () => {
+      const text = await expectRejected({
+        method: 'POST', url: '/api/employee-notes', uid: ids.mgrA, role: 'manager', status: 403,
+        body: { employee_id: ids.empA2, visibility: 'hr_only', title: 'NOTA-MGR-HRONLY' },
+      });
+      expect(JSON.parse(text).code).toBe('VISIBILITY_NOT_ALLOWED');
+    });
+    test('manager cambia managers ↔ employee (200) pero no a `hr_only` (403 sin escritura)', async () => {
+      const id = ids.nMgrDefault;
+      expect((await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { visibility: 'employee' })).status).toBe(200);
+      expect((await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { visibility: 'managers' })).status).toBe(200);
+      const text = await expectRejected({ method: 'PUT', url: `/api/employee-notes/${id}`, uid: ids.mgrA, role: 'manager', status: 403, body: { visibility: 'hr_only' } });
+      expect(JSON.parse(text).code).toBe('VISIBILITY_NOT_ALLOWED');
+      const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [id]);
+      expect(row.visibility).toBe('managers');
+    });
+  });
+
+  describe('consistencia transaccional (carreras deterministas en MySQL real)', () => {
+    const moveTo = (empId, deptId, branchId) => async (c2) => {
+      await c2.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [empId]);
+      await c2.query('UPDATE employees SET department_id = ?, branch_id = ? WHERE id = ?', [deptId, branchId, empId]);
+    };
+    const restore = (empId) => conn.query('UPDATE employees SET department_id = ?, branch_id = ? WHERE id = ?', [ids.deptA, ids.branchA, empId]);
+
+    test('PUT contrato mientras el empleado se muda a otra sede → 404, sin escritura ni auditoría', async () => {
+      try {
+        const [[before]] = await conn.query('SELECT type, salary FROM employee_contracts WHERE id = ?', [ids.cA]);
+        const r = await raceCase({
+          uid: ids.mgrA,
+          lock: moveTo(ids.empA1, ids.deptB, ids.branchB),
+          request: labeled('PUT contrato (mudanza concurrente)', () => http('PUT', `/api/contracts/${ids.cA}`, ids.mgrA, 'manager', { type: 'Carrera', start_date: '2026-01-01', salary: 7 })),
+        });
+        expect({ status: r.status, writes: r.writes, audits: r.audits }).toEqual({ status: 404, writes: 0, audits: 0 });
+        expect(r.text).not.toMatch(LEAK_RE);
+        const [[after]] = await conn.query('SELECT type, salary FROM employee_contracts WHERE id = ?', [ids.cA]);
+        expect(after).toEqual(before);
+      } finally { await restore(ids.empA1); }
+    });
+
+    test('POST contrato mientras el empleado se muda a otra sede → 404, sin INSERT', async () => {
+      try {
+        const r = await raceCase({
+          uid: ids.mgrA,
+          lock: moveTo(ids.empA2, ids.deptB, ids.branchB),
+          request: labeled('POST contrato (mudanza concurrente)', () => http('POST', '/api/contracts', ids.mgrA, 'manager', { employee_id: ids.empA2, type: 'Indefinido', start_date: '2026-04-01', salary: 5555555 })),
+        });
+        expect({ status: r.status, writes: r.writes, audits: r.audits }).toEqual({ status: 404, writes: 0, audits: 0 });
+        expect(await count('SELECT COUNT(*) AS n FROM employee_contracts WHERE salary = 5555555')).toBe(0);
+      } finally { await restore(ids.empA2); }
+    });
+
+    test('POST nota mientras el empleado se muda a otra sede → 404, sin INSERT', async () => {
+      try {
+        const r = await raceCase({
+          uid: ids.mgrA,
+          lock: moveTo(ids.empA2, ids.deptB, ids.branchB),
+          request: labeled('POST nota (mudanza concurrente)', () => http('POST', '/api/employee-notes', ids.mgrA, 'manager', { employee_id: ids.empA2, visibility: 'managers', title: 'NOTA-RACE-POST' })),
+        });
+        expect({ status: r.status, writes: r.writes, audits: r.audits }).toEqual({ status: 404, writes: 0, audits: 0 });
+        expect(await count("SELECT COUNT(*) AS n FROM employee_notes WHERE title = 'NOTA-RACE-POST'")).toBe(0);
+      } finally { await restore(ids.empA2); }
+    });
+
+    test('PUT nota borrada concurrentemente (affectedRows = 0) → 404, sin auditoría', async () => {
+      const noteId = await insertNote(ids.empA1, ids.mgrA, 'managers', 'NOTA-RACE-PUT');
+      const r = await raceCase({
+        uid: ids.mgrA,
+        lock: async (c2) => { await c2.query('SELECT id FROM employee_notes WHERE id = ? FOR UPDATE', [noteId]); await c2.query('DELETE FROM employee_notes WHERE id = ?', [noteId]); },
+        request: labeled('PUT nota (borrado concurrente)', () => http('PUT', `/api/employee-notes/${noteId}`, ids.mgrA, 'manager', { pinned: 1 })),
+      });
+      expect({ status: r.status, audits: r.audits }).toEqual({ status: 404, audits: 0 });
+      expect(await count("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'employee_note_update' AND entity_id = ?", [String(noteId)])).toBe(0);
+    });
+
+    test('DELETE nota borrada concurrentemente (affectedRows = 0) → 404, sin auditoría', async () => {
+      const noteId = await insertNote(ids.empB, ids.admin, 'hr_only', 'NOTA-RACE-DEL');
+      const r = await raceCase({
+        uid: ids.hr,
+        lock: async (c2) => { await c2.query('SELECT id FROM employee_notes WHERE id = ? FOR UPDATE', [noteId]); await c2.query('DELETE FROM employee_notes WHERE id = ?', [noteId]); },
+        request: labeled('DELETE nota (borrado concurrente)', () => http('DELETE', `/api/employee-notes/${noteId}`, ids.hr, 'hr')),
+      });
+      expect({ status: r.status, audits: r.audits }).toEqual({ status: 404, audits: 0 });
+    });
+
+    test('PUT y DELETE de contrato borrado concurrentemente → 404, sin auditoría', async () => {
+      for (const method of ['PUT', 'DELETE']) {
+        const [ins] = await conn.query(
+          "INSERT INTO employee_contracts (employee_id, type, start_date, status) VALUES (?, 'Temporal', '2026-01-01', 'active')", [ids.empA1],
+        );
+        const cid = ins.insertId;
+        const r = await raceCase({
+          uid: ids.mgrA,
+          lock: async (c2) => { await c2.query('SELECT id FROM employee_contracts WHERE id = ? FOR UPDATE', [cid]); await c2.query('DELETE FROM employee_contracts WHERE id = ?', [cid]); },
+          request: labeled(`${method} contrato (borrado concurrente)`, () => http(method, `/api/contracts/${cid}`, ids.mgrA, 'manager', method === 'PUT' ? { type: 'Temporal', start_date: '2026-01-01' } : undefined)),
+        });
+        expect({ method, status: r.status, audits: r.audits }).toEqual({ method, status: 404, audits: 0 });
+      }
     });
   });
 });

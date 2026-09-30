@@ -4,11 +4,12 @@
  * Router REAL, authenticate REAL (identidad vigente desde `users`),
  * capacidades REALES (user_permissions) y resolutor de alcance REAL
  * (departmentScope); base SIMULADA. La prueba con MySQL real (dos empresas,
- * contadores de escritura y auditoría) está en tests/it/sensitiveData.it.test.js.
+ * contadores de escritura, carreras con bloqueos reales) está en
+ * tests/it/sensitiveData.it.test.js.
  */
 process.env.JWT_SECRET = 'test-secret-contracts-scope-0123456789';
 
-jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn() } }));
+jest.mock('../src/config/database', () => ({ sequelize: { query: jest.fn(), transaction: jest.fn() } }));
 jest.mock('../src/services/audit', () => ({ log: jest.fn() }));
 
 const express = require('express');
@@ -25,16 +26,33 @@ const USERS = {
 const EMPS = { 100: { department_id: 10 }, 200: { department_id: 20 } };
 let contracts;
 let writes;
+let events;       // orden de commit / rollback / auditoría
+let locks;        // lecturas FOR UPDATE hechas dentro de una transacción
+let affected;     // affectedRows que devuelve la próxima mutación
+let tx;
 
 function installDb() {
+  sequelize.transaction.mockImplementation(async () => {
+    tx = {
+      commit: jest.fn(async () => { events.push('commit'); }),
+      rollback: jest.fn(async () => { events.push('rollback'); }),
+    };
+    return tx;
+  });
+  audit.log.mockImplementation((a) => { events.push(`audit:${a.action}`); });
   sequelize.query.mockImplementation(async (sql, opts = {}) => {
     const rp = opts.replacements || [];
+    if (/FOR UPDATE/.test(sql)) locks.push({ sql: sql.replace(/\s+/g, ' ').trim(), tx: !!opts.transaction });
+    if (/^\s*(INSERT|UPDATE|DELETE)/.test(sql)) {
+      writes.push(`${sql.trim().split(/\s+/)[0]}${opts.transaction ? '@tx' : ''}`);
+      return /INSERT/.test(sql) ? [55, 1] : [{ affectedRows: affected }];
+    }
     if (/FROM users WHERE id = \? LIMIT 1/.test(sql)) { const u = USERS[rp[0]]; return [u ? [u] : []]; }
     if (/FROM user_permissions/.test(sql)) return [[{ module: 'ingresos', can_view: 1, can_create: 1, can_update: 1, can_delete: 1 }]];
     if (/FROM users u\s+JOIN branches b/.test(sql)) { const u = USERS[rp[0]]; return [u && u.branch_id ? [{ branch_id: u.branch_id }] : []]; }
     if (/SELECT id FROM departments WHERE active = 1 AND branch_id = \?/.test(sql)) return [[{ id: rp[0] === 1 ? 10 : 20 }]];
     if (/FROM notification_settings/.test(sql)) return [[]];
-    if (/SELECT department_id FROM employees WHERE id = \?/.test(sql)) { const e = EMPS[rp[0]]; return [e ? [e] : []]; }
+    if (/FROM employees WHERE id = \?/.test(sql)) { const e = EMPS[rp[0]]; return [e ? [{ id: rp[0], ...e }] : []]; }
     if (/SELECT id, employee_id FROM employee_contracts WHERE id = \?/.test(sql)) {
       const c = contracts.find((x) => x.id === rp[0]); return [c ? [c] : []];
     }
@@ -45,7 +63,6 @@ function installDb() {
       return [contracts.filter((c) => !depts || depts.includes(EMPS[c.employee_id].department_id))];
     }
     if (/FROM employee_contracts c\s+LEFT JOIN users/.test(sql)) return [contracts.filter((c) => c.employee_id === rp[0])];
-    if (/^\s*(INSERT|UPDATE|DELETE)/.test(sql)) { writes.push(sql.trim().split(/\s+/)[0]); return /INSERT/.test(sql) ? [55, 1] : [{ affectedRows: 1 }]; }
     return [[]];
   });
 }
@@ -71,6 +88,9 @@ afterAll(() => new Promise((r) => server.close(r)));
 beforeEach(() => {
   jest.clearAllMocks();
   writes = [];
+  events = [];
+  locks = [];
+  affected = 1;
   contracts = [{ id: 1, employee_id: 100, salary: '1000.00' }, { id: 2, employee_id: 200, salary: '9999.00' }];
   installDb();
 });
@@ -109,10 +129,39 @@ describe('manager de la sede 1 (rol por sede)', () => {
     expect((await call('POST', '/api/contracts', 2, { ...BODY, employee_id: 100 })).status).toBe(201);
     expect((await call('PUT', '/api/contracts/1', 2, BODY)).status).toBe(200);
     expect((await call('DELETE', '/api/contracts/1', 2)).status).toBe(200);
-    expect(writes).toEqual(['INSERT', 'UPDATE', 'DELETE']);
+    expect(writes).toEqual(['INSERT@tx', 'UPDATE@tx', 'DELETE@tx']);
     const upd = sequelize.query.mock.calls.find(([sql]) => /^\s*UPDATE employee_contracts/.test(sql));
     expect(upd[1].replacements.slice(-2)).toEqual([1, 100]);
     expect(audit.log.mock.calls.map(([a]) => a.action)).toEqual(['contract_create', 'contract_update', 'contract_delete']);
+    // Cada mutación: commit y DESPUÉS auditoría.
+    expect(events).toEqual(['commit', 'audit:contract_create', 'commit', 'audit:contract_update', 'commit', 'audit:contract_delete']);
+  });
+
+  test('autorización dentro de la transacción: contrato y empleado leídos con FOR UPDATE en la misma transacción', async () => {
+    expect((await call('PUT', '/api/contracts/1', 2, BODY)).status).toBe(200);
+    expect(locks.map((l) => [/employee_contracts/.test(l.sql) ? 'contract' : 'employee', l.tx])).toEqual([['contract', true], ['employee', true]]);
+    // El alcance del actor también se lee dentro de la transacción (FOR SHARE).
+    const scopeCalls = sequelize.query.mock.calls.filter(([sql]) => /FROM users u\s+JOIN branches b|FROM departments WHERE active = 1/.test(sql));
+    expect(scopeCalls.every(([sql, o]) => /FOR SHARE/.test(sql) && o.transaction === tx)).toBe(true);
+    locks = [];
+    expect((await call('POST', '/api/contracts', 2, { ...BODY, employee_id: 100 })).status).toBe(201);
+    expect(locks).toEqual([expect.objectContaining({ tx: true })]);
+  });
+
+  test('rechazos dentro de la transacción → rollback, sin commit ni auditoría', async () => {
+    expect((await call('PUT', '/api/contracts/2', 2, BODY)).status).toBe(404);
+    expect((await call('POST', '/api/contracts', 2, { ...BODY, employee_id: 200 })).status).toBe(404);
+    expect((await call('PUT', '/api/contracts/1', 2, { ...BODY, employee_id: 200 })).status).toBe(400);
+    expect(events).toEqual(['rollback', 'rollback', 'rollback']);
+    expect(writes).toEqual([]);
+  });
+
+  test('affectedRows = 0 en PUT y DELETE → 404, rollback, sin auditoría', async () => {
+    affected = 0;
+    expect((await call('PUT', '/api/contracts/1', 2, BODY)).status).toBe(404);
+    expect((await call('DELETE', '/api/contracts/1', 2)).status).toBe(404);
+    expect(events).toEqual(['rollback', 'rollback']);
+    expect(audit.log).not.toHaveBeenCalled();
   });
 });
 
@@ -124,6 +173,15 @@ describe('manager sin sede → sin alcance', () => {
     expect((await call('POST', '/api/contracts', 3, { ...BODY, employee_id: 100 })).status).toBe(404);
     expect((await call('DELETE', '/api/contracts/1', 3)).status).toBe(404);
     expect(writes).toEqual([]);
+  });
+});
+
+describe('rol global: el empleado debe existir', () => {
+  test('historial y alta de un empleado inexistente → 404 sin INSERT', async () => {
+    expect((await call('GET', '/api/contracts/employee/999', 1)).status).toBe(404);
+    expect((await call('POST', '/api/contracts', 1, { ...BODY, employee_id: 999 })).status).toBe(404);
+    expect(writes).toEqual([]);
+    expect(audit.log).not.toHaveBeenCalled();
   });
 });
 
