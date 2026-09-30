@@ -7,66 +7,69 @@
  * DELETE /api/employee-notes/:id                (admin/gth/hr)
  *
  * ALCANCE POR EMPLEADO (services/departmentScope):
- *   - roles globales de RR.HH. (super_admin/admin/gth/hr): sin cambio, todas
- *     las visibilidades de cualquier empleado;
+ *   - roles globales de RR.HH. (super_admin/admin/gth/hr): todas las
+ *     visibilidades de cualquier empleado EXISTENTE;
  *   - roles por sede (manager/coordinator/supervisor/gestor): sólo empleados
  *     de los departamentos activos de su sede y visibilidades
  *     `managers`/`employee`;
  *   - employee: sólo SUS notas (users.employee_id vigente) con visibilidad
  *     `employee`;
  *   - cualquier otro rol: nada.
- * Editar y borrar validan el empleado y la visibilidad de la nota GUARDADA.
  * Fuera de alcance, no visible e inexistente responden el MISMO 404, sin
  * contenido, sin escritura y sin auditoría.
+ *
+ * VISIBILIDAD AL ESCRIBIR: un rol global que omite `visibility` crea
+ * `hr_only`; un rol por sede crea `managers` por defecto y sólo puede crear o
+ * cambiar a `managers`/`employee` (lo que puede leer). `hr_only` desde un rol
+ * por sede → 403 VISIBILITY_NOT_ALLOWED sin escritura. Una escalación
+ * confidencial hacia RR.HH. sería un flujo aparte.
+ *
+ * CONSISTENCIA: alta, edición y borrado leen la nota y el empleado con
+ * FOR UPDATE y el alcance con FOR SHARE dentro de la MISMA transacción que la
+ * mutación. Rechazo o `affectedRows = 0` → rollback y 404; la auditoría (sin
+ * título ni cuerpo) se registra sólo después del commit.
  */
 const router = require('express').Router();
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
 const { insertId } = require('../utils/insertId');
-const { getVisibleDepartmentIds, canSeeEmployee, isGlobal, isScoped } = require('../services/departmentScope');
+const { isScoped, isUnrestricted } = require('../services/departmentScope');
+const { findEmployeeInScope, rollbackQuietly } = require('../services/employeeScopeLock');
 const { parsePositiveId } = require('../utils/strictId');
 
 router.use(authenticate);
 
 const VALID_TYPES      = new Set(['observation','warning','recognition','medical','training','other']);
 const VALID_VISIBILITY = new Set(['hr_only','managers','employee']);
+const SCOPED_VISIBILITY = ['managers', 'employee'];
 const NOTE_NOT_FOUND = { error: 'Nota no encontrada' };
 const EMP_NOT_FOUND = { error: 'Empleado no encontrado' };
+const VISIBILITY_FORBIDDEN = { error: 'Visibilidad no permitida para su rol', code: 'VISIBILITY_NOT_ALLOWED' };
 
 /** Visibilidades legibles: null = todas (global); [] = ninguna. */
-function readableVisibilities(user, scope) {
-  if (isGlobal(scope)) return null;
+function readableVisibilities(user) {
+  if (isUnrestricted(user?.role)) return null;
   if (user?.role === 'employee') return ['employee'];
-  if (isScoped(user?.role)) return ['managers', 'employee'];
+  if (isScoped(user?.role)) return SCOPED_VISIBILITY;
   return [];
 }
 
-/** ¿Puede el actor operar sobre notas de este empleado? */
-async function employeeInScope(user, scope, employeeId) {
-  if (isGlobal(scope)) return true;
-  if (user?.role === 'employee') return user.employee_id != null && Number(user.employee_id) === employeeId;
-  if (!isScoped(user?.role)) return false;
-  const [[emp]] = await sequelize.query(
-    'SELECT department_id FROM employees WHERE id = ? LIMIT 1', { replacements: [employeeId] }
-  );
-  return !!emp && canSeeEmployee(scope, emp);
-}
-
 /**
- * Nota GUARDADA si el actor puede verla (empleado en alcance y visibilidad
- * legible); si no, null (→ 404).
+ * Nota GUARDADA bloqueada (FOR UPDATE) si el actor puede verla (visibilidad
+ * legible y empleado existente, en alcance y bloqueado), dentro de
+ * `transaction`; si no, null (→ 404).
  */
-async function loadNoteInScope(user, noteId) {
+async function lockNoteInScope(user, noteId, transaction) {
   const [[note]] = await sequelize.query(
-    'SELECT id, employee_id, author_id, visibility FROM employee_notes WHERE id = ? LIMIT 1',
-    { replacements: [noteId] }
+    'SELECT id, employee_id, author_id, visibility FROM employee_notes WHERE id = ? LIMIT 1 FOR UPDATE',
+    { replacements: [noteId], transaction }
   );
   if (!note) return null;
-  const scope = await getVisibleDepartmentIds(user);
-  const vis = readableVisibilities(user, scope);
+  const vis = readableVisibilities(user);
   if (vis !== null && !vis.includes(note.visibility)) return null;
-  return (await employeeInScope(user, scope, Number(note.employee_id))) ? note : null;
+  const emp = await findEmployeeInScope(user, Number(note.employee_id), { transaction, lock: true, allowSelf: true });
+  return emp ? { ...note, employee_id: emp.id } : null;
 }
 
 // Listado por empleado
@@ -74,9 +77,8 @@ router.get('/by-employee/:id', async (req, res) => {
   try {
     const empId = parsePositiveId(req.params.id);
     if (empId === null) return res.status(400).json({ error: 'Identificador de empleado inválido' });
-    const scope = await getVisibleDepartmentIds(req.user);
-    const vis = readableVisibilities(req.user, scope);
-    if ((vis !== null && !vis.length) || !(await employeeInScope(req.user, scope, empId))) {
+    const vis = readableVisibilities(req.user);
+    if ((vis !== null && !vis.length) || !(await findEmployeeInScope(req.user, empId, { allowSelf: true }))) {
       return res.status(404).json(EMP_NOT_FOUND);
     }
     const visibilityFilter = vis === null ? '' : ` AND n.visibility IN (${vis.map(() => '?').join(',')})`;
@@ -99,8 +101,9 @@ router.post('/',
   authorize('admin', 'gth', 'hr', 'manager'),
   requirePermission('empleados', 'update'),
   async (req, res) => {
+    const global = isUnrestricted(req.user?.role);
     const {
-      employee_id, type = 'observation', visibility = 'hr_only',
+      employee_id, type = 'observation', visibility = global ? 'hr_only' : 'managers',
       title, body, pinned = 0, attachment_url,
     } = req.body || {};
     if (!employee_id || !title) {
@@ -110,56 +113,72 @@ router.post('/',
     if (empId === null) return res.status(400).json({ error: 'Identificador de empleado inválido' });
     if (!VALID_TYPES.has(type))      return res.status(400).json({ error: 'type inválido' });
     if (!VALID_VISIBILITY.has(visibility)) return res.status(400).json({ error: 'visibility inválido' });
+    if (!global && !SCOPED_VISIBILITY.includes(visibility)) return res.status(403).json(VISIBILITY_FORBIDDEN);
+    let t;
     try {
-      // El empleado debe estar en el alcance ANTES de escribir.
-      if (!(await employeeInScope(req.user, await getVisibleDepartmentIds(req.user), empId))) {
+      t = await sequelize.transaction();
+      // El empleado debe existir y estar en el alcance, bloqueado hasta el commit.
+      if (!(await findEmployeeInScope(req.user, empId, { transaction: t, lock: true }))) {
+        await rollbackQuietly(t);
         return res.status(404).json(EMP_NOT_FOUND);
       }
       const [r] = await sequelize.query(
         `INSERT INTO employee_notes (employee_id, author_id, type, visibility, title, body, pinned, attachment_url)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        { replacements: [empId, req.user.id, type, visibility, title, body || null, pinned ? 1 : 0, attachment_url || null] }
+        { replacements: [empId, req.user.id, type, visibility, title, body || null, pinned ? 1 : 0, attachment_url || null], transaction: t }
       );
       const id = insertId(r);
+      await t.commit();
       // Auditoría sin contenido: ni título ni cuerpo (texto libre).
       audit.log({ req, user: req.user, action: 'employee_note_create', entity: 'employee_notes', entity_id: id, details: { employee_id: empId, type } });
       res.status(201).json({ ok: true, id });
     } catch (err) {
+      await rollbackQuietly(t);
       res.status(500).json({ error: 'Error interno' });
     }
   });
 
 // Editar (autor o admin)
 router.put('/:id', async (req, res) => {
+  let t;
   try {
     const id = parsePositiveId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'Identificador de nota inválido' });
-    const note = await loadNoteInScope(req.user, id);
-    if (!note) return res.status(404).json(NOTE_NOT_FOUND);
+    const body = req.body || {};
+    t = await sequelize.transaction();
+    const note = await lockNoteInScope(req.user, id, t);
+    if (!note) { await rollbackQuietly(t); return res.status(404).json(NOTE_NOT_FOUND); }
     const isAdmin = ['admin', 'gth', 'super_admin'].includes(req.user?.role);
     if (!isAdmin && note.author_id !== req.user?.id) {
+      await rollbackQuietly(t);
       return res.status(403).json({ error: 'Solo el autor o admin pueden editar' });
     }
 
     const allowed = ['type','visibility','title','body','pinned','attachment_url'];
     const sets = []; const vals = []; const fields = [];
     for (const k of allowed) {
-      if (req.body[k] !== undefined) {
-        if (k === 'type' && !VALID_TYPES.has(req.body[k])) {
-          return res.status(400).json({ error: 'type inválido' });
+      if (body[k] !== undefined) {
+        if (k === 'type' && !VALID_TYPES.has(body[k])) {
+          await rollbackQuietly(t); return res.status(400).json({ error: 'type inválido' });
         }
-        if (k === 'visibility' && !VALID_VISIBILITY.has(req.body[k])) {
-          return res.status(400).json({ error: 'visibility inválido' });
+        if (k === 'visibility' && !VALID_VISIBILITY.has(body[k])) {
+          await rollbackQuietly(t); return res.status(400).json({ error: 'visibility inválido' });
         }
-        sets.push(`${k} = ?`); vals.push(req.body[k]); fields.push(k);
+        if (k === 'visibility' && !isUnrestricted(req.user?.role) && !SCOPED_VISIBILITY.includes(body[k])) {
+          await rollbackQuietly(t); return res.status(403).json(VISIBILITY_FORBIDDEN);
+        }
+        sets.push(`${k} = ?`); vals.push(body[k]); fields.push(k);
       }
     }
-    if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
-    await sequelize.query(`UPDATE employee_notes SET ${sets.join(', ')} WHERE id = ? AND employee_id = ?`,
-      { replacements: [...vals, id, note.employee_id] });
-    audit.log({ req, user: req.user, action: 'employee_note_update', entity: 'employee_notes', entity_id: id, details: { employee_id: Number(note.employee_id), fields } });
+    if (!sets.length) { await rollbackQuietly(t); return res.status(400).json({ error: 'Sin cambios' }); }
+    const [r] = await sequelize.query(`UPDATE employee_notes SET ${sets.join(', ')} WHERE id = ? AND employee_id = ?`,
+      { replacements: [...vals, id, note.employee_id], transaction: t });
+    if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(404).json(NOTE_NOT_FOUND); }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'employee_note_update', entity: 'employee_notes', entity_id: id, details: { employee_id: note.employee_id, fields } });
     res.json({ ok: true });
   } catch (err) {
+    await rollbackQuietly(t);
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -168,15 +187,21 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id',
   authorize('admin', 'gth', 'hr'),
   async (req, res) => {
+    let t;
     try {
       const id = parsePositiveId(req.params.id);
       if (id === null) return res.status(400).json({ error: 'Identificador de nota inválido' });
-      const note = await loadNoteInScope(req.user, id);
-      if (!note) return res.status(404).json(NOTE_NOT_FOUND);
-      await sequelize.query('DELETE FROM employee_notes WHERE id = ? AND employee_id = ?', { replacements: [id, note.employee_id] });
-      audit.log({ req, user: req.user, action: 'employee_note_delete', entity: 'employee_notes', entity_id: id, details: { employee_id: Number(note.employee_id) } });
+      t = await sequelize.transaction();
+      const note = await lockNoteInScope(req.user, id, t);
+      if (!note) { await rollbackQuietly(t); return res.status(404).json(NOTE_NOT_FOUND); }
+      const [r] = await sequelize.query('DELETE FROM employee_notes WHERE id = ? AND employee_id = ?',
+        { replacements: [id, note.employee_id], transaction: t });
+      if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(404).json(NOTE_NOT_FOUND); }
+      await t.commit();
+      audit.log({ req, user: req.user, action: 'employee_note_delete', entity: 'employee_notes', entity_id: id, details: { employee_id: note.employee_id } });
       res.json({ ok: true });
     } catch (err) {
+      await rollbackQuietly(t);
       res.status(500).json({ error: 'Error interno' });
     }
   });
