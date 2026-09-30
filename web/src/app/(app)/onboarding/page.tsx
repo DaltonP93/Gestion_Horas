@@ -8,6 +8,7 @@ import {
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 import { canAdministerOnboarding, canManageOnboardingTasks } from '@/lib/onboardingRoles'
+import { buildTemplatePayload, TEMPLATE_DUE_DAYS_MAX } from '@/lib/onboardingTemplate'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -223,12 +224,11 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [err, setErr] = useState<string | null>(null)
 
   async function submit() {
-    const validTasks = tasks.filter(t => t.title.trim())
-    if (!form.name) { setErr('El nombre es requerido'); return }
-    if (!validTasks.length) { setErr('Se requiere al menos una tarea'); return }
+    const built = buildTemplatePayload(form, tasks)
+    if ('error' in built) { setErr(built.error); return }
     setSaving(true); setErr(null)
     try {
-      await api.post('/api/onboarding/templates', { ...form, tasks: validTasks })
+      await api.post('/api/onboarding/templates', built.payload)
       onCreated(); onClose()
     } catch (e: any) {
       setErr(e?.response?.data?.error || 'Error al guardar')
@@ -297,7 +297,7 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
                       className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white dark:bg-white/[0.04] dark:border-white/[0.08]" />
                     <div className="flex items-center gap-1">
                       <span className="text-xs text-slate-500 shrink-0 dark:text-white/40">Vence en</span>
-                      <input type="number" min={1} value={task.due_days}
+                      <input type="number" min={0} max={TEMPLATE_DUE_DAYS_MAX} step={1} value={Number.isNaN(task.due_days) ? '' : task.due_days}
                         onChange={e => updateTask(i, 'due_days', parseInt(e.target.value))}
                         className="w-14 border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white text-center dark:bg-white/[0.04] dark:border-white/[0.08]" />
                       <span className="text-xs text-slate-500 shrink-0 dark:text-white/40">días</span>
