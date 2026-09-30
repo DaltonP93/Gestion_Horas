@@ -7,8 +7,8 @@
  *   - users.employee_id = vínculo personal opcional; NO define el alcance.
  *
  * Roles scoped (manager / coordinator / supervisor / gestor) ven los
- * departamentos activos de su sede. Sin users.branch_id => alcance vacío
- * (fail-closed). Roles globales (super_admin / admin / gth / hr) mantienen
+ * departamentos activos de su sede. Sin users.branch_id, o con una sede
+ * inexistente o inactiva => alcance vacío (fail-closed). Roles globales (super_admin / admin / gth / hr) mantienen
  * visibilidad total.
  */
 
@@ -76,11 +76,15 @@ async function getVisibleDepartmentIds(user) {
 
   // La sede pertenece a la CUENTA. Se consulta en cada resolución para que
   // un cambio administrativo tenga efecto inmediato sin depender de un JWT
-  // potencialmente desactualizado.
+  // potencialmente desactualizado. La sede debe EXISTIR y estar ACTIVA: sin
+  // sede, con una sede inexistente o desactivada no hay alcance (fail-closed).
+  // Reactivarla devuelve el alcance en la siguiente resolución; nada se borra.
   let branchId = null;
   try {
     const [[row]] = await sequelize.query(
-      'SELECT branch_id FROM users WHERE id = ? AND active = 1 LIMIT 1',
+      `SELECT u.branch_id FROM users u
+         JOIN branches b ON b.id = u.branch_id AND b.active = 1
+        WHERE u.id = ? AND u.active = 1 LIMIT 1`,
       { replacements: [user.id] }
     );
     branchId = row?.branch_id || null;

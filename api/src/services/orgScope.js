@@ -14,7 +14,9 @@
  *   - Roles con alcance (manager, coordinator, supervisor, gestor): la SEDE
  *     configurada en users.branch_id define el universo visible. El empleado
  *     vinculado es independiente y no participa en autorización.
- *     Sin sede configurada ⇒ conjuntos vacíos (fail-closed).
+ *     Sin sede, o con sede inexistente o INACTIVA ⇒ conjuntos vacíos
+ *     (fail-closed): no consulta ni modifica datos organizacionales, tampoco
+ *     los calendarios globales. Reactivar la sede recupera el alcance.
  *   - Cualquier otro rol (p. ej. employee): sin alcance (nada).
  *
  * Los writers usan `assert*InScope` para RECHAZAR referencias fuera de alcance
@@ -264,6 +266,7 @@ function canSeeCalendar(scope, cal) {
   if (isGlobal(scope)) return true;
   if (!cal || !isValidScope(scope)) return false;          // sin alcance válido no ve ni los globales
   const { companyIds, branchIds } = sets(scope);
+  if (!companyIds.length && !branchIds.length) return false; // sin sede activa: sin datos organizacionales
   const branch = cal.branch_id ?? null;
   const company = cal.company_id ?? null;
   if (branch == null && company == null) return true;     // global aplica a todos
@@ -284,6 +287,7 @@ function calendarScopeFilter(scope, { companyCol = 'company_id', branchCol = 'br
   if (isGlobal(scope)) return { clause: '', params: [] };
   if (!isValidScope(scope)) return { clause: 'AND 1=0', params: [] };
   const { companyIds: cids, branchIds: bids } = sets(scope);
+  if (!cids.length && !bids.length) return { clause: 'AND 1=0', params: [] }; // sin sede activa
   const ors = [`(${companyCol} IS NULL AND ${branchCol} IS NULL)`]; // global siempre visible
   const params = [];
   if (bids.length) {

@@ -384,11 +384,16 @@ jobs:
         env:
           IT_DB: '1'
           JWT_SECRET: it-identity-ci-only-secret-0123456789
-      # Alcance organizacional: la sede de la CUENTA (users.branch_id, activa)
-      # define empresa/sede/departamentos; el empleado vinculado no amplía nada.
-      # Permitido (empresa propia, rol global) y denegado (empresa/sede/depto
-      # ajenos, sin sede, cuenta inactiva, rol sin alcance) sobre dos empresas
-      # sintéticas. Falla si alguna prueba queda omitida.
+      # Alcance organizacional: la sede de la CUENTA (users.branch_id, cuenta
+      # activa, sede existente y ACTIVA) define empresa/sede/departamentos; el
+      # empleado vinculado no amplía nada. Alcance obligatorio: ausente, nulo o
+      # un literal { unrestricted: true } no emitido → sin filas. Servicio y
+      # rutas HTTP reales (companies, cost-centers, branches) sobre dos
+      # empresas sintéticas: permitido (empresa propia, admin) y denegado
+      # (ajeno, sin sede, sede inexistente/inactiva, cuenta inactiva) sin filas
+      # ni auditoría; reactivar la sede recupera el alcance. El proceso de
+      # prueba habilita sus propios writers de gobierno. Falla si alguna prueba
+      # queda omitida.
       - name: IT reales alcance organizacional (orgScope)
         run: |
           set -o pipefail

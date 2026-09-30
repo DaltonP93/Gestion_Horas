@@ -83,7 +83,7 @@ function installDb() {
     if (/SELECT id, role, active, employee_id FROM users WHERE id = \? LIMIT 1/.test(sql)) {
       const u = world.users[rp[0]]; return [u ? [u] : []];
     }
-    if (/SELECT branch_id FROM users WHERE id = \? AND active = 1/.test(sql)) {
+    if (/SELECT u\.branch_id FROM users u\s+JOIN branches b ON b\.id = u\.branch_id AND b\.active = 1\s+WHERE u\.id = \? AND u\.active = 1/.test(sql)) {
       const u = world.users[rp[0]]; return [u && u.active ? [{ branch_id: u.branch_id }] : []];
     }
     if (/SELECT id FROM departments WHERE active = 1 AND branch_id = \?/.test(sql)) {

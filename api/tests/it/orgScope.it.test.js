@@ -12,7 +12,9 @@
  *   - Departamentos visibles = los ACTIVOS de esa sede (`departments.branch_id`).
  *   - Empresa visible = `branches.company_id` de esa sede.
  *   - `users.employee_id` es un vínculo personal: NO define ni amplía el alcance.
- *   - Sin sede, cuenta inactiva o rol sin alcance → conjuntos vacíos (fail-closed).
+ *   - Sin sede, sede inexistente o INACTIVA, cuenta inactiva o rol sin alcance
+ *     → conjuntos vacíos (fail-closed); reactivar la sede recupera el alcance.
+ *   - El alcance global sólo lo emite el servidor (un literal no cuenta).
  *   - Roles globales (admin, …) → sin restricción.
  *
  * Datos sintéticos: dos empresas con una sede cada una; los departamentos se
@@ -108,10 +110,19 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
     ids.coordA = await insertUser('cA', 'coordinator', { branchId: ids.branchA });
     ids.employeeA = await insertUser('eA', 'employee', { branchId: ids.branchA, employeeId: ids.empA });
     ids.admin = await insertUser('ad', 'admin');
+    // Cuenta con una sede que NO existe (users.branch_id no tiene FK).
+    const [[mx]] = await conn.query('SELECT COALESCE(MAX(id), 0) + 1000 AS id FROM branches');
+    ids.ghostBranch = Number(mx.id);
+    ids.mgrGhost = await insertUser('mG', 'manager', { branchId: ids.ghostBranch });
+    // Calendario GLOBAL (sin empresa ni sede): sólo visible con sede activa o rol global.
+    const [cal] = await conn.query(
+      'INSERT INTO labor_calendars (code, name, valid_from) VALUES (?, ?, ?)', [`${uniq}GCAL`, 'IT global', '2031-01-01'],
+    );
+    ids.globalCal = cal.insertId;
 
     // Capacidades EXPLÍCITAS para los gerentes: el permiso funcional está
     // otorgado; lo que decide es el ALCANCE.
-    for (const uid of [ids.mgrA, ids.mgrNoBranch]) {
+    for (const uid of [ids.mgrA, ids.mgrNoBranch, ids.mgrGhost]) {
       for (const module of ['empresas', 'centros_costo']) {
         await conn.query(
           'INSERT INTO user_permissions (user_id, module, can_view, can_create, can_update, can_delete) VALUES (?, ?, 1, 1, 1, 0)',
@@ -135,7 +146,9 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
   afterAll(async () => {
     if (server) await new Promise((r) => server.close(r));
     if (conn) {
-      const userIds = [ids.mgrA, ids.mgrNoBranch, ids.mgrInactive, ids.coordA, ids.employeeA, ids.admin].filter(Boolean);
+      await conn.query('UPDATE branches SET active = 1 WHERE id = ?', [ids.branchA]);
+      if (ids.globalCal) await conn.query('DELETE FROM labor_calendars WHERE id = ?', [ids.globalCal]);
+      const userIds = [ids.mgrA, ids.mgrNoBranch, ids.mgrInactive, ids.coordA, ids.employeeA, ids.admin, ids.mgrGhost].filter(Boolean);
       if (userIds.length) {
         await conn.query('DELETE FROM user_permissions WHERE user_id IN (?)', [userIds]);
         await conn.query('DELETE FROM audit_events WHERE user_id IN (?)', [userIds]);
@@ -320,6 +333,78 @@ describeIT('orgScope (integración) — alcance por empresa', () => {
       await waitAudit(ids.admin, 'company.create', id);
       const seen = (await (await http('GET', '/api/companies', ids.admin, 'admin')).json()).data.map((x) => x.id);
       expect(seen).toEqual(expect.arrayContaining([ids.companyA, ids.companyB, id]));
+    });
+  });
+  describe('sede existente y activa para roles por sede (base real)', () => {
+    const calendar = () => require('../../src/services/calendarService');
+    const EMPTY = { unrestricted: false, companyIds: [], branchIds: [], departmentIds: [] };
+
+    test('sede inexistente → alcance vacío; no ve empresas, centros ni calendarios globales', async () => {
+      const scope = await orgScope.getOrgScope(who(ids.mgrGhost, 'manager'));
+      expect(scope).toEqual(EMPTY);
+      expect((await calendar().listCalendars(scope)).map((c) => c.id)).not.toContain(ids.globalCal);
+      expect((await (await http('GET', '/api/companies', ids.mgrGhost, 'manager')).json()).data).toEqual([]);
+      expect(await (await http('GET', '/api/branches', ids.mgrGhost, 'manager')).json()).toEqual([]);
+      const r = await http('POST', '/api/cost-centers', ids.mgrGhost, 'manager', { company_id: ids.companyA, code: `${ids.uniq}GH`, name: 'x' });
+      expect(r.status).toBe(403);
+      expect(await count('SELECT COUNT(*) AS n FROM cost_centers WHERE code = ?', [`${ids.uniq}GH`])).toBe(0);
+    });
+
+    test('sede inactiva: sin consulta ni modificación; admin sigue administrando; reactivar recupera el alcance sin perder datos', async () => {
+      const before = await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB));
+      expect(before.companyIds).toEqual([ids.companyA]);
+      expect((await calendar().listCalendars(before)).map((c) => c.id)).toContain(ids.globalCal);
+      const snapshot = async () => ({
+        company: (await conn.query('SELECT legal_name, active FROM companies WHERE id = ?', [ids.companyA]))[0][0],
+        cc: (await conn.query('SELECT company_id, name, active FROM cost_centers WHERE id = ?', [ids.ccA]))[0][0],
+        dept: (await conn.query('SELECT branch_id, active FROM departments WHERE id = ?', [ids.deptA]))[0][0],
+        user: (await conn.query('SELECT branch_id, active FROM users WHERE id = ?', [ids.mgrA]))[0][0],
+      });
+      const data0 = await snapshot();
+      const audit0 = await auditCount(ids.mgrA);
+
+      await conn.query('UPDATE branches SET active = 0 WHERE id = ?', [ids.branchA]);
+      try {
+        const off = await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB));
+        expect(off).toEqual(EMPTY);
+        expect((await calendar().listCalendars(off)).map((c) => c.id)).not.toContain(ids.globalCal);
+
+        // Consultas por HTTP: nada.
+        expect((await (await http('GET', '/api/companies', ids.mgrA, 'manager')).json()).data).toEqual([]);
+        expect((await http('GET', `/api/companies/${ids.companyA}`, ids.mgrA, 'manager')).status).toBe(404);
+        expect((await (await http('GET', '/api/cost-centers', ids.mgrA, 'manager')).json()).data).toEqual([]);
+        expect(await (await http('GET', '/api/branches', ids.mgrA, 'manager')).json()).toEqual([]);
+
+        // Modificaciones: rechazadas, sin filas nuevas ni cambios.
+        const code = `${ids.uniq}OFF`;
+        expect((await http('POST', '/api/cost-centers', ids.mgrA, 'manager', { company_id: ids.companyA, code, name: 'x' })).status).toBe(403);
+        expect((await http('PATCH', `/api/cost-centers/${ids.ccA}`, ids.mgrA, 'manager', { name: 'pisado' })).status).toBe(404);
+        expect((await http('PATCH', `/api/companies/${ids.companyA}`, ids.mgrA, 'manager', { legal_name: 'pisada' })).status).toBe(404);
+        expect(await count('SELECT COUNT(*) AS n FROM cost_centers WHERE code = ?', [code])).toBe(0);
+        expect(await snapshot()).toEqual(data0);
+        expect(await auditCount(ids.mgrA)).toBe(audit0);
+
+        // Administración global autorizada: admin ve y administra durante la baja.
+        const adminSeen = (await (await http('GET', '/api/companies', ids.admin, 'admin')).json()).data.map((x) => x.id);
+        expect(adminSeen).toEqual(expect.arrayContaining([ids.companyA, ids.companyB]));
+        const adminBranches = (await (await http('GET', '/api/branches', ids.admin, 'admin')).json()).map((b) => b.id);
+        expect(adminBranches).toContain(ids.branchA);
+        const adm = await http('POST', '/api/cost-centers', ids.admin, 'admin', { company_id: ids.companyA, code: `${code}AD`, name: 'admin' });
+        expect(adm.status).toBe(201);
+        await waitAudit(ids.admin, 'cost_center.create', (await adm.json()).id);
+      } finally {
+        await conn.query('UPDATE branches SET active = 1 WHERE id = ?', [ids.branchA]);
+      }
+
+      // Reactivada: el mismo alcance y los mismos datos que antes de la baja.
+      const back = await orgScope.getOrgScope(who(ids.mgrA, 'manager', ids.empB));
+      expect(back).toEqual(before);
+      expect((await calendar().listCalendars(back)).map((c) => c.id)).toContain(ids.globalCal);
+      const seen = (await (await http('GET', '/api/companies', ids.mgrA, 'manager')).json()).data.map((x) => x.id);
+      expect(seen).toContain(ids.companyA);
+      expect(seen).not.toContain(ids.companyB);
+      expect((await http('GET', `/api/cost-centers/${ids.ccA}`, ids.mgrA, 'manager')).status).toBe(200);
+      expect(await snapshot()).toEqual(data0);
     });
   });
 });
