@@ -298,4 +298,85 @@ describeIT('datos sensibles por empleado (integración)', () => {
       await waitAudit(ids.admin, 'contract_update', ids.cB);
     });
   });
+
+  // ─────────────────────────────── Notas ───────────────────────────────────
+  describe('notas internas', () => {
+    const titles = async (r) => (await r.json()).data.map((n) => n.title).sort();
+
+    test('employee: lee sólo sus notas con visibilidad employee', async () => {
+      const r = await http('GET', `/api/employee-notes/by-employee/${ids.empA1}`, ids.employeeA, 'employee');
+      expect(r.status).toBe(200);
+      expect(await titles(r)).toEqual(['NOTA-A1-EMP']);
+    });
+
+    test('employee: notas de otro empleado (misma sede y otra empresa) → 404 sin contenido', async () => {
+      await expectRejected({ method: 'GET', url: `/api/employee-notes/by-employee/${ids.empA2}`, uid: ids.employeeA, role: 'employee', status: 404 });
+      await expectRejected({ method: 'GET', url: `/api/employee-notes/by-employee/${ids.empB}`, uid: ids.employeeA, role: 'employee', status: 404 });
+    });
+
+    test('rol por sede: empleado propio → visibilidades managers/employee (no hr_only)', async () => {
+      const r = await http('GET', `/api/employee-notes/by-employee/${ids.empA1}`, ids.coordA, 'coordinator');
+      expect(r.status).toBe(200);
+      expect(await titles(r)).toEqual(['NOTA-A1-EMP', 'NOTA-A1-MGR']);
+    });
+
+    test('rol por sede: empleado ajeno o inexistente → 404 sin contenido', async () => {
+      await expectRejected({ method: 'GET', url: `/api/employee-notes/by-employee/${ids.empB}`, uid: ids.mgrA, role: 'manager', status: 404 });
+      await expectRejected({ method: 'GET', url: '/api/employee-notes/by-employee/999999999', uid: ids.mgrA, role: 'manager', status: 404 });
+      await expectRejected({ method: 'GET', url: '/api/employee-notes/by-employee/0x10', uid: ids.mgrA, role: 'manager', status: 400 });
+    });
+
+    test('rol por sede: crear nota sobre empleado ajeno → 404 sin INSERT', async () => {
+      await expectRejected({
+        method: 'POST', url: '/api/employee-notes', uid: ids.mgrA, role: 'manager', status: 404,
+        body: { employee_id: ids.empB, visibility: 'managers', title: 'NOTA-NUEVA-B' },
+      });
+      expect(await count("SELECT COUNT(*) AS n FROM employee_notes WHERE title = 'NOTA-NUEVA-B'")).toBe(0);
+    });
+
+    test('rol por sede: editar nota propia sobre empleado ajeno → 404; ser autor no da alcance', async () => {
+      await expectRejected({ method: 'PUT', url: `/api/employee-notes/${ids.nBbyMgr}`, uid: ids.mgrA, role: 'manager', status: 404, body: { pinned: 1 } });
+    });
+
+    test('rol por sede: editar nota hr_only de su alcance (aunque sea autor) → 404', async () => {
+      await expectRejected({ method: 'PUT', url: `/api/employee-notes/${ids.nA1hrByMgr}`, uid: ids.mgrA, role: 'manager', status: 404, body: { pinned: 1 } });
+    });
+
+    test('rol por sede: editar nota visible de su alcance escrita por otro → 403 (regla de autor vigente)', async () => {
+      await expectRejected({ method: 'PUT', url: `/api/employee-notes/${ids.nA1mgr}`, uid: ids.mgrA, role: 'manager', status: 403, body: { pinned: 1 } });
+    });
+
+    test('employee: editar nota ajena → 404; nota propia visible pero no es autor → 403', async () => {
+      await expectRejected({ method: 'PUT', url: `/api/employee-notes/${ids.nBemp}`, uid: ids.employeeA, role: 'employee', status: 404, body: { pinned: 1 } });
+      await expectRejected({ method: 'PUT', url: `/api/employee-notes/${ids.nA1hr}`, uid: ids.employeeA, role: 'employee', status: 404, body: { pinned: 1 } });
+      await expectRejected({ method: 'PUT', url: `/api/employee-notes/${ids.nA1emp}`, uid: ids.employeeA, role: 'employee', status: 403, body: { pinned: 1 } });
+    });
+
+    test('borrado: rol por sede → 403 (sólo RR.HH. global); inexistente y no canónico para global → 404/400', async () => {
+      await expectRejected({ method: 'DELETE', url: `/api/employee-notes/${ids.nBmgr}`, uid: ids.mgrA, role: 'manager', status: 403 });
+      await expectRejected({ method: 'DELETE', url: '/api/employee-notes/999999999', uid: ids.hr, role: 'hr', status: 404 });
+      await expectRejected({ method: 'DELETE', url: '/api/employee-notes/1e2', uid: ids.hr, role: 'hr', status: 400 });
+    });
+
+    test('dentro del alcance: el rol por sede crea y edita su nota; queda auditado', async () => {
+      const c = await http('POST', '/api/employee-notes', ids.mgrA, 'manager', { employee_id: ids.empA2, visibility: 'managers', title: 'NOTA-MGR-A2' });
+      expect(c.status).toBe(201);
+      const { id } = await c.json();
+      await waitAudit(ids.mgrA, 'employee_note_create', id);
+      const u = await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { pinned: 1 });
+      expect(u.status).toBe(200);
+      await waitAudit(ids.mgrA, 'employee_note_update', id);
+      expect(await count('SELECT COUNT(*) AS n FROM employee_notes WHERE id = ? AND pinned = 1', [id])).toBe(1);
+    });
+
+    test('rol global: ve todas las visibilidades de B, edita y borra (sin cambio)', async () => {
+      const r = await http('GET', `/api/employee-notes/by-employee/${ids.empB}`, ids.admin, 'admin');
+      expect(await titles(r)).toEqual(['NOTA-B-BYMGR', 'NOTA-B-EMP', 'NOTA-B-MGR']);
+      expect((await http('PUT', `/api/employee-notes/${ids.nBmgr}`, ids.admin, 'admin', { pinned: 1 })).status).toBe(200);
+      const tmp = await insertNote(ids.empB, ids.admin, 'hr_only', 'NOTA-B-TMP');
+      expect((await http('DELETE', `/api/employee-notes/${tmp}`, ids.hr, 'hr')).status).toBe(200);
+      await waitAudit(ids.hr, 'employee_note_delete', tmp);
+      expect(await count('SELECT COUNT(*) AS n FROM employee_notes WHERE id = ?', [tmp])).toBe(0);
+    });
+  });
 });
