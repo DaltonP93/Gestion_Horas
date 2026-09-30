@@ -19,14 +19,21 @@
  * RR.HH. conservan el acceso actual. Fuera de alcance e inexistente responden
  * el MISMO 404, sin datos del contrato ni del empleado, sin escritura y sin
  * auditoría. En PUT/DELETE el empleado se resuelve desde el contrato GUARDADO,
- * nunca desde el body.
+ * nunca desde el body. El empleado debe EXISTIR también para roles globales.
+ *
+ * CONSISTENCIA: en alta, edición y borrado la lectura del recurso, la
+ * autorización y la mutación ocurren en UNA transacción: el contrato y el
+ * empleado se leen con FOR UPDATE y el alcance del actor con FOR SHARE. Un
+ * rechazo o `affectedRows = 0` hace rollback y responde 404; la auditoría se
+ * registra sólo después del commit.
  */
 const router = require('express').Router();
 const { insertId } = require('../utils/insertId');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
-const { getVisibleDepartmentIds, applyDepartmentScope, canSeeEmployee, isGlobal } = require('../services/departmentScope');
+const { getVisibleDepartmentIds, applyDepartmentScope } = require('../services/departmentScope');
+const { findEmployeeInScope, rollbackQuietly } = require('../services/employeeScopeLock');
 const { parsePositiveId } = require('../utils/strictId');
 
 router.use(authenticate);
@@ -72,29 +79,18 @@ router.put('/config', authorize('admin', 'super_admin', 'gth', 'hr'), async (req
 });
 
 /**
- * ¿El empleado es visible para el alcance? Global → sí (sin consulta: el
- * handler resuelve su propio "no encontrado"). Restringido → el empleado debe
- * existir y su departamento estar en el alcance. Alcance ausente/inválido → no.
+ * Contrato GUARDADO bloqueado (FOR UPDATE) + su empleado autorizado y
+ * bloqueado, dentro de `transaction`. null si no existe o está fuera de
+ * alcance (→ 404).
  */
-async function employeeInScope(scope, employeeId) {
-  if (isGlobal(scope)) return true;
-  const [[emp]] = await sequelize.query(
-    'SELECT department_id FROM employees WHERE id = ? LIMIT 1', { replacements: [employeeId] }
-  );
-  return !!emp && canSeeEmployee(scope, emp);
-}
-
-/**
- * Contrato GUARDADO + visibilidad de su empleado. Devuelve la fila sólo si el
- * contrato existe y su empleado está en el alcance; si no, null (→ 404).
- */
-async function loadContractInScope(req, contractId) {
+async function lockContractInScope(user, contractId, transaction) {
   const [[row]] = await sequelize.query(
-    'SELECT id, employee_id FROM employee_contracts WHERE id = ? LIMIT 1', { replacements: [contractId] }
+    'SELECT id, employee_id FROM employee_contracts WHERE id = ? LIMIT 1 FOR UPDATE',
+    { replacements: [contractId], transaction }
   );
   if (!row) return null;
-  const scope = await getVisibleDepartmentIds(req.user);
-  return (await employeeInScope(scope, Number(row.employee_id))) ? row : null;
+  const emp = await findEmployeeInScope(user, Number(row.employee_id), { transaction, lock: true });
+  return emp ? { id: Number(row.id), employee_id: emp.id } : null;
 }
 
 const NOT_FOUND = { error: 'Contrato no encontrado' };
@@ -143,9 +139,7 @@ router.get('/employee/:id', requirePermission('ingresos', 'view'), async (req, r
   try {
     const employeeId = parsePositiveId(req.params.id);
     if (employeeId === null) return res.status(400).json({ error: 'Identificador de empleado inválido' });
-    if (!(await employeeInScope(await getVisibleDepartmentIds(req.user), employeeId))) {
-      return res.status(404).json(EMP_NOT_FOUND);
-    }
+    if (!(await findEmployeeInScope(req.user, employeeId))) return res.status(404).json(EMP_NOT_FOUND);
     const [rows] = await sequelize.query(`
       SELECT c.*, u.full_name AS created_by_name
       FROM employee_contracts c
@@ -183,72 +177,84 @@ function validateContract(c) {
 
 // ── Alta ───────────────────────────────────────────────────────
 router.post('/', requirePermission('ingresos', 'create'), async (req, res, next) => {
+  let t;
   try {
     const c = contractFromBody(req.body || {});
     const err = validateContract(c);
     if (err) return res.status(400).json({ error: err });
-    // El empleado del body debe estar en el alcance ANTES de escribir.
-    if (!(await employeeInScope(await getVisibleDepartmentIds(req.user), c.employee_id))) {
+    t = await sequelize.transaction();
+    // El empleado debe existir y estar en el alcance, bloqueado hasta el commit.
+    if (!(await findEmployeeInScope(req.user, c.employee_id, { transaction: t, lock: true }))) {
+      await rollbackQuietly(t);
       return res.status(404).json(EMP_NOT_FOUND);
     }
     const [r] = await sequelize.query(
       `INSERT INTO employee_contracts
          (employee_id, type, start_date, end_date, probation_end_date, salary, status, note, created_by)
        VALUES (?,?,?,?,?,?,?,?,?)`,
-      { replacements: [c.employee_id, c.type, c.start_date, c.end_date, c.probation_end_date, c.salary, c.status, c.note, req.user?.id || null] }
+      { replacements: [c.employee_id, c.type, c.start_date, c.end_date, c.probation_end_date, c.salary, c.status, c.note, req.user?.id || null], transaction: t }
     );
-    audit.log({ req, user: req.user, action: 'contract_create', entity: 'employee_contracts', entity_id: insertId(r), details: { employee_id: c.employee_id, type: c.type } });
-    res.status(201).json({ id: insertId(r) });
-  } catch (e) { next(e); }
+    const id = insertId(r);
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'contract_create', entity: 'employee_contracts', entity_id: id, details: { employee_id: c.employee_id, type: c.type } });
+    res.status(201).json({ id });
+  } catch (e) { await rollbackQuietly(t); next(e); }
 });
 
 // ── Editar ─────────────────────────────────────────────────────
 router.put('/:id', requirePermission('ingresos', 'update'), async (req, res, next) => {
+  let t;
   try {
     const contractId = parsePositiveId(req.params.id);
     if (contractId === null) return res.status(400).json({ error: 'Identificador de contrato inválido' });
     const body = req.body || {};
-    // El empleado sale del contrato GUARDADO. El body puede repetirlo (la web
-    // reenvía la fila), pero no cambiarlo: un valor distinto es 400 y nunca
-    // se usa para decidir el alcance.
-    const stored = await loadContractInScope(req, contractId);
-    if (!stored) return res.status(404).json(NOT_FOUND);
-    const c = contractFromBody({ ...body, employee_id: stored.employee_id });
+    t = await sequelize.transaction();
+    // El empleado sale del contrato GUARDADO (bloqueado). El body puede
+    // repetirlo (la web reenvía la fila), pero no cambiarlo: un valor distinto
+    // es 400 y nunca se usa para decidir el alcance.
+    const stored = await lockContractInScope(req.user, contractId, t);
+    if (!stored) { await rollbackQuietly(t); return res.status(404).json(NOT_FOUND); }
     if (body.employee_id !== undefined && body.employee_id !== null && body.employee_id !== '') {
       const claimed = parsePositiveId(body.employee_id);
-      if (claimed === null || claimed !== Number(stored.employee_id)) {
+      if (claimed === null || claimed !== stored.employee_id) {
+        await rollbackQuietly(t);
         return res.status(400).json({ error: 'El contrato no puede cambiar de empleado' });
       }
     }
+    const c = contractFromBody({ ...body, employee_id: stored.employee_id });
     const err = validateContract(c);
-    if (err) return res.status(400).json({ error: err });
+    if (err) { await rollbackQuietly(t); return res.status(400).json({ error: err }); }
     const [r] = await sequelize.query(
       `UPDATE employee_contracts SET
          type=?, start_date=?, end_date=?, probation_end_date=?, salary=?, status=?, note=?
        WHERE id=? AND employee_id=?`,
-      { replacements: [c.type, c.start_date, c.end_date, c.probation_end_date, c.salary, c.status, c.note, contractId, stored.employee_id] }
+      { replacements: [c.type, c.start_date, c.end_date, c.probation_end_date, c.salary, c.status, c.note, contractId, stored.employee_id], transaction: t }
     );
-    if (!r.affectedRows) return res.status(404).json(NOT_FOUND);
-    audit.log({ req, user: req.user, action: 'contract_update', entity: 'employee_contracts', entity_id: contractId, details: { employee_id: Number(stored.employee_id) } });
+    if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(404).json(NOT_FOUND); }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'contract_update', entity: 'employee_contracts', entity_id: contractId, details: { employee_id: stored.employee_id } });
     res.json({ ok: true });
-  } catch (e) { next(e); }
+  } catch (e) { await rollbackQuietly(t); next(e); }
 });
 
 // ── Eliminar ───────────────────────────────────────────────────
 router.delete('/:id', requirePermission('ingresos', 'delete'), async (req, res, next) => {
+  let t;
   try {
     const contractId = parsePositiveId(req.params.id);
     if (contractId === null) return res.status(400).json({ error: 'Identificador de contrato inválido' });
-    const stored = await loadContractInScope(req, contractId);
-    if (!stored) return res.status(404).json(NOT_FOUND);
+    t = await sequelize.transaction();
+    const stored = await lockContractInScope(req.user, contractId, t);
+    if (!stored) { await rollbackQuietly(t); return res.status(404).json(NOT_FOUND); }
     const [r] = await sequelize.query(
       'DELETE FROM employee_contracts WHERE id = ? AND employee_id = ?',
-      { replacements: [contractId, stored.employee_id] }
+      { replacements: [contractId, stored.employee_id], transaction: t }
     );
-    if (!r.affectedRows) return res.status(404).json(NOT_FOUND);
-    audit.log({ req, user: req.user, action: 'contract_delete', entity: 'employee_contracts', entity_id: contractId, details: { employee_id: Number(stored.employee_id) } });
+    if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(404).json(NOT_FOUND); }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'contract_delete', entity: 'employee_contracts', entity_id: contractId, details: { employee_id: stored.employee_id } });
     res.json({ ok: true });
-  } catch (e) { next(e); }
+  } catch (e) { await rollbackQuietly(t); next(e); }
 });
 
 // ── Egreso: baja del empleado + cierre de contratos vigentes ───

@@ -63,14 +63,18 @@ async function _expandDescendants(rootId) {
 }
 
 /**
- * getVisibleDepartmentIds(user)
+ * getVisibleDepartmentIds(user, { transaction }?)
  *   → alcance global emitido (scopeGrant)   (admin/hr/gth/super_admin)
  *   → { unrestricted: false, ids: [...] }   (manager/coord/supervisor/gestor)
  *   → { unrestricted: false, ids: [] }      (rol scoped sin empleado/depto → nada)
  * Roles no reconocidos (p.ej. 'employee') → { unrestricted: false, ids: [] }.
  */
-async function getVisibleDepartmentIds(user) {
+async function getVisibleDepartmentIds(user, { transaction } = {}) {
   if (!user || !user.role) return { unrestricted: false, ids: [], branchIds: [] };
+  // Dentro de una transacción de escritura, las lecturas de alcance toman un
+  // bloqueo COMPARTIDO (cuenta, sede y departamentos): el alcance que autoriza
+  // no puede cambiar hasta el commit de la mutación que autoriza.
+  const lock = transaction ? ' FOR SHARE' : '';
   if (isUnrestricted(user.role)) return scopeGrant.issueGlobal();
   if (!isScoped(user.role)) return { unrestricted: false, ids: [], branchIds: [] };
 
@@ -84,8 +88,8 @@ async function getVisibleDepartmentIds(user) {
     const [[row]] = await sequelize.query(
       `SELECT u.branch_id FROM users u
          JOIN branches b ON b.id = u.branch_id AND b.active = 1
-        WHERE u.id = ? AND u.active = 1 LIMIT 1`,
-      { replacements: [user.id] }
+        WHERE u.id = ? AND u.active = 1 LIMIT 1${lock}`,
+      { replacements: [user.id], transaction }
     );
     branchId = row?.branch_id || null;
   } catch { branchId = null; }
@@ -94,8 +98,8 @@ async function getVisibleDepartmentIds(user) {
 
   try {
     const [rows] = await sequelize.query(
-      'SELECT id FROM departments WHERE active = 1 AND branch_id = ? ORDER BY id',
-      { replacements: [branchId] }
+      `SELECT id FROM departments WHERE active = 1 AND branch_id = ? ORDER BY id${lock}`,
+      { replacements: [branchId], transaction }
     );
     return {
       unrestricted: false,
