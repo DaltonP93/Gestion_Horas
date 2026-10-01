@@ -71,6 +71,14 @@ describe('appraisalDetailActions', () => {
     expect(appraisalDetailActions({ ...base, role: 'hr', userId: 1, status: 'hr_review' }))
       .toEqual({ selfScore: false, managerScore: false, hrScore: true, close: true })
   })
+  it('supervisor sobre su propia evaluación en self_pending: sólo autoevaluación (sin cierre)', () => {
+    expect(appraisalDetailActions({ ...base, role: 'supervisor', userEmployeeId: 3, reviewerId: 99, status: 'self_pending', selfScored: false }))
+      .toEqual({ selfScore: true, managerScore: false, hrScore: false, close: false })
+  })
+  it('supervisor evaluado y no asignado en manager_pending: no puede puntuar como manager', () => {
+    expect(appraisalDetailActions({ ...base, role: 'supervisor', userEmployeeId: 3, reviewerId: 99, status: 'manager_pending' }))
+      .toEqual({ selfScore: false, managerScore: false, hrScore: false, close: false })
+  })
   it('employee propio en self_pending: autoevaluación', () => {
     expect(appraisalDetailActions({ ...base, role: 'employee', userId: 5, userEmployeeId: 3, reviewerId: 7, status: 'self_pending', selfScored: false }))
       .toEqual({ selfScore: true, managerScore: false, hrScore: false, close: false })

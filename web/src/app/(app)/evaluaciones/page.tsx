@@ -528,7 +528,7 @@ export default function EvaluacionesPage() {
 
   const loadAppraisals = useCallback(async () => {
     // El servidor filtra por alcance (employee: sólo las propias; supervisor:
-    // sólo sus asignadas). Un rol sin listado no consulta.
+    // propias + asignadas en su alcance). Un rol sin listado no consulta.
     if (!canList) { setAppraisals([]); setTotal(0); setLoading(false); return }
     setLoading(true)
     try {

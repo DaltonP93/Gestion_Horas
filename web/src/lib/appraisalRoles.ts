@@ -4,8 +4,9 @@
  *   - globales: plantillas (escritura), cierre y override de manager/RR.HH.;
  *   - gestión (globales + manager/coordinator/gestor): listado de su alcance
  *     y alta de evaluaciones;
- *   - supervisor: no administra; puede ser reviewer y su listado sólo trae
- *     las evaluaciones que tiene asignadas (lo filtra el servidor);
+ *   - supervisor: no administra; puede ser reviewer. Su listado trae sus
+ *     evaluaciones propias (si está vinculado a un empleado) y las asignadas
+ *     dentro de su alcance (lo filtra el servidor);
  *   - employee: su propio listado, historial, detalle y autoevaluación.
  */
 export const APPRAISAL_ADMIN_ROLES = ['super_admin', 'admin', 'gth', 'hr'] as const
@@ -26,7 +27,7 @@ export function canManageAppraisals(role: string | undefined | null): boolean {
   return has(APPRAISAL_MANAGER_ROLES, role)
 }
 
-/** ¿El rol puede cargar el listado? (employee: lo propio; supervisor: sus asignadas). */
+/** ¿El rol puede cargar el listado? (employee: lo propio; supervisor: propias + asignadas). */
 export function canListAppraisals(role: string | undefined | null): boolean {
   return has(APPRAISAL_LIST_ROLES, role)
 }
