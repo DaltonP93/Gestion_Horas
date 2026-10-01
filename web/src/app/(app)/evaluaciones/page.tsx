@@ -4,6 +4,7 @@ import { Star, Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, AlertCircle,
          ClipboardList, X, Save, Award, Users, FileText, BarChart2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
+import { canAdministerAppraisals, canManageAppraisals, canListAppraisals } from '@/lib/appraisalRoles'
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip } from 'recharts'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -27,9 +28,6 @@ const STATUS_LABELS: Record<string, { label: string; color: string; icon: React.
   hr_review:       { label: 'Revisión RRHH',     color: 'bg-violet-100 text-violet-700', icon: <ClipboardList size={12} /> },
   closed:          { label: 'Cerrada',           color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle2 size={12} /> },
 }
-
-const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin']
-const MGR_ROLES   = [...ADMIN_ROLES, 'manager', 'coordinator', 'gestor']
 
 // ─── ScoreForm — completar una evaluación ───────────────────────────────────
 
@@ -141,8 +139,7 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
     <div className="flex items-center justify-center h-48 text-slate-400 text-sm dark:text-white/30">Cargando…</div>
   )
 
-  const isAdmin  = ADMIN_ROLES.includes(user?.role || '')
-  const isMgr    = MGR_ROLES.includes(user?.role || '')
+  const isAdmin  = canAdministerAppraisals(user?.role)
   const isEmployee = user?.employee_id === data.employee_id
   const isReviewer = user?.id === data.reviewer_id
 
@@ -525,22 +522,25 @@ export default function EvaluacionesPage() {
   const [showNewAppraisal, setShowNewAppraisal] = useState(false)
   const [showNewTemplate, setShowNewTemplate]   = useState(false)
 
-  const isAdmin = ADMIN_ROLES.includes(user?.role || '')
-  const isMgr   = MGR_ROLES.includes(user?.role || '')
+  const isAdmin = canAdministerAppraisals(user?.role)
+  const isMgr   = canManageAppraisals(user?.role)
+  const canList = canListAppraisals(user?.role)
 
   const loadAppraisals = useCallback(async () => {
+    // El servidor filtra por alcance (employee: sólo las propias). Un rol sin
+    // listado (supervisor) no consulta: ve sólo lo que tenga asignado al abrirlo.
+    if (!canList) { setAppraisals([]); setTotal(0); setLoading(false); return }
     setLoading(true)
     try {
       const params = new URLSearchParams({ limit: '50' })
       if (statusFilter) params.set('status', statusFilter)
-      // Empleados ven solo su historial
-      if (!isMgr && user?.employee_id)
-        params.set('employee_id', String(user.employee_id))
       const res = await api.get(`/api/appraisals?${params}`)
       setAppraisals(res.data.data || [])
       setTotal(res.data.total || 0)
+    } catch {
+      setAppraisals([]); setTotal(0)
     } finally { setLoading(false) }
-  }, [statusFilter, isMgr, user?.employee_id])
+  }, [statusFilter, canList])
 
   const loadTemplates = useCallback(async () => {
     const res = await api.get('/api/appraisals/templates?all=1')
@@ -571,10 +571,12 @@ export default function EvaluacionesPage() {
         </div>
         {isMgr && (
           <div className="flex gap-2">
-            <button onClick={() => setShowNewTemplate(true)}
-              className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
-              <FileText size={16} /> Nueva plantilla
-            </button>
+            {isAdmin && (
+              <button onClick={() => setShowNewTemplate(true)}
+                className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
+                <FileText size={16} /> Nueva plantilla
+              </button>
+            )}
             <button onClick={() => setShowNewAppraisal(true)}
               className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2 text-sm font-medium">
               <Plus size={16} /> Nueva evaluación
