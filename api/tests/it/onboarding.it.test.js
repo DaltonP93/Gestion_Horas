@@ -506,6 +506,16 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       await waitAudit(ids.hr, 'onboarding_task_update', ids.tMeta);
     });
 
+    test('PATCH idéntico repetido (sin cambios reales) → 200, no 404', async () => {
+      await setDoneOld();
+      expect((await patch(ids.coordA, 'coordinator', { status: 'in_progress' })).status).toBe(200);
+      const r = await patch(ids.coordA, 'coordinator', { status: 'in_progress' });
+      const m = await meta();
+      evidence.push({ request: 'PATCH tasks/tMeta in_progress → in_progress repetido (coordinator)', got: r.status, completed_by: m.completed_by, completed_at: m.at });
+      expect(r.status).toBe(200);
+      expect(m).toEqual({ status: 'in_progress', completed_by: null, at: null });
+    });
+
     test('volver a done registra el nuevo actor y la nueva fecha', async () => {
       await setDoneOld();
       expect((await patch(ids.mgrA, 'manager', { status: 'pending' })).status).toBe(200);
