@@ -7,6 +7,8 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
+import { canAdministerOnboarding, canManageOnboardingTasks } from '@/lib/onboardingRoles'
+import { buildTemplatePayload, TEMPLATE_DUE_DAYS_MAX } from '@/lib/onboardingTemplate'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -34,12 +36,14 @@ const TASK_STATUS = {
   skipped:     { label: 'Omitido',      color: 'bg-slate-100 text-slate-400',   icon: <X size={12} /> },
 }
 
-const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin']
-
 // ─── ProcessDetail ───────────────────────────────────────────────────────────
 
-function ProcessDetail({ id, onClose, onUpdated }: {
+function ProcessDetail({ id, onClose, onUpdated, canAdmin, canManageTasks }: {
   id: number; onClose: () => void; onUpdated: () => void
+  /** Completar / cancelar el proceso (gestión global). */
+  canAdmin: boolean
+  /** Cambiar estado y responsable de las tareas (gestión global o con alcance). */
+  canManageTasks: boolean
 }) {
   const [data, setData] = useState<(Process & { tasks: Task[] }) | null>(null)
   const [loading, setLoading] = useState(true)
@@ -49,14 +53,18 @@ function ProcessDetail({ id, onClose, onUpdated }: {
   const load = useCallback(async () => {
     setLoading(true)
     try {
+      // Candidatos filtrados por el servidor según el alcance del actor y el
+      // proceso (no la búsqueda global de usuarios).
       const [r, ru] = await Promise.all([
         api.get(`/api/onboarding/${id}`),
-        api.get('/api/users/lookup').catch(() => ({ data: [] })),
+        canManageTasks
+          ? api.get(`/api/onboarding/${id}/assignee-candidates`).catch(() => ({ data: { data: [] } }))
+          : Promise.resolve({ data: { data: [] } }),
       ])
       setData(r.data.data)
-      setUsers(ru.data?.data || ru.data || [])
+      setUsers(ru.data?.data || [])
     } finally { setLoading(false) }
-  }, [id])
+  }, [id, canManageTasks])
 
   useEffect(() => { load() }, [load])
 
@@ -148,7 +156,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                   </div>
                 </div>
                 {/* Quick action buttons */}
-                {data.status === 'active' && task.status !== 'done' && (
+                {canManageTasks && data.status === 'active' && task.status !== 'done' && (
                   <div className="flex gap-1 shrink-0">
                     {task.status === 'pending' && (
                       <button onClick={() => updateTask(task.id, { status: 'in_progress' })}
@@ -174,7 +182,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
                 )}
               </div>
               {/* Assignee selector */}
-              {data.status === 'active' && task.status !== 'done' && (
+              {canManageTasks && data.status === 'active' && task.status !== 'done' && (
                 <select
                   value={task.assignee_id || ''}
                   onChange={e => updateTask(task.id, { assignee_id: e.target.value || null })}
@@ -191,7 +199,7 @@ function ProcessDetail({ id, onClose, onUpdated }: {
       </div>
 
       {/* Process actions */}
-      {data.status === 'active' && (
+      {canAdmin && data.status === 'active' && (
         <div className="flex gap-2 pt-2 border-t border-slate-100 dark:border-white/[0.06]">
           <button onClick={() => closeProcess('complete')}
             className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl py-2 text-sm font-medium flex items-center justify-center gap-1.5">
@@ -216,12 +224,11 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [err, setErr] = useState<string | null>(null)
 
   async function submit() {
-    const validTasks = tasks.filter(t => t.title.trim())
-    if (!form.name) { setErr('El nombre es requerido'); return }
-    if (!validTasks.length) { setErr('Se requiere al menos una tarea'); return }
+    const built = buildTemplatePayload(form, tasks)
+    if ('error' in built) { setErr(built.error); return }
     setSaving(true); setErr(null)
     try {
-      await api.post('/api/onboarding/templates', { ...form, tasks: validTasks })
+      await api.post('/api/onboarding/templates', built.payload)
       onCreated(); onClose()
     } catch (e: any) {
       setErr(e?.response?.data?.error || 'Error al guardar')
@@ -290,7 +297,7 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
                       className="border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white dark:bg-white/[0.04] dark:border-white/[0.08]" />
                     <div className="flex items-center gap-1">
                       <span className="text-xs text-slate-500 shrink-0 dark:text-white/40">Vence en</span>
-                      <input type="number" min={1} value={task.due_days}
+                      <input type="number" min={0} max={TEMPLATE_DUE_DAYS_MAX} step={1} value={Number.isNaN(task.due_days) ? '' : task.due_days}
                         onChange={e => updateTask(i, 'due_days', parseInt(e.target.value))}
                         className="w-14 border border-slate-200 rounded-lg px-2 py-1 text-xs bg-white text-center dark:bg-white/[0.04] dark:border-white/[0.08]" />
                       <span className="text-xs text-slate-500 shrink-0 dark:text-white/40">días</span>
@@ -421,7 +428,8 @@ export default function OnboardingPage() {
   const [showNewProcess, setShowNewProcess]   = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
 
-  const isAdmin = ADMIN_ROLES.includes(user?.role || '')
+  const isAdmin = canAdministerOnboarding(user?.role)
+  const canManageTasks = canManageOnboardingTasks(user?.role)
 
   const loadProcesses = useCallback(async () => {
     setLoading(true)
@@ -617,6 +625,8 @@ export default function OnboardingPage() {
               id={selectedId}
               onClose={() => setSelectedId(null)}
               onUpdated={loadProcesses}
+              canAdmin={isAdmin}
+              canManageTasks={canManageTasks}
             />
           </div>
         )}
