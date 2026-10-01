@@ -490,6 +490,22 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       expect(m).toEqual({ status, completed_by: null, at: null });
     });
 
+    test.each([
+      ['{status:"done"}', () => ({ status: 'done' }), null],
+      ['{status:"done", notes:"nueva"}', () => ({ status: 'done', notes: 'nueva' }), 'nueva'],
+    ])('reintento done → done %s por otro actor: conserva exactamente actor y fecha originales', async (label, mk, notes) => {
+      await setDoneOld();
+      await conn.query('UPDATE onboarding_tasks SET notes = NULL WHERE id = ?', [ids.tMeta]);
+      const r = await patch(ids.hr, 'hr', mk());
+      const m = await meta();
+      const [[row]] = await conn.query('SELECT notes FROM onboarding_tasks WHERE id = ?', [ids.tMeta]);
+      evidence.push({ request: `PATCH tasks/tMeta done → done ${label} (hr; original mgrA ${OLD})`, got: r.status, completed_by: m.completed_by, completed_at: m.at, notes: row.notes });
+      expect(r.status).toBe(200);
+      expect(m).toEqual({ status: 'done', completed_by: ids.mgrA, at: OLD });
+      expect(row.notes).toBe(notes);
+      await waitAudit(ids.hr, 'onboarding_task_update', ids.tMeta);
+    });
+
     test('volver a done registra el nuevo actor y la nueva fecha', async () => {
       await setDoneOld();
       expect((await patch(ids.mgrA, 'manager', { status: 'pending' })).status).toBe(200);

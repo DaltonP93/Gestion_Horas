@@ -112,18 +112,29 @@ describe('taskDueDate (plazo de la tarea desde start_date)', () => {
 });
 
 describe('taskCompletionSets (metadatos de finalización en el PATCH)', () => {
-  test('a done: registra actor y fecha', () => {
-    expect(V.taskCompletionSets({ status: 'done' }, 42))
+  test.each(['pending', 'in_progress', 'skipped'])('%s → done: registra actor y fecha', (prev) => {
+    expect(V.taskCompletionSets({ status: 'done' }, 42, prev))
       .toEqual({ sets: ['completed_at = NOW()', 'completed_by = ?'], vals: [42] });
   });
-  test.each(['pending', 'in_progress', 'skipped'])('a %s: limpia ambos campos', (status) => {
-    expect(V.taskCompletionSets({ status }, 42))
+  test('done → done (reintento): conserva exactamente actor y fecha originales', () => {
+    expect(V.taskCompletionSets({ status: 'done' }, 42, 'done')).toEqual({ sets: [], vals: [] });
+    expect(V.taskCompletionSets({ status: 'done', notes: 'nueva' }, 42, 'done')).toEqual({ sets: [], vals: [] });
+  });
+  test('sin estado anterior conocido no se asume "done": registra', () => {
+    expect(V.taskCompletionSets({ status: 'done' }, 42, undefined))
+      .toEqual({ sets: ['completed_at = NOW()', 'completed_by = ?'], vals: [42] });
+  });
+  test.each([
+    ['pending', 'done'], ['in_progress', 'done'], ['skipped', 'done'], ['pending', 'pending'], ['skipped', 'in_progress'],
+  ])('a %s (desde %s): limpia ambos campos', (status, prev) => {
+    expect(V.taskCompletionSets({ status }, 42, prev))
       .toEqual({ sets: ['completed_at = NULL', 'completed_by = NULL'], vals: [] });
   });
   test.each([
     [{ notes: 'n' }], [{ due_date: '2026-10-05' }], [{ assignee_id: 7 }], [{ assignee_id: null, notes: null, due_date: null }],
   ])('%j (sin cambio de estado): conserva los metadatos', (patch) => {
-    expect(V.taskCompletionSets(patch, 42)).toEqual({ sets: [], vals: [] });
+    expect(V.taskCompletionSets(patch, 42, 'done')).toEqual({ sets: [], vals: [] });
+    expect(V.taskCompletionSets(patch, 42, 'pending')).toEqual({ sets: [], vals: [] });
   });
 });
 
