@@ -22,10 +22,13 @@
  *   - Con alcance: manager, coordinator, gestor → sólo evaluaciones de
  *     empleados de su alcance vigente (services/departmentScope).
  *   - supervisor: fuera de la administración (alta, historial, plantillas y
- *     cierre → 403). Puede ser elegido como reviewer; su listado, detalle y
- *     puntuación (como manager) se limitan EXCLUSIVAMENTE a las evaluaciones
- *     donde es el reviewer asignado y el empleado sigue en su alcance vigente
- *     (cambio de sede, sede inactiva o empleado fuera → listado vacío y 404).
+ *     cierre → 403). Puede ser elegido como reviewer. Ve y opera la UNIÓN de:
+ *       · sus evaluaciones PROPIAS (users.employee_id): acceso personal, sin
+ *         depender de su sede ni de su alcance; sólo autoevaluación;
+ *       · las ASIGNADAS (reviewer = su cuenta) con el empleado dentro de su
+ *         alcance vigente: puntuación como manager. Cambio de sede, sede
+ *         inactiva o empleado fuera → la asignada desaparece (404); la propia
+ *         sigue visible. Ser el evaluado nunca habilita puntuar como manager.
  *   - employee: sólo listado, historial, detalle y autoevaluación propios.
  *   - Inexistente y fuera de alcance responden el mismo 404 sin datos.
  *     Listado y total usan exactamente el mismo filtro.
@@ -45,17 +48,17 @@ const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
 const audit = require('../services/audit');
-const { getVisibleDepartmentIds, applyDepartmentScope, canSeeEmployee, isGlobal } = require('../services/departmentScope');
+const { getVisibleDepartmentIds, canSeeEmployee, isGlobal } = require('../services/departmentScope');
 const { findEmployeeInScope, rollbackQuietly } = require('../services/employeeScopeLock');
 const { parsePositiveId } = require('../utils/strictId');
 const V = require('../services/appraisalValidation');
+const { canSeeAppraisal, listScope, ownEmployeeId } = require('../services/appraisalAccess');
 const { escapeLike } = require('../services/userLookup');
 
 router.use(authenticate);
 
 const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin'];
 const MGR_ROLES   = [...ADMIN_ROLES, 'manager', 'coordinator', 'gestor'];
-const SCOPED_MGR_ROLES = new Set(['manager', 'coordinator', 'gestor']);
 /** Roles válidos como reviewer al ASIGNAR: gestión y supervisor (que no administra). */
 const REVIEWER_ROLES = new Set([...MGR_ROLES, 'supervisor']);
 /** Listado: gestión, employee (lo propio) y supervisor (sólo sus asignadas). */
@@ -69,7 +72,6 @@ const INVALID_REVIEWER = { error: 'Reviewer inválido', code: 'INVALID_REVIEWER'
 const NOT_ACTIVE_STATE = (msg) => ({ error: msg, code: 'INVALID_STATE' });
 const badInput = (res, error) => res.status(400).json({ error, code: 'INVALID_INPUT' });
 const serverError = (res) => res.status(500).json({ error: 'Error interno' });
-const ownEmployeeId = (user) => (user && user.employee_id != null ? Number(user.employee_id) : null);
 
 // ─── PLANTILLAS ──────────────────────────────────────────────────────────────
 
@@ -154,37 +156,6 @@ router.delete('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
 });
 
 // ─── EVALUACIONES ────────────────────────────────────────────────────────────
-
-/**
- * ¿Puede el actor ver esta evaluación? `scope` es el alcance vigente del
- * actor; `emp` el empleado evaluado ({ id, department_id }).
- */
-function canSeeAppraisal(user, scope, appraisal, emp) {
-  if (isGlobal(scope)) return true;
-  const assigned = Number(appraisal.reviewer_id) === Number(user.id) && canSeeEmployee(scope, emp);
-  // Supervisor: exclusivamente sus asignadas dentro de su alcance vigente.
-  if (user.role === 'supervisor') return assigned;
-  if (SCOPED_MGR_ROLES.has(user.role) && canSeeEmployee(scope, emp)) return true;
-  if (assigned) return true;
-  return ownEmployeeId(user) === Number(appraisal.employee_id);
-}
-
-/**
- * Filtro del listado (el MISMO para filas y total). Global: sin filtro;
- * gestión con alcance: departamentos de su alcance; supervisor: sus
- * asignadas Y dentro de su alcance (sin alcance → 0 filas); employee: sólo
- * lo propio.
- */
-function listScope(user, scope, where, params) {
-  if (isGlobal(scope)) return { where, params };
-  if (SCOPED_MGR_ROLES.has(user.role)) return applyDepartmentScope(where, params, scope, 'e.department_id');
-  if (user.role === 'supervisor') {
-    return applyDepartmentScope(`${where} AND a.reviewer_id = ?`, [...params, Number(user.id)], scope, 'e.department_id');
-  }
-  const own = ownEmployeeId(user);
-  if (own === null) return { where: `${where} AND 1=0`, params };
-  return { where: `${where} AND a.employee_id = ?`, params: [...params, own] };
-}
 
 router.get('/', authorize(...LIST_ROLES), async (req, res) => {
   try {
