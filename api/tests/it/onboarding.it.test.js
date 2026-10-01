@@ -327,13 +327,15 @@ describeIT('onboarding (integración) — alcance, validación y consistencia', 
       await expectRejected({ method: 'GET', url: `/api/onboarding/${ids.pA}/assignee-candidates`, uid: ids.supA, role: 'supervisor', status: 403 });
     });
 
-    test('relevamiento: /api/users/lookup (global, otros módulos) sigue devolviendo usuarios de otra sede', async () => {
-      // Fuera del alcance de este PR: se documenta, no se corrige. Onboarding
-      // ya no lo usa (ver candidatos filtrados).
+    test('/api/users/lookup (otros módulos) ya no devuelve a un manager usuarios de otra sede', async () => {
+      // Onboarding no lo usa (ver candidatos filtrados); el alcance propio del
+      // lookup se prueba en tests/it/usersLookup.it.test.js.
       const r = await http('GET', '/api/users/lookup', ids.mgrA, 'manager');
       const list = await r.json();
-      evidence.push({ request: 'GET /api/users/lookup (manager A) [relevamiento]', got: r.status, containsUserOfB: Array.isArray(list) && list.some((u) => u.id === ids.uB) });
+      const containsUserOfB = Array.isArray(list) && list.some((u) => u.id === ids.uB);
+      evidence.push({ request: 'GET /api/users/lookup (manager A)', got: r.status, containsUserOfB });
       expect(r.status).toBe(200);
+      expect(containsUserOfB).toBe(false);
     });
   });
 

@@ -84,8 +84,17 @@ día que `start_date` (el valor por defecto 3 sólo aplica si falta); `completed
 `done` y se conservan en un reintento `done` → `done` y en un `PATCH` sin estado; el alta de plantillas se valida entera antes de
 escribir (`due_days` entero de 0 a 3650, sin campos desconocidos ni tareas omitidas
 en silencio). **Sigue pendiente** la vista "Mis tareas" para
-responsables sin rol de gestión (no implementada). `GET /api/users/lookup` sigue
-siendo global para Departamentos y Evaluaciones: fuera de este lote.
+responsables sin rol de gestión (no implementada).
+
+**`GET /api/users/lookup` (lote siguiente, implementado):** roles globales
+(`super_admin`, `admin`, `gth`, `hr`) ven todas las cuentas activas; roles por sede
+(`manager`, `coordinator`, `supervisor`, `gestor`) sólo cuentas activas cuya
+`users.branch_id` está en su alcance (el empleado vinculado no cambia el alcance
+de la cuenta); actor sin sede, con sede inexistente o inactiva → lista vacía, sin
+fallback global. `role` y `search` se validan (400) y `%`, `_` y `\` son literales
+en la búsqueda. Esto sólo cierra la divulgación del selector: las rutas de
+Evaluaciones (lectura, alta, puntuación y cierre) todavía requieren su propio lote
+de alcance y concurrencia.
 
 **Decisiones adoptadas para el próximo lote (base del lote de onboarding):**
 

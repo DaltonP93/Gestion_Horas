@@ -262,8 +262,10 @@ describeIT('GET /api/users/lookup (integración) — alcance por sede de la cuen
         expect(Array.isArray(rows)).toBe(true);
         expect(rows.length).toBeGreaterThan(0);
         for (const row of rows) expect(Object.keys(row).sort()).toEqual(LOOKUP_FIELDS);
-        const names = rows.map((x) => x.full_name);
-        expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }) || 0));
+        // Mismo orden que ORDER BY full_name de la base (misma intercalación).
+        const got = rows.map((x) => x.id);
+        const [ordered] = await conn.query('SELECT id FROM users WHERE id IN (?) ORDER BY full_name', [got]);
+        expect(got).toEqual(ordered.map((x) => x.id));
       }
     });
     test('Departamentos y Evaluaciones reciben la misma forma (arreglo plano)', async () => {
