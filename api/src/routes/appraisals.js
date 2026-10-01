@@ -16,16 +16,56 @@
  *   POST   /api/appraisals/:id/advance        → avanzar estado del workflow
  *   POST   /api/appraisals/:id/close          → cerrar y calcular score final
  *   GET    /api/appraisals/employee/:empId    → historial de un empleado
+ *
+ * ACCESO (evaluaciones)
+ *   - Global: super_admin, admin, gth, hr.
+ *   - Con alcance: manager, coordinator, gestor → sólo evaluaciones de
+ *     empleados de su alcance vigente (services/departmentScope).
+ *   - supervisor: fuera de la administración (listado/historial/alta → 403);
+ *     sólo lee y puntúa como manager si es el reviewer asignado y el
+ *     empleado sigue en su alcance.
+ *   - employee: sólo listado, historial, detalle y autoevaluación propios.
+ *   - Inexistente y fuera de alcance responden el mismo 404 sin datos.
+ *     Listado y total usan exactamente el mismo filtro.
+ *   - El reviewer asignado lee y puntúa como manager mientras su cuenta siga
+ *     activa (authenticate) y el empleado esté en su alcance vigente. Los
+ *     roles globales pueden actuar como override de manager/hr, pero nunca
+ *     envían la autoevaluación de otro.
+ *
+ * CONSISTENCIA: alta, puntuación y cierre corren en una transacción. La
+ * evaluación se bloquea (FOR UPDATE) antes de autorizar; empleado,
+ * plantilla, criterios, reviewer y alcance se leen con bloqueo dentro de la
+ * misma transacción. Rechazo o `affectedRows = 0` → rollback sin escritura ni
+ * auditoría; la auditoría se registra sólo después del commit.
  */
 const router = require('express').Router();
 const { insertId } = require('../utils/insertId');
 const { authenticate, authorize } = require('../middleware/auth');
 const { sequelize } = require('../config/database');
+const audit = require('../services/audit');
+const { getVisibleDepartmentIds, applyDepartmentScope, canSeeEmployee, isGlobal } = require('../services/departmentScope');
+const { findEmployeeInScope, rollbackQuietly } = require('../services/employeeScopeLock');
+const { parsePositiveId } = require('../utils/strictId');
+const V = require('../services/appraisalValidation');
+const { escapeLike } = require('../services/userLookup');
 
 router.use(authenticate);
 
 const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin'];
 const MGR_ROLES   = [...ADMIN_ROLES, 'manager', 'coordinator', 'gestor'];
+const SCOPED_MGR_ROLES = new Set(['manager', 'coordinator', 'gestor']);
+/** Roles válidos como reviewer al ASIGNAR (el supervisor no administra evaluaciones). */
+const REVIEWER_ROLES = new Set([...MGR_ROLES]);
+/** Listado e historial: gestión + el propio employee. */
+const READER_ROLES = [...MGR_ROLES, 'employee'];
+
+const NOT_FOUND = { error: 'Evaluación no encontrada' };
+const EMPLOYEE_NOT_FOUND = { error: 'Empleado no encontrado' };
+const INVALID_REVIEWER = { error: 'Reviewer inválido', code: 'INVALID_REVIEWER' };
+const NOT_ACTIVE_STATE = (msg) => ({ error: msg, code: 'INVALID_STATE' });
+const badInput = (res, error) => res.status(400).json({ error, code: 'INVALID_INPUT' });
+const serverError = (res) => res.status(500).json({ error: 'Error interno' });
+const ownEmployeeId = (user) => (user && user.employee_id != null ? Number(user.employee_id) : null);
 
 // ─── PLANTILLAS ──────────────────────────────────────────────────────────────
 
@@ -41,7 +81,7 @@ router.get('/templates', async (req, res) => {
       ORDER BY t.created_at DESC
     `);
     res.json({ ok: true, data: rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
 router.get('/templates/:id', async (req, res) => {
@@ -56,7 +96,7 @@ router.get('/templates/:id', async (req, res) => {
       { replacements: [id] }
     );
     res.json({ ok: true, data: { ...t, criteria } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
 router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
@@ -83,7 +123,7 @@ router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
     }
     await t.commit();
     res.status(201).json({ ok: true, id: templateId });
-  } catch (err) { await t.rollback(); res.status(500).json({ error: err.message }); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 router.put('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
@@ -98,7 +138,7 @@ router.put('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
     await sequelize.query(`UPDATE appraisal_templates SET ${sets.join(', ')} WHERE id = ?`,
       { replacements: [...vals, id] });
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
 router.delete('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
@@ -106,19 +146,45 @@ router.delete('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
     await sequelize.query('UPDATE appraisal_templates SET active = 0 WHERE id = ?',
       { replacements: [parseInt(req.params.id, 10)] });
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
 // ─── EVALUACIONES ────────────────────────────────────────────────────────────
 
-router.get('/', authorize(...MGR_ROLES), async (req, res) => {
+/**
+ * ¿Puede el actor ver esta evaluación? `scope` es el alcance vigente del
+ * actor; `emp` el empleado evaluado ({ id, department_id }).
+ */
+function canSeeAppraisal(user, scope, appraisal, emp) {
+  if (isGlobal(scope)) return true;
+  if (SCOPED_MGR_ROLES.has(user.role) && canSeeEmployee(scope, emp)) return true;
+  if (Number(appraisal.reviewer_id) === Number(user.id) && canSeeEmployee(scope, emp)) return true;
+  return ownEmployeeId(user) === Number(appraisal.employee_id);
+}
+
+/**
+ * Filtro del listado (el MISMO para filas y total). Global: sin filtro;
+ * gestión con alcance: departamentos de su alcance; employee: sólo lo propio.
+ */
+function listScope(user, scope, where, params) {
+  if (isGlobal(scope)) return { where, params };
+  if (SCOPED_MGR_ROLES.has(user.role)) return applyDepartmentScope(where, params, scope, 'e.department_id');
+  const own = ownEmployeeId(user);
+  if (own === null) return { where: `${where} AND 1=0`, params };
+  return { where: `${where} AND a.employee_id = ?`, params: [...params, own] };
+}
+
+router.get('/', authorize(...READER_ROLES), async (req, res) => {
   try {
-    const { status, employee_id, period, limit = 50, offset = 0 } = req.query;
+    const q = V.validateListQuery(req.query);
+    if (!q.ok) return badInput(res, q.error);
+    const { status, employeeId, period, limit, offset } = q.value;
     const conds = []; const params = [];
-    if (status)      { conds.push('a.status = ?');       params.push(status); }
-    if (employee_id) { conds.push('a.employee_id = ?');  params.push(employee_id); }
-    if (period)      { conds.push('a.period_label LIKE ?'); params.push(`%${period}%`); }
-    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+    if (status)     { conds.push('a.status = ?');           params.push(status); }
+    if (employeeId) { conds.push('a.employee_id = ?');      params.push(employeeId); }
+    if (period)     { conds.push("a.period_label LIKE ? ESCAPE '!'"); params.push(`%${escapeLike(period)}%`); }
+    const sc = listScope(req.user, await getVisibleDepartmentIds(req.user),
+      `WHERE 1=1${conds.map((c) => ` AND ${c}`).join('')}`, params);
 
     const [rows] = await sequelize.query(`
       SELECT a.id, a.period_label, a.status, a.due_date, a.final_score, a.created_at,
@@ -131,25 +197,28 @@ router.get('/', authorize(...MGR_ROLES), async (req, res) => {
       LEFT JOIN departments d ON d.id = e.department_id
       JOIN appraisal_templates t ON t.id = a.template_id
       LEFT JOIN users u ON u.id = a.reviewer_id
-      ${where}
-      ORDER BY a.created_at DESC
+      ${sc.where}
+      ORDER BY a.created_at DESC, a.id DESC
       LIMIT ? OFFSET ?
-    `, { replacements: [...params, parseInt(limit), parseInt(offset)] });
+    `, { replacements: [...sc.params, limit, offset] });
 
     const [[{ total }]] = await sequelize.query(
-      `SELECT COUNT(*) AS total FROM appraisals a ${where}`, { replacements: params }
+      `SELECT COUNT(*) AS total FROM appraisals a JOIN employees e ON e.id = a.employee_id ${sc.where}`,
+      { replacements: sc.params }
     );
-    res.json({ ok: true, data: rows, total, limit: parseInt(limit), offset: parseInt(offset) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json({ ok: true, data: rows, total: Number(total), limit, offset });
+  } catch (err) { serverError(res); }
 });
 
-// Historial de un empleado (admin/manager puede ver cualquiera; empleado solo el suyo)
-router.get('/employee/:empId', async (req, res) => {
+// Historial de un empleado: gestión dentro de su alcance; employee sólo el suyo.
+router.get('/employee/:empId', authorize(...READER_ROLES), async (req, res) => {
   try {
-    const empId = parseInt(req.params.empId, 10);
-    const isAdmin = MGR_ROLES.includes(req.user.role);
-    if (!isAdmin && req.user.employee_id !== empId)
-      return res.status(403).json({ error: 'Sin permiso' });
+    const empId = parsePositiveId(req.params.empId);
+    if (empId === null) return badInput(res, 'Identificador de empleado inválido');
+    const visible = req.user.role === 'employee'
+      ? ownEmployeeId(req.user) === empId
+      : !!(await findEmployeeInScope(req.user, empId));
+    if (!visible) return res.status(404).json(EMPLOYEE_NOT_FOUND);
 
     const [rows] = await sequelize.query(`
       SELECT a.id, a.period_label, a.status, a.final_score, a.due_date, a.closed_at,
@@ -157,18 +226,20 @@ router.get('/employee/:empId', async (req, res) => {
       FROM appraisals a
       JOIN appraisal_templates t ON t.id = a.template_id
       WHERE a.employee_id = ?
-      ORDER BY a.created_at DESC
+      ORDER BY a.created_at DESC, a.id DESC
     `, { replacements: [empId] });
     res.json({ ok: true, data: rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { serverError(res); }
 });
 
 router.get('/:id', async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de evaluación inválido');
     const [[a]] = await sequelize.query(`
       SELECT a.*,
              CONCAT(e.first_name,' ',e.last_name) AS employee_name, e.code AS employee_code,
+             e.department_id AS employee_department_id,
              d.name AS department_name,
              t.name AS template_name, t.scale_min, t.scale_max,
              u.full_name AS reviewer_name,
@@ -181,14 +252,11 @@ router.get('/:id', async (req, res) => {
       LEFT JOIN users cb ON cb.id = a.created_by
       WHERE a.id = ?
     `, { replacements: [id] });
-    if (!a) return res.status(404).json({ error: 'Evaluación no encontrada' });
-
-    // Verificar acceso: admin/mgr, o el propio empleado, o el reviewer
-    const isAdmin = MGR_ROLES.includes(req.user.role);
-    const isReviewer = req.user.id === a.reviewer_id;
-    const isEmployee = req.user.employee_id === a.employee_id;
-    if (!isAdmin && !isReviewer && !isEmployee)
-      return res.status(403).json({ error: 'Sin permiso' });
+    const scope = await getVisibleDepartmentIds(req.user);
+    const emp = a && { id: Number(a.employee_id), department_id: a.employee_department_id == null ? null : Number(a.employee_department_id) };
+    // Inexistente y sin acceso: el mismo 404, sin datos.
+    if (!a || !canSeeAppraisal(req.user, scope, a, emp)) return res.status(404).json(NOT_FOUND);
+    const { employee_department_id: _omit, ...appraisal } = a;
 
     const [criteria] = await sequelize.query(
       'SELECT * FROM appraisal_template_criteria WHERE template_id = ? ORDER BY sort_order, id',
@@ -201,117 +269,175 @@ router.get('/:id', async (req, res) => {
        WHERE s.appraisal_id = ?`,
       { replacements: [id] }
     );
-    res.json({ ok: true, data: { ...a, criteria, scores } });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json({ ok: true, data: { ...appraisal, criteria, scores } });
+  } catch (err) { serverError(res); }
 });
 
-router.post('/', authorize(...MGR_ROLES), async (req, res) => {
-  const { template_id, employee_id, reviewer_id, period_label, due_date } = req.body || {};
-  if (!template_id || !employee_id || !period_label)
-    return res.status(400).json({ error: 'template_id, employee_id y period_label son requeridos' });
-  try {
-    const [[tmpl]] = await sequelize.query(
-      'SELECT id FROM appraisal_templates WHERE id = ? AND active = 1', { replacements: [template_id] }
-    );
-    if (!tmpl) return res.status(400).json({ error: 'Plantilla no encontrada o inactiva' });
+/**
+ * ¿Puede asignarse esta cuenta como reviewer del empleado? Cuenta existente,
+ * ACTIVA, con rol de gestión; si el actor tiene alcance, la cuenta debe ser
+ * de una sede de su alcance (igual que /api/users/lookup); y el empleado
+ * debe estar dentro del alcance VIGENTE del reviewer. Todo con FOR SHARE.
+ */
+async function reviewerAllowed(actorScope, reviewerId, emp, transaction) {
+  const [[u]] = await sequelize.query(
+    'SELECT id, role, active, branch_id FROM users WHERE id = ? LIMIT 1 FOR SHARE',
+    { replacements: [reviewerId], transaction }
+  );
+  if (!u || !Number(u.active) || !REVIEWER_ROLES.has(u.role)) return false;
+  if (!isGlobal(actorScope)) {
+    const branches = Array.isArray(actorScope && actorScope.branchIds) ? actorScope.branchIds : [];
+    if (u.branch_id == null || !branches.includes(Number(u.branch_id))) return false;
+  }
+  const reviewerScope = await getVisibleDepartmentIds({ id: Number(u.id), role: u.role }, { transaction });
+  return canSeeEmployee(reviewerScope, emp);
+}
 
+router.post('/', authorize(...MGR_ROLES), async (req, res) => {
+  const v = V.validateCreate(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  const { templateId, employeeId, reviewerId, periodLabel, dueDate } = v.value;
+  let t;
+  try {
+    t = await sequelize.transaction();
+    const [[tmpl]] = await sequelize.query(
+      'SELECT id FROM appraisal_templates WHERE id = ? AND active = 1 LIMIT 1 FOR SHARE',
+      { replacements: [templateId], transaction: t }
+    );
+    if (!tmpl) {
+      await rollbackQuietly(t);
+      return res.status(400).json({ error: 'Plantilla no encontrada o inactiva', code: 'INVALID_TEMPLATE' });
+    }
+    const emp = await findEmployeeInScope(req.user, employeeId, { transaction: t, lock: true });
+    if (!emp) { await rollbackQuietly(t); return res.status(404).json(EMPLOYEE_NOT_FOUND); }
+    if (reviewerId !== null) {
+      const scope = await getVisibleDepartmentIds(req.user, { transaction: t });
+      if (!(await reviewerAllowed(scope, reviewerId, emp, t))) { await rollbackQuietly(t); return res.status(400).json(INVALID_REVIEWER); }
+    }
     const [r] = await sequelize.query(
       `INSERT INTO appraisals (template_id, employee_id, reviewer_id, period_label, due_date, status, created_by)
        VALUES (?, ?, ?, ?, ?, 'self_pending', ?)`,
-      { replacements: [template_id, employee_id, reviewer_id || null, period_label, due_date || null, req.user.id] }
+      { replacements: [templateId, employeeId, reviewerId, periodLabel, dueDate, req.user.id], transaction: t }
     );
-    res.status(201).json({ ok: true, id: insertId(r) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const id = insertId(r);
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'appraisal_create', entity: 'appraisals', entity_id: id, details: { employee_id: employeeId, status: 'self_pending' } });
+    res.status(201).json({ ok: true, id });
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 // POST /:id/score — enviar puntajes (self / manager / hr)
 router.post('/:id/score', async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { scorer_role, scores } = req.body || {};
-  if (!['self','manager','hr'].includes(scorer_role))
-    return res.status(400).json({ error: 'scorer_role inválido' });
-  if (!Array.isArray(scores) || scores.length === 0)
-    return res.status(400).json({ error: 'scores[] es requerido' });
-
+  const id = parsePositiveId(req.params.id);
+  if (id === null) return badInput(res, 'Identificador de evaluación inválido');
+  const v = V.validateScoreBody(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  const { scorerRole, scores } = v.value;
+  let t;
   try {
+    t = await sequelize.transaction();
+    const scope = await getVisibleDepartmentIds(req.user, { transaction: t });
+    // La evaluación se bloquea ANTES de autorizar: estado, reviewer y empleado
+    // se evalúan sobre el valor vigente.
     const [[a]] = await sequelize.query(
-      'SELECT * FROM appraisals WHERE id = ?', { replacements: [id] }
+      'SELECT id, template_id, employee_id, reviewer_id, status FROM appraisals WHERE id = ? LIMIT 1 FOR UPDATE',
+      { replacements: [id], transaction: t }
     );
-    if (!a) return res.status(404).json({ error: 'Evaluación no encontrada' });
-    if (a.status === 'closed') return res.status(409).json({ error: 'Evaluación cerrada' });
+    const [[e]] = a ? await sequelize.query(
+      'SELECT id, department_id FROM employees WHERE id = ? LIMIT 1 FOR SHARE',
+      { replacements: [a.employee_id], transaction: t }
+    ) : [[null]];
+    const emp = e && { id: Number(e.id), department_id: e.department_id == null ? null : Number(e.department_id) };
+    if (!a || !emp || !canSeeAppraisal(req.user, scope, a, emp)) { await rollbackQuietly(t); return res.status(404).json(NOT_FOUND); }
 
-    // Validar que el usuario tiene el rol correcto
-    const isAdmin = ADMIN_ROLES.includes(req.user.role);
-    const isReviewer = req.user.id === a.reviewer_id;
-    const isEmployee = req.user.employee_id === a.employee_id;
-    if (scorer_role === 'self' && !isEmployee && !isAdmin)
-      return res.status(403).json({ error: 'Solo el empleado puede hacer auto-evaluación' });
-    if (scorer_role === 'manager' && !isReviewer && !isAdmin)
-      return res.status(403).json({ error: 'Solo el manager asignado puede evaluar' });
-    if (scorer_role === 'hr' && !isAdmin)
-      return res.status(403).json({ error: 'Solo RRHH puede enviar evaluación HR' });
+    const isOwn = ownEmployeeId(req.user) === Number(a.employee_id);
+    const isReviewer = Number(a.reviewer_id) === Number(req.user.id) && canSeeEmployee(scope, emp);
+    const allowed = scorerRole === 'self' ? isOwn
+      : scorerRole === 'manager' ? (isReviewer || isGlobal(scope))
+      : isGlobal(scope);
+    if (!allowed) {
+      await rollbackQuietly(t);
+      const msg = { self: 'Sólo el empleado puede enviar su autoevaluación', manager: 'Sólo el reviewer asignado puede evaluar como manager', hr: 'Sólo RR.HH. puede enviar la evaluación de RR.HH.' };
+      return res.status(403).json({ error: msg[scorerRole] });
+    }
+    const state = V.SCORE_STATE[scorerRole];
+    if (a.status !== state.from) { await rollbackQuietly(t); return res.status(409).json(NOT_ACTIVE_STATE('La evaluación no está en el estado correspondiente')); }
+    if (scorerRole === 'hr') {
+      const [[{ n }]] = await sequelize.query(
+        "SELECT COUNT(*) AS n FROM appraisal_scores WHERE appraisal_id = ? AND scorer_role = 'hr' FOR SHARE",
+        { replacements: [id], transaction: t }
+      );
+      if (Number(n) > 0) { await rollbackQuietly(t); return res.status(409).json(NOT_ACTIVE_STATE('La evaluación de RR.HH. ya fue enviada')); }
+    }
 
-    // Guardar cada puntaje
-    const t = await sequelize.transaction();
-    try {
-      for (const { criteria_id, score, comment } of scores) {
-        if (!criteria_id || score == null) continue;
-        await sequelize.query(
-          `INSERT INTO appraisal_scores (appraisal_id, criteria_id, scorer_role, score, comment, scored_by)
-           VALUES (?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE score = VALUES(score), comment = VALUES(comment),
-                                   scored_by = VALUES(scored_by), scored_at = NOW()`,
-          { replacements: [id, criteria_id, scorer_role, score, comment || null, req.user.id], transaction: t }
-        );
-      }
-      // Avanzar estado automáticamente
-      let nextStatus = a.status;
-      if (scorer_role === 'self'    && a.status === 'self_pending')    nextStatus = 'manager_pending';
-      if (scorer_role === 'manager' && a.status === 'manager_pending') nextStatus = 'hr_review';
-      if (nextStatus !== a.status) {
-        await sequelize.query('UPDATE appraisals SET status = ? WHERE id = ?',
-          { replacements: [nextStatus, id], transaction: t });
-      }
-      await t.commit();
-      res.json({ ok: true, status: nextStatus });
-    } catch (e) { await t.rollback(); throw e; }
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const [[tmpl]] = await sequelize.query(
+      'SELECT scale_min, scale_max FROM appraisal_templates WHERE id = ? LIMIT 1 FOR SHARE',
+      { replacements: [a.template_id], transaction: t }
+    );
+    const [crit] = await sequelize.query(
+      'SELECT id FROM appraisal_template_criteria WHERE template_id = ? FOR SHARE',
+      { replacements: [a.template_id], transaction: t }
+    );
+    const check = tmpl && V.checkScoresAgainstTemplate(scores, crit.map((c) => c.id), tmpl.scale_min, tmpl.scale_max);
+    if (!check || !check.ok) { await rollbackQuietly(t); return badInput(res, check ? check.error : 'Plantilla inválida'); }
+
+    for (const s of scores) {
+      await sequelize.query(
+        `INSERT INTO appraisal_scores (appraisal_id, criteria_id, scorer_role, score, comment, scored_by)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        { replacements: [id, s.criteriaId, scorerRole, s.score, s.comment, req.user.id], transaction: t }
+      );
+    }
+    if (state.to !== state.from) {
+      const [u] = await sequelize.query(
+        'UPDATE appraisals SET status = ? WHERE id = ? AND status = ?',
+        { replacements: [state.to, id, state.from], transaction: t }
+      );
+      if (!u || !u.affectedRows) { await rollbackQuietly(t); return res.status(409).json(NOT_ACTIVE_STATE('La evaluación no está en el estado correspondiente')); }
+    }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'appraisal_score', entity: 'appraisals', entity_id: id, details: { role: scorerRole, from: state.from, to: state.to, count: scores.length } });
+    res.json({ ok: true, status: state.to });
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
-// POST /:id/close — HR cierra la evaluación y calcula score final ponderado
+// POST /:id/close — RR.HH. cierra la evaluación y calcula el score final ponderado:
+// desde manager_pending con la autoevaluación; desde hr_review con la del manager.
 router.post('/:id/close', authorize(...ADMIN_ROLES), async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { hr_comment } = req.body || {};
+  const id = parsePositiveId(req.params.id);
+  if (id === null) return badInput(res, 'Identificador de evaluación inválido');
+  const v = V.validateCloseBody(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  let t;
   try {
+    t = await sequelize.transaction();
     const [[a]] = await sequelize.query(
-      'SELECT a.*, t.scale_max FROM appraisals a JOIN appraisal_templates t ON t.id = a.template_id WHERE a.id = ?',
-      { replacements: [id] }
+      'SELECT id, status FROM appraisals WHERE id = ? LIMIT 1 FOR UPDATE',
+      { replacements: [id], transaction: t }
     );
-    if (!a) return res.status(404).json({ error: 'Evaluación no encontrada' });
-    if (a.status === 'closed') return res.status(409).json({ error: 'Ya está cerrada' });
+    if (!a) { await rollbackQuietly(t); return res.status(404).json(NOT_FOUND); }
+    const preferRole = V.CLOSE_FROM[a.status];
+    if (!preferRole) { await rollbackQuietly(t); return res.status(409).json(NOT_ACTIVE_STATE('La evaluación no se puede cerrar en su estado actual')); }
 
-    // Calcular promedio ponderado de puntajes de manager (o self si no hay manager)
-    const preferRole = a.status === 'hr_review' ? 'manager' : 'self';
     const [scores] = await sequelize.query(`
       SELECT s.score, c.weight
       FROM appraisal_scores s
       JOIN appraisal_template_criteria c ON c.id = s.criteria_id
       WHERE s.appraisal_id = ? AND s.scorer_role = ?
-    `, { replacements: [id, preferRole] });
+      FOR SHARE
+    `, { replacements: [id, preferRole], transaction: t });
+    const finalScore = V.computeFinalScore(scores);
 
-    let finalScore = null;
-    if (scores.length > 0) {
-      const totalWeight = scores.reduce((acc, r) => acc + parseFloat(r.weight), 0);
-      const weighted = scores.reduce((acc, r) => acc + r.score * parseFloat(r.weight), 0);
-      finalScore = totalWeight > 0 ? Math.round((weighted / totalWeight) * 100) / 100 : null;
-    }
-
-    await sequelize.query(
-      `UPDATE appraisals SET status='closed', final_score=?, hr_comment=?, closed_at=NOW() WHERE id=?`,
-      { replacements: [finalScore, hr_comment || null, id] }
+    const [u] = await sequelize.query(
+      `UPDATE appraisals SET status = 'closed', final_score = ?, hr_comment = ?, closed_at = NOW()
+        WHERE id = ? AND status = ?`,
+      { replacements: [finalScore, v.value.hrComment, id, a.status], transaction: t }
     );
+    if (!u || !u.affectedRows) { await rollbackQuietly(t); return res.status(409).json(NOT_ACTIVE_STATE('La evaluación no se puede cerrar en su estado actual')); }
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'appraisal_close', entity: 'appraisals', entity_id: id, details: { from: a.status, to: 'closed', count: scores.length } });
     res.json({ ok: true, final_score: finalScore });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 module.exports = router;

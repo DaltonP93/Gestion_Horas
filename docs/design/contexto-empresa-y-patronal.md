@@ -92,9 +92,25 @@ responsables sin rol de gestión (no implementada).
 `users.branch_id` está en su alcance (el empleado vinculado no cambia el alcance
 de la cuenta); actor sin sede, con sede inexistente o inactiva → lista vacía, sin
 fallback global. `role` y `search` se validan (400) y `%`, `_` y `\` son literales
-en la búsqueda. Esto sólo cierra la divulgación del selector: las rutas de
-Evaluaciones (lectura, alta, puntuación y cierre) todavía requieren su propio lote
-de alcance y concurrencia.
+en la búsqueda. Esto sólo cierra la divulgación del selector.
+
+**Evaluaciones de desempeño (lote siguiente, implementado):** roles globales con
+acceso total; `manager`/`coordinator`/`gestor` sólo evaluaciones de empleados de su
+alcance vigente; `supervisor` fuera de la administración (sólo lo que tenga
+asignado como reviewer, mientras el empleado siga en su alcance); `employee` sólo lo
+propio. Inexistente y fuera de alcance → el mismo 404; listado y total con el mismo
+filtro. Alta, puntuación y cierre en una transacción con la evaluación bloqueada
+antes de autorizar: criterios exactos de la plantilla y dentro de escala, cada rol
+sólo en su estado (`self` → `self_pending`, `manager` → `manager_pending`, `hr` →
+`hr_review`, una vez), cierre sólo desde `manager_pending` (usa la autoevaluación) o
+`hr_review` (usa la del manager), y auditoría después del commit.
+
+**Pendiente (plantillas de evaluación, fuera de este lote):** `GET /templates*`
+legibles por cualquier cuenta autenticada; `PUT`/`DELETE` sin verificar existencia
+ni validar el cuerpo (`active` sin normalizar) y con `parseInt` en el id; `POST`
+omite en silencio criterios sin nombre y no valida escala (`scale_min < scale_max`)
+ni pesos; editar o desactivar una plantilla con evaluaciones abiertas no está
+acotado.
 
 **Decisiones adoptadas para el próximo lote (base del lote de onboarding):**
 
