@@ -38,7 +38,8 @@
  * registra sólo después del commit. Se mantiene el autocompletado del
  * proceso cuando no quedan tareas pendientes (sin reapertura ni estados
  * nuevos). `completed_at`/`completed_by` de la tarea se fijan al pasar a
- * `done` y se limpian al salir de `done`; un PATCH sin estado los conserva.
+ * `done` desde otro estado y se limpian al salir de `done`; un reintento
+ * `done` → `done` o un PATCH sin estado los conserva.
  *
  * PLANTILLAS: el alta se valida entera (plantilla y cada tarea, sin omitir
  * tareas inválidas) antes de abrir la transacción. `due_days` es un entero
@@ -374,6 +375,15 @@ router.post('/:id/cancel', authorize(...ADMIN_ROLES), closeProcessHandler('cance
 
 // ─── TAREAS ───────────────────────────────────────────────────────────────────
 
+/** ¿La tarea sigue existiendo en ese proceso? (dentro de la transacción, FOR UPDATE) */
+async function taskStillLocked(taskId, processId, transaction) {
+  const [[row]] = await sequelize.query(
+    'SELECT id FROM onboarding_tasks WHERE id = ? AND process_id = ? LIMIT 1 FOR UPDATE',
+    { replacements: [taskId, processId], transaction }
+  );
+  return !!row;
+}
+
 router.patch('/tasks/:taskId', authorize(...MGR_ROLES), async (req, res) => {
   const taskId = parsePositiveId(req.params.taskId);
   if (taskId === null) return badInput(res, 'Identificador de tarea inválido');
@@ -386,7 +396,7 @@ router.patch('/tasks/:taskId', authorize(...MGR_ROLES), async (req, res) => {
     const scope = await getVisibleDepartmentIds(req.user, { transaction: t });
     // Orden de bloqueo: tarea → proceso → empleado (todo desde lo GUARDADO).
     const [[task]] = await sequelize.query(
-      'SELECT id, process_id FROM onboarding_tasks WHERE id = ? LIMIT 1 FOR UPDATE',
+      'SELECT id, process_id, status FROM onboarding_tasks WHERE id = ? LIMIT 1 FOR UPDATE',
       { replacements: [taskId], transaction: t }
     );
     if (!task) { await rollbackQuietly(t); return res.status(404).json(TASK_NOT_FOUND); }
@@ -404,16 +414,23 @@ router.patch('/tasks/:taskId', authorize(...MGR_ROLES), async (req, res) => {
     }
 
     const fields = Object.keys(patch);
-    // Metadatos de finalización en el MISMO UPDATE: a done → actor y fecha;
-    // a otro estado → NULL; sin cambio de estado → se conservan.
-    const completion = V.taskCompletionSets(patch, req.user.id);
+    // Metadatos de finalización en el MISMO UPDATE, según el estado guardado
+    // (leído bajo el FOR UPDATE): a done → actor y fecha; done → done → se
+    // conservan; a otro estado → NULL; sin cambio de estado → se conservan.
+    const completion = V.taskCompletionSets(patch, req.user.id, task.status);
     const sets = [...fields.map((k) => `${k} = ?`), ...completion.sets];
     const vals = [...fields.map((k) => patch[k]), ...completion.vals];
     const [r] = await sequelize.query(
       `UPDATE onboarding_tasks SET ${sets.join(', ')} WHERE id = ? AND process_id = ?`,
       { replacements: [...vals, taskId, proc.id], transaction: t }
     );
-    if (!r || !r.affectedRows) { await rollbackQuietly(t); return res.status(404).json(TASK_NOT_FOUND); }
+    // affectedRows cuenta filas CAMBIADAS: 0 también es un PATCH sin cambios
+    // reales (p. ej. done → done). Se distingue releyendo la fila bajo el
+    // mismo bloqueo: si sigue existiendo es un no-op válido; si no, 404.
+    if (!r || (!r.affectedRows && !(await taskStillLocked(taskId, proc.id, t)))) {
+      await rollbackQuietly(t);
+      return res.status(404).json(TASK_NOT_FOUND);
+    }
 
     // Si todas las tareas están done/skipped → auto-completar proceso (contrato actual).
     const [[{ pending }]] = await sequelize.query(

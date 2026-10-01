@@ -80,8 +80,8 @@ listado, detalle, candidatos (`GET /api/onboarding/:id/assignee-candidates`) y
 `PATCH`, validación estricta, responsables activos y dentro del alcance, y
 transacciones con bloqueo. Seguimiento de revisión: `due_days = 0` vence el mismo
 día que `start_date` (el valor por defecto 3 sólo aplica si falta); `completed_at`/
-`completed_by` se fijan al pasar a `done`, se limpian al salir de `done` y se
-conservan en un `PATCH` sin estado; el alta de plantillas se valida entera antes de
+`completed_by` se fijan al pasar a `done` desde otro estado, se limpian al salir de
+`done` y se conservan en un reintento `done` → `done` y en un `PATCH` sin estado; el alta de plantillas se valida entera antes de
 escribir (`due_days` entero de 0 a 3650, sin campos desconocidos ni tareas omitidas
 en silencio). **Sigue pendiente** la vista "Mis tareas" para
 responsables sin rol de gestión (no implementada). `GET /api/users/lookup` sigue

@@ -53,14 +53,19 @@ function taskDueDate(startDate, dueDays) {
 }
 
 /**
- * Metadatos de finalización para el UPDATE del PATCH de tarea:
- *   - a `done`: `completed_at = NOW()` y `completed_by = actor`;
- *   - a cualquier otro estado: ambos a NULL;
- *   - sin cambio de estado: no se tocan.
+ * Metadatos de finalización para el UPDATE del PATCH de tarea, según el
+ * estado GUARDADO (`previousStatus`) y el nuevo:
+ *   - sin `status` en el PATCH: no se tocan;
+ *   - de otro estado a `done`: `completed_at = NOW()` y `completed_by = actor`;
+ *   - de `done` a `done` (reintento): no se tocan (actor y fecha originales);
+ *   - a cualquier otro estado: ambos a NULL.
  */
-function taskCompletionSets(patch, actorId) {
+function taskCompletionSets(patch, actorId, previousStatus) {
   if (!('status' in patch)) return { sets: [], vals: [] };
-  if (patch.status === 'done') return { sets: ['completed_at = NOW()', 'completed_by = ?'], vals: [actorId] };
+  if (patch.status === 'done') {
+    if (previousStatus === 'done') return { sets: [], vals: [] };
+    return { sets: ['completed_at = NOW()', 'completed_by = ?'], vals: [actorId] };
+  }
   return { sets: ['completed_at = NULL', 'completed_by = NULL'], vals: [] };
 }
 
