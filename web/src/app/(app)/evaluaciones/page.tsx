@@ -4,6 +4,7 @@ import { Star, Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, AlertCircle,
          ClipboardList, X, Save, Award, Users, FileText, BarChart2 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
+import { appraisalPageActions, appraisalDetailActions, reviewerLookupUrl } from '@/lib/appraisalRoles'
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip } from 'recharts'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -27,9 +28,6 @@ const STATUS_LABELS: Record<string, { label: string; color: string; icon: React.
   hr_review:       { label: 'Revisión RRHH',     color: 'bg-violet-100 text-violet-700', icon: <ClipboardList size={12} /> },
   closed:          { label: 'Cerrada',           color: 'bg-emerald-100 text-emerald-700', icon: <CheckCircle2 size={12} /> },
 }
-
-const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin']
-const MGR_ROLES   = [...ADMIN_ROLES, 'manager', 'coordinator', 'gestor']
 
 // ─── ScoreForm — completar una evaluación ───────────────────────────────────
 
@@ -141,15 +139,15 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
     <div className="flex items-center justify-center h-48 text-slate-400 text-sm dark:text-white/30">Cargando…</div>
   )
 
-  const isAdmin  = ADMIN_ROLES.includes(user?.role || '')
-  const isMgr    = MGR_ROLES.includes(user?.role || '')
-  const isEmployee = user?.employee_id === data.employee_id
-  const isReviewer = user?.id === data.reviewer_id
-
   // Determinar qué puntajes ya existen
   const scored = (role: string) => (data.scores || []).filter(s => s.scorer_role === role)
   const selfScored    = scored('self').length > 0
   const managerScored = scored('manager').length > 0
+  const actions = appraisalDetailActions({
+    role: user?.role, userId: user?.id, userEmployeeId: user?.employee_id,
+    status: data.status, employeeId: data.employee_id, reviewerId: data.reviewer_id,
+    selfScored, managerScored,
+  })
 
   // Calcular promedio para el radar chart
   const criteriaMap = Object.fromEntries((data.criteria || []).map(c => [c.id, c.name]))
@@ -218,19 +216,19 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
       {/* Formulario de evaluación si corresponde y no está cerrada */}
       {data.status !== 'closed' && !filling && (
         <div className="flex flex-wrap gap-2">
-          {data.status === 'self_pending' && isEmployee && !selfScored && (
+          {actions.selfScore && (
             <button onClick={() => setFilling('self')}
               className="flex-1 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-2">
               <Star size={16} /> Hacer auto-evaluación
             </button>
           )}
-          {data.status === 'manager_pending' && (isReviewer || isAdmin) && !managerScored && (
+          {actions.managerScore && (
             <button onClick={() => setFilling('manager')}
               className="flex-1 bg-sky-600 hover:bg-sky-700 text-white rounded-xl px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-2">
               <Users size={16} /> Evaluar como manager
             </button>
           )}
-          {data.status === 'hr_review' && isAdmin && (
+          {actions.hrScore && (
             <button onClick={() => setFilling('hr')}
               className="flex-1 bg-amber-600 hover:bg-amber-700 text-white rounded-xl px-4 py-2.5 text-sm font-medium flex items-center justify-center gap-2">
               <ClipboardList size={16} /> Evaluación RRHH
@@ -248,7 +246,7 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
       )}
 
       {/* Cierre (HR) */}
-      {(data.status === 'hr_review' || data.status === 'manager_pending') && isAdmin && !filling && (
+      {actions.close && !filling && (
         <div className="border-t border-slate-200 pt-4 space-y-2 dark:border-white/[0.08]">
           <textarea rows={2} value={hrComment} onChange={e => setHrComment(e.target.value)}
             placeholder="Comentario de cierre (opcional)…"
@@ -425,7 +423,7 @@ function NewAppraisalModal({ onClose, onCreated }: { onClose: () => void; onCrea
   useEffect(() => {
     api.get('/api/appraisals/templates').then(r => setTemplates(r.data.data || []))
     api.get('/api/employees?limit=500').then(r => setEmployees(r.data.data || r.data || []))
-    api.get('/api/users/lookup?role=manager,coordinator,gestor,admin,gth,hr').then(r => setReviewers(r.data.data || r.data || []))
+    api.get(reviewerLookupUrl()).then(r => setReviewers(r.data.data || r.data || []))
       .catch(() => {})
   }, [])
 
@@ -525,22 +523,24 @@ export default function EvaluacionesPage() {
   const [showNewAppraisal, setShowNewAppraisal] = useState(false)
   const [showNewTemplate, setShowNewTemplate]   = useState(false)
 
-  const isAdmin = ADMIN_ROLES.includes(user?.role || '')
-  const isMgr   = MGR_ROLES.includes(user?.role || '')
+  const pa = appraisalPageActions(user?.role)
+  const canList = pa.loadList
 
   const loadAppraisals = useCallback(async () => {
+    // El servidor filtra por alcance (employee: sólo las propias; supervisor:
+    // propias + asignadas en su alcance). Un rol sin listado no consulta.
+    if (!canList) { setAppraisals([]); setTotal(0); setLoading(false); return }
     setLoading(true)
     try {
       const params = new URLSearchParams({ limit: '50' })
       if (statusFilter) params.set('status', statusFilter)
-      // Empleados ven solo su historial
-      if (!isMgr && user?.employee_id)
-        params.set('employee_id', String(user.employee_id))
       const res = await api.get(`/api/appraisals?${params}`)
       setAppraisals(res.data.data || [])
       setTotal(res.data.total || 0)
+    } catch {
+      setAppraisals([]); setTotal(0)
     } finally { setLoading(false) }
-  }, [statusFilter, isMgr, user?.employee_id])
+  }, [statusFilter, canList])
 
   const loadTemplates = useCallback(async () => {
     const res = await api.get('/api/appraisals/templates?all=1')
@@ -569,12 +569,14 @@ export default function EvaluacionesPage() {
           </h1>
           <p className="text-sm text-slate-500 mt-0.5 dark:text-white/40">Ciclos de evaluación 360°, auto-evaluación y feedback de managers.</p>
         </div>
-        {isMgr && (
+        {pa.newAppraisal && (
           <div className="flex gap-2">
-            <button onClick={() => setShowNewTemplate(true)}
-              className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
-              <FileText size={16} /> Nueva plantilla
-            </button>
+            {pa.newTemplate && (
+              <button onClick={() => setShowNewTemplate(true)}
+                className="flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl px-4 py-2 text-sm font-medium dark:text-white/80 dark:border-white/[0.08] dark:hover:bg-white/[0.04]">
+                <FileText size={16} /> Nueva plantilla
+              </button>
+            )}
             <button onClick={() => setShowNewAppraisal(true)}
               className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl px-4 py-2 text-sm font-medium">
               <Plus size={16} /> Nueva evaluación
@@ -584,7 +586,7 @@ export default function EvaluacionesPage() {
       </div>
 
       {/* KPI strip */}
-      {isMgr && (
+      {pa.kpis && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {Object.entries(STATUS_LABELS).map(([k, v]) => (
             <button key={k} onClick={() => setStatusFilter(statusFilter === k ? '' : k)}
@@ -599,7 +601,7 @@ export default function EvaluacionesPage() {
       )}
 
       {/* Tabs */}
-      {isMgr && (
+      {pa.templatesTab && (
         <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit dark:bg-white/[0.06]">
           {(['list', 'templates'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
@@ -674,7 +676,7 @@ export default function EvaluacionesPage() {
                       <p className={`font-medium text-sm ${t.active ? 'text-slate-800' : 'text-slate-400 line-through'}`}>{t.name}</p>
                       <p className="text-xs text-slate-500 dark:text-white/40">{t.criteria_count} criterios · escala {t.scale_min}–{t.scale_max}</p>
                     </div>
-                    {isAdmin && (
+                    {pa.toggleTemplate && (
                       <button onClick={() => toggleTemplate(t.id, t.active)}
                         className={`text-xs px-3 py-1 rounded-full font-medium border transition-colors
                           ${t.active
