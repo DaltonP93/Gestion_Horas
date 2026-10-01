@@ -8,7 +8,10 @@
  * Actores:
  *   - admin / hr                    → acceso global;
  *   - mgrA / coordA / gestorA       → gestión con alcance (sede A); mgrB (sede B);
- *   - supA                          → supervisor (fuera de la administración);
+ *   - supA                          → supervisor (fuera de la administración; reviewer
+ *                                     asignado por POST en "supervisor como reviewer");
+ *   - supA2 / supB / supMove / supC / supTmp → supervisores para los casos de
+ *                                     no asignado, otra sede, mudanza, sede inactiva y baja;
  *   - uA1 / uA2                     → employee vinculados a eA1 / eA2;
  *   - revA / revB                   → managers usados como reviewers (A / B);
  *   - revInactive / uEmpRole        → reviewer inactivo / cuenta employee.
@@ -56,7 +59,7 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     }
     throw new Error(`sin evento ${action} #${atLeast}`);
   }
-  const emps = () => [ids.eA1, ids.eA2, ids.eB];
+  const emps = () => [ids.eA1, ids.eA2, ids.eA3, ids.eB, ids.eC];
   const snapshot = async () => JSON.stringify([
     (await conn.query('SELECT * FROM appraisals WHERE employee_id IN (?) ORDER BY id', [emps()]))[0],
     (await conn.query(
@@ -167,6 +170,8 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     ids.brB = await ins('INSERT INTO branches (code, company_id, name, active) VALUES (?, ?, ?, 1)', [`${uniq}BB`, ids.coB, 'ITEv sede B']);
     ids.dA = await ins('INSERT INTO departments (name, code, branch_id, active) VALUES (?, ?, ?, 1)', ['ITEv DA', `${uniq}DA`, ids.brA]);
     ids.dB = await ins('INSERT INTO departments (name, code, branch_id, active) VALUES (?, ?, ?, 1)', ['ITEv DB', `${uniq}DB`, ids.brB]);
+    ids.brC = await ins('INSERT INTO branches (code, company_id, name, active) VALUES (?, ?, ?, 1)', [`${uniq}BC`, ids.coA, 'ITEv sede C']);
+    ids.dC = await ins('INSERT INTO departments (name, code, branch_id, active) VALUES (?, ?, ?, 1)', ['ITEv DC', `${uniq}DC`, ids.brC]);
     const emp = (tag, br, d) => ins(
       'INSERT INTO employees (code, employee_number, first_name, last_name, email, branch_id, department_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [`${uniq}${tag}`, `${uniq}N${tag}`, 'Emp', tag === 'B' ? 'ApB' : `Ap${tag}`, `${uniq.toLowerCase()}ev${tag.toLowerCase()}@it.local`, br, d, 'active'],
@@ -174,6 +179,8 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     ids.eA1 = await emp('A1', ids.brA, ids.dA);
     ids.eA2 = await emp('A2', ids.brA, ids.dA);
     ids.eB = await emp('B', ids.brB, ids.dB);
+    ids.eA3 = await emp('A3', ids.brA, ids.dA);   // se muda a B después de asignarse (supervisor)
+    ids.eC = await emp('C', ids.brC, ids.dC);     // sede C, que se desactiva (supervisor)
 
     ids.admin = await insertUser('ad', 'admin');
     ids.hr = await insertUser('hr', 'hr');
@@ -188,6 +195,11 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     ids.revB = await insertUser('rB', 'manager', { branchId: ids.brB });
     ids.revInactive = await insertUser('rI', 'manager', { branchId: ids.brA, active: 0 });
     ids.uEmpRole = await insertUser('uE', 'employee', { branchId: ids.brA });
+    ids.supA2 = await insertUser('sA2', 'supervisor', { branchId: ids.brA });
+    ids.supB = await insertUser('sB', 'supervisor', { branchId: ids.brB });
+    ids.supMove = await insertUser('sM', 'supervisor', { branchId: ids.brA });
+    ids.supC = await insertUser('sC', 'supervisor', { branchId: ids.brC });
+    ids.supTmp = await insertUser('sT', 'supervisor', { branchId: ids.brA });
 
     ids.tpl = await ins('INSERT INTO appraisal_templates (name, scale_min, scale_max, active) VALUES (?, 1, 5, 1)', [`${uniq} plantilla`]);
     ids.c1 = await ins('INSERT INTO appraisal_template_criteria (template_id, name, weight, sort_order) VALUES (?, ?, 1, 0)', [ids.tpl, 'Calidad']);
@@ -200,7 +212,6 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     ids.apA = await insertAppraisal(ids.eA1, 'self_pending', { reviewerId: ids.revA, period: 'EvA-2026' });
     ids.apA2 = await insertAppraisal(ids.eA2, 'self_pending', { period: 'EvA2-2026' });
     ids.apB = await insertAppraisal(ids.eB, 'self_pending', { reviewerId: ids.revB, period: 'EvB-2026' });
-    ids.apSupRev = await insertAppraisal(ids.eA2, 'manager_pending', { reviewerId: ids.supA, period: 'EvSup-2026' });
     // Puntuación
     ids.apSelf = await insertAppraisal(ids.eA1, 'self_pending', { reviewerId: ids.revA });
     ids.apSelfBad = await insertAppraisal(ids.eA1, 'self_pending', { reviewerId: ids.revA });
@@ -246,7 +257,8 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     }
     if (server) await new Promise((r) => server.close(r));
     if (conn) {
-      const userIds = ['admin', 'hr', 'mgrA', 'coordA', 'gestorA', 'mgrB', 'supA', 'uA1', 'uA2', 'revA', 'revB', 'revInactive', 'uEmpRole']
+      const userIds = ['admin', 'hr', 'mgrA', 'coordA', 'gestorA', 'mgrB', 'supA', 'uA1', 'uA2', 'revA', 'revB', 'revInactive', 'uEmpRole',
+        'supA2', 'supB', 'supMove', 'supC', 'supTmp']
         .map((k) => ids[k]).filter(Boolean);
       await conn.query('DELETE FROM appraisals WHERE employee_id IN (?)', [emps().filter(Boolean)]);
       await conn.query('DELETE FROM appraisal_templates WHERE name LIKE ?', [`${ids.uniq}%`]);
@@ -255,8 +267,8 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
         await conn.query('DELETE FROM users WHERE id IN (?)', [userIds]);
       }
       await conn.query('DELETE FROM employees WHERE id IN (?)', [emps().filter(Boolean)]);
-      await conn.query('DELETE FROM departments WHERE id IN (?, ?)', [ids.dA, ids.dB]);
-      await conn.query('DELETE FROM branches WHERE id IN (?, ?)', [ids.brA, ids.brB]);
+      await conn.query('DELETE FROM departments WHERE id IN (?)', [[ids.dA, ids.dB, ids.dC].filter(Boolean)]);
+      await conn.query('DELETE FROM branches WHERE id IN (?)', [[ids.brA, ids.brB, ids.brC].filter(Boolean)]);
       await conn.query('DELETE FROM companies WHERE id IN (?, ?)', [ids.coA, ids.coB]);
       await conn.end();
     }
@@ -309,7 +321,6 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
     });
 
     test.each([
-      ['supervisor lista', () => ({ url: '/api/appraisals', uid: ids.supA, role: 'supervisor', status: 403 })],
       ['filtro status inválido', () => ({ url: '/api/appraisals?status=bogus', uid: ids.mgrA, role: 'manager', status: 400 })],
       ['filtro employee_id no canónico', () => ({ url: '/api/appraisals?employee_id=1e2', uid: ids.mgrA, role: 'manager', status: 400 })],
       ['limit fuera de rango', () => ({ url: '/api/appraisals?limit=0', uid: ids.mgrA, role: 'manager', status: 400 })],
@@ -340,9 +351,6 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
       await expectRejected({ method: 'GET', ...mk() });
     });
 
-    test('detalle: el reviewer asignado (aun supervisor) lo ve mientras el empleado esté en su alcance', async () => {
-      expect((await http('GET', `/api/appraisals/${ids.apSupRev}`, ids.supA, 'supervisor')).status).toBe(200);
-    });
 
     test('historial: fuera de alcance e inexistente → mismo 404; propio y de alcance → 200', async () => {
       const fuera = await expectRejected({ method: 'GET', url: `/api/appraisals/employee/${ids.eB}`, uid: ids.mgrA, role: 'manager', status: 404 });
@@ -506,6 +514,125 @@ describeIT('evaluaciones (integración) — alcance, validación y consistencia'
       expect((await b.json()).final_score).toBe(5);
       const [[row]] = await conn.query('SELECT status, final_score, closed_at IS NOT NULL AS closed FROM appraisals WHERE id = ?', [ids.apCloseMgr]);
       expect({ status: row.status, score: Number(row.final_score), closed: Number(row.closed) }).toEqual({ status: 'closed', score: 5, closed: 1 });
+    });
+  });
+
+  // ─────────────────────── Supervisor como reviewer ───────────────────────
+  describe('supervisor como reviewer (asignado por POST real)', () => {
+    const listOf = async (uid, role = 'supervisor', qs = '') => {
+      const r = await http('GET', `/api/appraisals?limit=100${qs}`, uid, role);
+      const body = await r.json().catch(() => null);
+      return { status: r.status, body, ids: body && Array.isArray(body.data) ? body.data.map((a) => a.id) : null };
+    };
+    const create = async (uid, role, employeeId, reviewerId, period) => {
+      const r = await http('POST', '/api/appraisals', uid, role,
+        { template_id: ids.tpl, employee_id: employeeId, reviewer_id: reviewerId, period_label: period });
+      const body = await r.json().catch(() => ({}));
+      evidence.push({ request: `POST /api/appraisals reviewer=supervisor (${role}, ${period})`, got: r.status, code: body.code });
+      return { status: r.status, id: body.id };
+    };
+
+    test('alta: global y manager de A asignan supervisores de la sede del empleado → 201, auditados', async () => {
+      const a = await create(ids.hr, 'hr', ids.eA2, ids.supA, 'EvSup-1');
+      expect(a.status).toBe(201);
+      ids.apSup = a.id;
+      await waitAudit(ids.hr, 'appraisal_create', a.id);
+      const b = await create(ids.mgrA, 'manager', ids.eA1, ids.supMove, 'EvSup-move');
+      expect(b.status).toBe(201);
+      ids.apSupMove = b.id;
+      const c = await create(ids.hr, 'hr', ids.eA3, ids.supA, 'EvSup-out');
+      expect(c.status).toBe(201);
+      ids.apSupOut = c.id;                     // eA3 se muda a B: queda fuera del alcance de supA
+      const d = await create(ids.hr, 'hr', ids.eC, ids.supC, 'EvSup-sedeC');
+      expect(d.status).toBe(201);
+      ids.apSupC = d.id;                       // la sede C se desactiva
+      const e = await create(ids.admin, 'admin', ids.eA2, ids.supTmp, 'EvSup-tmp');
+      expect(e.status).toBe(201);
+      ids.apSupTmp = e.id;                     // la cuenta supTmp se desactiva
+      const [[row]] = await conn.query('SELECT reviewer_id, status FROM appraisals WHERE id = ?', [ids.apSup]);
+      expect(row).toEqual({ reviewer_id: ids.supA, status: 'self_pending' });
+      await conn.query('UPDATE employees SET department_id = ?, branch_id = ? WHERE id = ?', [ids.dB, ids.brB, ids.eA3]);
+    });
+
+    test.each([
+      ['manager A asigna un supervisor de B', () => ({ uid: ids.mgrA, role: 'manager', body: { employee_id: ids.eA1, reviewer_id: ids.supB } })],
+      ['global asigna un supervisor que no ve al empleado', () => ({ uid: ids.admin, role: 'admin', body: { employee_id: ids.eA1, reviewer_id: ids.supB } })],
+    ])('alta: %s → 400 INVALID_REVIEWER sin escritura ni auditoría', async (_l, mk) => {
+      const { uid, role, body } = mk();
+      await expectRejected({ method: 'POST', url: '/api/appraisals', uid, role, status: 400, code: 'INVALID_REVIEWER',
+        body: { template_id: ids.tpl, period_label: 'EvSup-bad', ...body } });
+    });
+
+    test('listado: sólo sus asignadas dentro del alcance; total coherente', async () => {
+      const r = await listOf(ids.supA);
+      evidence.push({ request: 'GET /api/appraisals (supervisor asignado)', got: r.status, ids: r.ids, total: r.body && r.body.total });
+      expect(r.status).toBe(200);
+      expect(r.ids).toEqual([ids.apSup]);        // ni apSupOut (fuera de alcance) ni no asignadas (apA, apA2…)
+      expect(r.body.total).toBe(1);
+      const f = await listOf(ids.supA, 'supervisor', '&status=closed');
+      expect({ ids: f.ids, total: f.body.total }).toEqual({ ids: [], total: 0 });
+      const other = await listOf(ids.supA2);
+      expect({ status: other.status, ids: other.ids, total: other.body.total }).toEqual({ status: 200, ids: [], total: 0 });
+    });
+
+    test('detalle: la asignada → 200; asignada fuera de alcance y no asignada → 404', async () => {
+      expect((await http('GET', `/api/appraisals/${ids.apSup}`, ids.supA, 'supervisor')).status).toBe(200);
+      await expectRejected({ method: 'GET', url: `/api/appraisals/${ids.apSupOut}`, uid: ids.supA, role: 'supervisor', status: 404 });
+      await expectRejected({ method: 'GET', url: `/api/appraisals/${ids.apA}`, uid: ids.supA, role: 'supervisor', status: 404 });
+      await expectRejected({ method: 'GET', url: `/api/appraisals/${ids.apSup}`, uid: ids.supA2, role: 'supervisor', status: 404 });
+    });
+
+    test('puntuación manager de la asignada → 200 y pasa a hr_review; supervisor no asignado → 404', async () => {
+      expect((await http('POST', `/api/appraisals/${ids.apSup}/score`, ids.uA2, 'employee', { scorer_role: 'self', scores: full(3, 3) })).status).toBe(200);
+      await expectRejected({ method: 'POST', url: `/api/appraisals/${ids.apSup}/score`, uid: ids.supA2, role: 'supervisor', status: 404,
+        body: { scorer_role: 'manager', scores: full(4, 4) } });
+      const r = await http('POST', `/api/appraisals/${ids.apSup}/score`, ids.supA, 'supervisor', { scorer_role: 'manager', scores: full(4, 5) });
+      evidence.push({ request: 'POST score manager (supervisor asignado)', got: r.status });
+      expect(r.status).toBe(200);
+      await waitAudit(ids.supA, 'appraisal_score', ids.apSup);
+      expect((await conn.query('SELECT status FROM appraisals WHERE id = ?', [ids.apSup]))[0][0].status).toBe('hr_review');
+      expect(await count("SELECT COUNT(*) AS n FROM appraisal_scores WHERE appraisal_id = ? AND scorer_role = 'manager' AND scored_by = ?", [ids.apSup, ids.supA])).toBe(2);
+    });
+
+    test('mudanza de sede: listado vacío; detalle y puntuación → 404 sin escritura ni auditoría', async () => {
+      expect((await http('POST', `/api/appraisals/${ids.apSupMove}/score`, ids.uA1, 'employee', { scorer_role: 'self', scores: full(2, 2) })).status).toBe(200);
+      await conn.query('UPDATE users SET branch_id = ? WHERE id = ?', [ids.brB, ids.supMove]);
+      const r = await listOf(ids.supMove);
+      evidence.push({ request: 'GET /api/appraisals (supervisor mudado)', got: r.status, ids: r.ids, total: r.body && r.body.total });
+      expect({ status: r.status, ids: r.ids, total: r.body.total }).toEqual({ status: 200, ids: [], total: 0 });
+      await expectRejected({ method: 'GET', url: `/api/appraisals/${ids.apSupMove}`, uid: ids.supMove, role: 'supervisor', status: 404 });
+      await expectRejected({ method: 'POST', url: `/api/appraisals/${ids.apSupMove}/score`, uid: ids.supMove, role: 'supervisor', status: 404,
+        body: { scorer_role: 'manager', scores: full(4, 4) } });
+    });
+
+    test('sede inactiva: listado vacío; detalle y puntuación → 404 sin escritura ni auditoría', async () => {
+      try {
+        await conn.query('UPDATE branches SET active = 0 WHERE id = ?', [ids.brC]);
+        const r = await listOf(ids.supC);
+        expect({ status: r.status, ids: r.ids, total: r.body.total }).toEqual({ status: 200, ids: [], total: 0 });
+        await expectRejected({ method: 'GET', url: `/api/appraisals/${ids.apSupC}`, uid: ids.supC, role: 'supervisor', status: 404 });
+        await expectRejected({ method: 'POST', url: `/api/appraisals/${ids.apSupC}/score`, uid: ids.supC, role: 'supervisor', status: 404,
+          body: { scorer_role: 'manager', scores: full(4, 4) } });
+      } finally {
+        await conn.query('UPDATE branches SET active = 1 WHERE id = ?', [ids.brC]);
+      }
+    });
+
+    test('cuenta desactivada → 401 en listado y detalle', async () => {
+      await conn.query('UPDATE users SET active = 0 WHERE id = ?', [ids.supTmp]);
+      await expectRejected({ method: 'GET', url: '/api/appraisals', uid: ids.supTmp, role: 'supervisor', status: 401 });
+      await expectRejected({ method: 'GET', url: `/api/appraisals/${ids.apSupTmp}`, uid: ids.supTmp, role: 'supervisor', status: 401 });
+    });
+
+    test.each([
+      ['crear evaluaciones', () => ({ method: 'POST', url: '/api/appraisals', body: { template_id: ids.tpl, employee_id: ids.eA2, period_label: 'x' } })],
+      ['historial general', () => ({ method: 'GET', url: `/api/appraisals/employee/${ids.eA2}` })],
+      ['crear plantilla', () => ({ method: 'POST', url: '/api/appraisals/templates', body: { name: 'x', criteria: [{ name: 'y' }] } })],
+      ['editar plantilla', () => ({ method: 'PUT', url: `/api/appraisals/templates/${ids.tpl}`, body: { name: 'x' } })],
+      ['desactivar plantilla', () => ({ method: 'DELETE', url: `/api/appraisals/templates/${ids.tpl}` })],
+      ['cerrar su asignada', () => ({ method: 'POST', url: `/api/appraisals/${ids.apSup}/close`, body: {} })],
+    ])('supervisor asignado: %s → 403 sin escritura ni auditoría', async (_l, mk) => {
+      await expectRejected({ uid: ids.supA, role: 'supervisor', status: 403, ...mk() });
     });
   });
 
