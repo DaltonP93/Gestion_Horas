@@ -11,6 +11,8 @@ const { authenticate, authorize, requirePermission } = require('../middleware/au
 const { sequelize } = require('../config/database');
 const logger  = require('../config/logger');
 const { isDefaultAdminPassword } = require('../config/securityPreflight');
+const { getVisibleDepartmentIds } = require('../services/departmentScope');
+const { validateLookupQuery, buildLookupQuery } = require('../services/userLookup');
 
 const BRANCH_SCOPED_ROLES = new Set(['manager', 'coordinator', 'supervisor', 'gestor']);
 const USER_ROLES = new Set(['super_admin', 'admin', 'gth', 'hr', 'manager', 'coordinator', 'gestor', 'supervisor', 'employee']);
@@ -84,29 +86,22 @@ router.get('/', authorize('admin'), requirePermission('usuarios', 'view'), async
   }
 });
 
-// GET /api/users/lookup — búsqueda liviana para selectores (asignados de
-// onboarding, revisores de evaluaciones, responsables de departamento, etc.).
-// Devuelve solo campos no sensibles y NO es la administración de usuarios, por
-// eso la pueden usar los roles de gestión (no solo admin). Debe ir ANTES de
-// la ruta '/:id' para no ser capturada como id.
+// GET /api/users/lookup — búsqueda liviana para selectores (responsables de
+// departamento, revisores de evaluaciones, etc.). Devuelve sólo campos no
+// sensibles y NO es la administración de usuarios, por eso la pueden usar los
+// roles de gestión (no sólo admin). Debe ir ANTES de la ruta '/:id'.
+//
+// ALCANCE (services/userLookup.js): roles globales → todas las cuentas
+// activas; roles por sede → cuentas activas con users.branch_id dentro del
+// alcance que resuelve el servidor (identidad vigente, no el JWT); sin
+// alcance → []. Nunca se usa el empleado vinculado para ampliar el alcance.
 router.get('/lookup', authorize('admin', 'gth', 'hr', 'coordinator', 'manager', 'gestor', 'supervisor'), async (req, res) => {
+  const v = validateLookupQuery(req.query, USER_ROLES);
+  if (!v.ok) return res.status(400).json({ error: v.error, code: 'INVALID_INPUT' });
   try {
-    const { role, search } = req.query;
-    let where = 'WHERE u.active = 1';
-    const params = [];
-    if (role) {
-      const roles = String(role).split(',').map(s => s.trim()).filter(Boolean);
-      if (roles.length) { where += ` AND u.role IN (${roles.map(() => '?').join(',')})`; params.push(...roles); }
-    }
-    if (search) {
-      where += ' AND (u.full_name LIKE ? OR u.username LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
-    }
-    const [rows] = await sequelize.query(
-      `SELECT u.id, u.full_name, u.username, u.role, u.employee_id
-       FROM users u ${where} ORDER BY u.full_name LIMIT 500`,
-      { replacements: params }
-    );
+    const q = buildLookupQuery(await getVisibleDepartmentIds(req.user), v.value);
+    if (!q) return res.json([]);
+    const [rows] = await sequelize.query(q.sql, { replacements: q.params });
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'Error al buscar usuarios' });
