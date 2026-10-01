@@ -96,9 +96,11 @@ en la búsqueda. Esto sólo cierra la divulgación del selector.
 
 **Evaluaciones de desempeño (lote siguiente, implementado):** roles globales con
 acceso total; `manager`/`coordinator`/`gestor` sólo evaluaciones de empleados de su
-alcance vigente; `supervisor` fuera de la administración (sólo lo que tenga
-asignado como reviewer, mientras el empleado siga en su alcance); `employee` sólo lo
-propio. Inexistente y fuera de alcance → el mismo 404; listado y total con el mismo
+alcance vigente; `supervisor` fuera de la administración (no crea, no consulta
+historiales, no gestiona plantillas ni cierra), pero elegible como reviewer: su
+listado, detalle y puntuación como manager se limitan exclusivamente a sus
+asignadas con el empleado dentro de su alcance vigente (mudanza de sede, sede
+inactiva o empleado fuera → listado vacío y 404); `employee` sólo lo propio. Inexistente y fuera de alcance → el mismo 404; listado y total con el mismo
 filtro. Alta, puntuación y cierre en una transacción con la evaluación bloqueada
 antes de autorizar: criterios exactos de la plantilla y dentro de escala, cada rol
 sólo en su estado (`self` → `self_pending`, `manager` → `manager_pending`, `hr` →

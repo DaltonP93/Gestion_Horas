@@ -21,9 +21,11 @@
  *   - Global: super_admin, admin, gth, hr.
  *   - Con alcance: manager, coordinator, gestor → sólo evaluaciones de
  *     empleados de su alcance vigente (services/departmentScope).
- *   - supervisor: fuera de la administración (listado/historial/alta → 403);
- *     sólo lee y puntúa como manager si es el reviewer asignado y el
- *     empleado sigue en su alcance.
+ *   - supervisor: fuera de la administración (alta, historial, plantillas y
+ *     cierre → 403). Puede ser elegido como reviewer; su listado, detalle y
+ *     puntuación (como manager) se limitan EXCLUSIVAMENTE a las evaluaciones
+ *     donde es el reviewer asignado y el empleado sigue en su alcance vigente
+ *     (cambio de sede, sede inactiva o empleado fuera → listado vacío y 404).
  *   - employee: sólo listado, historial, detalle y autoevaluación propios.
  *   - Inexistente y fuera de alcance responden el mismo 404 sin datos.
  *     Listado y total usan exactamente el mismo filtro.
@@ -54,10 +56,12 @@ router.use(authenticate);
 const ADMIN_ROLES = ['admin', 'gth', 'hr', 'super_admin'];
 const MGR_ROLES   = [...ADMIN_ROLES, 'manager', 'coordinator', 'gestor'];
 const SCOPED_MGR_ROLES = new Set(['manager', 'coordinator', 'gestor']);
-/** Roles válidos como reviewer al ASIGNAR (el supervisor no administra evaluaciones). */
-const REVIEWER_ROLES = new Set([...MGR_ROLES]);
-/** Listado e historial: gestión + el propio employee. */
-const READER_ROLES = [...MGR_ROLES, 'employee'];
+/** Roles válidos como reviewer al ASIGNAR: gestión y supervisor (que no administra). */
+const REVIEWER_ROLES = new Set([...MGR_ROLES, 'supervisor']);
+/** Listado: gestión, employee (lo propio) y supervisor (sólo sus asignadas). */
+const LIST_ROLES = [...MGR_ROLES, 'employee', 'supervisor'];
+/** Historial de un empleado: gestión y el propio employee (NO supervisor). */
+const HISTORY_ROLES = [...MGR_ROLES, 'employee'];
 
 const NOT_FOUND = { error: 'Evaluación no encontrada' };
 const EMPLOYEE_NOT_FOUND = { error: 'Empleado no encontrado' };
@@ -157,24 +161,32 @@ router.delete('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
  */
 function canSeeAppraisal(user, scope, appraisal, emp) {
   if (isGlobal(scope)) return true;
+  const assigned = Number(appraisal.reviewer_id) === Number(user.id) && canSeeEmployee(scope, emp);
+  // Supervisor: exclusivamente sus asignadas dentro de su alcance vigente.
+  if (user.role === 'supervisor') return assigned;
   if (SCOPED_MGR_ROLES.has(user.role) && canSeeEmployee(scope, emp)) return true;
-  if (Number(appraisal.reviewer_id) === Number(user.id) && canSeeEmployee(scope, emp)) return true;
+  if (assigned) return true;
   return ownEmployeeId(user) === Number(appraisal.employee_id);
 }
 
 /**
  * Filtro del listado (el MISMO para filas y total). Global: sin filtro;
- * gestión con alcance: departamentos de su alcance; employee: sólo lo propio.
+ * gestión con alcance: departamentos de su alcance; supervisor: sus
+ * asignadas Y dentro de su alcance (sin alcance → 0 filas); employee: sólo
+ * lo propio.
  */
 function listScope(user, scope, where, params) {
   if (isGlobal(scope)) return { where, params };
   if (SCOPED_MGR_ROLES.has(user.role)) return applyDepartmentScope(where, params, scope, 'e.department_id');
+  if (user.role === 'supervisor') {
+    return applyDepartmentScope(`${where} AND a.reviewer_id = ?`, [...params, Number(user.id)], scope, 'e.department_id');
+  }
   const own = ownEmployeeId(user);
   if (own === null) return { where: `${where} AND 1=0`, params };
   return { where: `${where} AND a.employee_id = ?`, params: [...params, own] };
 }
 
-router.get('/', authorize(...READER_ROLES), async (req, res) => {
+router.get('/', authorize(...LIST_ROLES), async (req, res) => {
   try {
     const q = V.validateListQuery(req.query);
     if (!q.ok) return badInput(res, q.error);
@@ -211,7 +223,7 @@ router.get('/', authorize(...READER_ROLES), async (req, res) => {
 });
 
 // Historial de un empleado: gestión dentro de su alcance; employee sólo el suyo.
-router.get('/employee/:empId', authorize(...READER_ROLES), async (req, res) => {
+router.get('/employee/:empId', authorize(...HISTORY_ROLES), async (req, res) => {
   try {
     const empId = parsePositiveId(req.params.empId);
     if (empId === null) return badInput(res, 'Identificador de empleado inválido');
@@ -275,7 +287,7 @@ router.get('/:id', async (req, res) => {
 
 /**
  * ¿Puede asignarse esta cuenta como reviewer del empleado? Cuenta existente,
- * ACTIVA, con rol de gestión; si el actor tiene alcance, la cuenta debe ser
+ * ACTIVA, con rol de gestión o supervisor; si el actor tiene alcance, la cuenta debe ser
  * de una sede de su alcance (igual que /api/users/lookup); y el empleado
  * debe estar dentro del alcance VIGENTE del reviewer. Todo con FOR SHARE.
  */
