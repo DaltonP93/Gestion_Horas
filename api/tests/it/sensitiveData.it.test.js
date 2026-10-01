@@ -42,13 +42,28 @@ describeIT('datos sensibles por empleado (integración)', () => {
     const [rows] = await conn.query('SHOW GLOBAL STATUS WHERE Variable_name IN (?)', [WRITE_COUNTERS]);
     return rows.reduce((acc, r) => acc + Number(r.Value), 0);
   }
-  async function waitAudit(userId, action, entityId) {
-    for (let i = 0; i < 100; i += 1) {
-      const n = await count('SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = ? AND entity_id = ?', [userId, action, String(entityId)]);
-      if (n > 0) return;
+  const auditEvents = (userId, action, entityId) => count(
+    'SELECT COUNT(*) AS n FROM audit_events WHERE user_id = ? AND action = ? AND entity_id = ?', [userId, action, String(entityId)],
+  );
+  /** Espera hasta que haya al menos `atLeast` eventos exactos (actor, acción, entidad). */
+  async function waitAudit(userId, action, entityId, atLeast = 1) {
+    for (let i = 0; i < 250; i += 1) {
+      if ((await auditEvents(userId, action, entityId)) >= atLeast) return;
       await sleep(20);
     }
-    throw new Error(`sin evento ${action}`);
+    throw new Error(`sin evento ${action} #${atLeast}`);
+  }
+  /**
+   * Escritura exitosa que debe dejar EXACTAMENTE un evento de auditoría nuevo.
+   * La auditoría se graba después de responder (asíncrona): se espera ese
+   * evento para que no caiga dentro de la medición de la prueba siguiente.
+   */
+  async function writeOk(method, url, uid, role, body, { status = 200, action, entityId }) {
+    const before = await auditEvents(uid, action, entityId);
+    const r = await http(method, url, uid, role, body);
+    expect({ url, status: r.status }).toEqual({ url, status });
+    await waitAudit(uid, action, entityId, before + 1);
+    return r;
   }
   const snapshot = async () => JSON.stringify([
     (await conn.query('SELECT * FROM employee_contracts WHERE employee_id IN (?) ORDER BY id', [[ids.empA1, ids.empA2, ids.empB]]))[0],
@@ -413,7 +428,7 @@ describeIT('datos sensibles por empleado (integración)', () => {
     test('rol global: ve todas las visibilidades de B, edita y borra (sin cambio)', async () => {
       const r = await http('GET', `/api/employee-notes/by-employee/${ids.empB}`, ids.admin, 'admin');
       expect(await titles(r)).toEqual(['NOTA-B-BYMGR', 'NOTA-B-EMP', 'NOTA-B-MGR']);
-      expect((await http('PUT', `/api/employee-notes/${ids.nBmgr}`, ids.admin, 'admin', { pinned: 1 })).status).toBe(200);
+      await writeOk('PUT', `/api/employee-notes/${ids.nBmgr}`, ids.admin, 'admin', { pinned: 1 }, { action: 'employee_note_update', entityId: ids.nBmgr });
       const tmp = await insertNote(ids.empB, ids.admin, 'hr_only', 'NOTA-B-TMP');
       expect((await http('DELETE', `/api/employee-notes/${tmp}`, ids.hr, 'hr')).status).toBe(200);
       await waitAudit(ids.hr, 'employee_note_delete', tmp);
@@ -479,17 +494,20 @@ describeIT('datos sensibles por empleado (integración)', () => {
       const c = await http('POST', '/api/employee-notes', ids.mgrA, 'manager', { employee_id: ids.empA2, title: 'NOTA-MGR-DEFAULT' });
       expect(c.status).toBe(201);
       const { id } = await c.json();
+      await waitAudit(ids.mgrA, 'employee_note_create', id);
       const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [id]);
       expect(row.visibility).toBe('managers');
       const list = await (await http('GET', `/api/employee-notes/by-employee/${ids.empA2}`, ids.mgrA, 'manager')).json();
       expect(list.data.map((n) => n.id)).toContain(id);
-      expect((await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { pinned: 1 })).status).toBe(200);
+      await writeOk('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { pinned: 1 }, { action: 'employee_note_update', entityId: id });
       ids.nMgrDefault = id;
     });
     test('rol global sin visibility → `hr_only` (sin cambio)', async () => {
       const c = await http('POST', '/api/employee-notes', ids.hr, 'hr', { employee_id: ids.empA2, title: 'NOTA-HR-DEFAULT' });
       expect(c.status).toBe(201);
-      const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [(await c.json()).id]);
+      const { id } = await c.json();
+      await waitAudit(ids.hr, 'employee_note_create', id);
+      const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [id]);
       expect(row.visibility).toBe('hr_only');
     });
     test('manager crea con `hr_only` → 403 sin INSERT ni auditoría', async () => {
@@ -501,8 +519,9 @@ describeIT('datos sensibles por empleado (integración)', () => {
     });
     test('manager cambia managers ↔ employee (200) pero no a `hr_only` (403 sin escritura)', async () => {
       const id = ids.nMgrDefault;
-      expect((await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { visibility: 'employee' })).status).toBe(200);
-      expect((await http('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { visibility: 'managers' })).status).toBe(200);
+      // Cada PUT exitoso espera SU evento de auditoría antes de que expectRejected tome la línea base.
+      await writeOk('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { visibility: 'employee' }, { action: 'employee_note_update', entityId: id });
+      await writeOk('PUT', `/api/employee-notes/${id}`, ids.mgrA, 'manager', { visibility: 'managers' }, { action: 'employee_note_update', entityId: id });
       const text = await expectRejected({ method: 'PUT', url: `/api/employee-notes/${id}`, uid: ids.mgrA, role: 'manager', status: 403, body: { visibility: 'hr_only' } });
       expect(JSON.parse(text).code).toBe('VISIBILITY_NOT_ALLOWED');
       const [[row]] = await conn.query('SELECT visibility FROM employee_notes WHERE id = ?', [id]);
