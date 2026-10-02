@@ -184,7 +184,7 @@ describeIT('plantillas de evaluaciones (integración) — roles, validación, co
     ids.tplOpen = open.id; [ids.cOpen1, ids.cOpen2] = open.crit;
     ids.tplRaceA = (await insertTemplate('carrera A', 1, [['Calidad', 1]])).id;
     const rb = await insertTemplate('carrera B', 1, [['Calidad', 1]]);
-    ids.tplRaceB = rb.id; [ids.cRaceB] = rb.crit;
+    ids.tplRaceB = rb.id;
 
     const express = require('express');
     const app = express();
@@ -544,7 +544,7 @@ describeIT('plantillas de evaluaciones (integración) — roles, validación, co
         await c2.query('START TRANSACTION');
         // La desactivación toma la plantilla (FOR UPDATE) y queda esperando el
         // conteo de criterios (FOR SHARE) que c2 retiene.
-        await c2.query('SELECT id FROM appraisal_template_criteria WHERE id = ? FOR UPDATE', [ids.cRaceB]);
+        await c2.query('SELECT id FROM appraisal_template_criteria WHERE template_id = ? FOR UPDATE', [ids.tplRaceB]);
         const del = track(http('DELETE', `${T}/${ids.tplRaceB}`, ids.hr, 'hr'));
         const delBlocked = await waitBlocked('%FROM appraisal_template_criteria WHERE template_id =%FOR SHARE%', [conn.threadId, c2.threadId]);
         const create = track(http('POST', '/api/appraisals', ids.admin, 'admin',
