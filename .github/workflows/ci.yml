@@ -466,6 +466,19 @@ jobs:
         env:
           IT_DB: '1'
 
+      # Plantillas de evaluaciones: matriz de roles, IDs y parámetros
+      # estrictos, alta atómica validada antes de la transacción, edición y
+      # desactivación con bloqueo (idempotentes), auditoría tras el commit y
+      # carrera determinista creación/desactivación. Falla si alguna prueba
+      # queda omitida.
+      - name: IT reales plantillas de evaluaciones (roles, validación y carreras)
+        run: |
+          set -o pipefail
+          npx jest tests/it/appraisalTemplates.it.test.js --runInBand --json --outputFile=/tmp/appraisal-templates-it.json
+          node -e 'const r=require("/tmp/appraisal-templates-it.json"); console.log(`plantillas de evaluaciones IT: ${r.numPassedTests} pasadas, ${r.numPendingTests + r.numTodoTests} omitidas, ${r.numFailedTests} fallidas`); if (!r.success || r.numPassedTests === 0 || r.numPendingTests + r.numTodoTests > 0) process.exit(1)'
+        env:
+          IT_DB: '1'
+
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el
   # runner aplica 072→ de verdad; luego se reaplica y se compara el esquema
