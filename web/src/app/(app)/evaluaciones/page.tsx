@@ -5,6 +5,7 @@ import { Star, Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, AlertCircle,
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 import { appraisalPageActions, appraisalDetailActions, reviewerLookupUrl } from '@/lib/appraisalRoles'
+import { validateTemplateForm, templateErrorMessage, TEMPLATE_NAME_MAX, CRITERION_NAME_MAX, SCALE_LOWER, SCALE_UPPER, WEIGHT_MIN, WEIGHT_MAX } from '@/lib/appraisalTemplateForm'
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip } from 'recharts'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -297,7 +298,9 @@ function AppraisalDetail({ id, user, onClose, onUpdated }: {
   )
 }
 
-// ─── TemplateModal — crear plantilla ────────────────────────────────────────
+// ─── TemplateModal — crear plantilla (sólo roles globales) ───────────────────
+// Valida en el cliente con las mismas reglas que el API (que sigue siendo la
+// autoridad): ningún criterio inválido o vacío se descarta en silencio.
 
 function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState({ name: '', description: '', scale_min: 1, scale_max: 5 })
@@ -306,17 +309,17 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [err, setErr] = useState<string | null>(null)
 
   async function submit() {
-    if (!form.name) { setErr('El nombre de la plantilla es requerido'); return }
-    const valid = criteria.filter(c => c.name.trim())
-    if (!valid.length) { setErr('Al menos un criterio es requerido'); return }
+    const v = validateTemplateForm(form, criteria)
+    if (!v.ok) { setErr(v.error); return }
     setSaving(true); setErr(null)
     try {
-      await api.post('/api/appraisals/templates', { ...form, criteria: valid })
+      await api.post('/api/appraisals/templates', v.payload)
       onCreated(); onClose()
-    } catch (e: any) {
-      setErr(e?.response?.data?.error || 'Error al guardar')
+    } catch (e) {
+      setErr(templateErrorMessage(e))
     } finally { setSaving(false) }
   }
+  const num = (n: number) => (Number.isNaN(n) ? '' : n)
 
   function addCriteria() { setCriteria(c => [...c, { name: '', description: '', weight: 1 }]) }
   function removeCriteria(i: number) { setCriteria(c => c.filter((_, idx) => idx !== i)) }
@@ -335,7 +338,7 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
           <div className="grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Nombre *</label>
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              <input value={form.name} maxLength={TEMPLATE_NAME_MAX} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" placeholder="Ej: Evaluación anual 360°" />
             </div>
             <div className="col-span-2">
@@ -345,13 +348,13 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
             </div>
             <div>
               <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Escala mínima</label>
-              <input type="number" min={1} max={10} value={form.scale_min}
+              <input type="number" min={SCALE_LOWER} max={SCALE_UPPER} step={1} value={num(form.scale_min)}
                 onChange={e => setForm(f => ({ ...f, scale_min: parseInt(e.target.value) }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
             <div>
               <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Escala máxima</label>
-              <input type="number" min={2} max={10} value={form.scale_max}
+              <input type="number" min={SCALE_LOWER} max={SCALE_UPPER} step={1} value={num(form.scale_max)}
                 onChange={e => setForm(f => ({ ...f, scale_max: parseInt(e.target.value) }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
@@ -369,7 +372,7 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
               {criteria.map((c, i) => (
                 <div key={i} className="flex gap-2 items-start">
                   <div className="flex-1 space-y-1">
-                    <input value={c.name} onChange={e => updateCriteria(i, 'name', e.target.value)}
+                    <input value={c.name} maxLength={CRITERION_NAME_MAX} onChange={e => updateCriteria(i, 'name', e.target.value)}
                       placeholder={`Criterio ${i + 1} *`}
                       className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm dark:border-white/[0.08]" />
                     <input value={c.description} onChange={e => updateCriteria(i, 'description', e.target.value)}
@@ -377,7 +380,7 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
                       className="w-full border border-slate-100 rounded-lg px-3 py-1.5 text-xs text-slate-500 dark:text-white/40 dark:border-white/[0.06]" />
                   </div>
                   <div className="w-16">
-                    <input type="number" min={0.1} step={0.1} value={c.weight}
+                    <input type="number" min={WEIGHT_MIN} max={WEIGHT_MAX} step={0.01} value={num(c.weight)}
                       onChange={e => updateCriteria(i, 'weight', parseFloat(e.target.value))}
                       title="Peso"
                       className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-sm text-center dark:border-white/[0.08]" />
@@ -422,6 +425,7 @@ function NewAppraisalModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   useEffect(() => {
     api.get('/api/appraisals/templates').then(r => setTemplates(r.data.data || []))
+      .catch(e => { setTemplates([]); setErr(templateErrorMessage(e, 'No se pudieron cargar las plantillas')) })
     api.get('/api/employees?limit=500').then(r => setEmployees(r.data.data || r.data || []))
     api.get(reviewerLookupUrl()).then(r => setReviewers(r.data.data || r.data || []))
       .catch(() => {})
@@ -522,6 +526,7 @@ export default function EvaluacionesPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [showNewAppraisal, setShowNewAppraisal] = useState(false)
   const [showNewTemplate, setShowNewTemplate]   = useState(false)
+  const [templatesErr, setTemplatesErr] = useState<string | null>(null)
 
   const pa = appraisalPageActions(user?.role)
   const canList = pa.loadList
@@ -542,16 +547,32 @@ export default function EvaluacionesPage() {
     } finally { setLoading(false) }
   }, [statusFilter, canList])
 
+  // Plantillas: sólo gestión las lee (supervisor/employee → 403 en el API, no se consultan).
+  const canLoadTemplates = pa.loadTemplates
   const loadTemplates = useCallback(async () => {
-    const res = await api.get('/api/appraisals/templates?all=1')
-    setTemplates(res.data.data || [])
-  }, [])
+    if (!canLoadTemplates) { setTemplates([]); return }
+    try {
+      const res = await api.get('/api/appraisals/templates?all=1')
+      setTemplates(res.data.data || [])
+      setTemplatesErr(null)
+    } catch (e) {
+      setTemplates([])
+      setTemplatesErr(templateErrorMessage(e, 'No se pudieron cargar las plantillas'))
+    }
+  }, [canLoadTemplates])
 
   useEffect(() => { loadAppraisals() }, [loadAppraisals])
   useEffect(() => { if (tab === 'templates') loadTemplates() }, [tab, loadTemplates])
 
+  // Desactivar = soft-delete (DELETE, idempotente); reactivar = PUT { active: true }.
   async function toggleTemplate(id: number, active: number) {
-    await api.put(`/api/appraisals/templates/${id}`, { active: active ? 0 : 1 })
+    try {
+      if (active) await api.delete(`/api/appraisals/templates/${id}`)
+      else await api.put(`/api/appraisals/templates/${id}`, { active: true })
+      setTemplatesErr(null)
+    } catch (e) {
+      setTemplatesErr(templateErrorMessage(e))
+    }
     loadTemplates()
   }
 
@@ -669,6 +690,11 @@ export default function EvaluacionesPage() {
               <div className="px-4 py-3 border-b border-slate-100 dark:border-white/[0.06]">
                 <p className="text-sm font-semibold text-slate-700 dark:text-white/80">{templates.length} plantilla{templates.length !== 1 ? 's' : ''}</p>
               </div>
+              {templatesErr && (
+                <div className="mx-4 mt-3 bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-2 text-sm flex items-center gap-2">
+                  <AlertCircle size={14} /> {templatesErr}
+                </div>
+              )}
               <div className="divide-y divide-slate-100 dark:divide-white/[0.06]">
                 {templates.map(t => (
                   <div key={t.id} className="flex items-center gap-3 px-4 py-3.5">

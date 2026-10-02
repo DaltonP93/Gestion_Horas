@@ -1,13 +1,15 @@
 /**
  * Roles de Evaluaciones de Desempeño. Espeja `api/src/routes/appraisals.js`
  * (el servidor vuelve a autorizar todo; esto sólo decide qué mostrar):
- *   - globales: plantillas (escritura), cierre y override de manager/RR.HH.;
- *   - gestión (globales + manager/coordinator/gestor): listado de su alcance
- *     y alta de evaluaciones;
+ *   - globales: plantillas (alta, edición, desactivación), cierre y override
+ *     de manager/RR.HH.;
+ *   - gestión (globales + manager/coordinator/gestor): listado de su alcance,
+ *     alta de evaluaciones y LECTURA de plantillas;
  *   - supervisor: no administra; puede ser reviewer. Su listado trae sus
  *     evaluaciones propias (si está vinculado a un empleado) y las asignadas
  *     dentro de su alcance (lo filtra el servidor);
  *   - employee: su propio listado, historial, detalle y autoevaluación.
+ * supervisor y employee no consultan /api/appraisals/templates (el API → 403).
  */
 export const APPRAISAL_ADMIN_ROLES = ['super_admin', 'admin', 'gth', 'hr'] as const
 export const APPRAISAL_MANAGER_ROLES = [...APPRAISAL_ADMIN_ROLES, 'manager', 'coordinator', 'gestor'] as const
@@ -24,6 +26,11 @@ export function canAdministerAppraisals(role: string | undefined | null): boolea
 
 /** Ver evaluaciones de su alcance y crear evaluaciones. */
 export function canManageAppraisals(role: string | undefined | null): boolean {
+  return has(APPRAISAL_MANAGER_ROLES, role)
+}
+
+/** Leer plantillas (listado y detalle): sólo gestión. */
+export function canReadAppraisalTemplates(role: string | undefined | null): boolean {
   return has(APPRAISAL_MANAGER_ROLES, role)
 }
 
@@ -45,7 +52,8 @@ export function appraisalPageActions(role: string | undefined | null) {
     loadList: canListAppraisals(role),
     newAppraisal: mgr,
     newTemplate: admin,
-    templatesTab: mgr,
+    templatesTab: canReadAppraisalTemplates(role),
+    loadTemplates: canReadAppraisalTemplates(role),
     kpis: mgr,
     toggleTemplate: admin,
   }

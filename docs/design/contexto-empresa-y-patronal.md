@@ -110,12 +110,22 @@ sólo en su estado (`self` → `self_pending`, `manager` → `manager_pending`, 
 `hr_review`, una vez), cierre sólo desde `manager_pending` (usa la autoevaluación) o
 `hr_review` (usa la del manager), y auditoría después del commit.
 
-**Pendiente (plantillas de evaluación, fuera de este lote):** `GET /templates*`
-legibles por cualquier cuenta autenticada; `PUT`/`DELETE` sin verificar existencia
-ni validar el cuerpo (`active` sin normalizar) y con `parseInt` en el id; `POST`
-omite en silencio criterios sin nombre y no valida escala (`scale_min < scale_max`)
-ni pesos; editar o desactivar una plantilla con evaluaciones abiertas no está
-acotado.
+**Plantillas de evaluación (lote siguiente, implementado):** lectura (listado y
+detalle) sólo para gestión (globales y `manager`/`coordinator`/`gestor`); `supervisor`
+y `employee` → 403 aun para una plantilla inexistente, y la web no las consulta.
+Alta, edición y desactivación sólo roles globales. IDs canónicos y listado estricto
+(sólo `all=1`; parámetros desconocidos → 400). El alta se valida entera antes de la
+transacción con límites del esquema (nombres hasta 120 caracteres, descripciones
+hasta 65535 bytes, peso de 0.01 a 999.99 con 2 decimales), escala entera 0–10 con
+mínimo < máximo y de 1 a 50 criterios sin duplicados normalizados; nada se omite y
+el alta es atómica. La edición sólo cambia nombre, descripción y estado (criterios y
+escala quedan para un diseño separado), con la plantilla bloqueada: inexistente →
+404 sin escritura; sin cambio real → 200 sin escribir ni auditar. La desactivación
+es soft-delete idempotente y bloquea la plantilla que el alta de evaluaciones lee
+con bloqueo compartido: o la evaluación se confirma antes, o ve la plantilla
+inactiva y falla sin escribir; las evaluaciones ya abiertas siguen viéndose,
+puntuándose y cerrándose. Auditoría sólo tras el commit y sólo con transición real,
+sin descripciones ni textos de criterios.
 
 **Decisiones adoptadas para el próximo lote (base del lote de onboarding):**
 
