@@ -1,12 +1,12 @@
 /**
  * appraisals.js — Evaluaciones de Desempeño
  *
- * Plantillas
- *   GET    /api/appraisals/templates          → listar plantillas activas
- *   POST   /api/appraisals/templates          → crear plantilla (admin/gth/hr)
+ * Plantillas (lectura: gestión; escritura: globales; supervisor/employee → 403)
+ *   GET    /api/appraisals/templates          → listar activas (?all=1 → todas)
+ *   POST   /api/appraisals/templates          → crear plantilla + criterios (atómico)
  *   GET    /api/appraisals/templates/:id      → detalle + criterios
- *   PUT    /api/appraisals/templates/:id      → editar plantilla
- *   DELETE /api/appraisals/templates/:id      → desactivar plantilla
+ *   PUT    /api/appraisals/templates/:id      → editar nombre/descripción/estado
+ *   DELETE /api/appraisals/templates/:id      → desactivar (soft-delete, idempotente)
  *
  * Evaluaciones
  *   GET    /api/appraisals                    → lista (filtros: status, employee_id, period)
@@ -42,6 +42,12 @@
  * plantilla, criterios, reviewer y alcance se leen con bloqueo dentro de la
  * misma transacción. Rechazo o `affectedRows = 0` → rollback sin escritura ni
  * auditoría; la auditoría se registra sólo después del commit.
+ * Plantillas: el alta se valida entera antes de la transacción y es atómica;
+ * edición y desactivación bloquean la plantilla (FOR UPDATE), que el alta de
+ * evaluaciones lee con FOR SHARE: una evaluación nunca se crea desde una
+ * plantilla ya observada como inactiva. Sin cambio real → 200 sin escribir ni
+ * auditar. La auditoría lleva ids, cantidad de criterios y nombres de campo,
+ * nunca descripciones ni textos de criterios.
  */
 const router = require('express').Router();
 const { insertId } = require('../utils/insertId');
@@ -52,6 +58,7 @@ const { getVisibleDepartmentIds, canSeeEmployee, isGlobal } = require('../servic
 const { findEmployeeInScope, rollbackQuietly } = require('../services/employeeScopeLock');
 const { parsePositiveId } = require('../utils/strictId');
 const V = require('../services/appraisalValidation');
+const TV = require('../services/appraisalTemplateValidation');
 const { canSeeAppraisal, listScope, ownEmployeeId } = require('../services/appraisalAccess');
 const { escapeLike } = require('../services/userLookup');
 
@@ -74,29 +81,36 @@ const badInput = (res, error) => res.status(400).json({ error, code: 'INVALID_IN
 const serverError = (res) => res.status(500).json({ error: 'Error interno' });
 
 // ─── PLANTILLAS ──────────────────────────────────────────────────────────────
+// Lectura: gestión (globales + manager/coordinator/gestor). Alta, edición y
+// desactivación: sólo globales. supervisor y employee → 403 (también para una
+// plantilla inexistente: la respuesta no revela existencia).
 
-router.get('/templates', async (req, res) => {
+const TEMPLATE_NOT_FOUND = { error: 'Plantilla no encontrada' };
+
+router.get('/templates', authorize(...MGR_ROLES), async (req, res) => {
   try {
-    const onlyActive = req.query.all !== '1';
+    const q = TV.validateTemplateListQuery(req.query);
+    if (!q.ok) return badInput(res, q.error);
     const [rows] = await sequelize.query(`
       SELECT t.*, u.full_name AS created_by_name,
              (SELECT COUNT(*) FROM appraisal_template_criteria c WHERE c.template_id = t.id) AS criteria_count
       FROM appraisal_templates t
       LEFT JOIN users u ON u.id = t.created_by
-      ${onlyActive ? 'WHERE t.active = 1' : ''}
-      ORDER BY t.created_at DESC
+      ${q.value.all ? '' : 'WHERE t.active = 1'}
+      ORDER BY t.created_at DESC, t.id DESC
     `);
     res.json({ ok: true, data: rows });
   } catch (err) { serverError(res); }
 });
 
-router.get('/templates/:id', async (req, res) => {
+router.get('/templates/:id', authorize(...MGR_ROLES), async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (id === null) return badInput(res, 'Identificador de plantilla inválido');
     const [[t]] = await sequelize.query(
       'SELECT * FROM appraisal_templates WHERE id = ?', { replacements: [id] }
     );
-    if (!t) return res.status(404).json({ error: 'Plantilla no encontrada' });
+    if (!t) return res.status(404).json(TEMPLATE_NOT_FOUND);
     const [criteria] = await sequelize.query(
       'SELECT * FROM appraisal_template_criteria WHERE template_id = ? ORDER BY sort_order, id',
       { replacements: [id] }
@@ -106,53 +120,90 @@ router.get('/templates/:id', async (req, res) => {
 });
 
 router.post('/templates', authorize(...ADMIN_ROLES), async (req, res) => {
-  const { name, description, scale_min = 1, scale_max = 5, criteria = [] } = req.body || {};
-  if (!name) return res.status(400).json({ error: 'name es requerido' });
-  if (!Array.isArray(criteria) || criteria.length === 0)
-    return res.status(400).json({ error: 'Se requiere al menos un criterio' });
-  const t = await sequelize.transaction();
+  // Todo se valida ANTES de abrir la transacción: un error → 400 sin escribir.
+  const v = TV.validateTemplateCreate(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  const { name, description, scaleMin, scaleMax, criteria } = v.value;
+  let t;
   try {
+    t = await sequelize.transaction();
     const [r] = await sequelize.query(
       `INSERT INTO appraisal_templates (name, description, scale_min, scale_max, created_by)
        VALUES (?, ?, ?, ?, ?)`,
-      { replacements: [name, description || null, scale_min, scale_max, req.user.id], transaction: t }
+      { replacements: [name, description, scaleMin, scaleMax, req.user.id], transaction: t }
     );
     const templateId = insertId(r);
     for (let i = 0; i < criteria.length; i++) {
-      const { name: cn, description: cd, weight = 1 } = criteria[i];
-      if (!cn) continue;
+      const c = criteria[i];
       await sequelize.query(
         `INSERT INTO appraisal_template_criteria (template_id, name, description, weight, sort_order)
          VALUES (?, ?, ?, ?, ?)`,
-        { replacements: [templateId, cn, cd || null, weight, i], transaction: t }
+        { replacements: [templateId, c.name, c.description, c.weight, i], transaction: t }
       );
     }
     await t.commit();
+    audit.log({ req, user: req.user, action: 'appraisal_template_create', entity: 'appraisal_templates', entity_id: templateId, details: { count: criteria.length } });
     res.status(201).json({ ok: true, id: templateId });
   } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
+/**
+ * Plantilla bloqueada (FOR UPDATE) dentro de `transaction`, o null. El alta
+ * de evaluaciones la lee con FOR SHARE (`active = 1`): ambas operaciones se
+ * serializan sobre la misma fila.
+ */
+async function lockTemplate(id, transaction) {
+  const [[row]] = await sequelize.query(
+    'SELECT id, name, description, active FROM appraisal_templates WHERE id = ? LIMIT 1 FOR UPDATE',
+    { replacements: [id], transaction }
+  );
+  return row || null;
+}
+
+// PUT /templates/:id — sólo nombre, descripción y estado. Un PUT sin cambios
+// reales responde 200 sin escribir ni auditar.
 router.put('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
+  const id = parsePositiveId(req.params.id);
+  if (id === null) return badInput(res, 'Identificador de plantilla inválido');
+  const v = TV.validateTemplateUpdate(req.body);
+  if (!v.ok) return badInput(res, v.error);
+  let t;
   try {
-    const id = parseInt(req.params.id, 10);
-    const allowed = ['name', 'description', 'active'];
-    const sets = []; const vals = [];
-    for (const k of allowed) {
-      if (req.body[k] !== undefined) { sets.push(`${k} = ?`); vals.push(req.body[k]); }
-    }
-    if (!sets.length) return res.status(400).json({ error: 'Sin cambios' });
-    await sequelize.query(`UPDATE appraisal_templates SET ${sets.join(', ')} WHERE id = ?`,
-      { replacements: [...vals, id] });
+    t = await sequelize.transaction();
+    const row = await lockTemplate(id, t);
+    if (!row) { await rollbackQuietly(t); return res.status(404).json(TEMPLATE_NOT_FOUND); }
+    const fields = TV.templateChanges(row, v.value);
+    if (!fields.length) { await rollbackQuietly(t); return res.json({ ok: true }); }
+    await sequelize.query(
+      `UPDATE appraisal_templates SET ${fields.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
+      { replacements: [...fields.map((k) => v.value[k]), id], transaction: t }
+    );
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'appraisal_template_update', entity: 'appraisal_templates', entity_id: id, details: { fields } });
     res.json({ ok: true });
-  } catch (err) { serverError(res); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
+// DELETE /templates/:id — soft-delete idempotente. Las evaluaciones ya creadas
+// con la plantilla siguen operativas; no se pueden crear nuevas.
 router.delete('/templates/:id', authorize(...ADMIN_ROLES), async (req, res) => {
+  const id = parsePositiveId(req.params.id);
+  if (id === null) return badInput(res, 'Identificador de plantilla inválido');
+  let t;
   try {
-    await sequelize.query('UPDATE appraisal_templates SET active = 0 WHERE id = ?',
-      { replacements: [parseInt(req.params.id, 10)] });
+    t = await sequelize.transaction();
+    const row = await lockTemplate(id, t);
+    if (!row) { await rollbackQuietly(t); return res.status(404).json(TEMPLATE_NOT_FOUND); }
+    if (!Number(row.active)) { await rollbackQuietly(t); return res.json({ ok: true }); }
+    const [[{ n }]] = await sequelize.query(
+      'SELECT COUNT(*) AS n FROM appraisal_template_criteria WHERE template_id = ? FOR SHARE',
+      { replacements: [id], transaction: t }
+    );
+    await sequelize.query('UPDATE appraisal_templates SET active = 0 WHERE id = ?', { replacements: [id], transaction: t });
+    await t.commit();
+    audit.log({ req, user: req.user, action: 'appraisal_template_deactivate', entity: 'appraisal_templates', entity_id: id, details: { active: 0, count: Number(n) } });
     res.json({ ok: true });
-  } catch (err) { serverError(res); }
+  } catch (err) { await rollbackQuietly(t); serverError(res); }
 });
 
 // ─── EVALUACIONES ────────────────────────────────────────────────────────────

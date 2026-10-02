@@ -1,5 +1,5 @@
 import {
-  canAdministerAppraisals, canManageAppraisals, canListAppraisals,
+  canAdministerAppraisals, canManageAppraisals, canListAppraisals, canReadAppraisalTemplates,
   reviewerLookupUrl, appraisalPageActions, appraisalDetailActions,
 } from '../appraisalRoles'
 
@@ -31,6 +31,15 @@ describe('appraisalRoles (espeja api/src/routes/appraisals.js)', () => {
   })
 })
 
+describe('lectura de plantillas (espeja GET /api/appraisals/templates)', () => {
+  it.each(['super_admin', 'admin', 'gth', 'hr', 'manager', 'coordinator', 'gestor'])('%s: lee plantillas', (r) => {
+    expect(canReadAppraisalTemplates(r)).toBe(true)
+  })
+  it.each(['supervisor', 'employee', '', undefined, null, 'otro'])('%s: no lee plantillas (403 en el API)', (r) => {
+    expect(canReadAppraisalTemplates(r as any)).toBe(false)
+  })
+})
+
 describe('selector de reviewers', () => {
   it('incluye supervisor junto a los roles de gestión', () => {
     expect(reviewerLookupUrl()).toBe('/api/users/lookup?role=manager,coordinator,gestor,supervisor,admin,gth,hr')
@@ -40,15 +49,22 @@ describe('selector de reviewers', () => {
 describe('appraisalPageActions', () => {
   it('supervisor: carga el listado; sin nueva evaluación, plantillas ni KPIs', () => {
     expect(appraisalPageActions('supervisor')).toEqual({
-      loadList: true, newAppraisal: false, newTemplate: false, templatesTab: false, kpis: false, toggleTemplate: false,
+      loadList: true, newAppraisal: false, newTemplate: false, templatesTab: false, loadTemplates: false, kpis: false, toggleTemplate: false,
+    })
+  })
+  it('employee: carga su listado; nunca consulta plantillas', () => {
+    expect(appraisalPageActions('employee')).toEqual({
+      loadList: true, newAppraisal: false, newTemplate: false, templatesTab: false, loadTemplates: false, kpis: false, toggleTemplate: false,
     })
   })
   it('manager: crea evaluaciones pero no plantillas', () => {
-    expect(appraisalPageActions('manager')).toMatchObject({ loadList: true, newAppraisal: true, newTemplate: false, toggleTemplate: false })
+    expect(appraisalPageActions('manager')).toMatchObject({
+      loadList: true, newAppraisal: true, newTemplate: false, toggleTemplate: false, templatesTab: true, loadTemplates: true,
+    })
   })
   it('hr: todas las acciones', () => {
     expect(appraisalPageActions('hr')).toEqual({
-      loadList: true, newAppraisal: true, newTemplate: true, templatesTab: true, kpis: true, toggleTemplate: true,
+      loadList: true, newAppraisal: true, newTemplate: true, templatesTab: true, loadTemplates: true, kpis: true, toggleTemplate: true,
     })
   })
 })
