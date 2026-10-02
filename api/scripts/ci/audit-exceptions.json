@@ -1,0 +1,24 @@
+{
+  "_comment": "Excepciones TEMPORALES y acotadas del gate de npm audit del API. El gate (audit-gate.js) sólo tolera EXACTAMENTE estos advisories y falla ante cualquier cambio (paquete, URL, severidad, rango, versión), si aparece un fix, si el advisory desaparece o si se vence la fecha. Bridge y Web NO usan excepciones.",
+  "exceptions": [
+    {
+      "ghsa": "GHSA-86w9-cpqp-85rv",
+      "cve": "CVE-2026-85393",
+      "package": "node-forge",
+      "version": "1.4.0",
+      "affectedRange": "<=1.4.0",
+      "severity": "high",
+      "url": "https://github.com/advisories/GHSA-86w9-cpqp-85rv",
+      "reason": "Falsificación de firma RSA PKCS#1 v1.5 por relleno anidado en DigestAlgorithm, explotable con claves de exponente bajo (e=3). node-forge <=1.4.0 sin versión corregida publicada. En SisHoras node-forge se usa sólo para parseo CMS/ASN.1 del contenedor PKCS#7; no para control de acceso ni para TLS.",
+      "mitigation": "La verificación criptográfica de la firma pasó de node-forge a node:crypto/OpenSSL (cert.publicKey.verify de forge ya NO se usa en producción) y el verificador rechaza claves RSA con exponente != 65537 (la precondición del ataque). Ver api/src/services/signing/verifyPdfSignature.js.",
+      "tests": [
+        "api/tests/verifyPdfSignatureCrypto.test.js",
+        "api/tests/verifyPdfSignature.test.js",
+        "api/scripts/ci/__tests__/auditGate.test.js",
+        "job CI: Firma PAdES — integración REAL (Docker)"
+      ],
+      "owner": "Equipo SisHoras — firma/seguridad",
+      "expires": "2026-11-01"
+    }
+  ]
+}
