@@ -123,3 +123,99 @@ describe('audit-gate.evaluate', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe('endurecimiento del gate (reproducciones que fallan sobre ebbc25c)', () => {
+  const forgeVuln = () => ({
+    name: 'node-forge', severity: 'high', range: '<=1.4.0',
+    via: [{ source: 1240912, name: 'node-forge', dependency: 'node-forge', title: 't', url: URL, severity: 'high', range: '<=1.4.0' }],
+    nodes: ['node_modules/node-forge'], fixAvailable: false,
+  });
+  const meta = (o) => ({ info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0, ...o });
+
+  test('otro high cuyo via no trae advisory con URL → falla (no se ignora en silencio)', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        'oculto': {
+          name: 'oculto', severity: 'high', range: '*',
+          // via con un objeto SIN url: hoy el gate lo ignora y queda ok.
+          via: [{ name: 'oculto', dependency: 'oculto', title: 'sin url', severity: 'high', range: '*' }],
+          nodes: ['node_modules/oculto'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 2, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, oculto: '1.0.0' } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/URL|oculto|no está explicada/i);
+  });
+
+  test('referencia via transitiva no resoluble → falla', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        'padre': {
+          name: 'padre', severity: 'high', range: '*',
+          via: ['dependencia-ausente'], // no está en el informe
+          nodes: ['node_modules/padre'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 2, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, padre: '1.0.0' } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/transitiv|no resoluble|dependencia-ausente/i);
+  });
+
+  test('contadores de metadata incoherentes con el informe → falla', () => {
+    const audit = {
+      vulnerabilities: { 'node-forge': forgeVuln() },
+      metadata: { vulnerabilities: meta({ high: 2, total: 2 }) }, // dice 2, hay 1
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: installed });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/contador|incoheren/i);
+  });
+
+  test('informe con objeto "error" (fallo de npm audit) → falla aunque esté el advisory permitido', () => {
+    const audit = {
+      error: { code: 'EAUDITNOLOCK', summary: 'npm no pudo auditar' },
+      vulnerabilities: { 'node-forge': forgeVuln() },
+      metadata: { vulnerabilities: meta({ high: 1, total: 1 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: installed });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/error|ejecuci/i);
+  });
+
+  test('fecha de vencimiento inválida en la excepción → falla', () => {
+    const bad = [{ ...EXCEPTIONS[0], expires: 'pronto' }];
+    const r = evaluate(auditWith([{ name: 'node-forge', severity: 'high', url: URL, range: '<=1.4.0' }]), bad, { now, installedVersions: installed });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/fecha|vencimiento|inv[aá]lid/i);
+  });
+
+  test('fecha de vencimiento con desbordamiento (2026-13-40) → falla', () => {
+    const bad = [{ ...EXCEPTIONS[0], expires: '2026-13-40' }];
+    const r = evaluate(auditWith([{ name: 'node-forge', severity: 'high', url: URL, range: '<=1.4.0' }]), bad, { now, installedVersions: installed });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/fecha|vencimiento|inv[aá]lid/i);
+  });
+
+  test('un high explicado SÓLO por una referencia transitiva resoluble al advisory permitido → pasa', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        'consumidor': {
+          name: 'consumidor', severity: 'high', range: '*',
+          via: ['node-forge'], // explicado transitivamente por el advisory permitido
+          nodes: ['node_modules/consumidor'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 2, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: installed });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+});
