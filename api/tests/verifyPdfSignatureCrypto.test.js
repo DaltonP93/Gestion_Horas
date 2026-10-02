@@ -128,15 +128,20 @@ describe('verifyPdfSignature — verificación por node:crypto, no por node-forg
     expect(r.reason).toBe('DIGEST_MISMATCH');
   });
 
-  test('firma alterada (bytes del PKCS#7) → no válida', () => {
+  test('firma alterada (último byte del valor de la firma) → no válida', () => {
     const { signedPdf } = makeSignedPdf({ commonName: 'FirmaAlterada' });
+    // Corrupción DETERMINISTA: se toma el DER exacto del PKCS#7 y se altera su
+    // último byte (contenido del OCTET STRING de la firma), re-hex del MISMO
+    // largo sobre el hueco de /Contents (el padding de ceros queda intacto).
+    const ext = V._extractSignature(signedPdf);
+    const der = Buffer.from(ext.signature);
+    der[der.length - 1] ^= 0xff;
     const pdf = Buffer.from(signedPdf);
     const hexStart = pdf.indexOf(Buffer.from('/Contents <', 'latin1')) + '/Contents <'.length;
-    const target = hexStart + 600; // más allá de la cabecera DER, en el valor de la firma
-    pdf[target] = pdf[target] === 0x41 ? 0x42 : 0x41; // 'A'/'B' hex-válidos
+    Buffer.from(der.toString('hex'), 'latin1').copy(pdf, hexStart);
     const r = verifyPdfSignature(pdf);
     expect(r.valid).toBe(false);
-    expect(['SIGNATURE_INVALID', 'DIGEST_MISMATCH', 'BAD_CMS', 'NO_SIGNED_ATTRS']).toContain(r.reason);
+    expect(['SIGNATURE_INVALID', 'BAD_CMS']).toContain(r.reason);
   });
 
   test('contrato SHA-256 / SHA-384 / SHA-512 preservado', () => {
