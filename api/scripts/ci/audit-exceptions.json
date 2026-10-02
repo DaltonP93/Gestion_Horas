@@ -1,5 +1,6 @@
 {
   "_comment": "Excepciones TEMPORALES y acotadas del gate de npm audit del API. El gate (audit-gate.js) sólo tolera EXACTAMENTE estos advisories y falla ante cualquier cambio (paquete, URL, severidad, rango, versión), si aparece un fix, si el advisory desaparece o si se vence la fecha. Bridge y Web NO usan excepciones.",
+  "exitPlan": "Antes del 2026-11-01: (1) si node-forge publica una versión corregida, actualizar y retirar esta excepción (el gate ya falla cuando aparece un fix o cuando el advisory desaparece); (2) si no, eliminar node-forge migrando el PARSEO CMS/ASN.1 a una librería ASN.1/CMS mantenida y auditada (p. ej. @peculiar/asn1-schema + @peculiar/asn1-cms, o PKI.js) — node:crypto cubre la verificación RSA pero NO ofrece por sí solo un parser general CMS/ASN.1, así que la salida pasa por esa librería, no por un parser artesanal. Si ninguna opción está lista, el gate vencido fuerza volver a 'npm audit --audit-level=high' y re-evaluar.",
   "exceptions": [
     {
       "ghsa": "GHSA-86w9-cpqp-85rv",

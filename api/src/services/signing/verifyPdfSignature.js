@@ -29,10 +29,22 @@
  *   2. Parsea el PKCS#7 SignedData (forge, sólo ASN.1) y toma el SignerInfo.
  *   3. Digest EXPLÍCITAMENTE permitido (sha256/384/512); sin fallback silencioso.
  *   4. Certificado del firmante ASOCIADO por issuer + serial; vigencia; y pin por
- *      fingerprint SHA-256 del DER EMBEBIDO (igual a `openssl x509 -fingerprint`).
+ *      fingerprint SHA-256 del DER del certificado.
  *   5. INTEGRIDAD: `messageDigest` == hash del contenido cubierto por el ByteRange.
- *   6. AUTENTICIDAD: node:crypto.verify(RSA_PKCS1_PADDING) sobre el DER ORIGINAL
- *      del SET de atributos firmados (sin digest precomputado → sin doble hash).
+ *   6. AUTENTICIDAD: node:crypto.verify(RSA_PKCS1_PADDING) sobre el DER del SET
+ *      de atributos firmados (sin digest precomputado → sin doble hash).
+ *
+ * ── CODIFICACIONES NO CANÓNICAS ─────────────────────────────────────────────
+ * El DER del certificado y el del SET de atributos firmados se RE-SERIALIZAN con
+ * `forge.asn1.toDer` a partir de los nodos ASN.1 parseados; no se recorta el DER
+ * original byte-a-byte. CMS/PAdES exige DER (canónico) para los SignedAttributes,
+ * así que para una firma legítima la re-serialización coincide con lo que firmó
+ * el emisor y con `openssl x509 -fingerprint -sha256` del certificado. Si el
+ * emisor usó una codificación NO canónica (BER, longitudes no mínimas, elementos
+ * de más — justamente el vector de CVE-2026-85393), la re-serialización canónica
+ * NO la reproduce: el hash o la firma dejan de coincidir y se responde
+ * `valid:false` (fail-closed). No se acepta una codificación laxa; en el peor
+ * caso se rechaza una firma, nunca se valida una manipulada.
  *
  * Cualquier problema → `valid:false` con una razón NO-PII.
  */
@@ -166,8 +178,10 @@ function certSha256(cert) {
 /**
  * Asocia el SignerInfo (issuer + serial) con SU certificado embebido. Devuelve
  * `{ cert, certDer, sha256 }`: `cert` es el objeto forge (metadatos: serial,
- * vigencia, CN), `certDer` es el Buffer DER EMBEBIDO EXACTO (para construir la
- * X509Certificate de node:crypto y para el pin), y `sha256` su fingerprint.
+ * vigencia, CN); `certDer` es el Buffer con el DER del certificado RE-SERIALIZADO
+ * desde su nodo ASN.1 (DER canónico: para un cert legítimo coincide con el DER
+ * embebido y con `openssl x509 -fingerprint`), usado para construir la
+ * X509Certificate de node:crypto y para el pin; `sha256` es su fingerprint.
  */
 function findSignerCert(_p7, rc) {
   const nodes = (rc.certificates && Array.isArray(rc.certificates.value)) ? rc.certificates.value : [];
@@ -235,8 +249,8 @@ function verifyPdfSignature(pdfBuffer, opts = {}) {
   if (!found) return fail(REASONS.SIGNER_CERT_NOT_FOUND);
   const { cert, certDer, sha256: signerCertSha256 } = found;
 
-  // Clave pública del firmante vía node:crypto, a partir del DER EMBEBIDO EXACTO.
-  // La verificación de la firma NO usa forge (CVE-2026-85393).
+  // Clave pública del firmante vía node:crypto, a partir del DER (canónico) del
+  // certificado. La verificación de la firma NO usa forge (CVE-2026-85393).
   let x509; let publicKey;
   try {
     x509 = new crypto.X509Certificate(certDer);
@@ -280,8 +294,10 @@ function verifyPdfSignature(pdfBuffer, opts = {}) {
   }
 
   // (6) AUTENTICIDAD: node:crypto.verify sobre el DER del SET OF de atributos
-  // firmados. Se pasa el DER ORIGINAL (no un digest precomputado) para que
-  // OpenSSL haga el hash una sola vez; padding RSA PKCS#1 v1.5.
+  // firmados, RE-SERIALIZADO desde los nodos ASN.1 (DER canónico; para una firma
+  // legítima equivale a lo que firmó el emisor, que CMS exige en DER). Se pasa
+  // ese DER completo, no un digest precomputado, para que OpenSSL haga el hash
+  // una sola vez; padding RSA PKCS#1 v1.5.
   const attrSet = forge.asn1.create(
     forge.asn1.Class.UNIVERSAL, forge.asn1.Type.SET, true, attrs,
   );
@@ -307,7 +323,7 @@ function verifyPdfSignature(pdfBuffer, opts = {}) {
     reason: null,
     signerSubjectCN: cn,
     digestAlg: mdName,
-    signerCertSha256, // fingerprint sobre el DER EMBEBIDO (coincide con openssl)
+    signerCertSha256, // fingerprint sobre el DER canónico del cert (coincide con openssl)
     signerSerial: normalizeSerialHex(cert.serialNumber),
     notBefore: notBefore instanceof Date ? notBefore : null,
     notAfter: notAfter instanceof Date ? notAfter : null,
