@@ -219,3 +219,81 @@ describe('endurecimiento del gate (reproducciones que fallan sobre ebbc25c)', ()
     expect(r.errors).toEqual([]);
   });
 });
+
+describe('validación de severidad del advisory (reproducciones sobre 4797055)', () => {
+  const forgeVuln = () => ({
+    name: 'node-forge', severity: 'high', range: '<=1.4.0',
+    via: [{ source: 1240912, name: 'node-forge', dependency: 'node-forge', title: 't', url: URL, severity: 'high', range: '<=1.4.0' }],
+    nodes: ['node_modules/node-forge'], fixAvailable: false,
+  });
+  const meta = (o) => ({ info: 0, low: 0, moderate: 0, high: 0, critical: 0, total: 0, ...o });
+  const OTHER = 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc';
+
+  test('critical con advisory (con URL) SIN severidad → falla (no desaparece en silencio)', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        mal: {
+          name: 'mal', severity: 'critical', range: '*',
+          via: [{ name: 'mal', dependency: 'mal', title: 'x', url: OTHER, range: '*' }], // sin severity
+          nodes: ['node_modules/mal'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 1, critical: 1, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, mal: '1.0.0' } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/severidad|mal/i);
+  });
+
+  test('critical con advisory de severidad desconocida → falla', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        mal: {
+          name: 'mal', severity: 'critical', range: '*',
+          via: [{ name: 'mal', dependency: 'mal', title: 'x', url: OTHER, severity: 'bogus', range: '*' }],
+          nodes: ['node_modules/mal'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 1, critical: 1, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, mal: '1.0.0' } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/severidad|bogus|mal/i);
+  });
+
+  test('critical "explicada" sólo por un advisory de severidad incompatible (moderate) → falla', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        mal: {
+          name: 'mal', severity: 'critical', range: '*',
+          via: [{ name: 'mal', dependency: 'mal', title: 'x', url: OTHER, severity: 'moderate', range: '*' }],
+          nodes: ['node_modules/mal'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 1, critical: 1, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, mal: '1.0.0' } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/no está explicada|incompatible|severidad/i);
+  });
+
+  test('control positivo: una vulnerabilidad moderate (bajo el umbral) con severidad conocida → pasa', () => {
+    const audit = {
+      vulnerabilities: {
+        'node-forge': forgeVuln(),
+        menor: {
+          name: 'menor', severity: 'moderate', range: '*',
+          via: [{ name: 'menor', dependency: 'menor', title: 'x', url: OTHER, severity: 'moderate', range: '*' }],
+          nodes: ['node_modules/menor'], fixAvailable: false,
+        },
+      },
+      metadata: { vulnerabilities: meta({ high: 1, moderate: 1, total: 2 }) },
+    };
+    const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, menor: '1.0.0' } });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+});
