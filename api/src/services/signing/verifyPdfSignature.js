@@ -34,17 +34,28 @@
  *   6. AUTENTICIDAD: node:crypto.verify(RSA_PKCS1_PADDING) sobre el DER del SET
  *      de atributos firmados (sin digest precomputado → sin doble hash).
  *
- * ── CODIFICACIONES NO CANÓNICAS ─────────────────────────────────────────────
- * El DER del certificado y el del SET de atributos firmados se RE-SERIALIZAN con
- * `forge.asn1.toDer` a partir de los nodos ASN.1 parseados; no se recorta el DER
- * original byte-a-byte. CMS/PAdES exige DER (canónico) para los SignedAttributes,
- * así que para una firma legítima la re-serialización coincide con lo que firmó
- * el emisor y con `openssl x509 -fingerprint -sha256` del certificado. Si el
- * emisor usó una codificación NO canónica (BER, longitudes no mínimas, elementos
- * de más — justamente el vector de CVE-2026-85393), la re-serialización canónica
- * NO la reproduce: el hash o la firma dejan de coincidir y se responde
- * `valid:false` (fail-closed). No se acepta una codificación laxa; en el peor
- * caso se rechaza una firma, nunca se valida una manipulada.
+ * ── CODIFICACIONES NO CANÓNICAS (dos tratamientos distintos) ────────────────
+ * Este verificador NO impone conformidad DER estricta sobre el contenedor
+ * CMS/ASN.1, y conviene ser preciso sobre qué se rechaza y qué se normaliza:
+ *
+ *  (a) Contenedor CMS / certificado / SignedAttributes: el certificado y el SET
+ *      de atributos firmados se RE-SERIALIZAN con `forge.asn1.toDer` desde los
+ *      nodos ASN.1 parseados (forma DER mínima). Por eso una codificación NO
+ *      mínima del contenedor, del certificado o de los SignedAttributes (p. ej.
+ *      longitudes en forma larga con ceros a la izquierda) se NORMALIZA antes de
+ *      verificar: la firma se valida sobre la re-serialización canónica y el
+ *      resultado sigue siendo `valid:true` con el mismo pin. No es un rechazo de
+ *      BER; es normalización. (Cubierto por pruebas en verifyPdfSignatureCrypto.)
+ *
+ *  (b) DigestInfo de la firma RSA: lo verifica node:crypto/OpenSSL, que comprueba
+ *      el DigestInfo de forma estricta. Ahí SÍ se rechaza una codificación no
+ *      canónica (relleno anidado en el DigestAlgorithm, el vector de
+ *      CVE-2026-85393): `crypto.verify` devuelve false → `valid:false`.
+ *
+ * En otras palabras: la autenticidad RSA es estricta (OpenSSL); el envoltorio
+ * CMS se normaliza, no se exige DER byte-a-byte. Lo que NUNCA ocurre es validar
+ * una firma manipulada: alterar contenido, atributos o la firma rompe el hash o
+ * la verificación RSA.
  *
  * Cualquier problema → `valid:false` con una razón NO-PII.
  */

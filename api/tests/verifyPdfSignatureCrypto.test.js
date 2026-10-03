@@ -209,3 +209,116 @@ describe('node:crypto verifica de forma INDEPENDIENTE la firma PAdES legítima',
     expect(crypto.verify('sha256', attrDer, key, badSig)).toBe(false);
   });
 });
+
+describe('codificaciones ASN.1 no canónicas: CMS/cert se NORMALIZAN; el DigestInfo RSA lo rechaza OpenSSL', () => {
+  // Mini-códec DER de PRUEBA: re-encoda un árbol TLV recomputando longitudes
+  // (mínimas) salvo en el nodo marcado con `extraZeros`, que recibe octetos de
+  // longitud NO mínimos (ceros a la izquierda en forma larga). Permite producir
+  // dentro de /Contents una codificación no canónica sin tocar ByteRange,
+  // contenido firmado, valores de atributos ni la firma.
+  function readTLV(buf, off) {
+    const tag = buf[off]; let p = off + 1; const l0 = buf[p++]; let len;
+    if (l0 < 0x80) len = l0;
+    else { const n = l0 & 0x7f; len = 0; for (let i = 0; i < n; i += 1) len = len * 256 + buf[p++]; }
+    return { tag, valueOff: p, end: p + len };
+  }
+  const isConstructed = (tag) => (tag & 0x20) !== 0;
+  function parseNodes(buf, off, end) {
+    const out = []; let p = off;
+    while (p < end) {
+      const t = readTLV(buf, p);
+      const node = { tag: t.tag, value: buf.subarray(t.valueOff, t.end) };
+      if (isConstructed(t.tag)) node.children = parseNodes(buf, t.valueOff, t.end);
+      out.push(node); p = t.end;
+    }
+    return out;
+  }
+  function encodeLen(len, extraZeros = 0) {
+    if (len < 0x80 && !extraZeros) return Buffer.from([len]);
+    const b = []; let n = len; if (n === 0) b.push(0);
+    while (n > 0) { b.unshift(n & 0xff); n = Math.floor(n / 256); }
+    for (let i = 0; i < extraZeros; i += 1) b.unshift(0x00);
+    return Buffer.from([0x80 | b.length, ...b]);
+  }
+  function encodeNode(node) {
+    const value = node.children ? Buffer.concat(node.children.map(encodeNode)) : Buffer.from(node.value);
+    return Buffer.concat([Buffer.from([node.tag]), encodeLen(value.length, node.extraZeros || 0), value]);
+  }
+
+  function parts(signedPdf) {
+    const ext = V._extractSignature(signedPdf);
+    const der = Buffer.from(ext.signature);
+    const contentInfo = parseNodes(der, 0, der.length)[0];
+    const content0 = contentInfo.children.find((c) => c.tag === 0xa0);
+    const signedData = content0.children[0];
+    const signerInfos = signedData.children.filter((c) => c.tag === 0x31).pop();
+    const signerInfo = signerInfos.children[0];
+    const signedAttrs = signerInfo.children.find((c) => c.tag === 0xa0);
+    const certs = signedData.children.find((c) => c.tag === 0xa0);
+    return { contentInfo, signedAttrs, certs };
+  }
+  function rebuild(signedPdf, contentInfo) {
+    const der2 = encodeNode(contentInfo);
+    const pdf = Buffer.from(signedPdf);
+    const hexStart = pdf.indexOf(Buffer.from('/Contents <', 'latin1')) + '/Contents <'.length;
+    const gt = pdf.indexOf(0x3e, hexStart); // '>'
+    const capacity = gt - hexStart; // ancho fijo del hueco hex → no mueve el ByteRange
+    const hex = der2.toString('hex');
+    if (hex.length > capacity) throw new Error('DER no entra en el hueco de /Contents');
+    Buffer.from(hex + '0'.repeat(capacity - hex.length), 'latin1').copy(pdf, hexStart);
+    return pdf;
+  }
+
+  test('longitud NO mínima de SignedAttributes → el verificador la normaliza: valid:true, pin intacto', () => {
+    const { signedPdf } = makeSignedPdf({ commonName: 'NoCanonAttrs' });
+    const base = verifyPdfSignature(signedPdf);
+    const p = parts(signedPdf);
+    p.signedAttrs.extraZeros = 1; // longitud larga con cero a la izquierda (no mínima)
+    const r = verifyPdfSignature(rebuild(signedPdf, p.contentInfo));
+    expect(r.valid).toBe(true);
+    expect(r.signerCertSha256).toBe(base.signerCertSha256);
+  });
+
+  test('longitud NO mínima del certificado embebido → se normaliza: valid:true, pin intacto', () => {
+    const { signedPdf } = makeSignedPdf({ commonName: 'NoCanonCert' });
+    const base = verifyPdfSignature(signedPdf);
+    const p = parts(signedPdf);
+    expect(p.certs).toBeDefined();
+    p.certs.extraZeros = 1;
+    const r = verifyPdfSignature(rebuild(signedPdf, p.contentInfo));
+    expect(r.valid).toBe(true);
+    expect(r.signerCertSha256).toBe(base.signerCertSha256);
+  });
+
+  test('longitud NO mínima del contenedor CMS exterior → se normaliza: valid:true, pin intacto', () => {
+    const { signedPdf } = makeSignedPdf({ commonName: 'NoCanonContainer' });
+    const base = verifyPdfSignature(signedPdf);
+    const p = parts(signedPdf);
+    p.contentInfo.extraZeros = 1;
+    const r = verifyPdfSignature(rebuild(signedPdf, p.contentInfo));
+    expect(r.valid).toBe(true);
+    expect(r.signerCertSha256).toBe(base.signerCertSha256);
+  });
+
+  test('distinción: el DigestInfo RSA no canónico SÍ se rechaza (OpenSSL), no se normaliza', () => {
+    // Contraparte del caso CMS: la verificación RSA la hace node:crypto/OpenSSL,
+    // que comprueba el DigestInfo de forma estricta. Se reusa la demostración:
+    // forge acepta un DigestInfo con relleno; node:crypto lo rechaza.
+    const keys = forge.pki.rsa.generateKeyPair({ bits: 2048, e: 0x10001 });
+    const pem = forge.pki.publicKeyToPem(keys.publicKey);
+    const message = Buffer.from('mensaje');
+    const md = forge.md.sha256.create(); md.update(message.toString('binary'));
+    const digest = md.digest().getBytes();
+    const k = Math.ceil(keys.privateKey.n.bitLength() / 8);
+    const oid = () => asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(forge.pki.oids.sha256).getBytes());
+    const nul = () => asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, '');
+    const di = (alg) => asn1.toDer(asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true,
+      [alg, asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, digest)])).getBytes();
+    const garbage = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, 'A'.repeat(48));
+    const algMal = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [oid(), nul(), garbage]);
+    const t = di(algMal);
+    const sig = keys.privateKey.sign(md, { encode: () => `\x00\x01${'\xff'.repeat(k - 3 - t.length)}\x00${t}` });
+    expect(keys.publicKey.verify(digest, sig)).toBe(true); // forge (vulnerable) lo acepta
+    expect(crypto.verify('sha256', message, pem, Buffer.from(sig, 'binary'))).toBe(false); // OpenSSL lo rechaza
+  });
+});
