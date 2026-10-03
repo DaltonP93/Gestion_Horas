@@ -124,18 +124,26 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {} 
       if (typeof ref === 'string') {
         if (ref !== name && !vulns[ref]) errors.push(`Referencia via transitiva no resoluble en ${name}: "${ref}" no está en el informe.`);
       } else if (ref && typeof ref === 'object') {
+        // Se validan los campos del advisory ANTES de filtrar por severidad: un
+        // advisory sin URL o sin severidad conocida no puede desaparecer en
+        // silencio (dejaría pasar la vulnerabilidad que explica).
         if (!ref.url) errors.push(`Advisory sin URL identificable en ${name} (title=${JSON.stringify(ref.title)}).`);
+        if (!SEV.has(ref.severity)) errors.push(`Advisory en ${name} con severidad ausente o desconocida: ${JSON.stringify(ref.severity)}.`);
       } else {
         errors.push(`Entrada "via" inválida en ${name}: ${JSON.stringify(ref)}.`);
       }
     }
   }
 
-  // 4) Toda vulnerabilidad high/critical debe quedar explicada por ≥1 advisory identificado.
+  // 4) Toda vulnerabilidad high/critical debe quedar explicada por ≥1 advisory
+  // identificado DE SEVERIDAD COMPATIBLE (high/critical). No basta con alcanzar
+  // cualquier objeto con URL: un advisory de severidad menor (o sin severidad)
+  // no explica un high/critical.
   for (const [name, v] of Object.entries(vulns)) {
     if (!HIGH.has(v && v.severity)) continue;
-    if (reachableAdvisories(name, vulns, new Set()).length === 0) {
-      errors.push(`La vulnerabilidad high/critical ${name} no está explicada por ningún advisory identificado.`);
+    const reached = reachableAdvisories(name, vulns, new Set());
+    if (!reached.some((a) => HIGH.has(a.severity))) {
+      errors.push(`La vulnerabilidad high/critical ${name} no está explicada por ningún advisory high/critical identificado.`);
     }
   }
 
