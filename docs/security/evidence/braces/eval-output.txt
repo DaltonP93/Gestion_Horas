@@ -1,30 +1,40 @@
-## A. Controles VÁLIDOS: stock vs patched (deben coincidir)
-  IGUAL   expand("foo/{a,b}/bar") 
-  IGUAL   expand("a{b,c}d") 
-  IGUAL   expand("{1..5}") 
-  IGUAL   expand("{01..10}") 
-  IGUAL   expand("{0..10..2}") 
-  IGUAL   expand("{a,{b,c}}") 
-  IGUAL   expand("{a,b}{c,d}") 
-  IGUAL   expand("x{{a,b},{c,d}}y") 
-  IGUAL   expand("!(foo|bar)") 
-  IGUAL   expand("@(a|b)") 
-  IGUAL   expand("foo") 
+braces eval — Node v22.22.2
+stock  : /tmp/tmp.eya5Wq2IT6/stock  (braces@3.0.3)
+patched: /tmp/tmp.eya5Wq2IT6/patched  (braces@3.0.3)  [PR #72 @28d440b5dd449dbf1fe6f3506cf94ecca4d02660]
+(ambas versiones deberían ser 3.0.3: el parche NO cambia la versión → relevante para npm audit)
 
-## B. Límite de PROFUNDIDAD por parseo (string). patched MAX_DEPTH=100
-  depth=50   len=201   | stock: acepta | patched: acepta
-  depth=100  len=401   | stock: acepta | patched: acepta
-  depth=101  len=405   | stock: acepta | patched: SyntaxError: Input depth (101), exceeds max depth (100)
-  depth=500  len=2001  | stock: acepta | patched: SyntaxError: Input depth (101), exceeds max depth (100)
+## Fase 1 — parche bajo prueba: debe cumplir el comportamiento corregido
+  [PASS] A.valido "foo/{a,b}/bar"
+  [PASS] A.valido "a{b,c}d"
+  [PASS] A.valido "{1..5}"
+  [PASS] A.valido "{01..10}"
+  [PASS] A.valido "{0..10..2}"
+  [PASS] A.valido "{a,{b,c}}"
+  [PASS] A.valido "{a,b}{c,d}"
+  [PASS] A.valido "x{{a,b},{c,d}}y"
+  [PASS] A.valido "!(foo|bar)"
+  [PASS] A.valido "@(a|b)"
+  [PASS] A.valido "foo"
+  [PASS] B.depth100.acepta
+  [PASS] B.depth101.rechaza
+  [PASS] B.depth500.rechaza
+  [PASS] C.maxDepth200.rechaza
+  [PASS] C.maxDepth1e5.rechaza
+  [PASS] D.parens100.acepta
+  [PASS] D.parens101.rechaza
+  [PASS] E.compileAst50.acepta
+  [PASS] E.compileAst150.rechaza
 
-## C. Opción maxDepth que intenta SUPERAR el límite (cap a 100)
-  patched(depth150, {maxDepth:200}) -> SyntaxError: Input depth (101), exceeds max depth (100)  (se espera rechazo: cap=min(100,maxDepth))
-  patched(depth150, {maxDepth:100000}) -> SyntaxError: Input depth (101), exceeds max depth (100)  (se espera rechazo: cap=min(100,maxDepth))
+## Fase 2 — control negativo: el stock DEBE fallar los criterios de rechazo
+  [PASS] NEG B.depth101.rechaza (el stock debe NO rechazar)
+  [PASS] NEG B.depth500.rechaza (el stock debe NO rechazar)
+  [PASS] NEG C.maxDepth200.rechaza (el stock debe NO rechazar)
+  [PASS] NEG C.maxDepth1e5.rechaza (el stock debe NO rechazar)
+  [PASS] NEG D.parens101.rechaza (el stock debe NO rechazar)
+  [PASS] NEG E.compileAst150.rechaza (el stock debe NO rechazar)
 
-## D. Paréntesis profundamente anidados (extglob) — patched cuenta parens
-  parens=100  len=301   | stock: acepta | patched: acepta
-  parens=101  len=304   | stock: acepta | patched: SyntaxError: Input depth (101), exceeds max depth (100)
+## RESUMEN
+  Fase 1 (parche cumple): 20/20 PASS
+  Fase 2 (control negativo): 6/6 PASS
 
-## E. AST suministrado DIRECTAMENTE a compile/stringify (sin pasar por parse)
-  compile(AST depth=50 ) | stock: compila | patched: compila
-  compile(AST depth=150) | stock: compila | patched: RangeError: AST depth (101), exceeds max depth (100)
+RESULTADO: OK -> exit 0
