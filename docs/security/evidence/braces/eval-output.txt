@@ -1,0 +1,30 @@
+## A. Controles VÁLIDOS: stock vs patched (deben coincidir)
+  IGUAL   expand("foo/{a,b}/bar") 
+  IGUAL   expand("a{b,c}d") 
+  IGUAL   expand("{1..5}") 
+  IGUAL   expand("{01..10}") 
+  IGUAL   expand("{0..10..2}") 
+  IGUAL   expand("{a,{b,c}}") 
+  IGUAL   expand("{a,b}{c,d}") 
+  IGUAL   expand("x{{a,b},{c,d}}y") 
+  IGUAL   expand("!(foo|bar)") 
+  IGUAL   expand("@(a|b)") 
+  IGUAL   expand("foo") 
+
+## B. Límite de PROFUNDIDAD por parseo (string). patched MAX_DEPTH=100
+  depth=50   len=201   | stock: acepta | patched: acepta
+  depth=100  len=401   | stock: acepta | patched: acepta
+  depth=101  len=405   | stock: acepta | patched: SyntaxError: Input depth (101), exceeds max depth (100)
+  depth=500  len=2001  | stock: acepta | patched: SyntaxError: Input depth (101), exceeds max depth (100)
+
+## C. Opción maxDepth que intenta SUPERAR el límite (cap a 100)
+  patched(depth150, {maxDepth:200}) -> SyntaxError: Input depth (101), exceeds max depth (100)  (se espera rechazo: cap=min(100,maxDepth))
+  patched(depth150, {maxDepth:100000}) -> SyntaxError: Input depth (101), exceeds max depth (100)  (se espera rechazo: cap=min(100,maxDepth))
+
+## D. Paréntesis profundamente anidados (extglob) — patched cuenta parens
+  parens=100  len=301   | stock: acepta | patched: acepta
+  parens=101  len=304   | stock: acepta | patched: SyntaxError: Input depth (101), exceeds max depth (100)
+
+## E. AST suministrado DIRECTAMENTE a compile/stringify (sin pasar por parse)
+  compile(AST depth=50 ) | stock: compila | patched: compila
+  compile(AST depth=150) | stock: compila | patched: RangeError: AST depth (101), exceeds max depth (100)
