@@ -1,6 +1,6 @@
 braces eval — Node v22.22.2
-stock  : /tmp/tmp.eya5Wq2IT6/stock  (braces@3.0.3)
-patched: /tmp/tmp.eya5Wq2IT6/patched  (braces@3.0.3)  [PR #72 @28d440b5dd449dbf1fe6f3506cf94ecca4d02660]
+stock  : /tmp/tmp.Pxj9LEZbnz/stock  (braces@3.0.3)
+patched: /tmp/tmp.Pxj9LEZbnz/patched  (braces@3.0.3)  [PR #72 @28d440b5dd449dbf1fe6f3506cf94ecca4d02660]
 (ambas versiones deberían ser 3.0.3: el parche NO cambia la versión → relevante para npm audit)
 
 ## Fase 1 — parche bajo prueba: debe cumplir el comportamiento corregido

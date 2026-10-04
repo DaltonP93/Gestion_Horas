@@ -8,12 +8,16 @@ o por argumento.
 
 ## 1. Preparar DOS instalaciones aisladas
 
-Crear un directorio limpio (fuera del repo) con dos subcarpetas independientes,
-cada una con su propio `node_modules/braces`. Usar **Node 22** y `--ignore-scripts`
-en ambos casos (el parche se instala desde git y no debe ejecutar scripts).
+Comandos de **Bash**. Capturar la **raíz del repositorio ANTES** de cambiar de
+directorio, para luego invocar `eval.js` por su ruta completa sin depender del
+`cwd`. Crear un directorio limpio (fuera del repo) con dos subcarpetas
+independientes, cada una con su propio `node_modules/braces`. Usar **Node 22** y
+`--ignore-scripts` en ambos casos (el parche se instala desde git y no debe
+ejecutar scripts).
 
-```sh
-node --version          # debe ser v22.x
+```bash
+REPO="$(git rev-parse --show-toplevel)"   # raíz del repo, ANTES de cualquier cd
+node --version                            # debe ser v22.x
 
 WORK="$(mktemp -d)"     # directorio limpio, fuera del repositorio
 
@@ -34,18 +38,41 @@ que se pasa a `eval.js` es la carpeta que **contiene** `node_modules/braces`
 
 ## 2. Ejecutar la evaluación
 
-`eval.js` **no instala nada**: lee las dos instalaciones ya preparadas. Las rutas
-se indican por variable de entorno (preferido) o por argumento:
+`eval.js` **no instala nada**: lee las dos instalaciones ya preparadas. Se invoca
+por su **ruta completa** (`$REPO/docs/security/evidence/braces/eval.js`), así el
+directorio actual no importa. Las rutas de las instalaciones se indican por variable
+de entorno (preferido) o por argumento posicional.
 
-```sh
+**Conservar el código de salida al guardar la evidencia.** `tee` devolvería su
+propio código y enmascararía el de `node`; por eso el script es de **Bash** con
+`set -o pipefail` (el `exit` de `node`, no el de `tee`, decide el resultado). La
+alternativa sin tubería es redirigir con `>`.
+
+```bash
+set -o pipefail   # imprescindible si se usa tee: propaga el exit de node
+
+# (1) Evaluación correcta (parche real) → debe terminar en exit 0.
 BRACES_STOCK="$WORK/stock" BRACES_PATCHED="$WORK/patched" \
-  node eval.js | tee eval-output.txt
-# equivalente posicional:
-# node eval.js "$WORK/stock" "$WORK/patched" | tee eval-output.txt
+  node "$REPO/docs/security/evidence/braces/eval.js" \
+  | tee "$REPO/docs/security/evidence/braces/eval-output.txt"
+echo "exit=$?"        # → exit=0
+
+# (2) Control negativo (stock como supuesto parche) → debe terminar en exit 1.
+BRACES_STOCK="$WORK/stock" BRACES_PATCHED="$WORK/stock" \
+  node "$REPO/docs/security/evidence/braces/eval.js" >/dev/null
+echo "exit=$?"        # → exit=1
 ```
 
-(Para regenerar la evidencia versionada, redirigir a este mismo directorio:
-`... | tee docs/security/evidence/braces/eval-output.txt` desde la raíz del repo.)
+Equivalente sin `tee` (conserva el `exit` sin necesitar `pipefail`):
+
+```bash
+BRACES_STOCK="$WORK/stock" BRACES_PATCHED="$WORK/patched" \
+  node "$REPO/docs/security/evidence/braces/eval.js" \
+  > "$REPO/docs/security/evidence/braces/eval-output.txt"
+echo "exit=$?"        # → exit=0
+```
+
+(Forma posicional equivalente: `node "$REPO/.../eval.js" "$WORK/stock" "$WORK/patched"`.)
 
 ### Qué comprueba (ASERCIONES, no sólo impresión)
 
@@ -68,7 +95,8 @@ proceso con **exit 1** (exit 2 si faltan las rutas). Las comprobaciones:
 La Fase 2 usa el **stock como supuesto parche** y exige que **falle** los criterios
 de rechazo (acepta profundidades que un parche debería rechazar). Si el stock los
 cumpliera, la suite no distinguiría una implementación no corregida; por eso el
-control negativo que **no** falla se cuenta como fallo y fuerza exit 1.
+control negativo que **no** falla se cuenta como fallo y fuerza exit 1. El comando
+(2) de arriba ejercita ese caso de punta a punta: **exit 1**.
 
 - `eval-output.txt`: salida observada en **estas** pruebas (distintas de las
   declaradas por el PR upstream, p. ej. `test/depth-guards.js`).
