@@ -1,0 +1,40 @@
+braces eval — Node v22.22.2
+stock  : /tmp/tmp.Pxj9LEZbnz/stock  (braces@3.0.3)
+patched: /tmp/tmp.Pxj9LEZbnz/patched  (braces@3.0.3)  [PR #72 @28d440b5dd449dbf1fe6f3506cf94ecca4d02660]
+(ambas versiones deberían ser 3.0.3: el parche NO cambia la versión → relevante para npm audit)
+
+## Fase 1 — parche bajo prueba: debe cumplir el comportamiento corregido
+  [PASS] A.valido "foo/{a,b}/bar"
+  [PASS] A.valido "a{b,c}d"
+  [PASS] A.valido "{1..5}"
+  [PASS] A.valido "{01..10}"
+  [PASS] A.valido "{0..10..2}"
+  [PASS] A.valido "{a,{b,c}}"
+  [PASS] A.valido "{a,b}{c,d}"
+  [PASS] A.valido "x{{a,b},{c,d}}y"
+  [PASS] A.valido "!(foo|bar)"
+  [PASS] A.valido "@(a|b)"
+  [PASS] A.valido "foo"
+  [PASS] B.depth100.acepta
+  [PASS] B.depth101.rechaza
+  [PASS] B.depth500.rechaza
+  [PASS] C.maxDepth200.rechaza
+  [PASS] C.maxDepth1e5.rechaza
+  [PASS] D.parens100.acepta
+  [PASS] D.parens101.rechaza
+  [PASS] E.compileAst50.acepta
+  [PASS] E.compileAst150.rechaza
+
+## Fase 2 — control negativo: el stock DEBE fallar los criterios de rechazo
+  [PASS] NEG B.depth101.rechaza (el stock debe NO rechazar)
+  [PASS] NEG B.depth500.rechaza (el stock debe NO rechazar)
+  [PASS] NEG C.maxDepth200.rechaza (el stock debe NO rechazar)
+  [PASS] NEG C.maxDepth1e5.rechaza (el stock debe NO rechazar)
+  [PASS] NEG D.parens101.rechaza (el stock debe NO rechazar)
+  [PASS] NEG E.compileAst150.rechaza (el stock debe NO rechazar)
+
+## RESUMEN
+  Fase 1 (parche cumple): 20/20 PASS
+  Fase 2 (control negativo): 6/6 PASS
+
+RESULTADO: OK -> exit 0
