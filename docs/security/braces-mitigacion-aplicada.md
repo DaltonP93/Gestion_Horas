@@ -66,9 +66,10 @@ URL/severidad, high/critical sin advisory compatible):
 - **Cambio de identidad** (paquete, URL/GHSA), **severidad**, **rango** o **versión
   instalada** distintos de lo declarado → falla.
 - **Forma de `fixAvailable` validada estrictamente:** **sólo `false`** representa "sin
-  fix"; `true` o el objeto canónico con **`name` no vacío**, **`version` semver válida** y
+  fix"; `true` o el objeto canónico con **`name` no vacío**, **`version` SemVer 2.0.0
+  válida** (regex estricta de semver.org: rechaza `01.2.3`, `1.2.3-!`, `1.2.3-a..b`, …) y
   **`isSemVerMajor` booleano**. Cualquier otra cosa — `null`, **ausente**, número, string
-  como `"unexpected"`, objeto con `name`/`version` **vacíos** o versión **inválida** →
+  como `"unexpected"`, objeto con `name`/`version` **vacíos** o versión **no-SemVer** →
   **falla** (no se trata como "sin fix").
 - **Fix publicado del propio paquete** (`fixAvailable===true` o un objeto cuyo `name` es el
   propio paquete) → falla. Un **fix NO-mayor de otro paquete** también → falla (hay que
@@ -85,9 +86,12 @@ URL/severidad, high/critical sin advisory compatible):
   1. **rechaza manifiestos inválidos** (identifica la copia por el nombre de la carpeta, no
      por el manifiesto; un `braces` sin `name` válido o con versión distinta **falla**, no se
      omite);
-  2. **autentica la entrada realmente resuelta**: lo que Node cargaría (honrando `main`/
-     `exports`) debe ser el `index.js` **fingerprinteado de esa copia** — si `main`/`exports`
-     apunta a otro archivo, **falla** (no basta con que las 7 huellas estén intactas);
+  2. **autentica la entrada que cargaría un consumidor por NOMBRE** (`require('braces')`),
+     resuelta desde el contexto de esa copia (`require.resolve('braces', { paths: [base] })`,
+     que honra `main` **y** `exports`). No se usa `require.resolve(dir)`: la resolución por
+     **ruta IGNORA `exports`**, así que un `exports["."].require` que redirige la entrada se
+     colaría. La entrada resuelta debe ser el `index.js` **fingerprinteado de esa copia**; si
+     `main` o `exports` la redirige a otro archivo, **falla** (aunque las 7 huellas estén intactas);
   3. verifica las **huellas SHA-256** de los 7 archivos de código contra la revisión aprobada;
   4. **carga esa copia** (su entrada autenticada) y exige el comportamiento del parche:
      controles positivos (`a{b,c}d`→`abd,acd`, `{1..3}`, `foo/{a,b}`), aceptación dentro del
@@ -123,9 +127,16 @@ URL/severidad, high/critical sin advisory compatible):
   guarda de compile eliminada → **rechaza**; #2 copia con `package.json` **sin name** → **falla**
   (manifiesto inválido, ya no se omite); #3 copia con las 7 huellas intactas pero `main`→`evil.js`
   → **falla** (entrada resuelta no autenticada); #4 `fixAvailable` `null`/ausente/vacíos/versión
-  inválida → **falla**. Evidencia antes/después en
-  `docs/security/evidence/braces/parche/negativos-antes-{85a8510,b1f13fe}.txt` y
-  `negativos-despues{,-b1f13fe}.txt`.
+  inválida → **falla**.
+- **Reproducciones de exports/SemVer** `api/scripts/ci/__tests__/auditGateExportsSemver.test.js`
+  — **9/9** (5 fallaban sobre `d3d2e3d`): #1/#2 `exports["."].require`→`evil.js` (raíz y
+  anidada) con 7 huellas intactas y `main=index.js` → **rechaza** (la entrada por nombre no
+  es el index.js autenticado); #3 `fixAvailable` con versiones no-SemVer (`01.2.3`,
+  `1.2.3-!`, `1.2.3-a..b`) → **falla**; controles positivos de versiones SemVer válidas
+  toleradas.
+- Evidencia antes/después en
+  `docs/security/evidence/braces/parche/negativos-antes-{85a8510,b1f13fe,d3d2e3d}.txt` y
+  `negativos-despues{,-b1f13fe,-d3d2e3d}.txt`.
 - **Verificador real del parche:** `verifyBracesPatch` (huellas + comportamiento) sobre la
   instalación real del api → `ok:true`; sin huellas de referencia → `ok:false`; sobre un
   `braces@3.0.3` **stock** o un parche con la guarda de compile eliminada → `ok:false`.

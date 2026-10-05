@@ -42,6 +42,9 @@ const { execFileSync } = require('node:child_process');
 
 const HIGH = new Set(['high', 'critical']);
 const SEVERITIES = ['info', 'low', 'moderate', 'high', 'critical'];
+// SemVer 2.0.0 estricto (semver.org): sin ceros a la izquierda, prerelease/build con
+// identificadores válidos y no vacíos. Rechaza 01.2.3, 1.2.3-!, 1.2.3-a..b, etc.
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 const SEV = new Set(SEVERITIES);
 
 function ghsaFromUrl(url) {
@@ -206,7 +209,7 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {},
     // cosa (undefined, null, número, string, objeto incompleto o con campos vacíos/
     // inválidos) hace fallar el gate.
     const isNonEmptyStr = (s) => typeof s === 'string' && s.trim().length > 0;
-    const isValidVersion = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+([-+].+)?$/.test(v);
+    const isValidVersion = (v) => typeof v === 'string' && SEMVER_RE.test(v);
     const faIsCanonicalObject = fa && typeof fa === 'object' && !Array.isArray(fa)
       && isNonEmptyStr(fa.name) && isValidVersion(fa.version) && typeof fa.isSemVerMajor === 'boolean';
     if (fa === false) {
@@ -348,15 +351,19 @@ function verifyBracesPatch(root, fingerprints) {
     }
     if (pkg.name !== 'braces') return { ok: false, detail: `copia ${dir}: manifiesto inválido (name=${JSON.stringify(pkg.name)}, se espera "braces")` };
     if (pkg.version !== fingerprints.version) return { ok: false, detail: `copia ${dir}: versión ${JSON.stringify(pkg.version)} ≠ ${fingerprints.version}` };
-    // 2) ENTRADA REALMENTE RESUELTA: lo que Node cargaría (honrando main/exports) debe
-    //    ser el index.js fingerprinteado de ESTA copia, no otro archivo.
+    // 2) ENTRADA que cargaría un CONSUMIDOR por NOMBRE (require('braces')), resuelta
+    //    desde el contexto de ESTA copia. Honra `main` Y `exports`: require.resolve(dir)
+    //    (resolución por RUTA) NO sirve porque IGNORA el campo `exports`. El contexto es
+    //    <base> = el directorio cuyo node_modules contiene esta copia (dirname×2), así
+    //    la resolución por nombre apunta a la copia más cercana (ésta).
     const expectedEntry = fs.realpathSync(path.join(dir, 'index.js'));
+    const consumerCtx = path.dirname(path.dirname(dir));
     let resolvedEntry;
-    try { resolvedEntry = fs.realpathSync(require.resolve(dir)); } catch (e) {
-      return { ok: false, detail: `copia ${dir}: no se pudo resolver la entrada (${e.message})` };
+    try { resolvedEntry = fs.realpathSync(require.resolve('braces', { paths: [consumerCtx] })); } catch (e) {
+      return { ok: false, detail: `copia ${dir}: no se pudo resolver 'braces' por nombre desde ${consumerCtx} (${e.message})` };
     }
     if (resolvedEntry !== expectedEntry) {
-      return { ok: false, detail: `copia ${dir}: la entrada resuelta (${resolvedEntry}) no es index.js de la copia (main/exports apunta a otro archivo)` };
+      return { ok: false, detail: `copia ${dir}: la entrada que carga el consumidor por nombre (${resolvedEntry}) no es el index.js autenticado (main/exports la redirige)` };
     }
     // 3) HUELLAS de los 7 archivos de código.
     for (const [rel, want] of Object.entries(fingerprints.files)) {
