@@ -6,7 +6,7 @@
  * (node-forge 1.4.0). JSON SINTÉTICO; no ejecuta npm.
  */
 
-const { evaluate } = require('../audit-gate');
+const { evaluate, verifyBracesPatch } = require('../audit-gate');
 
 const GHSA = 'GHSA-86w9-cpqp-85rv';
 const URL = `https://github.com/advisories/${GHSA}`;
@@ -295,5 +295,113 @@ describe('validación de severidad del advisory (reproducciones sobre 4797055)',
     const r = evaluate(audit, EXCEPTIONS, { now, installedVersions: { ...installed, menor: '1.0.0' } });
     expect(r.ok).toBe(true);
     expect(r.errors).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// braces (GHSA-vfj7-8cjw-p6xm): excepción con parche REQUERIDO y verificado.
+// Primero los RECHAZOS, luego los controles positivos. JSON sintético.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('excepción de braces con parche (GHSA-vfj7-8cjw-p6xm)', () => {
+  const BR_GHSA = 'GHSA-vfj7-8cjw-p6xm';
+  const BR_URL = `https://github.com/advisories/${BR_GHSA}`;
+  const bracesExc = {
+    ghsa: BR_GHSA, cve: 'CVE-2026-93687', package: 'braces', version: '3.0.3',
+    affectedRange: '<=3.0.3', severity: 'high', url: BR_URL,
+    patch: { source: 'github:micromatch/braces#28d440b', verify: 'braces-depth-guard' },
+    expires: '2026-10-18',
+  };
+  const EXC_WEB = [bracesExc]; // Web/Bridge: SÓLO braces.
+  const EXC_API = [EXCEPTIONS[0], bracesExc]; // API: node-forge + braces.
+  const instWeb = { braces: '3.0.3' };
+  const patchOK = { braces: { ok: true, detail: 'ok' } };
+  // fixAvailable real tras el override: salto semver-MAJOR de OTRO paquete.
+  const FA_MAJOR_OTHER = { name: 'tailwindcss', version: '4.3.3', isSemVerMajor: true };
+
+  const bracesAdvisory = (over = {}) => ({ name: 'braces', severity: 'high', url: BR_URL, range: '<=3.0.3', fixAvailable: FA_MAJOR_OTHER, ...over });
+
+  // ── RECHAZOS ────────────────────────────────────────────────────────────
+  test('parche NO verificado (ok:false) → falla y lo dice', () => {
+    const r = evaluate(auditWith([bracesAdvisory()]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: { braces: { ok: false, detail: 'profundidad 101 aceptada' } } });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/parche|aplicad|verific/i);
+  });
+
+  test('parche sin verificación disponible (stock como supuesto parche) → falla', () => {
+    const r = evaluate(auditWith([bracesAdvisory()]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: {} });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/parche|aplicad|verific/i);
+  });
+
+  test('fixAvailable del PROPIO paquete (versión corregida publicada) → falla', () => {
+    const r = evaluate(auditWith([bracesAdvisory({ fixAvailable: { name: 'braces', version: '3.0.4', isSemVerMajor: false } })]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: patchOK });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/versi[oó]n corregida|fix|actualiz/i);
+  });
+
+  test('fixAvailable NO-mayor de otro paquete → falla (hay que tomarlo)', () => {
+    const r = evaluate(auditWith([bracesAdvisory({ fixAvailable: { name: 'chokidar', version: '3.6.1', isSemVerMajor: false } })]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: patchOK });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/NO-mayor|fix|remedia/i);
+  });
+
+  test('fixAvailable === true → falla', () => {
+    const r = evaluate(auditWith([bracesAdvisory({ fixAvailable: true })]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: patchOK });
+    expect(r.ok).toBe(false);
+  });
+
+  test('excepción vencida (después del 2026-10-18) → falla', () => {
+    const r = evaluate(auditWith([bracesAdvisory()]), EXC_WEB, { now: new Date('2026-10-19T00:00:00Z'), installedVersions: instWeb, patchVerification: patchOK });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/vencid|expir/i);
+  });
+
+  test('rango/severidad/versión distintos de lo declarado → falla', () => {
+    const r1 = evaluate(auditWith([bracesAdvisory({ range: '<=3.0.4' })]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: patchOK });
+    const r2 = evaluate(auditWith([bracesAdvisory({ severity: 'critical' })]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: patchOK });
+    const r3 = evaluate(auditWith([bracesAdvisory()]), EXC_WEB, { now, installedVersions: { braces: '3.0.2' }, patchVerification: patchOK });
+    expect(r1.ok).toBe(false); expect(r2.ok).toBe(false); expect(r3.ok).toBe(false);
+  });
+
+  test('otro high/critical además de braces (Web sólo tolera braces) → falla', () => {
+    const r = evaluate(auditWith([bracesAdvisory(), { name: 'otra', severity: 'critical', url: 'https://github.com/advisories/GHSA-oooo-oooo-oooo', range: '*' }]), EXC_WEB, { now, installedVersions: { ...instWeb, otra: '1.0.0' }, patchVerification: patchOK });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/no permitido|otra/i);
+  });
+
+  // ── CONTROLES POSITIVOS ───────────────────────────────────────────────────
+  test('control positivo Web/Bridge: braces parcheado + fixAvailable major de OTRO paquete → pasa con NOTA', () => {
+    const r = evaluate(auditWith([bracesAdvisory()]), EXC_WEB, { now, installedVersions: instWeb, patchVerification: patchOK });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.allowed).toEqual([BR_GHSA]);
+    expect((r.notes || []).join('\n')).toMatch(/semver-MAJOR|NO lo elimina|npm audit/i);
+  });
+
+  test('control positivo API: node-forge + braces (dos excepciones, ambas presentes) → pasa', () => {
+    const audit = auditWith([{ name: 'node-forge', severity: 'high', url: URL, range: '<=1.4.0' }, bracesAdvisory()]);
+    const r = evaluate(audit, EXC_API, { now, installedVersions: { 'node-forge': '1.4.0', braces: '3.0.3' }, patchVerification: patchOK });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+    expect(r.allowed.sort()).toEqual([BR_GHSA, GHSA].sort());
+  });
+
+  test('una excepción extra configurada cuyo advisory NO aparece → falla (pide retirarla)', () => {
+    // Sólo braces en el informe, pero se declaran node-forge + braces.
+    const r = evaluate(auditWith([bracesAdvisory()]), EXC_API, { now, installedVersions: { 'node-forge': '1.4.0', braces: '3.0.3' }, patchVerification: patchOK });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join('\n')).toMatch(/ya no aparece|elimin|retir/i);
+  });
+});
+
+// Verificación REAL del parche sobre la instalación de este paquete (api).
+// `npm ci` deja braces parcheado (override → git #72); el verificador debe
+// confirmarlo (control positivo + rechazo de profundidad).
+describe('verifyBracesPatch (instalación real del api)', () => {
+  const path = require('node:path');
+  test('la instalación real del api tiene el parche aplicado → ok', () => {
+    const r = verifyBracesPatch(path.resolve(__dirname, '..', '..', '..'));
+    expect(r.ok).toBe(true);
+    expect(r.detail).toMatch(/profundidad 101 rechazada|parche aplicado/i);
   });
 });

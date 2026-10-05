@@ -1,0 +1,24 @@
+name: braces
+version: 3.0.3
+license: MIT
+_resolved: (see lockfile)
+--- api/package-lock.json braces node ---
+node_modules/braces {
+  "version": "3.0.3",
+  "resolved": "git+ssh://git@github.com/micromatch/braces.git#28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+  "integrity": "sha512-LcRdbKBiKSOJRndXDk1VR5druLYgvHdr6+BVwMmoX2HEQemPU/vMjtraOQ3RJjN8mPQkDQm85EmBXbMM24IZ2Q==",
+  "dev": true,
+  "license": "MIT",
+  "dependencies": {
+    "fill-range": "^7.1.1"
+  },
+  "engines": {
+    "node": ">=8.3"
+  }
+}
+--- LICENSE (head) ---
+The MIT License (MIT)
+
+Copyright (c) 2014-present, Jon Schlinkert.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy

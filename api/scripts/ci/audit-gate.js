@@ -2,24 +2,33 @@
 'use strict';
 
 /**
- * audit-gate.js — gate de `npm audit` del API con una excepción TEMPORAL,
- * acotada y vencible para GHSA-86w9-cpqp-85rv / CVE-2026-85393 (node-forge
- * 1.4.0, sin fix publicado; usado sólo para parseo CMS/ASN.1).
+ * audit-gate.js — gate de `npm audit` con excepciones TEMPORALES, acotadas y
+ * vencibles. Reemplaza a `npm audit --audit-level=high`. Por defecto audita el
+ * API; con `--root <dir> --exceptions <file>` el MISMO evaluador sirve a Bridge y
+ * Web, cada uno con su propio archivo de excepciones:
+ *   - API : node-forge (GHSA-86w9-cpqp-85rv) + braces (GHSA-vfj7-8cjw-p6xm)
+ *   - Bridge / Web : SÓLO braces (GHSA-vfj7-8cjw-p6xm)
  *
- * Reemplaza a `npm audit --audit-level=high` SÓLO en el API. Mantiene el nivel
- * alto/crítico y además:
- *   - tolera EXACTAMENTE los advisories declarados en audit-exceptions.json;
+ * Mantiene el nivel alto/crítico y además:
+ *   - tolera EXACTAMENTE los advisories declarados en el archivo de excepciones;
  *   - falla ante cualquier otro high/critical;
- *   - falla si hay más de un advisory permitido;
+ *   - falla si hay más advisories permitidos que excepciones declaradas;
  *   - falla si cambia paquete, URL/GHSA, severidad, rango o versión instalada;
- *   - falla si aparece una versión corregida (fixAvailable);
+ *   - falla si aparece una versión corregida del propio paquete (o un fix NO-mayor);
+ *     un salto semver-MAJOR de OTRO paquete (heurística transitiva de npm) se tolera
+ *     con NOTA y NO limpia el aviso;
+ *   - falla si la excepción exige un parche y éste NO está aplicado/verificado sobre
+ *     la instalación real (p.ej. braces: control positivo + guarda de profundidad);
  *   - falla si la excepción venció (fecha `expires`);
  *   - falla si el advisory DESAPARECE (hay que retirar la excepción y volver a
  *     `npm audit --audit-level=high`).
  *
- * Es una mitigación temporal: la función vulnerable de node-forge
- * (cert.publicKey.verify) ya NO se usa en producción; la verificación real la
- * hace node:crypto/OpenSSL (ver verifyPdfSignature.js).
+ * Excepciones = ACEPTACIÓN TEMPORAL DEL RIESGO: no eliminan el aviso de npm audit.
+ *   - node-forge: la función vulnerable (cert.publicKey.verify) ya NO se usa en
+ *     producción; la verificación real la hace node:crypto/OpenSSL.
+ *   - braces: parcheado con PR micromatch/braces #72 (overrides → git), que agrega
+ *     guardas de profundidad; el paquete sigue reportando 3.0.3, así que npm audit
+ *     sigue marcando el aviso mientras no exista una versión publicada > 3.0.3.
  */
 
 const path = require('node:path');
@@ -71,8 +80,9 @@ function reachableAdvisories(name, vulns, seen) {
  * al menos un advisory identificado (con URL). Nada se amplía ni se ignora.
  * @returns {{ok:boolean, errors:string[], allowed:string[]}}
  */
-function evaluate(audit, exceptions, { now = new Date(), installedVersions = {} } = {}) {
+function evaluate(audit, exceptions, { now = new Date(), installedVersions = {}, patchVerification = {} } = {}) {
   const errors = [];
+  const notes = [];
   const nowDate = now instanceof Date ? now : new Date(now);
 
   // 0) Las fechas de vencimiento declaradas deben ser válidas (independiente del informe).
@@ -175,15 +185,40 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {} 
     const installed = installedVersions[a.package];
     if (!installed) errors.push(`No se pudo determinar la versión instalada de ${a.package}.`);
     else if (installed !== exc.version) errors.push(`Versión instalada de ${a.package} (${installed}) distinta de la declarada (${exc.version}).`);
-    if (a.fixAvailable) errors.push(`Hay un fix disponible para ${a.ghsa}: actualiza ${a.package} y elimina la excepción (no excepcionar).`);
+    // fixAvailable: un fix PUBLICADO del paquete excepcionado obliga a retirar la
+    // excepción. `true` = fix in-place; objeto con `name === paquete` = versión
+    // corregida del propio paquete; objeto de OTRO paquete NO-mayor = remediación
+    // transitiva no disruptiva que debe tomarse. Sólo se tolera (dejando NOTA) un
+    // salto semver-MAJOR de OTRO paquete: es la heurística transitiva de npm
+    // (p.ej. nodemon/tailwindcss), no una versión corregida de este paquete, y
+    // adoptarlo queda fuera del alcance autorizado.
+    const fa = a.fixAvailable;
+    if (fa === true) {
+      errors.push(`Hay un fix disponible para ${a.ghsa}: actualiza ${a.package} y elimina la excepción (no excepcionar).`);
+    } else if (fa && typeof fa === 'object') {
+      if (fa.name === a.package) {
+        errors.push(`Hay una versión corregida de ${a.package} (${fa.name}@${fa.version}): actualiza y elimina la excepción de ${a.ghsa}.`);
+      } else if (fa.isSemVerMajor !== true) {
+        errors.push(`Hay un fix NO-mayor disponible (${fa.name}@${fa.version}) que remedia ${a.ghsa}: aplícalo y elimina la excepción.`);
+      } else {
+        notes.push(`${a.ghsa}: npm sugiere un salto semver-MAJOR de ${fa.name} (@${fa.version}); no es una versión corregida de ${a.package} y queda fuera del alcance autorizado — la excepción NO lo elimina del informe de npm audit.`);
+      }
+    }
+    // El parche declarado debe estar APLICADO y VERIFICADO sobre la instalación real.
+    if (exc.patch) {
+      const pv = patchVerification[a.package];
+      if (!pv || pv.ok !== true) {
+        errors.push(`El parche requerido para ${a.ghsa} (${a.package}) no está aplicado/verificado: ${pv && pv.detail ? pv.detail : 'sin verificación disponible'}.`);
+      }
+    }
     if (isCanonicalDate(exc.expires) && nowDate > new Date(`${exc.expires}T00:00:00Z`)) {
-      errors.push(`La excepción de ${a.ghsa} está vencida (venció el ${exc.expires}): actualiza o retira node-forge.`);
+      errors.push(`La excepción de ${a.ghsa} está vencida (venció el ${exc.expires}): actualiza o retira ${a.package}.`);
     }
     allowed.push(a);
   }
 
-  if (allowed.length > 1) {
-    errors.push(`Hay más de un advisory permitido presente (${allowed.length}); la excepción cubre exactamente uno.`);
+  if (allowed.length > exceptions.length) {
+    errors.push(`Hay más advisories permitidos presentes (${allowed.length}) que excepciones declaradas (${exceptions.length}).`);
   }
 
   // 6) Excepción configurada cuyo advisory ya no aparece → forzar su retiro.
@@ -194,7 +229,44 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {} 
     }
   }
 
-  return { ok: errors.length === 0, errors, allowed: allowed.map((a) => a.ghsa) };
+  return { ok: errors.length === 0, errors, allowed: allowed.map((a) => a.ghsa), notes };
+}
+
+/**
+ * Verifica sobre la INSTALACIÓN REAL que el parche de braces (PR micromatch/braces
+ * #72) está aplicado y funcionando: control positivo (un patrón válido expande con
+ * normalidad) + guarda de profundidad (un patrón de llaves muy anidado se rechaza).
+ * El stock de braces@3.0.3 NO rechaza la profundidad → devuelve {ok:false}, de modo
+ * que la excepción exige el parche aplicado y verificado, no sólo la versión 3.0.3.
+ */
+function verifyBracesPatch(root) {
+  let braces;
+  try {
+    braces = require(require.resolve('braces', { paths: [root] }));
+  } catch (e) {
+    return { ok: false, detail: `no se pudo cargar braces desde ${root}: ${e.message}` };
+  }
+  let positive;
+  try { positive = braces.expand('a{b,c}d'); } catch (e) { return { ok: false, detail: `control positivo lanzó: ${e.message}` }; }
+  if (!Array.isArray(positive) || positive.join(',') !== 'abd,acd') {
+    return { ok: false, detail: `control positivo inesperado: ${JSON.stringify(positive)}` };
+  }
+  const deep = `${'{a,'.repeat(101)}z${'}'.repeat(101)}`;
+  let rejected = false;
+  try { braces(deep); } catch (_e) { rejected = true; }
+  if (!rejected) return { ok: false, detail: 'parche AUSENTE/alterado: braces aceptó profundidad 101 (debería rechazarla)' };
+  return { ok: true, detail: 'control positivo OK y profundidad 101 rechazada (parche aplicado)' };
+}
+
+const PATCH_VERIFIERS = { 'braces-depth-guard': verifyBracesPatch };
+
+/** Parsea `--root <dir>` y `--exceptions <file>` (ambos opcionales). */
+function parseArgs(argv) {
+  const out = { root: null, exceptions: null };
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--root') { out.root = argv[i + 1]; i += 1; } else if (argv[i] === '--exceptions') { out.exceptions = argv[i + 1]; i += 1; }
+  }
+  return out;
 }
 
 /** Lee la versión instalada de un paquete desde node_modules, o null. */
@@ -218,40 +290,54 @@ function runNpmAudit(cwd) {
 }
 
 function main() {
-  const apiRoot = path.resolve(__dirname, '..', '..');
-  const excFile = path.join(__dirname, 'audit-exceptions.json');
+  const cli = parseArgs(process.argv.slice(2));
+  // Por defecto audita el API (compatibilidad). Con `--root`/`--exceptions` el
+  // MISMO evaluador sirve a Bridge y Web, cada uno con su propio archivo de
+  // excepciones (que sólo tolera braces).
+  const defaultRoot = path.resolve(__dirname, '..', '..');
+  const root = cli.root ? path.resolve(process.cwd(), cli.root) : defaultRoot;
+  const excFile = cli.exceptions ? path.resolve(process.cwd(), cli.exceptions) : path.join(__dirname, 'audit-exceptions.json');
   const exceptions = JSON.parse(fs.readFileSync(excFile, 'utf8')).exceptions || [];
 
   let audit;
   try {
-    audit = runNpmAudit(apiRoot);
+    audit = runNpmAudit(root);
   } catch (err) {
     process.stderr.write(`\n❌ El gate de npm audit falló: no se pudo ejecutar npm audit (${err.message}).\n`);
     process.exit(1);
   }
   const installedVersions = {};
-  for (const e of exceptions) installedVersions[e.package] = readInstalledVersion(e.package, apiRoot);
-
-  const { ok, errors, allowed } = evaluate(audit, exceptions, { now: new Date(), installedVersions });
-
-  process.stdout.write('── Gate de npm audit (API) ─ mitigación TEMPORAL ──────────────────────────\n');
-  process.stdout.write('node-forge se mantiene SÓLO para parseo CMS/ASN.1; la verificación de firma\n');
-  process.stdout.write('la hace node:crypto/OpenSSL (cert.publicKey.verify de forge NO se usa).\n');
-  if (allowed.length) {
-    for (const e of exceptions) {
-      process.stdout.write(`Excepción activa: ${e.ghsa} / ${e.cve} · ${e.package}@${e.version} · vence ${e.expires}\n`);
+  const patchVerification = {};
+  for (const e of exceptions) {
+    installedVersions[e.package] = readInstalledVersion(e.package, root);
+    if (e.patch) {
+      const verifier = PATCH_VERIFIERS[e.patch.verify];
+      patchVerification[e.package] = verifier
+        ? verifier(root)
+        : { ok: false, detail: `verificador de parche desconocido: ${JSON.stringify(e.patch.verify)}` };
     }
   }
+
+  const { ok, errors, allowed, notes } = evaluate(audit, exceptions, { now: new Date(), installedVersions, patchVerification });
+
+  process.stdout.write('── Gate de npm audit (mitigación TEMPORAL, acotada y vencible) ─────────────\n');
+  process.stdout.write(`Objetivo: ${root}\n`);
+  for (const e of exceptions) {
+    const pv = patchVerification[e.package];
+    const patchNote = e.patch ? ` · parche ${e.patch.source || e.patch.verify} [${pv && pv.ok ? 'verificado' : 'NO verificado'}]` : '';
+    process.stdout.write(`Excepción declarada: ${e.ghsa} / ${e.cve || '-'} · ${e.package}@${e.version} · vence ${e.expires}${patchNote}\n`);
+  }
+  for (const n of notes || []) process.stdout.write(`Nota: ${n}\n`);
   if (ok) {
-    process.stdout.write('✓ Sin avisos high/critical fuera de la excepción declarada.\n');
+    process.stdout.write('✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).\n');
     process.exit(0);
   }
   process.stderr.write('\n❌ El gate de npm audit falló:\n');
   for (const e of errors) process.stderr.write(`  - ${e}\n`);
-  process.stderr.write('\nSi node-forge publicó una versión corregida, actualiza y retira la excepción.\n');
+  process.stderr.write('\nUna excepción es temporal: si hay versión corregida publicada, actualiza y retírala.\n');
   process.exit(1);
 }
 
 if (require.main === module) main();
 
-module.exports = { evaluate, reachableAdvisories, ghsaFromUrl, isCanonicalDate, readInstalledVersion };
+module.exports = { evaluate, reachableAdvisories, ghsaFromUrl, isCanonicalDate, readInstalledVersion, verifyBracesPatch, parseArgs };

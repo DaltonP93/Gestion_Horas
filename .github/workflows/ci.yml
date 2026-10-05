@@ -96,8 +96,15 @@ jobs:
         run: |
           node -e "const M=+process.versions.node.split('.')[0]; if(M!==22){console.error('❌ Node major != 22:',process.version);process.exit(1)}; console.log('✓ Node',process.version)"
           node ../scripts/ci/check-node-engines.js .
-      - name: npm audit (nivel alto)
-        run: npm audit --audit-level=high
+      - name: npm audit (gate con excepción temporal de braces)
+        # Bridge usa el MISMO evaluador que el API (api/scripts/ci/audit-gate.js)
+        # con su propio archivo que SÓLO tolera braces (GHSA-vfj7-8cjw-p6xm),
+        # parcheado vía overrides→git #72 (@28d440b) y VERIFICADO sobre la
+        # instalación real (control positivo + guarda de profundidad). Falla ante
+        # cualquier otro high/critical, cambio de identidad/severidad/rango/versión,
+        # fix publicado del propio paquete, parche ausente/alterado, vencimiento
+        # (2026-10-18) o desaparición del advisory. NO limpia el aviso de npm audit.
+        run: node ../api/scripts/ci/audit-gate.js --root . --exceptions scripts/ci/audit-exceptions.json
       - name: Unit tests
         run: npm test
         env:
@@ -127,13 +134,15 @@ jobs:
         run: |
           node -e "const M=+process.versions.node.split('.')[0]; if(M!==22){console.error('❌ Node major != 22:',process.version);process.exit(1)}; console.log('✓ Node',process.version)"
           node ../scripts/ci/check-node-engines.js .
-      - name: npm audit (gate con excepción temporal node-forge)
-        # Mitigación TEMPORAL de GHSA-86w9-cpqp-85rv / CVE-2026-85393:
-        # node-forge 1.4.0 no tiene fix publicado y se usa sólo para parseo
-        # CMS/ASN.1 (la verificación de firma la hace node:crypto). El gate
-        # tolera EXACTAMENTE ese advisory y falla ante cualquier otro high/
-        # critical, si cambia, si aparece un fix, si desaparece o si vence
-        # (2026-11-01). Bridge y Web conservan `npm audit --audit-level=high`.
+      - name: npm audit (gate con excepciones temporales node-forge + braces)
+        # Mitigación TEMPORAL. node-forge (GHSA-86w9-cpqp-85rv, sin fix; usado sólo
+        # para parseo CMS/ASN.1, la verificación de firma la hace node:crypto) vence
+        # 2026-11-01. braces (GHSA-vfj7-8cjw-p6xm, sin fix publicado) va parcheado vía
+        # overrides→git #72 (@28d440b), VERIFICADO sobre la instalación real, y vence
+        # 2026-10-18. El gate tolera EXACTAMENTE esos advisories y falla ante cualquier
+        # otro high/critical, cambio de identidad/severidad/rango/versión, fix publicado
+        # del propio paquete, parche ausente/alterado, vencimiento o desaparición.
+        # Bridge y Web usan el MISMO gate con un archivo que SÓLO tolera braces.
         run: node scripts/ci/audit-gate.js
       - name: Syntax check
         run: node --check src/index.js
@@ -163,8 +172,14 @@ jobs:
         run: |
           node -e "const M=+process.versions.node.split('.')[0]; if(M!==22){console.error('❌ Node major != 22:',process.version);process.exit(1)}; console.log('✓ Node',process.version)"
           node ../scripts/ci/check-node-engines.js .
-      - name: npm audit (nivel alto)
-        run: npm audit --audit-level=high
+      - name: npm audit (gate con excepción temporal de braces)
+        # Web usa el MISMO evaluador que el API (api/scripts/ci/audit-gate.js) con
+        # su propio archivo que SÓLO tolera braces (GHSA-vfj7-8cjw-p6xm), parcheado
+        # vía overrides→git #72 (@28d440b) y VERIFICADO sobre la instalación real.
+        # Falla ante cualquier otro high/critical, cambio, fix publicado del propio
+        # paquete, parche ausente/alterado, vencimiento (2026-10-18) o desaparición.
+        # NO limpia el aviso de npm audit. eslint-config-next ya está en devDeps.
+        run: node ../api/scripts/ci/audit-gate.js --root . --exceptions scripts/ci/audit-exceptions.json
       - name: Unit tests
         run: npm test
       - run: npm run build

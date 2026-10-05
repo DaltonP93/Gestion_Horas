@@ -1,0 +1,29 @@
+{
+  "_comment": "Excepción TEMPORAL, acotada y vencible del gate de npm audit del BRIDGE. Usa el MISMO evaluador que el API (api/scripts/ci/audit-gate.js) vía `--root . --exceptions scripts/ci/audit-exceptions.json`. Bridge SÓLO puede tolerar braces; cualquier otro high/critical, cambio de identidad/severidad/rango/versión, fix publicado del propio paquete, parche ausente/alterado, vencimiento o desaparición del advisory hacen fallar el gate. Es ACEPTACIÓN TEMPORAL DEL RIESGO: NO elimina el aviso de npm audit.",
+  "exitPlan": "Antes del 2026-10-18: el aviso sólo se limpia cuando exista braces publicado > 3.0.3 (o chokidar/micromatch que lo incorporen); al publicarse, retirar el override y esta excepción. El override a git #72 es defensa en profundidad (guardas de profundidad), NO limpia npm audit porque el build sigue reportando 3.0.3.",
+  "exceptions": [
+    {
+      "ghsa": "GHSA-vfj7-8cjw-p6xm",
+      "cve": "CVE-2026-93687",
+      "package": "braces",
+      "version": "3.0.3",
+      "affectedRange": "<=3.0.3",
+      "severity": "high",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "patch": {
+        "source": "github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+        "pr": "https://github.com/micromatch/braces/pull/72",
+        "license": "MIT",
+        "verify": "braces-depth-guard"
+      },
+      "reason": "Agotamiento de pila (DoS, CWE-674) por patrones de llaves profundamente anidados. En el bridge braces es SÓLO dev (nodemon→chokidar, jest→micromatch); no está en el runtime desplegable.",
+      "mitigation": "Parche del PR micromatch/braces #72 (MIT) fijado a 28d440b5dd449dbf1fe6f3506cf94ecca4d02660 vía `overrides` → git, aplicado a todas las instancias de braces del bridge. El gate verifica sobre la instalación real que el parche está aplicado (control positivo + rechazo de profundidad 101). El build sigue reportando 3.0.3: npm audit SIGUE marcando el aviso.",
+      "tests": [
+        "api/scripts/ci/__tests__/auditGate.test.js",
+        "docs/security/evidence/braces/eval.js"
+      ],
+      "owner": "Equipo SisHoras — dependencias/seguridad",
+      "expires": "2026-10-18"
+    }
+  ]
+}
