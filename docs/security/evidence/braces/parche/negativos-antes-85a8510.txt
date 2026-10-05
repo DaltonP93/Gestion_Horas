@@ -1,0 +1,14 @@
+  REPRO 85a8510 #1 — guarda de compile eliminada se sigue aprobando
+    ✓ la copia manipulada mantiene la guarda de PARSE pero PIERDE la de COMPILE (16 ms)
+    ✕ el gate endurecido RECHAZA la copia con la guarda de compile eliminada (3 ms)
+  REPRO 85a8510 #2/#3 — fixAvailable: alcance y forma
+    ✕ #2 node-forge con fixAvailable major de OTRO paquete → el gate debe FALLAR (regla base de node-forge) (2 ms)
+    ✕ #3a fixAvailable = "unexpected" (string) → el gate debe FALLAR
+    ✕ #3b fixAvailable = 1 (número) → el gate debe FALLAR (1 ms)
+  ● REPRO 85a8510 #1 — guarda de compile eliminada se sigue aprobando › el gate endurecido RECHAZA la copia con la guarda de compile eliminada
+  ● REPRO 85a8510 #2/#3 — fixAvailable: alcance y forma › #2 node-forge con fixAvailable major de OTRO paquete → el gate debe FALLAR (regla base de node-forge)
+  ● REPRO 85a8510 #2/#3 — fixAvailable: alcance y forma › #3a fixAvailable = "unexpected" (string) → el gate debe FALLAR
+  ● REPRO 85a8510 #2/#3 — fixAvailable: alcance y forma › #3b fixAvailable = 1 (número) → el gate debe FALLAR
+Tests:       4 failed, 1 passed, 5 total
+
+# ANTES del endurecimiento (gate en 85a8510): las 4 reproducciones FALLAN (el gate aprueba lo que no debe); el test de comportamiento del tamper PASA.
