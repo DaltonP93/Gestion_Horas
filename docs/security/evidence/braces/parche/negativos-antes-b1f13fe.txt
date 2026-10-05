@@ -1,0 +1,22 @@
+  REPRO b1f13fe #1 — copia anidada bajo braces/node_modules no se recorre
+    ✕ el gate debe RECHAZAR (copia anidada con la guarda de compile eliminada) (14 ms)
+  REPRO b1f13fe #2 — manifiesto sin name se omite
+    ✕ el gate debe RECHAZAR (manifiesto inválido: carece de name) (10 ms)
+  REPRO b1f13fe #3 — main apunta a otro archivo; sólo se prueba la copia raíz
+    ✓ la copia anidada resuelve su entrada a evil.js (no index.js)
+    ✕ el gate debe RECHAZAR (entrada realmente resuelta no autenticada) (11 ms)
+  REPRO b1f13fe #4 — forma de fixAvailable
+    ✕ #4a fixAvailable null → falla (sólo false significa sin fix) (2 ms)
+    ✕ #4b fixAvailable ausente → falla
+    ✕ #4c fixAvailable con name/version vacíos → falla
+    ✕ #4d fixAvailable con versión inválida → falla
+  ● REPRO b1f13fe #1 — copia anidada bajo braces/node_modules no se recorre › el gate debe RECHAZAR (copia anidada con la guarda de compile eliminada)
+  ● REPRO b1f13fe #2 — manifiesto sin name se omite › el gate debe RECHAZAR (manifiesto inválido: carece de name)
+  ● REPRO b1f13fe #3 — main apunta a otro archivo; sólo se prueba la copia raíz › el gate debe RECHAZAR (entrada realmente resuelta no autenticada)
+  ● REPRO b1f13fe #4 — forma de fixAvailable › #4a fixAvailable null → falla (sólo false significa sin fix)
+  ● REPRO b1f13fe #4 — forma de fixAvailable › #4b fixAvailable ausente → falla
+  ● REPRO b1f13fe #4 — forma de fixAvailable › #4c fixAvailable con name/version vacíos → falla
+  ● REPRO b1f13fe #4 — forma de fixAvailable › #4d fixAvailable con versión inválida → falla
+Tests:       7 failed, 1 passed, 8 total
+
+# ANTES del endurecimiento (gate en b1f13fe): las 7 reproducciones FALLAN (el gate aprueba lo que no debe); el control de resolución de entrada pasa.
