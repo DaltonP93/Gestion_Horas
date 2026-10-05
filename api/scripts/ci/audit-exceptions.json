@@ -1,6 +1,6 @@
 {
-  "_comment": "Excepciones TEMPORALES y acotadas del gate de npm audit del API. El gate (audit-gate.js) sólo tolera EXACTAMENTE estos advisories y falla ante cualquier cambio (paquete, URL, severidad, rango, versión), si aparece un fix, si el advisory desaparece o si se vence la fecha. Bridge y Web NO usan excepciones.",
-  "exitPlan": "Antes del 2026-11-01: (1) si node-forge publica una versión corregida, actualizar y retirar esta excepción (el gate ya falla cuando aparece un fix o cuando el advisory desaparece); (2) si no, eliminar node-forge migrando el PARSEO CMS/ASN.1 a una librería ASN.1/CMS mantenida y auditada (p. ej. @peculiar/asn1-schema + @peculiar/asn1-cms, o PKI.js) — node:crypto cubre la verificación RSA pero NO ofrece por sí solo un parser general CMS/ASN.1, así que la salida pasa por esa librería, no por un parser artesanal. Si ninguna opción está lista, el gate vencido fuerza volver a 'npm audit --audit-level=high' y re-evaluar.",
+  "_comment": "Excepciones TEMPORALES, acotadas y vencibles del gate de npm audit del API. El gate (audit-gate.js) sólo tolera EXACTAMENTE estos advisories y falla ante cualquier cambio (paquete, URL, severidad, rango, versión), si aparece un fix publicado del propio paquete o un fix NO-mayor, si el advisory desaparece, si vence la fecha, o si una excepción con `patch` no está aplicada/verificada. Son ACEPTACIÓN TEMPORAL DEL RIESGO: NO eliminan el aviso de npm audit. Bridge y Web usan el MISMO gate con su propio archivo que SÓLO tolera braces.",
+  "exitPlan": "node-forge (antes del 2026-11-01): si publica versión corregida, actualizar y retirar la excepción; si no, eliminar node-forge migrando el parseo CMS/ASN.1 a una librería ASN.1/CMS mantenida (p.ej. @peculiar/asn1-schema + @peculiar/asn1-cms, o PKI.js). braces (antes del 2026-10-18): el aviso sólo se limpia cuando exista braces publicado > 3.0.3 (o micromatch/chokidar/fast-glob que lo incorporen); al publicarse, retirar el override y la excepción (el gate ya falla cuando aparece un fix publicado o cuando el advisory desaparece). El override a git #72 es defensa en profundidad (guardas de profundidad), NO limpia npm audit porque el build sigue reportando 3.0.3.",
   "exceptions": [
     {
       "ghsa": "GHSA-86w9-cpqp-85rv",
@@ -20,6 +20,32 @@
       ],
       "owner": "Equipo SisHoras — firma/seguridad",
       "expires": "2026-11-01"
+    },
+    {
+      "ghsa": "GHSA-vfj7-8cjw-p6xm",
+      "cve": "CVE-2026-93687",
+      "package": "braces",
+      "version": "3.0.3",
+      "affectedRange": "<=3.0.3",
+      "severity": "high",
+      "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+      "patch": {
+        "source": "github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+        "pr": "https://github.com/micromatch/braces/pull/72",
+        "license": "MIT",
+        "verify": "braces-patch-fingerprint"
+      },
+      "reason": "Agotamiento de pila (DoS, CWE-674) por patrones de llaves profundamente anidados en los walkers recursivos de parse/compile/expand. braces <=3.0.3 sin versión corregida publicada (braces@latest = 3.0.3). En SisHoras braces es transitivo: dev en api/bridge (nodemon→chokidar, jest→micromatch) y, en web, cadena de herramientas de build (tailwindcss, eslint-config-next ya movido a devDependencies). No procesa patrones de entrada externa en runtime por los caminos revisados.",
+      "mitigation": "Parche del PR micromatch/braces #72 (MIT) fijado a 28d440b5dd449dbf1fe6f3506cf94ecca4d02660 vía `overrides` → git, aplicado a TODAS las instancias de braces (incl. anidadas). El gate verifica el parche por HUELLAS SHA-256 de la revisión fija aprobada sobre todas las copias (api/scripts/ci/braces-patch-fingerprints.json) y, como cross-check, controles positivos + guardas de profundidad en parse Y compile. npm avisa \"skipping integrity check for git dependency\": el commit queda fijado en el lockfile, pero el SRI del git dep NO lo verifica npm; la identidad la acreditan nuestras huellas. El build sigue reportando 3.0.3, por lo que npm audit SIGUE marcando el aviso (aceptación temporal del riesgo).",
+      "tests": [
+        "api/scripts/ci/__tests__/auditGate.test.js",
+        "api/scripts/ci/__tests__/auditGateHardening.test.js",
+        "api/scripts/ci/braces-patch-fingerprints.json",
+        "docs/security/evidence/braces/eval.js"
+      ],
+      "owner": "Equipo SisHoras — dependencias/seguridad",
+      "expires": "2026-10-18",
+      "acceptTransitiveMajorFix": true
     }
   ]
 }

@@ -52,6 +52,7 @@
     "nodemon": "^3.0.2"
   },
   "overrides": {
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "braces": "github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660"
   }
 }

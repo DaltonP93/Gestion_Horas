@@ -1,0 +1,20 @@
+  REPRO d3d2e3d #1 — exports redirige la entrada por nombre (copia raíz)
+    ✓ require("braces") por nombre carga evil.js (exports) aunque main=index.js (2 ms)
+    ✕ el gate debe RECHAZAR (entrada por nombre no autenticada) (12 ms)
+  REPRO d3d2e3d #2 — exports redirige la entrada por nombre (copia anidada)
+    ✕ el gate debe RECHAZAR (la copia anidada redirige su entrada por exports) (17 ms)
+  REPRO d3d2e3d #3 — SemVer no estricto en fixAvailable
+    ✕ versión NO-SemVer "01.2.3" → debe FALLAR (2 ms)
+    ✕ versión NO-SemVer "1.2.3-!" → debe FALLAR (1 ms)
+    ✕ versión NO-SemVer "1.2.3-a..b" → debe FALLAR (1 ms)
+    ✓ control positivo: versión SemVer válida "4.3.3" → tolerada (1 ms)
+    ✓ control positivo: versión SemVer válida "1.14.10" → tolerada
+    ✓ control positivo: versión SemVer válida "1.2.3-beta.1" → tolerada
+  ● REPRO d3d2e3d #1 — exports redirige la entrada por nombre (copia raíz) › el gate debe RECHAZAR (entrada por nombre no autenticada)
+  ● REPRO d3d2e3d #2 — exports redirige la entrada por nombre (copia anidada) › el gate debe RECHAZAR (la copia anidada redirige su entrada por exports)
+  ● REPRO d3d2e3d #3 — SemVer no estricto en fixAvailable › versión NO-SemVer "01.2.3" → debe FALLAR
+  ● REPRO d3d2e3d #3 — SemVer no estricto en fixAvailable › versión NO-SemVer "1.2.3-!" → debe FALLAR
+  ● REPRO d3d2e3d #3 — SemVer no estricto en fixAvailable › versión NO-SemVer "1.2.3-a..b" → debe FALLAR
+Tests:       5 failed, 4 passed, 9 total
+
+# ANTES del endurecimiento (gate en d3d2e3d): 5 reproducciones FALLAN (2 exports + 3 SemVer); el control de resolución por nombre y los 3 controles positivos pasan.

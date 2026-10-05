@@ -1,0 +1,3 @@
+Test Suites: 4 passed, 4 total
+Tests:       58 passed, 58 total
+# DESPUÉS del endurecimiento: las 5 reproducciones (2 exports + 3 SemVer) PASAN; suite completa del gate verde (58 tests).

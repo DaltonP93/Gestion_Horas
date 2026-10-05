@@ -55,6 +55,7 @@
   "overrides": {
     "uuid": "^11.1.1",
     "postcss": "^8.5.10",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "braces": "github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660"
   }
 }
