@@ -201,9 +201,15 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {},
     // paquete, y adoptarlo queda fuera del alcance autorizado. node-forge NO declara
     // esa tolerancia, así que para él CUALQUIER fixAvailable sigue fallando (regla base).
     const fa = a.fixAvailable;
+    // Forma estricta: SÓLO `false` representa "sin fix". El objeto de npm debe traer
+    // name no vacío, version semver válida y booleano isSemVerMajor. Cualquier otra
+    // cosa (undefined, null, número, string, objeto incompleto o con campos vacíos/
+    // inválidos) hace fallar el gate.
+    const isNonEmptyStr = (s) => typeof s === 'string' && s.trim().length > 0;
+    const isValidVersion = (v) => typeof v === 'string' && /^\d+\.\d+\.\d+([-+].+)?$/.test(v);
     const faIsCanonicalObject = fa && typeof fa === 'object' && !Array.isArray(fa)
-      && typeof fa.name === 'string' && typeof fa.version === 'string' && typeof fa.isSemVerMajor === 'boolean';
-    if (fa === false || fa === undefined || fa === null) {
+      && isNonEmptyStr(fa.name) && isValidVersion(fa.version) && typeof fa.isSemVerMajor === 'boolean';
+    if (fa === false) {
       // sin fix: nada que objetar.
     } else if (fa === true) {
       errors.push(`Hay un fix disponible (in-place) para ${a.ghsa}: actualiza ${a.package} y elimina la excepción.`);
@@ -218,7 +224,7 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {},
         errors.push(`Hay un salto semver-MAJOR de ${fa.name} (@${fa.version}) para ${a.ghsa} y la excepción no lo declara tolerado (acceptTransitiveMajorFix).`);
       }
     } else {
-      errors.push(`Forma de fixAvailable inesperada para ${a.ghsa}: ${JSON.stringify(fa)} (se espera false/true o {name,version,isSemVerMajor}).`);
+      errors.push(`Forma de fixAvailable inesperada para ${a.ghsa}: ${JSON.stringify(fa)} (sólo se acepta false, true o {name no vacío, version semver, isSemVerMajor booleano}; null/ausente no cuentan como "sin fix").`);
     }
     // El parche declarado debe estar APLICADO y VERIFICADO sobre la instalación real.
     if (exc.patch) {
@@ -248,27 +254,41 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {},
   return { ok: errors.length === 0, errors, allowed: allowed.map((a) => a.ghsa), notes };
 }
 
-/** Encuentra TODAS las copias de braces bajo <root>/node_modules (incl. anidadas). */
+/**
+ * Encuentra TODA carpeta llamada `braces` cuyo PADRE es un `node_modules`, a
+ * cualquier profundidad, INCLUIDAS las anidadas bajo la propia carpeta braces
+ * (braces/node_modules/…/braces) y bajo paquetes con scope (@scope/pkg/node_modules).
+ * Identifica por el nombre de la carpeta (NO por el manifiesto): un `braces`
+ * cargable con package.json inválido NO debe poder esconderse; su validación la
+ * hace verifyBracesPatch, que RECHAZA manifiestos inválidos.
+ */
 function findBracesCopies(root) {
-  const out = [];
-  const seen = new Set();
-  const walk = (dir) => {
+  const out = new Set();
+  const isDirEntry = (nm, e) => {
+    if (e.isDirectory()) return true;
+    if (e.isSymbolicLink()) { try { return fs.statSync(path.join(nm, e.name)).isDirectory(); } catch (_e) { return false; } }
+    return false;
+  };
+  // `nm` es siempre un directorio node_modules.
+  const visit = (nm) => {
     let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_e) { return; }
+    try { entries = fs.readdirSync(nm, { withFileTypes: true }); } catch (_e) { return; }
     for (const e of entries) {
-      let isDir = e.isDirectory();
-      const full = path.join(dir, e.name);
-      if (e.isSymbolicLink()) { try { isDir = fs.statSync(full).isDirectory(); } catch (_e) { isDir = false; } }
-      if (!isDir) continue;
-      if (seen.has(full)) continue; seen.add(full);
+      if (!isDirEntry(nm, e)) continue;
+      const full = path.join(nm, e.name);
       if (e.name === 'braces') {
-        try { if (JSON.parse(fs.readFileSync(path.join(full, 'package.json'), 'utf8')).name === 'braces') { out.push(full); continue; } } catch (_e) { /* sigue */ }
+        out.add(full);
+        visit(path.join(full, 'node_modules')); // anidadas BAJO la propia copia braces
+      } else if (e.name.startsWith('@')) {
+        let subs; try { subs = fs.readdirSync(full, { withFileTypes: true }); } catch (_e) { subs = []; }
+        for (const s of subs) { if (isDirEntry(full, s)) visit(path.join(full, s.name, 'node_modules')); }
+      } else {
+        visit(path.join(full, 'node_modules'));
       }
-      walk(full);
     }
   };
-  walk(path.join(root, 'node_modules'));
-  return out;
+  visit(path.join(root, 'node_modules'));
+  return [...out];
 }
 
 /** Lanza fn y exige que la excepción sea de PROFUNDIDAD (no una excepción arbitraria). */
@@ -321,6 +341,24 @@ function verifyBracesPatch(root, fingerprints) {
   const copies = findBracesCopies(root);
   if (copies.length === 0) return { ok: false, detail: `no se encontró braces instalado bajo ${root}` };
   for (const dir of copies) {
+    // 1) Manifiesto VÁLIDO (si no, se RECHAZA; no se omite).
+    let pkg;
+    try { pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')); } catch (e) {
+      return { ok: false, detail: `copia ${dir}: package.json ausente o ilegible (${e.message})` };
+    }
+    if (pkg.name !== 'braces') return { ok: false, detail: `copia ${dir}: manifiesto inválido (name=${JSON.stringify(pkg.name)}, se espera "braces")` };
+    if (pkg.version !== fingerprints.version) return { ok: false, detail: `copia ${dir}: versión ${JSON.stringify(pkg.version)} ≠ ${fingerprints.version}` };
+    // 2) ENTRADA REALMENTE RESUELTA: lo que Node cargaría (honrando main/exports) debe
+    //    ser el index.js fingerprinteado de ESTA copia, no otro archivo.
+    const expectedEntry = fs.realpathSync(path.join(dir, 'index.js'));
+    let resolvedEntry;
+    try { resolvedEntry = fs.realpathSync(require.resolve(dir)); } catch (e) {
+      return { ok: false, detail: `copia ${dir}: no se pudo resolver la entrada (${e.message})` };
+    }
+    if (resolvedEntry !== expectedEntry) {
+      return { ok: false, detail: `copia ${dir}: la entrada resuelta (${resolvedEntry}) no es index.js de la copia (main/exports apunta a otro archivo)` };
+    }
+    // 3) HUELLAS de los 7 archivos de código.
     for (const [rel, want] of Object.entries(fingerprints.files)) {
       let got;
       try { got = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, rel))).digest('hex'); } catch (e) {
@@ -328,12 +366,16 @@ function verifyBracesPatch(root, fingerprints) {
       }
       if (got !== want) return { ok: false, detail: `copia ${dir}: ${rel} no coincide con la revisión aprobada ${fingerprints.commit || ''}` };
     }
+    // 4) COMPORTAMIENTO de ESTA copia (carga su entrada autenticada, no la raíz).
+    let braces;
+    try {
+      delete require.cache[resolvedEntry];
+      braces = require(resolvedEntry);
+    } catch (e) { return { ok: false, detail: `copia ${dir}: no se pudo cargar (${e.message})` }; }
+    const beh = verifyBracesBehavior(braces);
+    if (!beh.ok) return { ok: false, detail: `copia ${dir}: ${beh.detail}` };
   }
-  let braces;
-  try { braces = require(require.resolve('braces', { paths: [root] })); } catch (e) { return { ok: false, detail: `no se pudo cargar braces desde ${root}: ${e.message}` }; }
-  const beh = verifyBracesBehavior(braces);
-  if (!beh.ok) return beh;
-  return { ok: true, detail: `${copies.length} copia(s) con huellas de ${fingerprints.commit || 'la revisión aprobada'}; guardas parse+compile verificadas` };
+  return { ok: true, detail: `${copies.length} copia(s) con huellas de ${fingerprints.commit || 'la revisión aprobada'}; manifiesto, entrada resuelta, huellas y guardas parse+compile verificadas por copia` };
 }
 
 const PATCH_VERIFIERS = { 'braces-patch-fingerprint': verifyBracesPatch };

@@ -1,4 +1,4 @@
-# Salida del gate (audit-gate.js) con parche verificado por HUELLAS — 2026-10-05T01:24:16Z
+# Salida del gate (audit-gate.js) con verificación por copia (manifiesto+entrada+huellas+comportamiento) — 2026-10-05T14:33:29Z
 
 ## API (node-forge + braces)
 ── Gate de npm audit (mitigación TEMPORAL, acotada y vencible) ─────────────

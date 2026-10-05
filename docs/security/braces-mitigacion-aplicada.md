@@ -65,9 +65,11 @@ URL/severidad, high/critical sin advisory compatible):
   braces + node-forge).
 - **Cambio de identidad** (paquete, URL/GHSA), **severidad**, **rango** o **versión
   instalada** distintos de lo declarado → falla.
-- **Forma de `fixAvailable` validada estrictamente:** sólo se aceptan `false`/`true` o el
-  objeto canónico `{name, version, isSemVerMajor}`; cualquier otra cosa (string como
-  `"unexpected"`, número, objeto mal formado) → **falla**.
+- **Forma de `fixAvailable` validada estrictamente:** **sólo `false`** representa "sin
+  fix"; `true` o el objeto canónico con **`name` no vacío**, **`version` semver válida** y
+  **`isSemVerMajor` booleano**. Cualquier otra cosa — `null`, **ausente**, número, string
+  como `"unexpected"`, objeto con `name`/`version` **vacíos** o versión **inválida** →
+  **falla** (no se trata como "sin fix").
 - **Fix publicado del propio paquete** (`fixAvailable===true` o un objeto cuyo `name` es el
   propio paquete) → falla. Un **fix NO-mayor de otro paquete** también → falla (hay que
   tomarlo). Se **tolera con NOTA** un salto **semver-MAJOR de otro paquete** (heurística
@@ -76,13 +78,24 @@ URL/severidad, high/critical sin advisory compatible):
   declara**, así que para él **cualquier** `fixAvailable` sigue fallando (regla base
   conservada).
 - **Parche ausente o alterado**: la excepción declara `patch.verify = "braces-patch-fingerprint"`.
-  El gate verifica la **identidad por huellas SHA-256** de **todas** las copias (incl.
-  anidadas) contra la revisión aprobada **y**, como cross-check de comportamiento, exige
-  controles positivos (`a{b,c}d`→`abd,acd`, `{1..3}`, `foo/{a,b}`), aceptación dentro del
-  límite, y rechazo **de profundidad** (error que menciona `depth`, no una excepción
-  arbitraria) en **parse** (`nest(101)`) **y** en **compile** sobre AST suministrado
-  directamente (`compile(deepAst(150))`). Así, ni el **stock** de braces@3.0.3 ni un parche
-  **con la guarda de compile eliminada** pasan la verificación.
+  El gate **descubre TODA carpeta `braces`** cuyo padre es un `node_modules`, a cualquier
+  profundidad — incluidas las anidadas **bajo la propia carpeta braces**
+  (`braces/node_modules/…/braces`) y bajo paquetes con **scope** (`@scope/pkg/node_modules`) —
+  y por **cada copia**:
+  1. **rechaza manifiestos inválidos** (identifica la copia por el nombre de la carpeta, no
+     por el manifiesto; un `braces` sin `name` válido o con versión distinta **falla**, no se
+     omite);
+  2. **autentica la entrada realmente resuelta**: lo que Node cargaría (honrando `main`/
+     `exports`) debe ser el `index.js` **fingerprinteado de esa copia** — si `main`/`exports`
+     apunta a otro archivo, **falla** (no basta con que las 7 huellas estén intactas);
+  3. verifica las **huellas SHA-256** de los 7 archivos de código contra la revisión aprobada;
+  4. **carga esa copia** (su entrada autenticada) y exige el comportamiento del parche:
+     controles positivos (`a{b,c}d`→`abd,acd`, `{1..3}`, `foo/{a,b}`), aceptación dentro del
+     límite, y rechazo **de profundidad** (error que menciona `depth`, no una excepción
+     arbitraria) en **parse** (`nest(101)`) **y** en **compile** sobre AST suministrado
+     directamente (`compile(deepAst(150))`).
+  Así, ni el **stock**, ni un parche **con la guarda de compile eliminada**, ni una copia
+  **anidada** manipulada, ni un `main` que redirige la entrada, pasan la verificación.
 - **Vencimiento** (`expires` 2026-10-18) superado → falla.
 - **Advisory desaparecido** (ya hay versión corregida publicada) → falla y pide retirar la
   excepción y el override.
@@ -102,11 +115,17 @@ URL/severidad, high/critical sin advisory compatible):
   parcheado + fixAvailable major de otro paquete → pasa con NOTA; API node-forge+braces →
   pasa; excepción extra cuyo advisory no aparece → falla).
 - **Reproducciones de endurecimiento** `api/scripts/ci/__tests__/auditGateHardening.test.js`
-  — **5/5** (fallaban sobre `85a8510`, pasan tras el endurecimiento): #1 parche con la
-  guarda de **compile** eliminada (mantiene parse, pierde compile) → el gate lo **rechaza**;
-  #2 node-forge con fixAvailable major de otro paquete → **falla**; #3 fixAvailable mal
-  formado (`"unexpected"`, `1`) → **falla**. Evidencia antes/después en
-  `docs/security/evidence/braces/parche/negativos-antes-85a8510.txt` y `negativos-despues.txt`.
+  — **5/5** (fallaban sobre `85a8510`): #1 parche con la guarda de **compile** eliminada →
+  **rechaza**; #2 node-forge con fixAvailable major de otro paquete → **falla**; #3
+  fixAvailable mal formado (`"unexpected"`, `1`) → **falla**.
+- **Reproducciones de descubrimiento/entrada** `api/scripts/ci/__tests__/auditGateDiscovery.test.js`
+  — **8/8** (fallaban sobre `b1f13fe`): #1 copia anidada **bajo braces/node_modules** con la
+  guarda de compile eliminada → **rechaza**; #2 copia con `package.json` **sin name** → **falla**
+  (manifiesto inválido, ya no se omite); #3 copia con las 7 huellas intactas pero `main`→`evil.js`
+  → **falla** (entrada resuelta no autenticada); #4 `fixAvailable` `null`/ausente/vacíos/versión
+  inválida → **falla**. Evidencia antes/después en
+  `docs/security/evidence/braces/parche/negativos-antes-{85a8510,b1f13fe}.txt` y
+  `negativos-despues{,-b1f13fe}.txt`.
 - **Verificador real del parche:** `verifyBracesPatch` (huellas + comportamiento) sobre la
   instalación real del api → `ok:true`; sin huellas de referencia → `ok:false`; sobre un
   `braces@3.0.3` **stock** o un parche con la guarda de compile eliminada → `ok:false`.
