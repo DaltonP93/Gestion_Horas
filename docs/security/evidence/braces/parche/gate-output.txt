@@ -1,0 +1,13 @@
+# Salida del gate — autenticación de entrada por NOMBRE (honra exports) + SemVer estricto — 2026-10-05T15:00:38Z
+
+## API
+Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de nodemon (@1.14.10); no es una versión corregida de braces y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.
+✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).
+
+## BRIDGE
+Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de nodemon (@1.14.10); no es una versión corregida de braces y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.
+✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).
+
+## WEB
+Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de tailwindcss (@4.3.3); no es una versión corregida de braces y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.
+✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).

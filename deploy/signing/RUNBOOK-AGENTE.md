@@ -127,3 +127,24 @@ En el `.env` de la API (o secretos del server), **no** en el repo. Ver
 verificable), pero por defecto **sin** sellado de tiempo (TSA) ni datos de
 revocación (LTV). Para **PAdES-LT/LTV pleno** hay que mejorar el propio servicio
 `pades-signer` (agregar TSA/OCSP); no es un cambio del backend de SisHoras.
+
+## Verificación del exponente del certificado (GHSA-86w9-cpqp-85rv / CVE-2026-85393)
+
+El verificador PAdES (`api/src/services/signing/verifyPdfSignature.js`) rechaza
+claves RSA con exponente público distinto de **65537 (F4)**, porque la
+falsificación de firma de node-forge 1.4.0 requiere exponente bajo. Los
+certificados generados con OpenSSL usan 65537 por defecto, pero antes de
+desplegar un `.p12` **nuevo** confirmá el exponente del cert real, en **solo
+lectura** (no toca la clave privada):
+
+```bash
+# Desde el cert público del firmante (PEM o DER). Ajustá la ruta al cert real.
+openssl x509 -in /ruta/al/cert.pem -noout -text | grep -A1 'Public-Key\|Exponent'
+# Debe decir: Exponent: 65537 (0x10001)
+```
+
+- [ ] **Exponente == 65537 (0x10001)** antes de poner el `.p12` en producción.
+      Si por una razón legítima el cert usa otro exponente, **no** lo despliegues
+      sin revisar la mitigación: el verificador lo rechazará con
+      `RSA_EXPONENT_UNSUPPORTED`, y relajar esa regla exige evidencia y un cambio
+      explícito en `verifyPdfSignature.js`.

@@ -34,7 +34,12 @@ function certFingerprintSha256(cert) {
  * @param {string} [opts.serialNumber] serial hex (default '01').
  */
 function makeTestCert(commonName = 'SisHoras Reporte Mensual (test)', opts = {}) {
-  const keys = forge.pki.rsa.generateKeyPair(2048);
+  // `opts.e` permite generar claves con exponente público NO estándar (p. ej. 3),
+  // usado por las pruebas del exponente (el caso vulnerable de CVE-2026-85393
+  // requiere exponente bajo). Por defecto 65537, igual que el cert real.
+  const keys = opts.e
+    ? forge.pki.rsa.generateKeyPair({ bits: opts.bits || 2048, e: opts.e })
+    : forge.pki.rsa.generateKeyPair(opts.bits || 2048);
   const cert = forge.pki.createCertificate();
   cert.publicKey = keys.publicKey;
   cert.serialNumber = opts.serialNumber || '01';
@@ -59,11 +64,11 @@ function makeTestCert(commonName = 'SisHoras Reporte Mensual (test)', opts = {})
  */
 function makeSignedPdf({
   commonName, body = 'Reporte mensual de asistencia', notBefore, notAfter, serialNumber,
-  digestAlgorithm = forge.pki.oids.sha256,
+  digestAlgorithm = forge.pki.oids.sha256, e, bits,
 } = {}) {
   const {
     keys, cert, commonName: cn, certSha256,
-  } = makeTestCert(commonName, { notBefore, notAfter, serialNumber });
+  } = makeTestCert(commonName, { notBefore, notAfter, serialNumber, e, bits });
   const HEXW = 8000; // ancho del hueco hex de /Contents
 
   const pre = Buffer.from(

@@ -1,0 +1,35 @@
+name: braces
+version: 3.0.3
+license: MIT
+_resolved: (see lockfile)
+--- api/package-lock.json braces node ---
+node_modules/braces {
+  "version": "3.0.3",
+  "resolved": "git+ssh://git@github.com/micromatch/braces.git#28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
+  "integrity": "sha512-LcRdbKBiKSOJRndXDk1VR5druLYgvHdr6+BVwMmoX2HEQemPU/vMjtraOQ3RJjN8mPQkDQm85EmBXbMM24IZ2Q==",
+  "dev": true,
+  "license": "MIT",
+  "dependencies": {
+    "fill-range": "^7.1.1"
+  },
+  "engines": {
+    "node": ">=8.3"
+  }
+}
+--- LICENSE (head) ---
+The MIT License (MIT)
+
+Copyright (c) 2014-present, Jon Schlinkert.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+
+--- Integridad: distinción importante ---
+1) COMMIT FIJADO: package-lock.json fija el commit exacto
+   28d440b5dd449dbf1fe6f3506cf94ecca4d02660 (campo "resolved": git+ssh://...#<commit>).
+2) SRI NO verificado por npm: para una dependencia git, npm imprime
+   "npm warn skipping integrity check for git dependency ssh://git@github.com/micromatch/braces.git".
+   El campo "integrity" (sha512-...) existe en el lockfile pero npm NO lo verifica
+   en la instalación del git dep; por tanto NO es un SRI efectivamente comprobado.
+3) VERIFICACIÓN PROPIA DE ARCHIVOS (lo que SÍ acredita identidad): huellas SHA-256
+   por archivo en api/scripts/ci/braces-patch-fingerprints.json, comprobadas por el
+   gate sobre TODAS las copias instaladas (incl. anidadas) en cada npm ci.
