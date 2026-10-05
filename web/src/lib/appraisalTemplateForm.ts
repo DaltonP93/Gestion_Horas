@@ -47,6 +47,16 @@ export function normalizeCriterionName(s: string): string {
   return s.normalize('NFD').replace(COMBINING_MARKS, '').replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
+/**
+ * Parsea el valor crudo de un input de escala SIN truncar ni reinterpretar: sólo
+ * un entero canónico (`-?\d+`) devuelve su número; cualquier otra cosa (fracción
+ * "1.5", notación exponencial "1e1", texto o vacío) devuelve NaN para que la
+ * validación lo rechace. Evita el `parseInt("1.5")→1` / `parseInt("1e1")→1`.
+ */
+export function parseScaleInput(raw: string): number {
+  return /^[+-]?\d+$/.test(raw.trim()) ? parseInt(raw, 10) : NaN
+}
+
 export function validateTemplateForm(form: TemplateFormInput, criteria: CriterionFormInput[]): Result {
   const name = form.name.trim()
   if (!name) return { ok: false, error: 'El nombre de la plantilla es requerido' }

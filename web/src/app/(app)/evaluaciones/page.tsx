@@ -5,7 +5,7 @@ import { Star, Plus, ChevronDown, ChevronUp, CheckCircle2, Clock, AlertCircle,
 import { api } from '@/lib/api'
 import { useCurrentUser } from '@/lib/useCurrentUser'
 import { appraisalPageActions, appraisalDetailActions, reviewerLookupUrl } from '@/lib/appraisalRoles'
-import { validateTemplateForm, templateErrorMessage, TEMPLATE_NAME_MAX, CRITERION_NAME_MAX, SCALE_LOWER, SCALE_UPPER, WEIGHT_MIN, WEIGHT_MAX } from '@/lib/appraisalTemplateForm'
+import { validateTemplateForm, templateErrorMessage, parseScaleInput, TEMPLATE_NAME_MAX, CRITERION_NAME_MAX, SCALE_LOWER, SCALE_UPPER, WEIGHT_MIN, WEIGHT_MAX } from '@/lib/appraisalTemplateForm'
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, Tooltip } from 'recharts'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -349,13 +349,13 @@ function TemplateModal({ onClose, onCreated }: { onClose: () => void; onCreated:
             <div>
               <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Escala mínima</label>
               <input type="number" min={SCALE_LOWER} max={SCALE_UPPER} step={1} value={num(form.scale_min)}
-                onChange={e => setForm(f => ({ ...f, scale_min: parseInt(e.target.value) }))}
+                onChange={e => setForm(f => ({ ...f, scale_min: parseScaleInput(e.target.value) }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
             <div>
               <label className="text-xs font-medium text-slate-600 block mb-1 dark:text-white/60">Escala máxima</label>
               <input type="number" min={SCALE_LOWER} max={SCALE_UPPER} step={1} value={num(form.scale_max)}
-                onChange={e => setForm(f => ({ ...f, scale_max: parseInt(e.target.value) }))}
+                onChange={e => setForm(f => ({ ...f, scale_max: parseScaleInput(e.target.value) }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08]" />
             </div>
           </div>
@@ -549,12 +549,13 @@ export default function EvaluacionesPage() {
 
   // Plantillas: sólo gestión las lee (supervisor/employee → 403 en el API, no se consultan).
   const canLoadTemplates = pa.loadTemplates
-  const loadTemplates = useCallback(async () => {
+  const loadTemplates = useCallback(async (opts?: { preserveError?: boolean }) => {
     if (!canLoadTemplates) { setTemplates([]); return }
     try {
       const res = await api.get('/api/appraisals/templates?all=1')
       setTemplates(res.data.data || [])
-      setTemplatesErr(null)
+      // Un refresco tras una operación fallida NO debe borrar su error.
+      if (!opts?.preserveError) setTemplatesErr(null)
     } catch (e) {
       setTemplates([])
       setTemplatesErr(templateErrorMessage(e, 'No se pudieron cargar las plantillas'))
@@ -570,10 +571,12 @@ export default function EvaluacionesPage() {
       if (active) await api.delete(`/api/appraisals/templates/${id}`)
       else await api.put(`/api/appraisals/templates/${id}`, { active: true })
       setTemplatesErr(null)
+      await loadTemplates()
     } catch (e) {
+      // El error de la operación debe sobrevivir al refresco (GET exitoso).
       setTemplatesErr(templateErrorMessage(e))
+      await loadTemplates({ preserveError: true })
     }
-    loadTemplates()
   }
 
   const statusCounts = appraisals.reduce<Record<string, number>>((acc, a) => {
