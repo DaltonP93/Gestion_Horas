@@ -1,11 +1,11 @@
-# Salida del gate (audit-gate.js) con el parche aplicado — 2026-10-05T00:45:45Z
+# Salida del gate (audit-gate.js) con parche verificado por HUELLAS — 2026-10-05T01:24:16Z
 
 ## API (node-forge + braces)
 ── Gate de npm audit (mitigación TEMPORAL, acotada y vencible) ─────────────
 Objetivo: /home/user/Gestion_Horas/api
 Excepción declarada: GHSA-86w9-cpqp-85rv / CVE-2026-85393 · node-forge@1.4.0 · vence 2026-11-01
 Excepción declarada: GHSA-vfj7-8cjw-p6xm / CVE-2026-93687 · braces@3.0.3 · vence 2026-10-18 · parche github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660 [verificado]
-Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de nodemon (@1.14.10); no es una versión corregida de braces y queda fuera del alcance autorizado — la excepción NO lo elimina del informe de npm audit.
+Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de nodemon (@1.14.10); no es una versión corregida de braces y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.
 ✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).
 exit=0
 
@@ -13,7 +13,7 @@ exit=0
 ── Gate de npm audit (mitigación TEMPORAL, acotada y vencible) ─────────────
 Objetivo: /home/user/Gestion_Horas/bridge
 Excepción declarada: GHSA-vfj7-8cjw-p6xm / CVE-2026-93687 · braces@3.0.3 · vence 2026-10-18 · parche github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660 [verificado]
-Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de nodemon (@1.14.10); no es una versión corregida de braces y queda fuera del alcance autorizado — la excepción NO lo elimina del informe de npm audit.
+Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de nodemon (@1.14.10); no es una versión corregida de braces y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.
 ✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).
 exit=0
 
@@ -21,6 +21,6 @@ exit=0
 ── Gate de npm audit (mitigación TEMPORAL, acotada y vencible) ─────────────
 Objetivo: /home/user/Gestion_Horas/web
 Excepción declarada: GHSA-vfj7-8cjw-p6xm / CVE-2026-93687 · braces@3.0.3 · vence 2026-10-18 · parche github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660 [verificado]
-Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de tailwindcss (@4.3.3); no es una versión corregida de braces y queda fuera del alcance autorizado — la excepción NO lo elimina del informe de npm audit.
+Nota: GHSA-vfj7-8cjw-p6xm: npm sugiere un salto semver-MAJOR de tailwindcss (@4.3.3); no es una versión corregida de braces y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.
 ✓ Sin avisos high/critical fuera de las excepciones declaradas (una aceptación temporal del riesgo; el aviso SIGUE en npm audit).
 exit=0

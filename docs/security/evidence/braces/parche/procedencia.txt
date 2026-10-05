@@ -22,3 +22,14 @@ The MIT License (MIT)
 Copyright (c) 2014-present, Jon Schlinkert.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
+
+--- Integridad: distinción importante ---
+1) COMMIT FIJADO: package-lock.json fija el commit exacto
+   28d440b5dd449dbf1fe6f3506cf94ecca4d02660 (campo "resolved": git+ssh://...#<commit>).
+2) SRI NO verificado por npm: para una dependencia git, npm imprime
+   "npm warn skipping integrity check for git dependency ssh://git@github.com/micromatch/braces.git".
+   El campo "integrity" (sha512-...) existe en el lockfile pero npm NO lo verifica
+   en la instalación del git dep; por tanto NO es un SRI efectivamente comprobado.
+3) VERIFICACIÓN PROPIA DE ARCHIVOS (lo que SÍ acredita identidad): huellas SHA-256
+   por archivo en api/scripts/ci/braces-patch-fingerprints.json, comprobadas por el
+   gate sobre TODAS las copias instaladas (incl. anidadas) en cada npm ci.

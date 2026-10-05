@@ -308,7 +308,8 @@ describe('excepción de braces con parche (GHSA-vfj7-8cjw-p6xm)', () => {
   const bracesExc = {
     ghsa: BR_GHSA, cve: 'CVE-2026-93687', package: 'braces', version: '3.0.3',
     affectedRange: '<=3.0.3', severity: 'high', url: BR_URL,
-    patch: { source: 'github:micromatch/braces#28d440b', verify: 'braces-depth-guard' },
+    patch: { source: 'github:micromatch/braces#28d440b', verify: 'braces-patch-fingerprint' },
+    acceptTransitiveMajorFix: true,
     expires: '2026-10-18',
   };
   const EXC_WEB = [bracesExc]; // Web/Bridge: SÓLO braces.
@@ -399,9 +400,16 @@ describe('excepción de braces con parche (GHSA-vfj7-8cjw-p6xm)', () => {
 // confirmarlo (control positivo + rechazo de profundidad).
 describe('verifyBracesPatch (instalación real del api)', () => {
   const path = require('node:path');
-  test('la instalación real del api tiene el parche aplicado → ok', () => {
-    const r = verifyBracesPatch(path.resolve(__dirname, '..', '..', '..'));
+  const FP = require('../braces-patch-fingerprints.json');
+  test('la instalación real del api tiene el parche aplicado (huellas + comportamiento) → ok', () => {
+    const r = verifyBracesPatch(path.resolve(__dirname, '..', '..', '..'), FP);
     expect(r.ok).toBe(true);
-    expect(r.detail).toMatch(/profundidad 101 rechazada|parche aplicado/i);
+    expect(r.detail).toMatch(/huellas|parse\+compile|verificadas/i);
+  });
+
+  test('sin huellas de referencia → falla (no acredita el parche)', () => {
+    const r = verifyBracesPatch(path.resolve(__dirname, '..', '..', '..'), null);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toMatch(/huellas/i);
   });
 });

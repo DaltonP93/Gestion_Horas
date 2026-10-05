@@ -18,7 +18,11 @@
  *     un salto semver-MAJOR de OTRO paquete (heurística transitiva de npm) se tolera
  *     con NOTA y NO limpia el aviso;
  *   - falla si la excepción exige un parche y éste NO está aplicado/verificado sobre
- *     la instalación real (p.ej. braces: control positivo + guarda de profundidad);
+ *     la instalación real: braces se verifica por HUELLAS SHA-256 de la revisión fija
+ *     aprobada sobre TODAS las copias (incl. anidadas) + guardas de parse Y compile;
+ *   - valida estrictamente la forma de `fixAvailable` y acota la tolerancia de la
+ *     heurística transitiva (salto semver-MAJOR de otro paquete) a la excepción que lo
+ *     declara (`acceptTransitiveMajorFix`), nunca a node-forge;
  *   - falla si la excepción venció (fecha `expires`);
  *   - falla si el advisory DESAPARECE (hay que retirar la excepción y volver a
  *     `npm audit --audit-level=high`).
@@ -33,6 +37,7 @@
 
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
 const HIGH = new Set(['high', 'critical']);
@@ -185,24 +190,35 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {},
     const installed = installedVersions[a.package];
     if (!installed) errors.push(`No se pudo determinar la versión instalada de ${a.package}.`);
     else if (installed !== exc.version) errors.push(`Versión instalada de ${a.package} (${installed}) distinta de la declarada (${exc.version}).`);
-    // fixAvailable: un fix PUBLICADO del paquete excepcionado obliga a retirar la
-    // excepción. `true` = fix in-place; objeto con `name === paquete` = versión
-    // corregida del propio paquete; objeto de OTRO paquete NO-mayor = remediación
-    // transitiva no disruptiva que debe tomarse. Sólo se tolera (dejando NOTA) un
-    // salto semver-MAJOR de OTRO paquete: es la heurística transitiva de npm
-    // (p.ej. nodemon/tailwindcss), no una versión corregida de este paquete, y
-    // adoptarlo queda fuera del alcance autorizado.
+    // fixAvailable: la FORMA se valida estrictamente (sólo `false`/`true`/ el objeto
+    // canónico de npm {name,version,isSemVerMajor}); cualquier otra cosa (string,
+    // número, objeto mal formado) hace fallar el gate. Un fix PUBLICADO del paquete
+    // excepcionado (`true`, o un objeto cuyo `name` es el propio paquete) obliga a
+    // retirar la excepción; un fix NO-mayor de OTRO paquete también. SÓLO se tolera
+    // (dejando NOTA) un salto semver-MAJOR de OTRO paquete, y SÓLO si la excepción lo
+    // declara explícitamente (`acceptTransitiveMajorFix: true`): es la heurística
+    // transitiva de npm (p.ej. nodemon/tailwindcss), no una versión corregida de este
+    // paquete, y adoptarlo queda fuera del alcance autorizado. node-forge NO declara
+    // esa tolerancia, así que para él CUALQUIER fixAvailable sigue fallando (regla base).
     const fa = a.fixAvailable;
-    if (fa === true) {
-      errors.push(`Hay un fix disponible para ${a.ghsa}: actualiza ${a.package} y elimina la excepción (no excepcionar).`);
-    } else if (fa && typeof fa === 'object') {
+    const faIsCanonicalObject = fa && typeof fa === 'object' && !Array.isArray(fa)
+      && typeof fa.name === 'string' && typeof fa.version === 'string' && typeof fa.isSemVerMajor === 'boolean';
+    if (fa === false || fa === undefined || fa === null) {
+      // sin fix: nada que objetar.
+    } else if (fa === true) {
+      errors.push(`Hay un fix disponible (in-place) para ${a.ghsa}: actualiza ${a.package} y elimina la excepción.`);
+    } else if (faIsCanonicalObject) {
       if (fa.name === a.package) {
         errors.push(`Hay una versión corregida de ${a.package} (${fa.name}@${fa.version}): actualiza y elimina la excepción de ${a.ghsa}.`);
       } else if (fa.isSemVerMajor !== true) {
         errors.push(`Hay un fix NO-mayor disponible (${fa.name}@${fa.version}) que remedia ${a.ghsa}: aplícalo y elimina la excepción.`);
+      } else if (exc.acceptTransitiveMajorFix === true) {
+        notes.push(`${a.ghsa}: npm sugiere un salto semver-MAJOR de ${fa.name} (@${fa.version}); no es una versión corregida de ${a.package} y queda fuera del alcance autorizado — tolerado por la excepción documentada; NO elimina el aviso de npm audit.`);
       } else {
-        notes.push(`${a.ghsa}: npm sugiere un salto semver-MAJOR de ${fa.name} (@${fa.version}); no es una versión corregida de ${a.package} y queda fuera del alcance autorizado — la excepción NO lo elimina del informe de npm audit.`);
+        errors.push(`Hay un salto semver-MAJOR de ${fa.name} (@${fa.version}) para ${a.ghsa} y la excepción no lo declara tolerado (acceptTransitiveMajorFix).`);
       }
+    } else {
+      errors.push(`Forma de fixAvailable inesperada para ${a.ghsa}: ${JSON.stringify(fa)} (se espera false/true o {name,version,isSemVerMajor}).`);
     }
     // El parche declarado debe estar APLICADO y VERIFICADO sobre la instalación real.
     if (exc.patch) {
@@ -232,33 +248,95 @@ function evaluate(audit, exceptions, { now = new Date(), installedVersions = {},
   return { ok: errors.length === 0, errors, allowed: allowed.map((a) => a.ghsa), notes };
 }
 
-/**
- * Verifica sobre la INSTALACIÓN REAL que el parche de braces (PR micromatch/braces
- * #72) está aplicado y funcionando: control positivo (un patrón válido expande con
- * normalidad) + guarda de profundidad (un patrón de llaves muy anidado se rechaza).
- * El stock de braces@3.0.3 NO rechaza la profundidad → devuelve {ok:false}, de modo
- * que la excepción exige el parche aplicado y verificado, no sólo la versión 3.0.3.
- */
-function verifyBracesPatch(root) {
-  let braces;
-  try {
-    braces = require(require.resolve('braces', { paths: [root] }));
-  } catch (e) {
-    return { ok: false, detail: `no se pudo cargar braces desde ${root}: ${e.message}` };
-  }
-  let positive;
-  try { positive = braces.expand('a{b,c}d'); } catch (e) { return { ok: false, detail: `control positivo lanzó: ${e.message}` }; }
-  if (!Array.isArray(positive) || positive.join(',') !== 'abd,acd') {
-    return { ok: false, detail: `control positivo inesperado: ${JSON.stringify(positive)}` };
-  }
-  const deep = `${'{a,'.repeat(101)}z${'}'.repeat(101)}`;
-  let rejected = false;
-  try { braces(deep); } catch (_e) { rejected = true; }
-  if (!rejected) return { ok: false, detail: 'parche AUSENTE/alterado: braces aceptó profundidad 101 (debería rechazarla)' };
-  return { ok: true, detail: 'control positivo OK y profundidad 101 rechazada (parche aplicado)' };
+/** Encuentra TODAS las copias de braces bajo <root>/node_modules (incl. anidadas). */
+function findBracesCopies(root) {
+  const out = [];
+  const seen = new Set();
+  const walk = (dir) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_e) { return; }
+    for (const e of entries) {
+      let isDir = e.isDirectory();
+      const full = path.join(dir, e.name);
+      if (e.isSymbolicLink()) { try { isDir = fs.statSync(full).isDirectory(); } catch (_e) { isDir = false; } }
+      if (!isDir) continue;
+      if (seen.has(full)) continue; seen.add(full);
+      if (e.name === 'braces') {
+        try { if (JSON.parse(fs.readFileSync(path.join(full, 'package.json'), 'utf8')).name === 'braces') { out.push(full); continue; } } catch (_e) { /* sigue */ }
+      }
+      walk(full);
+    }
+  };
+  walk(path.join(root, 'node_modules'));
+  return out;
 }
 
-const PATCH_VERIFIERS = { 'braces-depth-guard': verifyBracesPatch };
+/** Lanza fn y exige que la excepción sea de PROFUNDIDAD (no una excepción arbitraria). */
+function expectsDepthError(fn) {
+  try { fn(); return { ok: false, detail: 'no lanzó (profundidad aceptada)' }; } catch (e) {
+    if (/depth/i.test(String(e && e.message))) return { ok: true };
+    return { ok: false, detail: `excepción no es de profundidad: ${e && e.name}: ${String(e && e.message).slice(0, 60)}` };
+  }
+}
+
+/**
+ * Cross-check de COMPORTAMIENTO del parche (complementa las huellas): controles
+ * positivos (patrones válidos expanden bien — descarta una impl que lanza siempre),
+ * aceptación dentro del límite, y guardas de profundidad en PARSE (string) Y en
+ * COMPILE (AST suministrado directamente). Una sola prueba de profundidad por parseo
+ * NO acredita el parche completo; una excepción arbitraria no cuenta como rechazo.
+ */
+function verifyBracesBehavior(braces) {
+  const positives = [['a{b,c}d', 'abd,acd'], ['{1..3}', '1,2,3'], ['foo/{a,b}', 'foo/a,foo/b']];
+  for (const [pat, exp] of positives) {
+    let r; try { r = braces.expand(pat); } catch (e) { return { ok: false, detail: `control positivo ${pat} lanzó: ${e.message}` }; }
+    if (!Array.isArray(r) || r.join(',') !== exp) return { ok: false, detail: `control positivo ${pat} inesperado: ${JSON.stringify(r)}` };
+  }
+  const nest = (d) => `${'{a,'.repeat(d)}z${'}'.repeat(d)}`;
+  const deepAst = (d) => { let n = { type: 'text', value: 'x' }; for (let i = 0; i < d; i += 1) n = { type: 'brace', nodes: [{ type: 'brace.open', value: '{' }, { type: 'text', value: 'a' }, n, { type: 'brace.close', value: '}' }] }; return { type: 'root', nodes: [n] }; };
+  try { braces(nest(100)); } catch (e) { return { ok: false, detail: `nest(100) dentro del límite lanzó: ${e.message}` }; }
+  const g1 = expectsDepthError(() => braces(nest(101)));
+  if (!g1.ok) return { ok: false, detail: `guarda de parse: ${g1.detail}` };
+  try { braces.compile(deepAst(50)); } catch (e) { return { ok: false, detail: `compile(AST 50) dentro del límite lanzó: ${e.message}` }; }
+  const g2 = expectsDepthError(() => braces.compile(deepAst(150)));
+  if (!g2.ok) return { ok: false, detail: `guarda de compile: ${g2.detail}` };
+  return { ok: true };
+}
+
+/**
+ * Verifica sobre la INSTALACIÓN REAL que el parche de braces (PR micromatch/braces
+ * #72) está aplicado:
+ *   1) IDENTIDAD por HUELLAS: TODAS las copias (incl. anidadas) coinciden byte a byte
+ *      con los archivos de la revisión fija aprobada (`fingerprints`, SHA-256). Esto
+ *      es independiente de npm (que avisa "skipping integrity check for git dependency"
+ *      y NO verifica el SRI del git dep), y cubre TODO el parche, no una sola guarda.
+ *   2) COMPORTAMIENTO: controles positivos + guardas de parse Y compile (ver
+ *      verifyBracesBehavior). El stock de braces@3.0.3, o un parche con la guarda de
+ *      compile eliminada, FALLAN.
+ */
+function verifyBracesPatch(root, fingerprints) {
+  if (!fingerprints || !fingerprints.files || typeof fingerprints.files !== 'object') {
+    return { ok: false, detail: 'sin huellas de referencia (braces-patch-fingerprints.json)' };
+  }
+  const copies = findBracesCopies(root);
+  if (copies.length === 0) return { ok: false, detail: `no se encontró braces instalado bajo ${root}` };
+  for (const dir of copies) {
+    for (const [rel, want] of Object.entries(fingerprints.files)) {
+      let got;
+      try { got = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, rel))).digest('hex'); } catch (e) {
+        return { ok: false, detail: `copia ${dir}: no se pudo leer ${rel}: ${e.message}` };
+      }
+      if (got !== want) return { ok: false, detail: `copia ${dir}: ${rel} no coincide con la revisión aprobada ${fingerprints.commit || ''}` };
+    }
+  }
+  let braces;
+  try { braces = require(require.resolve('braces', { paths: [root] })); } catch (e) { return { ok: false, detail: `no se pudo cargar braces desde ${root}: ${e.message}` }; }
+  const beh = verifyBracesBehavior(braces);
+  if (!beh.ok) return beh;
+  return { ok: true, detail: `${copies.length} copia(s) con huellas de ${fingerprints.commit || 'la revisión aprobada'}; guardas parse+compile verificadas` };
+}
+
+const PATCH_VERIFIERS = { 'braces-patch-fingerprint': verifyBracesPatch };
 
 /** Parsea `--root <dir>` y `--exceptions <file>` (ambos opcionales). */
 function parseArgs(argv) {
@@ -306,6 +384,11 @@ function main() {
     process.stderr.write(`\n❌ El gate de npm audit falló: no se pudo ejecutar npm audit (${err.message}).\n`);
     process.exit(1);
   }
+  // Huellas de la revisión fija aprobada (compartidas por los tres paquetes), junto
+  // al gate para ser una única fuente de verdad.
+  let fingerprints = null;
+  try { fingerprints = JSON.parse(fs.readFileSync(path.join(__dirname, 'braces-patch-fingerprints.json'), 'utf8')); } catch (_e) { fingerprints = null; }
+
   const installedVersions = {};
   const patchVerification = {};
   for (const e of exceptions) {
@@ -313,7 +396,7 @@ function main() {
     if (e.patch) {
       const verifier = PATCH_VERIFIERS[e.patch.verify];
       patchVerification[e.package] = verifier
-        ? verifier(root)
+        ? verifier(root, fingerprints)
         : { ok: false, detail: `verificador de parche desconocido: ${JSON.stringify(e.patch.verify)}` };
     }
   }
@@ -340,4 +423,4 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { evaluate, reachableAdvisories, ghsaFromUrl, isCanonicalDate, readInstalledVersion, verifyBracesPatch, parseArgs };
+module.exports = { evaluate, reachableAdvisories, ghsaFromUrl, isCanonicalDate, readInstalledVersion, verifyBracesPatch, verifyBracesBehavior, findBracesCopies, expectsDepthError, parseArgs };

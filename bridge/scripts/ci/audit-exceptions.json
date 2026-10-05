@@ -14,16 +14,19 @@
         "source": "github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660",
         "pr": "https://github.com/micromatch/braces/pull/72",
         "license": "MIT",
-        "verify": "braces-depth-guard"
+        "verify": "braces-patch-fingerprint"
       },
       "reason": "Agotamiento de pila (DoS, CWE-674) por patrones de llaves profundamente anidados. En el bridge braces es SÓLO dev (nodemon→chokidar, jest→micromatch); no está en el runtime desplegable.",
-      "mitigation": "Parche del PR micromatch/braces #72 (MIT) fijado a 28d440b5dd449dbf1fe6f3506cf94ecca4d02660 vía `overrides` → git, aplicado a todas las instancias de braces del bridge. El gate verifica sobre la instalación real que el parche está aplicado (control positivo + rechazo de profundidad 101). El build sigue reportando 3.0.3: npm audit SIGUE marcando el aviso.",
+      "mitigation": "Parche del PR micromatch/braces #72 (MIT) fijado a 28d440b5dd449dbf1fe6f3506cf94ecca4d02660 vía `overrides` → git, aplicado a TODAS las instancias de braces (incl. anidadas). El gate verifica el parche por HUELLAS SHA-256 de la revisión fija aprobada sobre todas las copias (api/scripts/ci/braces-patch-fingerprints.json) y, como cross-check, controles positivos + guardas de profundidad en parse Y compile. npm avisa \"skipping integrity check for git dependency\": el commit queda fijado en el lockfile, pero el SRI del git dep NO lo verifica npm; la identidad la acreditan nuestras huellas. El build sigue reportando 3.0.3, por lo que npm audit SIGUE marcando el aviso (aceptación temporal del riesgo).",
       "tests": [
         "api/scripts/ci/__tests__/auditGate.test.js",
+        "api/scripts/ci/__tests__/auditGateHardening.test.js",
+        "api/scripts/ci/braces-patch-fingerprints.json",
         "docs/security/evidence/braces/eval.js"
       ],
       "owner": "Equipo SisHoras — dependencias/seguridad",
-      "expires": "2026-10-18"
+      "expires": "2026-10-18",
+      "acceptTransitiveMajorFix": true
     }
   ]
 }

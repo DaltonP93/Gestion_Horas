@@ -19,15 +19,24 @@
 No se fusiona, no se despliega, no se activan flags, no se amplía el lote. #243 queda en
 `0931878`; #236–#244 intactos.
 
-## 2. Procedencia, licencia y reproducibilidad
+## 2. Procedencia, licencia e integridad (tres cosas distintas)
 
 - Fuente: `github:micromatch/braces#28d440b5dd449dbf1fe6f3506cf94ecca4d02660` (PR #72,
   **abierto, sin fusionar, sin release**). Licencia **MIT**.
-- El `package-lock.json` de cada paquete fija el **commit exacto** con `integrity`
-  (`sha512-LcRdbKBiKSOJRndXDk1VR5druLYgvHdr6+BVwMmoX2HEQemPU/vMjtraOQ3RJjN8mPQkDQm85EmBXbMM24IZ2Q==`),
-  de modo que `npm ci` reinstala **determinísticamente** el mismo build.
-- **Todas** las instancias de braces de cada árbol quedan parcheadas (una copia hoisted
-  por árbol; `npm ls braces` las marca `overridden (git+…#28d440b…)`).
+- **Commit fijado:** el `package-lock.json` de cada paquete fija el **commit exacto**
+  (`"resolved": "git+ssh://…/micromatch/braces.git#28d440b…"`), de modo que `npm ci`
+  reinstala el mismo árbol de commit.
+- **SRI NO verificado por npm:** para una dependencia **git**, npm imprime
+  `npm warn skipping integrity check for git dependency …`. El lockfile trae un campo
+  `integrity` (`sha512-…`) **pero npm NO lo verifica** al instalar el git dep; por tanto
+  **no es un SRI efectivamente comprobado**. No debe presentarse como tal.
+- **Verificación propia de archivos (lo que SÍ acredita identidad):** huellas **SHA-256
+  por archivo** del parche en la revisión aprobada
+  (`api/scripts/ci/braces-patch-fingerprints.json`), que el gate comprueba sobre
+  **todas** las copias instaladas (incl. anidadas) en cada ejecución. Esto, y no el SRI
+  de npm, es lo que acredita que los archivos instalados son los de `28d440b`.
+- **Todas** las instancias de braces de cada árbol quedan parcheadas; `npm ls braces`
+  las marca `overridden (git+…#28d440b…)`.
 - Evidencia: `docs/security/evidence/braces/parche/procedencia.txt`.
 
 ## 3. El nombre y la versión reales se conservan — el aviso NO se oculta
@@ -56,15 +65,24 @@ URL/severidad, high/critical sin advisory compatible):
   braces + node-forge).
 - **Cambio de identidad** (paquete, URL/GHSA), **severidad**, **rango** o **versión
   instalada** distintos de lo declarado → falla.
+- **Forma de `fixAvailable` validada estrictamente:** sólo se aceptan `false`/`true` o el
+  objeto canónico `{name, version, isSemVerMajor}`; cualquier otra cosa (string como
+  `"unexpected"`, número, objeto mal formado) → **falla**.
 - **Fix publicado del propio paquete** (`fixAvailable===true` o un objeto cuyo `name` es el
   propio paquete) → falla. Un **fix NO-mayor de otro paquete** también → falla (hay que
-  tomarlo). Sólo se **tolera con NOTA** un salto **semver-MAJOR de otro paquete** (la
-  heurística transitiva de npm, p.ej. `nodemon`/`tailwindcss`): **no** es una versión
-  corregida de braces y adoptarlo queda fuera del alcance autorizado.
-- **Parche ausente o alterado**: la excepción declara `patch.verify = "braces-depth-guard"`.
-  El gate **carga la instalación real** y exige **control positivo** (`a{b,c}d` expande a
-  `abd,acd`) **y** rechazo de un patrón de profundidad 101. El **stock** de braces@3.0.3
-  **no** rechaza esa profundidad → verificación `ok:false` → **el gate falla**.
+  tomarlo). Se **tolera con NOTA** un salto **semver-MAJOR de otro paquete** (heurística
+  transitiva de npm, p.ej. `nodemon`/`tailwindcss`) **sólo** si la excepción lo declara
+  (`acceptTransitiveMajorFix: true`, presente **sólo** en braces). **node-forge no lo
+  declara**, así que para él **cualquier** `fixAvailable` sigue fallando (regla base
+  conservada).
+- **Parche ausente o alterado**: la excepción declara `patch.verify = "braces-patch-fingerprint"`.
+  El gate verifica la **identidad por huellas SHA-256** de **todas** las copias (incl.
+  anidadas) contra la revisión aprobada **y**, como cross-check de comportamiento, exige
+  controles positivos (`a{b,c}d`→`abd,acd`, `{1..3}`, `foo/{a,b}`), aceptación dentro del
+  límite, y rechazo **de profundidad** (error que menciona `depth`, no una excepción
+  arbitraria) en **parse** (`nest(101)`) **y** en **compile** sobre AST suministrado
+  directamente (`compile(deepAst(150))`). Así, ni el **stock** de braces@3.0.3 ni un parche
+  **con la guarda de compile eliminada** pasan la verificación.
 - **Vencimiento** (`expires` 2026-10-18) superado → falla.
 - **Advisory desaparecido** (ya hay versión corregida publicada) → falla y pide retirar la
   excepción y el override.
@@ -77,14 +95,21 @@ URL/severidad, high/critical sin advisory compatible):
 
 ## 5. Pruebas y evidencia (local)
 
-- **Gate (unit, sintético):** `api/scripts/ci/__tests__/auditGate.test.js` — **35/35**.
-  Primero los **rechazos** (parche no verificado / sin verificación = stock como supuesto
-  parche; fix del propio paquete; fix no-mayor de otro; `fixAvailable===true`; vencida;
-  rango/severidad/versión distintos; otro high además de braces), luego los **controles
-  positivos** (braces parcheado + fixAvailable major de otro paquete → pasa con NOTA; API
-  node-forge+braces → pasa; excepción extra cuyo advisory no aparece → falla).
-- **Verificador real del parche:** `verifyBracesPatch` sobre la instalación real del api →
-  `ok:true`; sobre un `braces@3.0.3` **stock** → `ok:false` (“braces aceptó profundidad 101”).
+- **Gate (unit, sintético):** `api/scripts/ci/__tests__/auditGate.test.js` — **36/36**.
+  Primero los **rechazos** (parche no verificado / sin verificación / sin huellas; fix del
+  propio paquete; fix no-mayor de otro; `fixAvailable===true`; vencida; rango/severidad/
+  versión distintos; otro high además de braces), luego los **controles positivos** (braces
+  parcheado + fixAvailable major de otro paquete → pasa con NOTA; API node-forge+braces →
+  pasa; excepción extra cuyo advisory no aparece → falla).
+- **Reproducciones de endurecimiento** `api/scripts/ci/__tests__/auditGateHardening.test.js`
+  — **5/5** (fallaban sobre `85a8510`, pasan tras el endurecimiento): #1 parche con la
+  guarda de **compile** eliminada (mantiene parse, pierde compile) → el gate lo **rechaza**;
+  #2 node-forge con fixAvailable major de otro paquete → **falla**; #3 fixAvailable mal
+  formado (`"unexpected"`, `1`) → **falla**. Evidencia antes/después en
+  `docs/security/evidence/braces/parche/negativos-antes-85a8510.txt` y `negativos-despues.txt`.
+- **Verificador real del parche:** `verifyBracesPatch` (huellas + comportamiento) sobre la
+  instalación real del api → `ok:true`; sin huellas de referencia → `ok:false`; sobre un
+  `braces@3.0.3` **stock** o un parche con la guarda de compile eliminada → `ok:false`.
 - **`npm ci` (reproducibilidad):** api/bridge/web reinstalan braces@3.0.3 parcheado y el
   gate pasa en los tres (`exit 0`). Evidencia: `docs/security/evidence/braces/parche/gate-output.txt`.
 - **Suites:** API **2505** pruebas en UTC / America/Asuncion / Asia/Tokyo; Bridge **452**
