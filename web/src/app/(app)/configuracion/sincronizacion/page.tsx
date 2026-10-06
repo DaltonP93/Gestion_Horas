@@ -5,6 +5,7 @@ import { ArrowLeft, RefreshCw, Database, Cpu, Send, MapPinOff, Activity, Star, S
 import { api } from '@/lib/api'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 import VincularEmpleadoModal from '@/components/VincularEmpleadoModal'
+import ManualClockRead from '@/components/config/ManualClockRead'
 
 interface Diag {
   local?: { total?: number; last_mark?: string | null }
@@ -67,36 +68,6 @@ export default function SincronizacionPage() {
 
   useEffect(() => { loadDiag(); loadEstado() }, [loadDiag, loadEstado])
 
-  // B) Relojes → SisHoras (flujo principal)
-  async function readAllDevices() {
-    setBusy('devices'); addLog(`▶ Leyendo relojes válidos → SisHoras (${readFrom} … ${readTo})...`)
-    try {
-      const r = await api.post('/api/devices/backup-all', { from: readFrom, to: readTo, attempts: 2 }, { timeout: 120000 })
-      if (r.data.ok === false) { addLog(`✖ ${r.data.error || 'Error en la lectura'}`) }
-      const t = r.data.totals || {}
-      addLog(`✅ Relojes: ${r.data.devices ?? 0}. En rango ${t.in_range || 0}, importados ${t.imported || 0}, duplicados ${t.skipped || 0}, sin empleado ${t.notFound || 0}, basura ${t.junk || 0}.`)
-      if ((t.in_range || 0) > 0 && (t.notFound || 0) / (t.in_range || 1) > 0.5) {
-        addLog('🚨 La mayoría de las marcas en rango NO se importó por falta de mapeo deviceUserId→empleado.')
-      }
-      for (const d of r.data.results || []) {
-        if (!d.ok) { addLog(`   · ${d.device}: ✖ ${d.error}`); continue }
-        addLog(`   · ${d.device}: leídos ${d.total_read} · basura ${d.junk ?? 0} · en rango ${d.in_range} · +${d.imported} (dup ${d.skipped}, sinEmp ${d.notFound})`)
-        if (d.read_unstable) addLog(`      ⚠️ lectura inestable del reloj; puede faltar data. Reintentá o usá el script con --attempts 3.`)
-        if (d.warn_unmapped) addLog(`      🚨 ${d.notFound}/${d.in_range} marcas sin empleado. deviceUserId no coincide con employees (${(d.match_columns || []).join(', ')}).`)
-      }
-      loadDiag()
-    } catch (e: any) {
-      // 504 de Nginx o timeout del cliente: el request web es demasiado largo.
-      if (e?.code === 'ECONNABORTED' || e?.response?.status === 504) {
-        addLog('✖ La lectura tardó demasiado para el navegador/Nginx (504/timeout).')
-        addLog('   → Probá un rango más chico, o corré en el servidor:')
-        addLog('     cd api && node scripts/read-zkteco-now.js --from ' + readFrom + ' --to ' + readTo)
-      } else {
-        addLog(`✖ ${e?.response?.data?.error || e.message}`)
-      }
-    } finally { setBusy('') }
-  }
-
   // A) att2000 → SisHoras (histórico por rango). Herramienta histórica: pide
   // confirmación porque no es una operación diaria.
   async function importAtt2000() {
@@ -130,6 +101,10 @@ export default function SincronizacionPage() {
     } catch (e: any) { addLog(`✖ Sin empleado: ${e?.response?.data?.error || e.message}`) }
     finally { setLoadingUnmapped(false) }
   }, [])
+
+  const onReadFinished = useCallback(() => {
+    loadDiag(); loadEstado(); loadUnmapped()
+  }, [loadDiag, loadEstado, loadUnmapped])
 
   // Deep-link desde el dashboard (?unmapped=1): cargar y desplazarse solo.
   useEffect(() => {
@@ -265,15 +240,8 @@ export default function SincronizacionPage() {
       <FlowCard color="emerald" icon={<Cpu size={18} />} title="Lectura manual y recuperación" principal
         desc="SisHoras leerá los relojes automáticamente cuando la sincronización automática esté activa. Use esta opción para sincronizar ahora, recuperar un período específico, reintentar un reloj o cargar datos si la sincronización estuvo pausada.">
         {canManage && (
-          <div className="flex flex-wrap items-end gap-3">
-            <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Desde</label><input type="date" value={readFrom} onChange={e => setReadFrom(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
-            <div><label className="block text-xs font-semibold text-slate-500 mb-1 dark:text-white/40">Hasta</label><input type="date" value={readTo} onChange={e => setReadTo(e.target.value)} className="border border-slate-200 rounded-xl px-3 py-2 text-sm dark:border-white/[0.08] bg-transparent" /></div>
-            <button onClick={readAllDevices} disabled={busy === 'devices'} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm flex items-center gap-2 disabled:opacity-50">
-              <Cpu size={15} /> {busy === 'devices' ? 'Leyendo relojes...' : 'Leer relojes del rango'}
-            </button>
-          </div>
+          <ManualClockRead from={readFrom} to={readTo} onFromChange={setReadFrom} onToChange={setReadTo} onFinished={onReadFinished} />
         )}
-        <p className="text-[11px] text-slate-400 dark:text-white/30 mt-2">Para lecturas grandes o si el navegador da timeout (504), usá el script <code>read-zkteco-now.js</code> en el servidor.</p>
       </FlowCard>
 
       {/* Marcaciones sin empleado (staging) */}
