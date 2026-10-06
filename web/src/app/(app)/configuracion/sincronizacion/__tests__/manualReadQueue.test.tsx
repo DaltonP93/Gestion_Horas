@@ -1,5 +1,5 @@
 import React from 'react'
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import SincronizacionPage from '../page'
 import { api } from '@/lib/api'
 
@@ -72,7 +72,7 @@ describe('Lectura manual: cola persistente existente (reproducciones sobre 40e86
     expect(post).toHaveBeenCalledTimes(1)
     expect(post).toHaveBeenCalledWith('/api/devices/sync-jobs', {
       from: '2026-10-01', to: '2026-10-03', attempts: 2,
-    })
+    }, { timeout: 15000 })
     expect(within(section).getAllByText('En cola')).toHaveLength(2)
     expect(within(section).queryByText('Lectura finalizada')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Leyendo relojes/ })).toBeDisabled()
@@ -151,5 +151,30 @@ describe('Lectura manual: cola persistente existente (reproducciones sobre 40e86
     await poll()
     expect(post).toHaveBeenCalledTimes(1)
     expect(get.mock.calls.some(([url]) => /\/sync-jobs\/\d+$/.test(url))).toBe(false)
+  })
+
+  it('no transforma un resultado sin contadores en cero marcaciones', async () => {
+    jobs[101] = { ...jobs[101], status: 'success' }
+    const section = await startRead()
+    const comedor = within(section).getByRole('listitem', { name: 'Comedor' })
+    expect(within(comedor).getByText(/Leídas: — · En rango: — · Importadas: —/)).toBeInTheDocument()
+    expect(within(comedor).queryByText(/Importadas: 0/)).not.toBeInTheDocument()
+  })
+
+  it('una respuesta de otro trabajo no se acepta como confirmación de éxito', async () => {
+    jobs[101] = { ...jobs[101], id: 999, status: 'success' }
+    const section = await startRead()
+    expect(within(section).getByText(/No se pudo actualizar el estado/)).toBeInTheDocument()
+    expect(within(section).queryByText('Lectura finalizada')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Leyendo relojes/ })).toBeDisabled()
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+
+  it('si se pierde la respuesta del alta no encola automáticamente de nuevo', async () => {
+    post.mockRejectedValue({ code: 'ECONNABORTED' })
+    const section = await startRead()
+    expect(within(section).getByText(/Verifique si ya hay una lectura en curso antes de repetirla/)).toBeInTheDocument()
+    await poll()
+    expect(post).toHaveBeenCalledTimes(1)
   })
 })
