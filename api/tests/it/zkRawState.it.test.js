@@ -251,8 +251,36 @@ describeIT('estado crudo de la marcación (integración) — captura y reporte s
     }
   });
 
+  test('lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento', async () => {
+    await cleanup();
+    const { backupDeviceDirect } = require('../../src/services/zktecoReader');
+    const [[device]] = await conn.query('SELECT * FROM devices WHERE id = ?', [ids.device]);
+    // Misma colección en los dos intentos (el primero llega truncado), ya etiquetada.
+    const recs = [
+      { deviceUserId: uidA, recordTime: new Date(2026, 9, 5, 10, 0, 0), zkCapture: 'no_disponible' },
+      { deviceUserId: uidA, recordTime: new Date(2026, 9, 5, 10, 30, 0), zkCapture: 'no_disponible' },
+    ];
+    const report = await backupDeviceDirect(device, {
+      from: DAY, to: DAY, recalc: false, attempts: 2, lock: false,
+      _readOnce: (i) => ({ data: recs, err: i === 0 ? 'buffer incompleto' : null }),
+    });
+    expect(report.read_attempts_detail.map((a) => a.raw_state_missing)).toEqual([2, 2]);
+    const [run] = await rows('SELECT CAST(attempts_detail AS CHAR) AS d FROM device_sync_runs WHERE device_id = ? ORDER BY id DESC LIMIT 1', [ids.device]);
+    expect(JSON.parse(run.d).map((a) => a.raw_state_missing)).toEqual([2, 2]);
+    const out = await outcome();
+    expect(out.raw.map(({ wall, raw }) => ({ wall, raw }))).toEqual([
+      { wall: '2026-10-05 10:00:00', raw: { zkCapture: 'no_disponible' } },
+      { wall: '2026-10-05 10:30:00', raw: { zkCapture: 'no_disponible' } },
+    ]);
+    expect(out.attendance).toEqual(['2026-10-05 10:00:00 unknown zkteco_direct', '2026-10-05 10:30:00 unknown zkteco_direct']);
+  });
+
   test('reporte: exige reloj existente y rango válido (máximo 92 días)', async () => {
     const q = (id, qs) => http('GET', `/api/devices/${id}/raw-state-report${qs}`);
+    // ID estricto: entero positivo canónico y seguro, sin parseInt permisivo.
+    for (const bad of ['1e2', `${ids.device}abc`, `${ids.device}.5`, `%2B${ids.device}`, `-${ids.device}`, `0${ids.device}`, '9007199254740993']) {
+      expect({ bad, status: (await q(bad, `?from=${DAY}&to=${DAY}`)).status }).toEqual({ bad, status: 400 });
+    }
     expect((await q(ids.device, '?from=2026-10-05')).status).toBe(400);
     expect((await q(ids.device, '?from=2026-10-06&to=2026-10-05')).status).toBe(400);
     expect((await q(ids.device, '?from=2026-02-30&to=2026-03-01')).status).toBe(400);

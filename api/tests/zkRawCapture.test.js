@@ -123,3 +123,65 @@ describe('estado crudo de la marcación (captura de bytes descartados por node-z
     expect(rawOf(rec)).toEqual({ zkCapture: 'longitud_inesperada', zkRecordLength: 12 });
   });
 });
+
+// Conteo de capturas omitidas por intento: cuenta TODOS los registros con
+// zkCapture 'no_disponible', también los que ya venían etiquetados. Etiquetar
+// es idempotente; contar no depende de quién etiquetó.
+describe('estado crudo: conteo de capturas omitidas por intento (raw_state_missing)', () => {
+  const sinCaptura = () => ([
+    { deviceUserId: '4101', recordTime: new Date(2026, 9, 5, 8, 0, 0) },
+    { deviceUserId: '4101', recordTime: new Date(2026, 9, 5, 17, 0, 0) },
+  ]);
+  const readerFresh = async (fn) => {
+    let out;
+    await jest.isolateModulesAsync(async () => { out = await fn(require('../src/services/zktecoReader')); });
+    return out;
+  };
+
+  test('lectura inyectada con registros YA etiquetados no_disponible: se cuentan', async () => {
+    const recs = sinCaptura().map((r) => ({ ...r, zkCapture: 'no_disponible' }));
+    const out = await readerFresh((reader) => reader.readAttendancesStable(DEVICE, { _readOnce: () => ({ data: recs, err: null }) }));
+    expect(out.detail.map((d) => d.raw_state_missing)).toEqual([2]);
+    expect(out.logs.map(rawOf)).toEqual([{ zkCapture: 'no_disponible' }, { zkCapture: 'no_disponible' }]);
+  });
+
+  test('la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento', async () => {
+    const recs = sinCaptura();
+    // Primer intento truncado (err) para forzar el segundo, con la misma colección.
+    const out = await readerFresh((reader) => reader.readAttendancesStable(DEVICE, {
+      attempts: 2,
+      _readOnce: (i) => ({ data: recs, err: i === 0 ? 'buffer incompleto' : null }),
+    }));
+    expect(out.detail.map((d) => d.raw_state_missing)).toEqual([2, 2]);
+    expect(recs.map(rawOf)).toEqual([{ zkCapture: 'no_disponible' }, { zkCapture: 'no_disponible' }]);
+  });
+
+  test('repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos', async () => {
+    const recs = sinCaptura();
+    const counts = await readerFresh(async (reader) => {
+      const a = await reader.readAttendancesStable(DEVICE, { _readOnce: () => ({ data: recs, err: null }) });
+      const b = await reader.readAttendancesStable(DEVICE, { _readOnce: () => ({ data: recs, err: null }) });
+      return [a.detail[0].raw_state_missing, b.detail[0].raw_state_missing];
+    });
+    expect(counts).toEqual([2, 2]);
+    expect(recs.map(rawOf)).toEqual([{ zkCapture: 'no_disponible' }, { zkCapture: 'no_disponible' }]);
+  });
+
+  test('colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados', async () => {
+    const recs = [
+      { deviceUserId: '4101', recordTime: new Date(2026, 9, 5, 8, 0, 0), zkCapture: 'ok', zkRecordFormat: 'tcp40', zkPunchState: 1, zkVerify: 1 },
+      { deviceUserId: '4101', recordTime: new Date(2026, 9, 5, 9, 0, 0), zkCapture: 'no_disponible' },
+      { deviceUserId: '4101', recordTime: new Date(2026, 9, 5, 10, 0, 0) },
+      { deviceUserId: '4101', recordTime: new Date(2026, 9, 5, 11, 0, 0), zkCapture: 'longitud_inesperada', zkRecordLength: 12 },
+    ];
+    const out = await readerFresh((reader) => reader.readAttendancesStable(DEVICE, { _readOnce: () => ({ data: recs, err: null }) }));
+    expect(out.detail[0].raw_state_missing).toBe(2);
+    // Los bytes capturados y las otras etiquetas quedan intactos.
+    expect(recs.map(rawOf)).toEqual([
+      { zkCapture: 'ok', zkRecordFormat: 'tcp40', zkPunchState: 1, zkVerify: 1 },
+      { zkCapture: 'no_disponible' },
+      { zkCapture: 'no_disponible' },
+      { zkCapture: 'longitud_inesperada', zkRecordLength: 12 },
+    ]);
+  });
+});

@@ -1,0 +1,139 @@
+Reproducción sobre 0c8149f (#252): conteo de capturas omitidas y ID del reporte
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado · worker/lector reales · lecturas inyectadas con registros ya etiquetados
+Fallan: (1) raw_state_missing cuenta sólo lo que etiqueta en ese momento (0 con registros ya etiquetados; 0 en el segundo intento de la misma colección);
+(2) el ID se interpreta con parseInt: '1e2' → reloj 1 (200 con datos de OTRO reloj); otros inválidos consultan la base.
+
+=== tests/zkRawCapture.test.js · TZ=UTC: 7 pasadas, 4 fallidas, 0 omitidas
+  ✕ lectura inyectada con registros YA etiquetados no_disponible: se cuentan
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 1
+      + Received  + 1
+        Array [
+      -   2,
+      +   0,
+        ]
+  ✕ la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 1
+      + Received  + 1
+        Array [
+          2,
+      -   2,
+      +   0,
+        ]
+  ✕ repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 1
+      + Received  + 1
+        Array [
+          2,
+      -   2,
+      +   0,
+        ]
+  ✕ colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 2
+      Received: 1
+=== tests/zkRawCapture.test.js · TZ=America/Asuncion: 7 pasadas, 4 fallidas, 0 omitidas
+  ✕ lectura inyectada con registros YA etiquetados no_disponible: se cuentan
+  ✕ la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento
+  ✕ repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos
+  ✕ colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados
+=== tests/zkRawCapture.test.js · TZ=Asia/Tokyo: 7 pasadas, 4 fallidas, 0 omitidas
+  ✕ lectura inyectada con registros YA etiquetados no_disponible: se cuentan
+  ✕ la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento
+  ✕ repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos
+  ✕ colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados
+
+=== tests/rawStateReportRoute.test.js · TZ=UTC: 5 pasadas, 8 fallidas, 0 omitidas
+  ✕ ID 1e2 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✕ ID 1abc → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✕ ID 1.5 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✕ ID %2B1 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✓ ID -1 → 400 sin consultar la base
+  ✕ ID 01 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✕ ID 007 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✓ ID 0 → 400 sin consultar la base
+  ✕ ID %207 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✕ ID 9007199254740993 → 400 sin consultar la base
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 400
+      Received: 500
+  ✓ ID 0x10 → 400 sin consultar la base
+  ✓ ID válido → consulta el reloj y el reporte (200)
+  ✓ ID válido inexistente → 404
+=== tests/rawStateReportRoute.test.js · TZ=America/Asuncion: 5 pasadas, 8 fallidas, 0 omitidas
+  ✕ ID 1e2 → 400 sin consultar la base
+  ✕ ID 1abc → 400 sin consultar la base
+  ✕ ID 1.5 → 400 sin consultar la base
+  ✕ ID %2B1 → 400 sin consultar la base
+  ✓ ID -1 → 400 sin consultar la base
+  ✕ ID 01 → 400 sin consultar la base
+  ✕ ID 007 → 400 sin consultar la base
+  ✓ ID 0 → 400 sin consultar la base
+  ✕ ID %207 → 400 sin consultar la base
+  ✕ ID 9007199254740993 → 400 sin consultar la base
+  ✓ ID 0x10 → 400 sin consultar la base
+  ✓ ID válido → consulta el reloj y el reporte (200)
+  ✓ ID válido inexistente → 404
+=== tests/rawStateReportRoute.test.js · TZ=Asia/Tokyo: 5 pasadas, 8 fallidas, 0 omitidas
+  ✕ ID 1e2 → 400 sin consultar la base
+  ✕ ID 1abc → 400 sin consultar la base
+  ✕ ID 1.5 → 400 sin consultar la base
+  ✕ ID %2B1 → 400 sin consultar la base
+  ✓ ID -1 → 400 sin consultar la base
+  ✕ ID 01 → 400 sin consultar la base
+  ✕ ID 007 → 400 sin consultar la base
+  ✓ ID 0 → 400 sin consultar la base
+  ✕ ID %207 → 400 sin consultar la base
+  ✕ ID 9007199254740993 → 400 sin consultar la base
+  ✓ ID 0x10 → 400 sin consultar la base
+  ✓ ID válido → consulta el reloj y el reporte (200)
+  ✓ ID válido inexistente → 404
+
+=== tests/it/zkRawState.it.test.js · TZ=UTC: 5 pasadas, 2 fallidas, 0 omitidas
+  ✕ lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 2
+      + Received  + 2
+        Array [
+      -   2,
+      -   2,
+      +   0,
+      +   0,
+  ✕ reporte: exige reloj existente y rango válido (máximo 92 días)
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 1
+      + Received  + 1
+        Object {
+          "bad": "1e2",
+      -   "status": 400,
+      +   "status": 200,
+        }
+=== tests/it/zkRawState.it.test.js · TZ=America/Asuncion: 5 pasadas, 2 fallidas, 0 omitidas
+  ✕ lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento
+  ✕ reporte: exige reloj existente y rango válido (máximo 92 días)
+=== tests/it/zkRawState.it.test.js · TZ=Asia/Tokyo: 5 pasadas, 2 fallidas, 0 omitidas
+  ✕ lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento
+  ✕ reporte: exige reloj existente y rango válido (máximo 92 días)
