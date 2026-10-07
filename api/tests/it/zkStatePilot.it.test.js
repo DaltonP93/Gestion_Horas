@@ -122,7 +122,12 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     const [rows] = await admin.query(
       "SELECT thread_id, command_type, CONVERT(argument USING utf8mb4) AS arg FROM mysql.general_log ORDER BY event_time",
     );
-    const others = rows.filter((r) => !harnessThreads.has(Number(r.thread_id)));
+    // El piloto se conecta siempre por TCP/IP. Las conexiones por socket Unix son
+    // ajenas (p. ej. el healthcheck `mysqladmin ping` del contenedor de CI).
+    const socketThreads = new Set(rows
+      .filter((r) => r.command_type === 'Connect' && /using Socket/i.test(String(r.arg)))
+      .map((r) => Number(r.thread_id)));
+    const others = rows.filter((r) => !harnessThreads.has(Number(r.thread_id)) && !socketThreads.has(Number(r.thread_id)));
     return {
       out,
       statements: others.filter((r) => ['Query', 'Prepare', 'Execute'].includes(r.command_type)).map((r) => String(r.arg).replace(/\s+/g, ' ').trim()),

@@ -212,3 +212,13 @@ comandos_recibidos_por_el_reloj=CMD_CONNECT,CMD_FREE_DATA,CMD_DATA_WRRQ,CMD_FREE
     }
   }
 }
+
+## CI de f8cc9f4 y ajuste del arnés
+- Runs 37692557462 (push) y 37692627803 (pull_request): 13/14 jobs OK. Falló "DB — migraciones" en el paso
+  de la IT del piloto, en UTC, sólo en «ID "01"»: el piloto no emitió sentencias (statements = []), pero
+  general_log registró 2 conexiones ajenas. Eran del healthcheck del servicio MySQL de CI
+  (`mysqladmin ping -h localhost` cada 10 s, por socket Unix), no del piloto, que conecta siempre por TCP/IP.
+- Ajuste: la auditoría de la IT descarta los hilos cuya conexión es por socket Unix
+  ("Connect … using Socket"). Las sentencias de cualquier otro hilo se siguen verificando.
+- Validación local: IT completa en UTC, America/Asuncion y Asia/Tokyo con un `mysqladmin ping` por socket
+  cada 0,5 s en paralelo (más agresivo que el healthcheck de CI): 25/25, 0 fallidas, 0 omitidas en las tres.
