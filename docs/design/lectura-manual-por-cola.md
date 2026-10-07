@@ -122,6 +122,12 @@ reproceso y el recálculo legacy real de `daily_summary` con el horario
 explícito de la fixture (mismas horas en las tres zonas). No se modifican
 datos históricos ni la zona de la base.
 
+**Alcance de esa validación:** el recálculo se valida con **tipos
+entrada/salida explícitos aportados por la fixture** (`inOutStatus` agregado al
+registro ya decodificado). `node-zklib` no expone ese dato, así que una lectura
+real llega sin tipo; ese caso (horas con marcas sin tipo, legacy frente al motor
+en evaluación) está en `docs/design/horas-marcas-sin-tipo.md`.
+
 **Pantalla de Sincronización.** Los valores iniciales de «Desde/Hasta» (lectura
 de relojes, reproceso e importación histórica) se calculan en el calendario de
 Paraguay (`todayPy`/`addCivilDays`/`firstOfMonth` en `web/src/lib/datetime.ts`),
