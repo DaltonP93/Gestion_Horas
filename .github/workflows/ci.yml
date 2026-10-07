@@ -240,6 +240,18 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
+      # Redis descartable SÓLO para la IT del piloto aislado de estados. Se
+      # publica en 6390 (no en 6379) para no cambiar el entorno de las demás IT,
+      # que corren sin Redis (caminos de respaldo de la app).
+      redis:
+        image: redis:7.2
+        ports:
+          - 6390:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     defaults:
       run:
         working-directory: api
@@ -569,6 +581,25 @@ jobs:
           done
         env:
           IT_DB: '1'
+
+      # Piloto AISLADO de estados por reloj (scripts/zk-raw-state-pilot.js), con
+      # procesos reales: reloj simulado por TCP real (node-zklib completo), Redis
+      # de pruebas (lock compartido, keyspace) y general_log de esta MySQL para
+      # verificar CERO intentos de escritura/DDL. Controles negativos incluidos.
+      # Falla si alguna prueba queda omitida.
+      - name: IT piloto aislado de estados por reloj (lock, cierre real, cero escrituras, 3 TZ)
+        run: |
+          set -o pipefail
+          for tz in UTC America/Asuncion Asia/Tokyo; do
+            out="/tmp/zk-pilot-it-$(echo "$tz" | tr '/' '_').json"
+            TZ="$tz" npx jest tests/it/zkStatePilot.it.test.js --runInBand --json --outputFile="$out"
+            TZ_LABEL="$tz" node -e 'const r=require(process.argv[1]); console.log(`piloto estados IT (TZ=${process.env.TZ_LABEL}): ${r.numPassedTests} pasadas, ${r.numPendingTests + r.numTodoTests} omitidas, ${r.numFailedTests} fallidas`); if (!r.success || r.numPassedTests === 0 || r.numPendingTests + r.numTodoTests > 0) process.exit(1)' "$out"
+          done
+        env:
+          IT_DB: '1'
+          IT_REDIS_URL: redis://127.0.0.1:6390
+          IT_DB_ADMIN_USER: root
+          IT_DB_ADMIN_PASSWORD: ci_root_pass
 
   # Idempotencia REAL de 072→075: la otra job las BASELINEA (marca aplicadas sin
   # ejecutarlas), así que su SQL nunca corre. Acá se BASELINEA hasta 071 y el

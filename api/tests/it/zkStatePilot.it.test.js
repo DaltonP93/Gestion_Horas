@@ -176,9 +176,12 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
   });
 
   beforeEach(async () => {
-    keyEvents.length = 0;
     await redis.del(lockKey);
     await conn.query('DELETE FROM device_locks WHERE device_id = ?', [deviceId]).catch(() => {});
+    // La notificación del DEL de limpieza llega por otra conexión: se deja
+    // pasar antes de vaciar la lista, para que no se cuente en el caso siguiente.
+    await sleep(200);
+    keyEvents.length = 0;
   });
 
   afterEach(async () => {
