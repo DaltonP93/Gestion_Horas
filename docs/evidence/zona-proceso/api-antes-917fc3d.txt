@@ -1,0 +1,195 @@
+Reproducción sobre 917fc3d (código de API = #249 7dd78eb): hora de pared del reloj según la zona del proceso
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado (init.sql + 002–087) · reloj simulado con el DECODIFICADOR REAL de node-zklib (decodeRecordData40) · worker real en proceso aparte
+
+--- Decodificador real: hora empaquetada del reloj → Date según la zona del proceso
+TZ=UTC              reloj=2026-10-05 00:30:00 → Date ISO=2026-10-05T00:30:00.000Z · getters locales=2026-10-05 00:30:00 · pyDateTimeStr (Intl PY)=2026-10-04 21:30:00
+TZ=UTC              reloj=2026-10-05 08:12:00 → Date ISO=2026-10-05T08:12:00.000Z · getters locales=2026-10-05 08:12:00 · pyDateTimeStr (Intl PY)=2026-10-05 05:12:00
+TZ=UTC              reloj=2026-10-05 23:59:59 → Date ISO=2026-10-05T23:59:59.000Z · getters locales=2026-10-05 23:59:59 · pyDateTimeStr (Intl PY)=2026-10-05 20:59:59
+TZ=America/Asuncion reloj=2026-10-05 00:30:00 → Date ISO=2026-10-05T03:30:00.000Z · getters locales=2026-10-05 00:30:00 · pyDateTimeStr (Intl PY)=2026-10-05 00:30:00
+TZ=America/Asuncion reloj=2026-10-05 08:12:00 → Date ISO=2026-10-05T11:12:00.000Z · getters locales=2026-10-05 08:12:00 · pyDateTimeStr (Intl PY)=2026-10-05 08:12:00
+TZ=America/Asuncion reloj=2026-10-05 23:59:59 → Date ISO=2026-10-06T02:59:59.000Z · getters locales=2026-10-05 23:59:59 · pyDateTimeStr (Intl PY)=2026-10-05 23:59:59
+TZ=Asia/Tokyo       reloj=2026-10-05 00:30:00 → Date ISO=2026-10-04T15:30:00.000Z · getters locales=2026-10-05 00:30:00 · pyDateTimeStr (Intl PY)=2026-10-04 12:30:00
+TZ=Asia/Tokyo       reloj=2026-10-05 08:12:00 → Date ISO=2026-10-04T23:12:00.000Z · getters locales=2026-10-05 08:12:00 · pyDateTimeStr (Intl PY)=2026-10-04 20:12:00
+TZ=Asia/Tokyo       reloj=2026-10-05 23:59:59 → Date ISO=2026-10-05T14:59:59.000Z · getters locales=2026-10-05 23:59:59 · pyDateTimeStr (Intl PY)=2026-10-05 11:59:59
+
+Sobre la base, con worker y jest en America/Asuncion (la zona que declara ecosystem.config.js) todo coincide; con otra zona se corre el filtro, la hora en staging, la búsqueda de duplicados y el reproceso.
+
+=== zkWallClock.it.test.js · jest TZ=UTC: 0 pasadas, 3 fallidas, 0 omitidas
+  ✕ worker en UTC: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 1
+      + Received  + 1
+        Array [
+      -   "2026-10-05 00:00:00 out",
+          "2026-10-05 08:12:00 in",
+          "2026-10-05 17:45:00 out",
+          "2026-10-05 23:59:59 in",
+      +   "2026-10-06 00:00:00 out",
+        ]
+  ✕ worker en America/Asuncion: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 2
+      + Received  + 2
+        Array [
+      -   "2026-10-05 07:58:00 in",
+      -   "2026-10-05 16:03:00 out",
+      +   "2026-10-05 10:58:00 in",
+      +   "2026-10-05 19:03:00 out",
+        ]
+  ✕ worker en Asia/Tokyo: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 3
+      + Received  + 3
+        Object {
+      -   "imported": 4,
+      -   "in_range": 6,
+      -   "notFound": 2,
+      +   "imported": 3,
+      +   "in_range": 4,
+      +   "notFound": 1,
+          "partial": false,
+          "skipped": 0,
+          "total_read": 8,
+        }
+=== zkWallClock.it.test.js · jest TZ=America/Asuncion: 1 pasadas, 2 fallidas, 0 omitidas
+  ✕ worker en UTC: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 1
+      + Received  + 1
+        Array [
+      -   "2026-10-05 00:00:00 out",
+          "2026-10-05 08:12:00 in",
+          "2026-10-05 17:45:00 out",
+          "2026-10-05 23:59:59 in",
+      +   "2026-10-06 00:00:00 out",
+        ]
+  ✓ worker en America/Asuncion: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✕ worker en Asia/Tokyo: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 3
+      + Received  + 3
+        Object {
+      -   "imported": 4,
+      -   "in_range": 6,
+      -   "notFound": 2,
+      +   "imported": 3,
+      +   "in_range": 4,
+      +   "notFound": 1,
+          "partial": false,
+          "skipped": 0,
+          "total_read": 8,
+        }
+=== zkWallClock.it.test.js · jest TZ=Asia/Tokyo: 0 pasadas, 3 fallidas, 0 omitidas
+  ✕ worker en UTC: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 1
+      + Received  + 1
+        Array [
+      -   "2026-10-05 00:00:00 out",
+          "2026-10-05 08:12:00 in",
+          "2026-10-05 17:45:00 out",
+          "2026-10-05 23:59:59 in",
+      +   "2026-10-06 00:00:00 out",
+        ]
+  ✕ worker en America/Asuncion: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 2
+      + Received  + 2
+        Array [
+      -   "2026-10-05 07:58:00 in",
+      -   "2026-10-05 16:03:00 out",
+      +   "2026-10-05 19:58:00 in",
+      +   "2026-10-06 04:03:00 out",
+        ]
+  ✕ worker en Asia/Tokyo: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+      - Expected  - 3
+      + Received  + 3
+        Object {
+      -   "imported": 4,
+      -   "in_range": 6,
+      -   "notFound": 2,
+      +   "imported": 3,
+      +   "in_range": 4,
+      +   "notFound": 1,
+          "partial": false,
+          "skipped": 0,
+          "total_read": 8,
+        }
+
+=== syncJobsCivilRange.it.test.js · jest TZ=UTC: 13 pasadas, 1 fallidas, 0 omitidas
+  ✓ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✓ rango de un solo día (2026-10-05..2026-10-05)
+  ✓ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✓ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✕ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+      - Expected  - 8
+      + Received  + 8
+      @@ -1,13 +1,13 @@
+        Object {
+          "imported": Array [
+      -     "2026-10-01 00:00:00",
+            "2026-10-01 08:00:00",
+            "2026-10-04 23:59:59",
+            "2026-10-05 00:00:00",
+            "2026-10-05 17:00:00",
+            "2026-10-05 23:59:59",
+      +     "2026-10-06 00:00:00",
+          ],
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✓ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✓ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✓ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+=== syncJobsCivilRange.it.test.js · jest TZ=America/Asuncion: 13 pasadas, 1 fallidas, 0 omitidas
+  ✓ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✓ rango de un solo día (2026-10-05..2026-10-05)
+  ✓ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✓ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✕ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+      - Expected  - 8
+      + Received  + 8
+      @@ -1,13 +1,13 @@
+        Object {
+          "imported": Array [
+      -     "2026-10-01 00:00:00",
+            "2026-10-01 08:00:00",
+            "2026-10-04 23:59:59",
+            "2026-10-05 00:00:00",
+            "2026-10-05 17:00:00",
+            "2026-10-05 23:59:59",
+      +     "2026-10-06 00:00:00",
+          ],
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✓ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✓ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✓ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+=== syncJobsCivilRange.it.test.js · jest TZ=Asia/Tokyo: 13 pasadas, 1 fallidas, 0 omitidas
+  ✓ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✓ rango de un solo día (2026-10-05..2026-10-05)
+  ✓ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✓ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✕ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+      - Expected  - 8
+      + Received  + 8
+      @@ -1,13 +1,13 @@
+        Object {
+          "imported": Array [
+      -     "2026-10-01 00:00:00",
+            "2026-10-01 08:00:00",
+            "2026-10-04 23:59:59",
+            "2026-10-05 00:00:00",
+            "2026-10-05 17:00:00",
+            "2026-10-05 23:59:59",
+      +     "2026-10-06 00:00:00",
+          ],
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✓ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✓ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✓ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
