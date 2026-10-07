@@ -1,0 +1,112 @@
+Después del arreglo — conteo de capturas omitidas e ID estricto del reporte
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado · worker/lector reales
+
+=== tests/zkRawCapture.test.js · TZ=UTC: 11 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✓ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✓ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✓ longitud de registro inesperada: se indica la longitud y no se leen bytes
+  ✓ lectura inyectada con registros YA etiquetados no_disponible: se cuentan
+  ✓ la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento
+  ✓ repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos
+  ✓ colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados
+=== tests/zkRawCapture.test.js · TZ=America/Asuncion: 11 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✓ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✓ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✓ longitud de registro inesperada: se indica la longitud y no se leen bytes
+  ✓ lectura inyectada con registros YA etiquetados no_disponible: se cuentan
+  ✓ la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento
+  ✓ repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos
+  ✓ colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados
+=== tests/zkRawCapture.test.js · TZ=Asia/Tokyo: 11 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✓ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✓ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✓ longitud de registro inesperada: se indica la longitud y no se leen bytes
+  ✓ lectura inyectada con registros YA etiquetados no_disponible: se cuentan
+  ✓ la MISMA colección en dos intentos conserva sus campos y el conteo en cada intento
+  ✓ repetir la lectura sobre la misma colección (dos llamadas) da el mismo conteo y campos
+  ✓ colección mixta: sólo cuentan los no_disponible (etiquetados antes o ahora), no los capturados
+
+=== tests/rawStateReportRoute.test.js · TZ=UTC: 13 pasadas, 0 fallidas, 0 omitidas
+  ✓ ID 1e2 → 400 sin consultar la base
+  ✓ ID 1abc → 400 sin consultar la base
+  ✓ ID 1.5 → 400 sin consultar la base
+  ✓ ID %2B1 → 400 sin consultar la base
+  ✓ ID -1 → 400 sin consultar la base
+  ✓ ID 01 → 400 sin consultar la base
+  ✓ ID 007 → 400 sin consultar la base
+  ✓ ID 0 → 400 sin consultar la base
+  ✓ ID %207 → 400 sin consultar la base
+  ✓ ID 9007199254740993 → 400 sin consultar la base
+  ✓ ID 0x10 → 400 sin consultar la base
+  ✓ ID válido → consulta el reloj y el reporte (200)
+  ✓ ID válido inexistente → 404
+=== tests/rawStateReportRoute.test.js · TZ=America/Asuncion: 13 pasadas, 0 fallidas, 0 omitidas
+  ✓ ID 1e2 → 400 sin consultar la base
+  ✓ ID 1abc → 400 sin consultar la base
+  ✓ ID 1.5 → 400 sin consultar la base
+  ✓ ID %2B1 → 400 sin consultar la base
+  ✓ ID -1 → 400 sin consultar la base
+  ✓ ID 01 → 400 sin consultar la base
+  ✓ ID 007 → 400 sin consultar la base
+  ✓ ID 0 → 400 sin consultar la base
+  ✓ ID %207 → 400 sin consultar la base
+  ✓ ID 9007199254740993 → 400 sin consultar la base
+  ✓ ID 0x10 → 400 sin consultar la base
+  ✓ ID válido → consulta el reloj y el reporte (200)
+  ✓ ID válido inexistente → 404
+=== tests/rawStateReportRoute.test.js · TZ=Asia/Tokyo: 13 pasadas, 0 fallidas, 0 omitidas
+  ✓ ID 1e2 → 400 sin consultar la base
+  ✓ ID 1abc → 400 sin consultar la base
+  ✓ ID 1.5 → 400 sin consultar la base
+  ✓ ID %2B1 → 400 sin consultar la base
+  ✓ ID -1 → 400 sin consultar la base
+  ✓ ID 01 → 400 sin consultar la base
+  ✓ ID 007 → 400 sin consultar la base
+  ✓ ID 0 → 400 sin consultar la base
+  ✓ ID %207 → 400 sin consultar la base
+  ✓ ID 9007199254740993 → 400 sin consultar la base
+  ✓ ID 0x10 → 400 sin consultar la base
+  ✓ ID válido → consulta el reloj y el reporte (200)
+  ✓ ID válido inexistente → 404
+
+=== tests/it/zkRawState.it.test.js · TZ=UTC: 7 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: crudo por marca y horas sin cambios
+  ✓ udp16: crudo por marca y horas sin cambios
+  ✓ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✓ las horas, los tipos y el staging son idénticos con y sin captura
+  ✓ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✓ lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento
+  ✓ reporte: exige reloj existente y rango válido (máximo 92 días)
+=== tests/it/zkRawState.it.test.js · TZ=America/Asuncion: 7 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: crudo por marca y horas sin cambios
+  ✓ udp16: crudo por marca y horas sin cambios
+  ✓ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✓ las horas, los tipos y el staging son idénticos con y sin captura
+  ✓ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✓ lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento
+  ✓ reporte: exige reloj existente y rango válido (máximo 92 días)
+=== tests/it/zkRawState.it.test.js · TZ=Asia/Tokyo: 7 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: crudo por marca y horas sin cambios
+  ✓ udp16: crudo por marca y horas sin cambios
+  ✓ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✓ las horas, los tipos y el staging son idénticos con y sin captura
+  ✓ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✓ lectura inyectada con registros YA etiquetados: attempts_detail cuenta todos, en cada intento
+  ✓ reporte: exige reloj existente y rango válido (máximo 92 días)
+
+--- Sin cambios en bytes, tipos, horas, deduplicación ni recálculo
+untypedPunchHours 9/0/0 en las tres zonas; matriz Markdown IDÉNTICA (diff vacío) a la de #251.
+zkWallClock 3/0/0 y syncJobsCivilRange 14/0/0 en las tres zonas.
+Suite API completa: 2900 pasadas, 0 fallidas en UTC, America/Asuncion y Asia/Tokyo (543 omitidas = IT que requieren IT_DB).

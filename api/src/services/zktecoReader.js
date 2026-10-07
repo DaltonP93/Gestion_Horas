@@ -377,7 +377,10 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       try { payload = netMetrics.estimateBytes(logs); }
       catch { payload = { bytes: 0, estimated: true }; }
       // Registro sin estado crudo capturado → explícito, nunca un 0 inventado.
-      rawStateMissing = zkRawCapture.markMissing(logs);
+      // Etiquetar y contar van separados: el conteo incluye los que ya venían
+      // etiquetados (lectura inyectada o la misma colección en otro intento).
+      zkRawCapture.markMissing(logs);
+      rawStateMissing = zkRawCapture.countMissing(logs);
     }
     const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
       : scoreOf(logs, truncated);

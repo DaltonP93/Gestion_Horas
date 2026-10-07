@@ -96,23 +96,31 @@ function install() {
 }
 
 /**
- * Marca los registros sin captura (decodificador no envuelto o lectura
- * inyectada) y devuelve cuántos marcó, para que la lectura lo informe.
+ * Etiqueta (idempotente) los registros sin captura —decodificador no envuelto
+ * o lectura inyectada— con zkCapture 'no_disponible'. No toca los que ya
+ * tienen zkCapture (capturados, longitud inesperada o ya etiquetados).
  */
 function markMissing(records) {
-  let missing = 0;
-  if (!Array.isArray(records)) return missing;
+  if (!Array.isArray(records)) return records;
   for (const rec of records) {
-    if (rec && typeof rec === 'object' && rec.zkCapture === undefined) {
-      rec.zkCapture = 'no_disponible';
-      missing++;
-    }
+    if (rec && typeof rec === 'object' && rec.zkCapture === undefined) rec.zkCapture = 'no_disponible';
   }
-  return missing;
+  return records;
+}
+
+/**
+ * Cuenta TODOS los registros con zkCapture 'no_disponible', sin importar
+ * quién ni cuándo los etiquetó: repetir la misma colección da el mismo número.
+ */
+function countMissing(records) {
+  if (!Array.isArray(records)) return 0;
+  let n = 0;
+  for (const rec of records) if (rec && typeof rec === 'object' && rec.zkCapture === 'no_disponible') n++;
+  return n;
 }
 
 function status() {
   return { installed: state.installed, loadedBefore: [...state.loadedBefore], error: state.error };
 }
 
-module.exports = { install, annotate, markMissing, status, LAYOUTS, RAW_FIELDS };
+module.exports = { install, annotate, markMissing, countMissing, status, LAYOUTS, RAW_FIELDS };

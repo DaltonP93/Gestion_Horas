@@ -12,6 +12,7 @@ const audit = require('../services/audit');
 const { fetchPushStatus, logBridgeFailure, newCorrelationId } = require('../services/bridgeClient');
 const { getOrgScope, isGlobal, isValidScope } = require('../services/orgScope');
 const { pyDate, addCivilDays } = require('../services/syncSchedule');
+const { parsePositiveId } = require('../utils/strictId');
 
 router.use(authenticate);
 
@@ -1120,10 +1121,12 @@ router.get('/sync-status', requirePermission('dashboard', 'view'), async (req, r
 // Tener el byte no demuestra su significado: ver docs/design/horas-marcas-sin-tipo.md.
 router.get('/:id/raw-state-report', authorize('admin', 'gestor'), async (req, res) => {
   const { rawStateReport, validateRange } = require('../services/zkRawStateReport');
-  const deviceId = parseInt(req.params.id, 10);
+  // ID estricto (entero positivo canónico y seguro), antes de tocar la base:
+  // parseInt aceptaría '1e2' o '1abc' como 1 y reportaría OTRO reloj.
+  const deviceId = parsePositiveId(req.params.id);
+  if (deviceId === null) return res.status(400).json({ ok: false, error: 'Reloj inválido' });
   const { from, to } = req.query;
   const invalid = validateRange(from, to);
-  if (!Number.isInteger(deviceId) || deviceId <= 0) return res.status(400).json({ ok: false, error: 'Reloj inválido' });
   if (invalid) return res.status(400).json({ ok: false, error: invalid });
   try {
     const [[device]] = await sequelize.query('SELECT id FROM devices WHERE id = ?', { replacements: [deviceId] });
