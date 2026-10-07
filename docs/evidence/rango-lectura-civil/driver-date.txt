@@ -1,0 +1,16 @@
+Representación de sync_jobs.date_from/date_to que entrega el driver (mysql2 vía sequelize), MySQL 8.0.46-0ubuntu0.24.04.4 aislado.
+Se encola 2026-10-01..2026-10-05 con syncJobs.enqueue y se relee con syncJobs.get() y con una consulta cruda.
+La última columna aplica la expresión ANTERIOR del worker, pyDate(new Date(x)), para mostrar el corrimiento.
+
+TZ=UTC get(): date_from="2026-10-01" (string) date_to="2026-10-05" | raw query: "2026-10-01" | expresión anterior pyDate(new Date(x)): 2026-09-30..2026-10-04
+TZ=America/Asuncion get(): date_from="2026-10-01" (string) date_to="2026-10-05" | raw query: "2026-10-01" | expresión anterior pyDate(new Date(x)): 2026-09-30..2026-10-04
+TZ=Asia/Tokyo get(): date_from="2026-10-01" (string) date_to="2026-10-05" | raw query: "2026-10-01" | expresión anterior pyDate(new Date(x)): 2026-09-30..2026-10-04
+
+Conclusión: el driver devuelve texto 'YYYY-MM-DD' (no Date) en las tres zonas; ese texto ES la fecha civil pedida.
+El worker ahora la usa tal cual (civilDate) y rechaza cualquier otra representación.
+
+Hallazgo fuera del lote (no modificado): un Date en replacements se formatea con la zona del PROCESO, no con timezone '-03:00':
+TZ=UTC { f: '2026-10-01 11:00:00', tz: '-03:00' }
+TZ=America/Asuncion { f: '2026-10-01 08:00:00', tz: '-03:00' }
+TZ=Asia/Tokyo { f: '2026-10-01 20:00:00', tz: '-03:00' }
+(Date = 2026-10-01T08:00:00-03:00; producción fija TZ=America/Asuncion en PM2.)

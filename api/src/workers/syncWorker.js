@@ -17,7 +17,7 @@ require('dotenv').config();
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 const { backupDeviceDirect } = require('../services/zktecoReader');
-const { pyHHMM, pyDate, inWindow, computeNextRun } = require('../services/syncSchedule');
+const { pyHHMM, pyDate, civilDate, inWindow, computeNextRun } = require('../services/syncSchedule');
 const syncJobs = require('../services/syncJobs');
 
 const TICK_MS = 10_000;             // más frecuente para responder a la cola manual
@@ -121,8 +121,11 @@ async function processJob(job) {
     if (!device) { await syncJobs.finish(job.id, { status: 'error', error: 'Reloj inexistente' }); return; }
     if (job.mode) device.connection_mode = job.mode;
 
-    const from = job.date_from ? pyDate(new Date(job.date_from)) : defaultRange().from;
-    const to   = job.date_to   ? pyDate(new Date(job.date_to))   : defaultRange().to;
+    // date_from/date_to son columnas DATE: el driver las entrega como texto
+    // 'YYYY-MM-DD' y ese es el día pedido. No se pasan por new Date(): eso las
+    // vuelve medianoche UTC y, formateadas en Paraguay, el día anterior.
+    const from = job.date_from ? civilDate(job.date_from, 'date_from') : defaultRange().from;
+    const to   = job.date_to   ? civilDate(job.date_to, 'date_to')     : defaultRange().to;
     const attempts = job.attempts_requested || 3;
 
     await syncJobs.setProgress(job.id, 'Leyendo reloj…');

@@ -14,6 +14,34 @@ const pyHHMM = (d = new Date()) => new Intl.DateTimeFormat('en-GB', {
 // Fecha Paraguay YYYY-MM-DD.
 const pyDate = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Asuncion' }).format(d);
 
+// ─── Fechas CIVILES 'YYYY-MM-DD' (sin hora ni zona) ─────────────
+// Un rango de lectura es un par de días del calendario de Paraguay. Se opera
+// sobre el texto: convertirlo en un instante UTC y volver a formatearlo en
+// Paraguay corre el día (00:00 UTC = 21:00 del día anterior en Paraguay).
+const CIVIL_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function isCivilDate(s) {
+  const m = typeof s === 'string' && s.match(CIVIL_DATE_RE);
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+
+// Fecha civil tal cual llega de una columna DATE (mysql2/sequelize la devuelven
+// como texto 'YYYY-MM-DD'). Cualquier otra representación se rechaza en vez de
+// reinterpretarla como instante.
+function civilDate(v, label = 'fecha') {
+  if (isCivilDate(v)) return v;
+  throw new Error(`${label} no es una fecha civil YYYY-MM-DD: ${v instanceof Date ? 'Date' : JSON.stringify(v)}`);
+}
+
+// Suma días de calendario a una fecha civil (aritmética UTC pura: no depende
+// de la zona del proceso ni de cambios de horario).
+function addCivilDays(ymd, days) {
+  const [y, m, d] = civilDate(ymd).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
 // ¿Está HH:MM dentro de la ventana "HH:MM-HH:MM"? Ventana inválida = sin restricción.
 function inWindow(win, hhmm = pyHHMM()) {
   const m = String(win || '').match(/^(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$/);
@@ -35,4 +63,4 @@ function computeNextRun(intervalMin, offsetMin, from = new Date()) {
   return next;
 }
 
-module.exports = { pyHHMM, pyDate, inWindow, computeNextRun };
+module.exports = { pyHHMM, pyDate, isCivilDate, civilDate, addCivilDays, inWindow, computeNextRun };
