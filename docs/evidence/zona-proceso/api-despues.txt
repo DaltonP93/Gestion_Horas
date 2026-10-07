@@ -1,0 +1,106 @@
+Después del arreglo — mismas IT + tests/zkWallClock.test.js (unitaria, decodificador real)
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado · reloj simulado con decodeRecordData40 real · worker real en proceso aparte (UTC, America/Asuncion, Asia/Tokyo en cada corrida)
+
+=== zkWallClock.it.test.js · jest TZ=UTC: 3 pasadas, 0 fallidas, 0 omitidas
+  ✓ worker en UTC: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✓ worker en America/Asuncion: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✓ worker en Asia/Tokyo: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+=== zkWallClock.it.test.js · jest TZ=America/Asuncion: 3 pasadas, 0 fallidas, 0 omitidas
+  ✓ worker en UTC: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✓ worker en America/Asuncion: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✓ worker en Asia/Tokyo: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+=== zkWallClock.it.test.js · jest TZ=Asia/Tokyo: 3 pasadas, 0 fallidas, 0 omitidas
+  ✓ worker en UTC: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✓ worker en America/Asuncion: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+  ✓ worker en Asia/Tokyo: filtro, staging, asistencia, enlaces, duplicados, reproceso y daily_summary exactos
+
+=== syncJobsCivilRange.it.test.js · jest TZ=UTC: 14 pasadas, 0 fallidas, 0 omitidas
+  ✓ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✓ rango de un solo día (2026-10-05..2026-10-05)
+  ✓ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✓ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✓ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✓ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✓ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✓ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+=== syncJobsCivilRange.it.test.js · jest TZ=America/Asuncion: 14 pasadas, 0 fallidas, 0 omitidas
+  ✓ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✓ rango de un solo día (2026-10-05..2026-10-05)
+  ✓ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✓ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✓ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✓ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✓ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✓ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+=== syncJobsCivilRange.it.test.js · jest TZ=Asia/Tokyo: 14 pasadas, 0 fallidas, 0 omitidas
+  ✓ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✓ rango de un solo día (2026-10-05..2026-10-05)
+  ✓ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✓ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✓ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✓ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✓ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✓ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+
+=== tests/zkWallClock.test.js · TZ=UTC
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 00:00:00
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 08:12:00
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 23:59:59
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-12-31 23:59:59
+    ✓ la hora decodificada por node-zklib vuelve a ser 2027-01-01 00:00:00
+    ✓ texto sin zona: es hora de pared, se conserva
+    ✓ instante explícito (Z u offset, epoch): hora de pared de Paraguay
+    ✓ sin hora interpretable → null
+Tests:       8 passed, 8 total
+=== tests/zkWallClock.test.js · TZ=America/Asuncion
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 00:00:00
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 08:12:00
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 23:59:59
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-12-31 23:59:59
+    ✓ la hora decodificada por node-zklib vuelve a ser 2027-01-01 00:00:00
+    ✓ texto sin zona: es hora de pared, se conserva
+    ✓ instante explícito (Z u offset, epoch): hora de pared de Paraguay
+    ✓ sin hora interpretable → null
+Tests:       8 passed, 8 total
+=== tests/zkWallClock.test.js · TZ=Asia/Tokyo
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 00:00:00
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 08:12:00
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-10-05 23:59:59
+    ✓ la hora decodificada por node-zklib vuelve a ser 2026-12-31 23:59:59
+    ✓ la hora decodificada por node-zklib vuelve a ser 2027-01-01 00:00:00
+    ✓ texto sin zona: es hora de pared, se conserva
+    ✓ instante explícito (Z u offset, epoch): hora de pared de Paraguay
+    ✓ sin hora interpretable → null
+Tests:       8 passed, 8 total
+
+Suite API completa: 2864 pasadas / 0 fallidas en UTC, America/Asuncion y Asia/Tokyo (527 omitidas = IT que requieren IT_DB); +8 de tests/zkWallClock.test.js tras agregarla.
+
+--- Valores EXACTOS que zkWallClock.it.test.js exige en cada zona del worker (UTC, America/Asuncion, Asia/Tokyo)
+Rango 2026-10-05..2026-10-05, horario de la fixture 08:00–17:00, tolerancia entrada 5', salida 0', descanso 60'.
+Lectura:      total_read 8 · in_range 6 · imported 4 · skipped 0 · notFound 2 · partial false
+              (excluidas 2026-10-04 23:59:59 y 2026-10-06 00:00:00; incluidas 2026-10-05 00:00:00 y 23:59:59)
+attendance A: 2026-10-05 00:00:00 out · 08:12:00 in · 17:45:00 out · 23:59:59 in
+staging:      record_time = record_time_py = hora del reloj; A mapped y enlazada a la asistencia de la MISMA hora; B unmapped
+Releer:       imported 0 · skipped 4 · notFound 2; mismas filas (asistencia 4, staging 6, daily_summary 1);
+              A pasa a 'duplicate' en staging conservando el enlace
+Reproceso B:  candidates 2 · mapped 2 → 2026-10-05 07:58:00 in · 16:03:00 out, staging mapped y enlazado; reprocesar otra vez: candidates 0, sin filas nuevas
+daily_summary A: first_in 2026-10-05 08:12:00 · last_out 17:45:00 · worked 513 · late 7 · overtime 45 · status late
+daily_summary B: first_in 2026-10-05 07:58:00 · last_out 16:03:00 · worked 425 · late 0 · overtime 0 · status present
