@@ -1,0 +1,138 @@
+Reproducción sobre 182feff (#251): estado crudo de la marcación
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado · clases REALES de node-zklib (ZKLibTCP/ZKLibUDP, getAttendances y decodificadores) con transporte simulado y bytes del formato real · worker real en proceso aparte
+Fallan porque raw_json no conserva los bytes descartados y el reporte no existe (404); la lectura, la importación y las horas ya funcionan sobre la base.
+
+=== tests/zkRawCapture.test.js · TZ=UTC: 1 pasadas, 6 fallidas, 0 omitidas
+  ✕ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 6
+      + Received  + 1
+        Object {
+      -   "raw": Object {
+      -     "zkCapture": "ok",
+      -     "zkPunchState": 1,
+      -     "zkRecordFormat": "tcp40",
+      -     "zkVerify": 1,
+      -   },
+  ✕ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 6
+      + Received  + 1
+        Object {
+      -   "raw": Object {
+      -     "zkCapture": "ok",
+      -     "zkPunchState": 1,
+      -     "zkRecordFormat": "udp16",
+      -     "zkVerify": 1,
+      -   },
+  ✕ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 6
+      + Received  + 1
+      - Object {
+      -   "zkCapture": "ok",
+      -   "zkPunchState": 1,
+      -   "zkRecordFormat": "udp8",
+      -   "zkVerify": 1,
+      - }
+      + Object {}
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✕ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 3
+      + Received  + 1
+      - Object {
+      -   "zkCapture": "no_disponible",
+      - }
+      + Object {}
+  ✕ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 3
+      + Received  + 1
+      - Object {
+      -   "zkCapture": "no_disponible",
+      - }
+      + Object {}
+  ✕ longitud de registro inesperada: se indica la longitud y no se leen bytes
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 4
+      + Received  + 1
+      - Object {
+      -   "zkCapture": "longitud_inesperada",
+      -   "zkRecordLength": 12,
+      - }
+      + Object {}
+=== tests/zkRawCapture.test.js · TZ=America/Asuncion: 1 pasadas, 6 fallidas, 0 omitidas
+  ✕ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✕ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✕ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✕ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✕ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✕ longitud de registro inesperada: se indica la longitud y no se leen bytes
+=== tests/zkRawCapture.test.js · TZ=Asia/Tokyo: 1 pasadas, 6 fallidas, 0 omitidas
+  ✕ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✕ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✕ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✕ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✕ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✕ longitud de registro inesperada: se indica la longitud y no se leen bytes
+
+=== tests/it/zkRawState.it.test.js · TZ=UTC: 0 pasadas, 6 fallidas, 0 omitidas
+  ✕ tcp40: crudo por marca y horas sin cambios
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 30
+      + Received  +  5
+        Array [
+          Object {
+      -     "raw": Object {
+      -       "zkCapture": "ok",
+      -       "zkPunchState": 1,
+      -       "zkRecordFormat": "tcp40",
+      -       "zkVerify": 1,
+  ✕ udp16: crudo por marca y horas sin cambios
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 30
+      + Received  +  5
+        Array [
+          Object {
+      -     "raw": Object {
+      -       "zkCapture": "ok",
+      -       "zkPunchState": 1,
+      -       "zkRecordFormat": "udp16",
+      -       "zkVerify": 1,
+  ✕ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+      Error: expect(received).toEqual(expected) // deep equality
+      - Expected  - 15
+      + Received  +  5
+        Array [
+          Object {
+      -     "raw": Object {
+      -       "zkCapture": "no_disponible",
+      -     },
+      +     "raw": Object {},
+            "wall": "2026-10-05 08:00:00",
+  ✕ las horas, los tipos y el staging son idénticos con y sin captura
+      Error: expect(received).toHaveLength(expected)
+      Expected length: 3
+      Received length: 0
+      Received array:  []
+  ✕ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+      SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+  ✕ reporte: exige reloj existente y rango válido (máximo 92 días)
+      SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+=== tests/it/zkRawState.it.test.js · TZ=America/Asuncion: 0 pasadas, 6 fallidas, 0 omitidas
+  ✕ tcp40: crudo por marca y horas sin cambios
+  ✕ udp16: crudo por marca y horas sin cambios
+  ✕ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✕ las horas, los tipos y el staging son idénticos con y sin captura
+  ✕ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✕ reporte: exige reloj existente y rango válido (máximo 92 días)
+=== tests/it/zkRawState.it.test.js · TZ=Asia/Tokyo: 0 pasadas, 6 fallidas, 0 omitidas
+  ✕ tcp40: crudo por marca y horas sin cambios
+  ✕ udp16: crudo por marca y horas sin cambios
+  ✕ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✕ las horas, los tipos y el staging son idénticos con y sin captura
+  ✕ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✕ reporte: exige reloj existente y rango válido (máximo 92 días)

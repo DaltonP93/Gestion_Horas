@@ -15,7 +15,7 @@ const API_ROOT = path.resolve(__dirname, '..', '..', '..');
 const WORKER = path.join(API_ROOT, 'src', 'workers', 'syncWorker.js');
 const PRELOAD = path.join(__dirname, 'fakeZkPreload.js');
 
-async function runSyncWorker({ conn, cfg, jobIds, tz, recordsFile }) {
+async function runSyncWorker({ conn, cfg, jobIds, tz, recordsFile, env = {} }) {
   const child = spawn(process.execPath, ['-r', PRELOAD, WORKER], {
     cwd: API_ROOT,
     env: {
@@ -26,6 +26,7 @@ async function runSyncWorker({ conn, cfg, jobIds, tz, recordsFile }) {
       ZKTECO_AUTO_POLL: 'false',
       WORKDAY_ENGINE_DAILY_SUMMARY_WRITE_ENABLED: 'false',
       FAKE_ZK_RECORDS: recordsFile,
+      ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
