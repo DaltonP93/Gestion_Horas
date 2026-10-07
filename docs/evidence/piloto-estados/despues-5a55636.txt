@@ -1,0 +1,214 @@
+# Piloto aislado de estados por reloj — DESPUÉS del arreglo (5a55636, sobre c8bc35b ← 251d5dd)
+# Mismo entorno que antes-251d5dd.txt: MySQL 8 aislado, Redis aislado, reloj simulado por TCP real.
+
+## Antes / después (pasadas/total, igual en UTC, America/Asuncion y Asia/Tokyo)
+| Prueba | 251d5dd + reproducciones | 5a55636 |
+|---|---|---|
+| zkPilotAggregate (unit) | 0/7 | 7/7 |
+| zkPilotArgs (unit) | suite no carga (módulo inexistente) | 39/39 |
+| zkPilotIsolation (unit) | 0/9 | 9/9 |
+| zkStatePilot (IT) | 2/25 (sólo controles), 0 omitidas | 25/25, 0 omitidas |
+
+## Por zona
+UTC: unitarias del piloto y relacionadas 83/83 · IT piloto 25/25, 0 fallidas, 0 omitidas (jest termina solo, sin --forceExit)
+America/Asuncion: unitarias del piloto y relacionadas 83/83 · IT piloto 25/25, 0 fallidas, 0 omitidas (jest termina solo, sin --forceExit)
+Asia/Tokyo: unitarias del piloto y relacionadas 83/83 · IT piloto 25/25, 0 fallidas, 0 omitidas (jest termina solo, sin --forceExit)
+
+## IT del piloto (UTC; idéntico en las otras zonas)
+  PASA  control: el helper habitual, aun con Redis, intenta escribir en audit_events (el detector lo ve) (1558 ms)
+  PASA  control: el camino habitual con Promise.race devuelve el timeout y deja la conexión abierta (2638 ms)
+  PASA  lectura completa: agregado exacto, sólo comandos de lectura, cero escrituras y sin conexiones al liberar (1795 ms)
+  PASA  lectura truncada y después completa: intentos reales, cada uno cerrado antes del siguiente (1121 ms)
+  PASA  captura tardía (node-zklib cargado antes): aborta antes de conectar al reloj (712 ms)
+  PASA  ID "1e2": código 2 sin abrir MySQL, Redis ni el reloj (340 ms)
+  PASA  ID "01": código 2 sin abrir MySQL, Redis ni el reloj (330 ms)
+  PASA  ID "-1": código 2 sin abrir MySQL, Redis ni el reloj (324 ms)
+  PASA  ID "1.5": código 2 sin abrir MySQL, Redis ni el reloj (333 ms)
+  PASA  ID "1abc": código 2 sin abrir MySQL, Redis ni el reloj (353 ms)
+  PASA  ID "0": código 2 sin abrir MySQL, Redis ni el reloj (391 ms)
+  PASA  ID "9007199254740993": código 2 sin abrir MySQL, Redis ni el reloj (338 ms)
+  PASA  ID " 7": código 2 sin abrir MySQL, Redis ni el reloj (330 ms)
+  PASA  ID "0x10": código 2 sin abrir MySQL, Redis ni el reloj (325 ms)
+  PASA  reloj inexistente: código 8 sin tocar Redis ni relojes (374 ms)
+  PASA  lock Redis ocupado por otro: código 4, el lock ajeno queda intacto (551 ms)
+  PASA  lock MySQL previo con Redis libre: código 4, se suelta el Redis propio y no se toca la fila (522 ms)
+  PASA  Redis caído: código 5, sin fallback MySQL ni DDL, sin conectar al reloj (521 ms)
+  PASA  lectura colgada: cada intento se mata y se espera su fin; sin conexiones al liberar (4568 ms)
+  PASA  límite total: no empieza un intento que no cabe en la duración restante (2601 ms)
+  PASA  pérdida del lock durante la lectura: se mata la lectura, no se borra el lock ajeno, código 7 (1526 ms)
+  PASA  señal SIGTERM: cierra la lectura, libera el lock y escribe el JSON (código 143) (1004 ms)
+  PASA  señal SIGINT: cierra la lectura, libera el lock y escribe el JSON (código 130) (965 ms)
+  PASA  señal SIGHUP: cierra la lectura, libera el lock y escribe el JSON (código 129) (963 ms)
+  PASA  SIGKILL del proceso principal: la lectura termina sola y el lock vence por TTL (976 ms)
+
+## Estabilidad
+Casos de ciclo de vida (colgada, límite total, pérdida del lock, SIGTERM/SIGINT/SIGHUP, SIGKILL del principal)
+repetidos 8 veces seguidas en UTC: 8/8 corridas con 7/7 pasadas.
+Ajuste del arnés en 5a55636: el DEL de limpieza del beforeEach se notifica por otra conexión; se deja pasar (200 ms)
+antes de vaciar la lista de eventos (antes contaminaba el caso SIGTERM con un "del" del caso anterior).
+
+## Regresión (sin cambios de comportamiento)
+UTC API completa: 2955 pasadas 0 fallidas 568 omitidas
+    zkRawState 7 pasadas 0 fallidas 0 omitidas
+    zkWallClock 3 pasadas 0 fallidas 0 omitidas
+    untypedPunchHours 9 pasadas 0 fallidas 0 omitidas
+    syncJobsCivilRange 14 pasadas 0 fallidas 0 omitidas
+America/Asuncion API completa: 2955 pasadas 0 fallidas 568 omitidas
+    zkRawState 7 pasadas 0 fallidas 0 omitidas
+    zkWallClock 3 pasadas 0 fallidas 0 omitidas
+    untypedPunchHours 9 pasadas 0 fallidas 0 omitidas
+    syncJobsCivilRange 14 pasadas 0 fallidas 0 omitidas
+Asia/Tokyo API completa: 2955 pasadas 0 fallidas 568 omitidas
+    zkRawState 7 pasadas 0 fallidas 0 omitidas
+    zkWallClock 3 pasadas 0 fallidas 0 omitidas
+    untypedPunchHours 9 pasadas 0 fallidas 0 omitidas
+    syncJobsCivilRange 14 pasadas 0 fallidas 0 omitidas
+(API completa: 2900 previas + 55 unitarias nuevas = 2955; 568 omitidas = 543 previas + 25 IT nuevas sin IT_DB.)
+zktecoReader.js: 130 líneas movidas sin cambios a zkRecordShape.js/zkClient.js (verificado línea a línea).
+
+## Ejecución de muestra contra el reloj simulado (HEAD 5a55636, árbol limpio, TZ=America/Asuncion)
+node scripts/zk-raw-state-pilot.js --device-id <id> --attempts 3 --attempt-timeout 20 --max-duration 70 \
+  --cooldown 4 --renew-seconds 5 --env-file <pilot.env 0600 con 6 claves + 1 ignorada> --out <archivo>
+sentencias_mysql_del_piloto=["Connect: root@localhost on asistencia using TCP/IP","Query: SET SESSION TRANSACTION READ ONLY","Query: SELECT id, ip_address, port, connection_mode, timeout_ms FROM devices WHERE id = 43 LIMIT 1","Query: SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_locks'","Query: SELECT COUNT(*) AS n FROM device_locks WHERE device_id = 43 AND expires_at > NOW()","Query: SELECT COUNT(*) AS n FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'device_locks'","Query: SELECT COUNT(*) AS n FROM device_locks WHERE device_id = 43 AND expires_at > NOW()","Quit: "]
+codigo_salida_proceso=0 stderr=[piloto-estados] resultado=ok intentos=1 codigo=0
+comandos_recibidos_por_el_reloj=CMD_CONNECT,CMD_FREE_DATA,CMD_DATA_WRRQ,CMD_FREE_DATA,CMD_EXIT
+{
+  "formato": "sishoras.zk-raw-state-pilot/1",
+  "advertencia": "Conteos crudos de los bytes de estado y verificación del reloj. El piloto no interpreta ningún valor como entrada o salida, no importa marcaciones, no modifica horas, dispositivos ni configuración. Disponer del byte no demuestra su semántica ni la configuración del equipo.",
+  "herramienta": {
+    "commit": "5a556362ccb39c3b75971543ec8e3fa993505eb3",
+    "origen_commit": "git",
+    "node_zklib": "1.3.0",
+    "node": "v22.22.2"
+  },
+  "reloj": {
+    "id": 43,
+    "modo_conexion": "tcp"
+  },
+  "limites": {
+    "intentos_max": 3,
+    "timeout_intento_s": 20,
+    "duracion_max_s": 70,
+    "espera_entre_intentos_s": 4,
+    "renovacion_s": 5,
+    "ttl_lock_s": 31
+  },
+  "exclusion": {
+    "backend": "redis",
+    "clave": "zk:lock:dev:43",
+    "mysql_device_locks": "sin_lock_vigente",
+    "auditoria_mysql": false,
+    "fallback_mysql": false
+  },
+  "resultado": "ok",
+  "codigo_salida": 0,
+  "senal": null,
+  "duracion_ms": 1259,
+  "intentos_ejecutados": 1,
+  "intentos": [
+    {
+      "intento": 1,
+      "estado": "completa",
+      "codigo": null,
+      "duracion_ms": 1112,
+      "registros": 31,
+      "validos": 29,
+      "basura": 2,
+      "captura": {
+        "ok": 31,
+        "no_disponible": 0,
+        "longitud_inesperada": 0,
+        "otro": 0
+      },
+      "bytes_estimados": {
+        "valor": 1244,
+        "es_estimacion": true,
+        "metodo": "tamano_por_registro_decodificado",
+        "registros_sin_longitud": 0
+      },
+      "cierre": "proceso_terminado"
+    }
+  ],
+  "lectura": {
+    "intento": 1,
+    "registros": 31,
+    "basura": 2,
+    "validos": 29,
+    "captura": {
+      "ok": 31,
+      "no_disponible": 0,
+      "longitud_inesperada": 0,
+      "otro": 0
+    },
+    "validos_sin_captura": 0,
+    "formatos": {
+      "tcp40": {
+        "validos": 29,
+        "zkPunchState": {
+          "0": 13,
+          "1": 13,
+          "2": 1,
+          "4": 1,
+          "5": 1
+        },
+        "zkVerify": {
+          "1": 21,
+          "4": 1,
+          "15": 7
+        },
+        "combinaciones": {
+          "0/1": 13,
+          "4/1": 1,
+          "5/1": 1,
+          "1/1": 6,
+          "1/15": 7,
+          "2/4": 1
+        }
+      }
+    },
+    "fechas": {
+      "primera": "2026-10-01",
+      "ultima": "2099-06-01",
+      "dias_con_marcas": 3
+    },
+    "futuras": 1,
+    "duplicados_usuario_hora": 1,
+    "usuarios_distintos": 7,
+    "umbral_supresion": 5,
+    "por_hora": {
+      "10": {
+        "0": "<5"
+      },
+      "12": {
+        "4": "<5"
+      },
+      "13": {
+        "5": "<5"
+      },
+      "17": {
+        "1": 13
+      },
+      "03": {
+        "2": "<5"
+      },
+      "07": {
+        "0": 12
+      }
+    },
+    "patrones_dia": {
+      "patrones": {
+        "0,1": 10
+      },
+      "suprimidos": {
+        "patrones": 4,
+        "dias": 4
+      }
+    },
+    "bytes_estimados": {
+      "valor": 1244,
+      "es_estimacion": true,
+      "metodo": "tamano_por_registro_decodificado",
+      "registros_sin_longitud": 0
+    }
+  }
+}
