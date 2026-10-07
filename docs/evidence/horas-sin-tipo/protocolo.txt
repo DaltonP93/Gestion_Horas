@@ -1,0 +1,67 @@
+Evidencia: qué transmite el reloj y qué expone node-zklib
+
+== node-zklib 1.3.0 (api/node_modules/node-zklib/utils.js) — decodificadores usados por getAttendances
+  146:module.exports.decodeRecordData40 = (recordData)=>{
+  147-    const record = {
+  148-        userSn: recordData.readUIntLE(0, 2),
+  149-        deviceUserId: recordData
+  150-        .slice(2, 2+9)
+  151-        .toString('ascii')
+  152-        .split('\0')
+  153-        .shift(),
+  154-        recordTime: parseTimeToDate(recordData.readUInt32LE(27)),
+  155-      }
+  156-      return record
+  --
+  159:module.exports.decodeRecordData16 = (recordData)=>{
+  160-    const record = {
+  161-        deviceUserId: recordData.readUIntLE(0, 2),
+  162-        recordTime: parseTimeToDate(recordData.readUInt32LE(4))
+  163-    }
+  164-    return record
+  165-}
+  166-
+  167-module.exports.decodeRecordRealTimeLog18 = (recordData)=>{
+  168-    const userId = recordData.readUIntLE(8,1)
+  169-    const attTime = parseHexToTime(recordData.subarray(12,18))
+
+== zklibudp.js: los registros de 8 y de 16 bytes usan el MISMO decodeRecordData16
+  386:      const RECORD_PACKET_SIZE = 8
+  391:        const record = decodeRecordData16(recordData.subarray(0, RECORD_PACKET_SIZE))
+  399:      const RECORD_PACKET_SIZE = 16
+  404:        const record = decodeRecordData16(recordData.subarray(0, RECORD_PACKET_SIZE))
+
+== pyzk (referencia del protocolo) zk/base.py → get_attendance
+   fuente A: https://raw.githubusercontent.com/fananimi/pyzk/master/zk/base.py  sha256 808022413c68bbc06d716748c663538d92f568a138bba929b5e340a5a1371582
+   fuente B: PyPI pyzk-0.9.tar.gz sha256 9dcf0d40e0473c752d04d0af389fdd71ce85a0a9609bb8aca562be9171248170 (mismas disposiciones)
+  1620:        if record_size == 8:
+  1622:                uid, status, timestamp, punch = unpack('HB4sB', attendance_data.ljust(8, b'\x00')[:8])
+  1633:        elif record_size == 16:
+  1635:                user_id, timestamp, status, punch, reserved, workcode = unpack('<I4sBB2sI', attendance_data.ljust(16, b'\x00')[:16])
+  1659:                uid, user_id, status, timestamp, punch, space = unpack('<H24sB4sB8s', attendance_data.ljust(40, b'\x00')[:40])
+
+== bridge (ADMS PUSH) — el reloj envía Status por marcación; formato verificado con captura de producción
+   * ── El formato, tal como lo emite el firmware ────────────────────────
+   *
+   *   PIN <TAB> YYYY-MM-DD HH:mm:ss <TAB> Status <TAB> Verify <TAB> WorkCode <TAB> …
+   *
+  137:// ZKTeco punch_state:
+  138://   0 = Check In (entrada)
+  139://   1 = Check Out (salida)
+
+== Prueba: api/tests/zkRecordLayout.test.js (UTC, America/Asuncion, Asia/Tokyo)
+  [UTC]     ✓ TCP 40 bytes: byte 31 (punch) y 26 (status) se descartan; usuario y hora sí
+  [UTC]     ✓ TCP 40 bytes: el id de usuario se corta en 9 caracteres (el campo tiene 24)
+  [UTC]     ✓ UDP 16 bytes: bytes 8 (status) y 9 (punch) se descartan; el id se lee con 2 de 4 bytes
+  [UTC]     ✓ UDP 8 bytes: node-zklib usa el decodificador de 16 y lee la hora corrida un byte
+  [UTC] Tests:       4 passed, 4 total
+  [America/Asuncion]     ✓ TCP 40 bytes: byte 31 (punch) y 26 (status) se descartan; usuario y hora sí
+  [America/Asuncion]     ✓ TCP 40 bytes: el id de usuario se corta en 9 caracteres (el campo tiene 24)
+  [America/Asuncion]     ✓ UDP 16 bytes: bytes 8 (status) y 9 (punch) se descartan; el id se lee con 2 de 4 bytes
+  [America/Asuncion]     ✓ UDP 8 bytes: node-zklib usa el decodificador de 16 y lee la hora corrida un byte
+  [America/Asuncion] Tests:       4 passed, 4 total
+  [Asia/Tokyo]     ✓ TCP 40 bytes: byte 31 (punch) y 26 (status) se descartan; usuario y hora sí
+  [Asia/Tokyo]     ✓ TCP 40 bytes: el id de usuario se corta en 9 caracteres (el campo tiene 24)
+  [Asia/Tokyo]     ✓ UDP 16 bytes: bytes 8 (status) y 9 (punch) se descartan; el id se lee con 2 de 4 bytes
+  [Asia/Tokyo]     ✓ UDP 8 bytes: node-zklib usa el decodificador de 16 y lee la hora corrida un byte
+  [Asia/Tokyo] Tests:       4 passed, 4 total
