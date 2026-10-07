@@ -84,19 +84,48 @@ vecinos excluidos; un solo día; cruce de mes; valores por defecto alrededor de
 la medianoche UTC; repetir la lectura no duplica asistencia ni staging; mismo
 resultado en las tres zonas. Evidencia en `docs/evidence/rango-lectura-civil/`.
 
-**Hallazgo fuera de este lote.** `attendance_logs.timestamp` se escribe
-formateando un `Date` con la zona del **proceso** (sequelize no aplica
-`timezone: '-03:00'` a los `Date` pasados como `replacements`). Producción
-fija `TZ=America/Asuncion` en todos los procesos PM2 (`ecosystem.config.js`),
-así que allí la hora guardada es la de Paraguay; un worker iniciado con otra
-zona la guardaría corrida. La prueba entre zonas compara rango, contadores,
-staging civil y cantidad importada; las horas de asistencia se verifican con
-la zona de producción.
+## Hora de pared del reloj e independencia de la zona del proceso
 
-También queda fuera: los valores iniciales de «Desde/Hasta» en la pantalla de
-Sincronización (`web/…/configuracion/sincronizacion/page.tsx`) se calculan con
-la fecha UTC del navegador; son editables y se envían explícitos, así que no
-pasan por los valores por defecto de `readRange`.
+**Corrige el diagnóstico anterior.** El hallazgo previo se había medido con un
+`Date` construido desde un ISO con offset, que no es lo que entrega el reloj.
+Verificado con el decodificador real (`docs/evidence/zona-proceso/`): el reloj
+guarda la hora de **pared** sin zona y `node-zklib` la decodifica con
+`new Date(año, mes, día, h, m, s)`, es decir en la zona **local del proceso**.
+Con el proceso fuera de `America/Asuncion`, el lector formateaba ese `Date` en
+Paraguay y corría la hora: el filtro por día (entraba `00:00` del día siguiente
+y salía `00:00` del primero), `raw_device_punches.record_time_py`, la búsqueda
+de duplicados y las fechas a recalcular. El reproceso de marcas sin empleado
+releía `record_time` como `Date` (a −03:00) y lo reinsertaba con la zona del
+proceso (+3 h en UTC).
+
+**Ahora**, cada marca lleva una sola hora de pared `'YYYY-MM-DD HH:MM:SS'`
+(`wallClockOf` en `zktecoReader.js`): los getters locales del `Date`, que son
+la inversa exacta del decodificador en cualquier zona del proceso; un instante
+absoluto explícito (texto con `Z`/offset o epoch) se convierte a la hora de
+Paraguay. Esa hora, como **texto**, alimenta el filtro, `record_time` y
+`record_time_py`, `attendance_logs.timestamp` (invariante de
+`utils/attendanceTime.js`: hora de pared persistida como texto), la búsqueda
+de duplicados, el enlace raw → asistencia, las fechas a recalcular y el
+reproceso. `raw_json` conserva el registro decodificado tal cual: su
+`recordTime` serializado como ISO depende de la zona del proceso y no se usa
+como hora. Límite: si la zona del proceso tuviera cambio de horario y la hora
+del reloj cayera en el salto, el `Date` ya llega corrido desde `node-zklib`.
+
+**Producción:** `ecosystem.config.js` **declara** `TZ: 'America/Asuncion'`
+para los procesos PM2; el entorno efectivo de producción **no fue verificado**.
+Con este cambio el resultado ya no depende de esa variable.
+
+Verificación: `api/tests/it/zkWallClock.it.test.js`, con el worker real en UTC,
+America/Asuncion y Asia/Tokyo (y jest en las tres en CI), comprueba valores
+exactos de filtro, staging, asistencia, enlaces, duplicados al releer,
+reproceso y el recálculo legacy real de `daily_summary` con el horario
+explícito de la fixture (mismas horas en las tres zonas). No se modifican
+datos históricos ni la zona de la base.
+
+**Pantalla de Sincronización.** Los valores iniciales de «Desde/Hasta» (lectura
+de relojes, reproceso e importación histórica) se calculan en el calendario de
+Paraguay (`todayPy`/`addCivilDays`/`firstOfMonth` en `web/src/lib/datetime.ts`),
+no con la fecha UTC ni la del navegador.
 
 ## Siguiente verificación operativa
 
