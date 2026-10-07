@@ -145,8 +145,10 @@ Cada registro leído por `node-zklib` lleva en `raw_device_punches.raw_json`:
   lector, antes de que `openZK` cargue `node-zklib` (los módulos `zklibtcp` y
   `zklibudp` toman el decodificador al cargarse). Si `node-zklib` se cargó antes,
   la captura no ocurre: el registro queda `zkCapture: 'no_disponible'`, **sin
-  inventar un 0**; la lectura informa la cantidad (`raw_state_missing` en
-  `device_sync_runs.attempts_detail`) y, en Node, se avisa en el log. Lo mismo
+  inventar un 0**; la lectura informa por intento cuántos registros tienen
+  `zkCapture: 'no_disponible'` (`raw_state_missing` en
+  `device_sync_runs.attempts_detail`), incluidos los que ya venían etiquetados;
+  etiquetar es idempotente y no afecta el conteo y, en Node, se avisa en el log. Lo mismo
   vale para lecturas inyectadas sin decodificador. Verificado: en la API y en el
   worker el lector se carga antes que `node-zklib`.
 - **Formatos.** TCP de 40 bytes (byte 31 / 26), UDP de 16 (9 / 8) y UDP de 8
@@ -154,7 +156,9 @@ Cada registro leído por `node-zklib` lleva en `raw_device_punches.raw_json`:
   desalineada**: ese defecto, y el corte del id TCP a 9 caracteres, quedan
   separados y sin corregir.
 - **Reporte de solo lectura.** `GET /api/devices/:id/raw-state-report?from&to`
-  (admin/gestor; rango obligatorio de hasta 92 días; marcas `zkteco_direct`):
+  (admin/gestor; ID de reloj entero positivo canónico —`1e2`, `1.5`, `01` o
+  signos dan 400 sin consultar la base—; rango obligatorio de hasta 92 días;
+  marcas `zkteco_direct`):
   conteos por estado de captura, por formato y por cada valor observado de cada
   byte, más `invalido` y `ausente`. Sin nombres, ids de usuario o empleado ni
   marcaciones individuales. `sin_registro` cuenta marcas guardadas antes de este
