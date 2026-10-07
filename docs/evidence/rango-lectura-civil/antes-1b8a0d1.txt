@@ -1,0 +1,155 @@
+Reproducción sobre la base 1b8a0d1 (#248) — tests/it/syncJobsCivilRange.it.test.js
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado (init.sql + migraciones 002–087) · reloj simulado (node-zklib) · worker real en proceso aparte en America/Asuncion (TZ de PM2) salvo la prueba entre zonas
+Fallan por el defecto (rango corrido un día en el worker y "hoy" UTC en readRange); 3 controles pasan (instantes en que UTC y Paraguay comparten fecha).
+
+=== jest TZ=UTC: 3 pasadas, 11 fallidas, 0 omitidas
+  ✕ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+      - Expected  - 2
+      + Received  + 2
+        Array [
+          Object {
+      -     "from_date": "2026-10-01",
+      -     "to_date": "2026-10-05",
+      +     "from_date": "2026-09-30",
+      +     "to_date": "2026-10-04",
+          },
+        ]
+  ✕ rango de un solo día (2026-10-05..2026-10-05)
+      - Expected  - 2
+      + Received  + 2
+        Array [
+          Object {
+      -     "from_date": "2026-10-05",
+      -     "to_date": "2026-10-05",
+      +     "from_date": "2026-10-04",
+      +     "to_date": "2026-10-04",
+          },
+        ]
+  ✕ rango que cruza de mes (2026-10-31..2026-11-01)
+      - Expected  - 2
+      + Received  + 2
+        Array [
+          Object {
+      -     "from_date": "2026-10-31",
+      -     "to_date": "2026-11-01",
+      +     "from_date": "2026-10-30",
+      +     "to_date": "2026-10-31",
+          },
+        ]
+  ✕ repetir la lectura no duplica asistencia ni staging en MySQL
+      - Expected  - 3
+      + Received  + 1
+        Array [
+      +   "2026-09-30 23:59:59",
+          "2026-10-01 00:00:00",
+          "2026-10-01 08:00:00",
+          "2026-10-04 23:59:59",
+      -   "2026-10-05 00:00:00",
+      -   "2026-10-05 17:00:00",
+      -   "2026-10-05 23:59:59",
+        ]
+  ✕ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+      - Expected  - 9
+      + Received  + 7
+        Object {
+      -   "imported_count": 6,
+      +   "imported_count": 4,
+          "job": Object {
+            "from": "2026-10-01",
+            "status": "success",
+            "to": "2026-10-05",
+          },
+          "result": Object {
+      -     "imported": 6,
+      -     "in_range": 7,
+      +     "imported": 4,
+      +     "in_range": 5,
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+      - Expected  - 2
+      + Received  + 2
+        Object {
+      -   "from": "2026-10-03",
+      -   "to": "2026-10-06",
+      +   "from": "2026-10-04",
+      +   "to": "2026-10-07",
+        }
+  ✕ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+      - Expected  - 2
+      + Received  + 2
+        Object {
+      -   "from": "2026-10-03",
+      -   "to": "2026-10-06",
+      +   "from": "2026-10-04",
+      +   "to": "2026-10-07",
+        }
+  ✕ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+      - Expected  - 2
+      + Received  + 2
+        Object {
+      -   "from": "2026-10-03",
+      -   "to": "2026-10-06",
+      +   "from": "2026-10-04",
+      +   "to": "2026-10-07",
+        }
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✕ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+      - Expected  - 2
+      + Received  + 2
+        Object {
+      -   "from": "2026-10-28",
+      -   "to": "2026-10-31",
+      +   "from": "2026-10-29",
+      +   "to": "2026-11-01",
+        }
+  ✕ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+      - Expected  - 2
+      + Received  + 2
+        Object {
+      -   "from": "2026-10-03",
+      -   "to": "2026-10-06",
+      +   "from": "2026-10-04",
+      +   "to": "2026-10-07",
+        }
+  ✕ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+      - Expected  - 2
+      + Received  + 2
+        Array [
+          Object {
+      -     "from_date": "2026-10-03",
+      -     "to_date": "2026-10-06",
+      +     "from_date": "2026-10-02",
+      +     "to_date": "2026-10-05",
+          },
+        ]
+=== jest TZ=America/Asuncion: 3 pasadas, 11 fallidas, 0 omitidas
+  ✕ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✕ rango de un solo día (2026-10-05..2026-10-05)
+  ✕ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✕ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✕ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✕ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✕ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✕ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
+=== jest TZ=Asia/Tokyo: 3 pasadas, 11 fallidas, 0 omitidas
+  ✕ 2026-10-01..2026-10-05 llega idéntico al lector e importa el primer y el último día
+  ✕ rango de un solo día (2026-10-05..2026-10-05)
+  ✕ rango que cruza de mes (2026-10-31..2026-11-01)
+  ✕ repetir la lectura no duplica asistencia ni staging en MySQL
+  ✕ el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo
+  ✓ sync-jobs sin fechas a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-06T23:59:59Z (Paraguay 2026-10-06 20:59) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T01:30:00Z (Paraguay 2026-10-06 22:30) usa 2026-10-03..2026-10-06
+  ✕ sync-jobs sin fechas a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) usa 2026-10-03..2026-10-06
+  ✓ sync-jobs sin fechas a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) usa 2026-10-04..2026-10-07
+  ✕ sync-jobs sin fechas a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) usa 2026-10-28..2026-10-31
+  ✕ los demás consumidores de readRange usan el mismo día de Paraguay por defecto
+  ✕ «Sincronizar ahora» sin fechas de día importa las marcas de HOY en Paraguay
