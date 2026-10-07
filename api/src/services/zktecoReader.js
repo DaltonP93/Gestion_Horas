@@ -20,6 +20,10 @@ const { withDeadlockRetry, isRetryable, mysqlErrno } = require('../utils/mysqlRe
 const punchTypeResolver = require('./punchTypeResolver');
 // Sólo mide: no altera qué se lee ni cuándo (ver services/netMetrics.js).
 const netMetrics = require('./netMetrics');
+// Estado CRUDO del registro (bytes que node-zklib descarta). Se instala al
+// cargar el lector, antes de que openZK cargue node-zklib; ver zkRawCapture.js.
+const zkRawCapture = require('./zkRawCapture');
+zkRawCapture.install();
 
 // ─── Instrumentación por fase ───────────────────────────────────
 // Traza estructurada por fase de la sincronización (SIN SQL, sin stack, sin
@@ -368,9 +372,12 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
     // pierde la métrica de ese intento, no el intento. Esta línea está fuera
     // del try/catch de la lectura, así que necesita el suyo.
     let payload = { bytes: 0, estimated: false };
+    let rawStateMissing = 0;
     if (!err) {
       try { payload = netMetrics.estimateBytes(logs); }
       catch { payload = { bytes: 0, estimated: true }; }
+      // Registro sin estado crudo capturado → explícito, nunca un 0 inventado.
+      rawStateMissing = zkRawCapture.markMissing(logs);
     }
     const sc = err ? { total: 0, valid: 0, inRange: 0, garbage: 0, maxTs: 0, minTs: 0, truncated: true }
       : scoreOf(logs, truncated);
@@ -385,6 +392,8 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       // ver que el polling descarga el buffer entero cada vez.
       payload_bytes: payload.bytes,
       payload_estimated: payload.estimated,
+      // Registros cuyo estado crudo NO se capturó (zkCapture='no_disponible').
+      raw_state_missing: rawStateMissing,
     });
     logMem(memCtx, 'read_attempt', { attempt: i + 1, records: sc.total });
 
@@ -987,6 +996,7 @@ async function readDeviceRaw(device, opts = {}) {
     report.connected = true;
     const res = data.result;
     const logs = Array.isArray(res) ? res : (res && Array.isArray(res.data) ? res.data : []);
+    zkRawCapture.markMissing(logs);
     report.total_read = logs.length;
     report.device_info = data.info || null;
 
@@ -1075,5 +1085,6 @@ module.exports = {
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
   normalizeRecord, wallClockOf, resolvePunchTypes, explicitType, detectFields, memSnapshot,
+  zkRawCaptureStatus: zkRawCapture.status,
   recordSyncRun, recommendationFor,
 };

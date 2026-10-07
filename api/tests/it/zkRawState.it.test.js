@@ -191,6 +191,9 @@ describeIT('estado crudo de la marcación (integración) — captura y reporte s
         : rawExpected(transport),
     );
     expect(out.attendance).toEqual(EXP_ATTENDANCE);
+    // La corrida lo deja auditado: registros sin estado crudo por intento.
+    const [run] = await rows('SELECT CAST(attempts_detail AS CHAR) AS d FROM device_sync_runs WHERE device_id = ? ORDER BY id DESC LIMIT 1', [ids.device]);
+    expect(JSON.parse(run.d).map((a) => a.raw_state_missing)).toEqual([late ? RECORDS.length : 0]);
     results[name] = { attendance: out.attendance, summary: out.summary, mapping: out.raw.map((r) => `${r.who} ${r.mapping}`) };
   });
 
@@ -239,9 +242,11 @@ describeIT('estado crudo de la marcación (integración) — captura y reporte s
         },
       },
     });
-    // Sin nombres, ids de usuario/empleado ni marcas individuales.
+    // La igualdad exacta ya excluye cualquier otro campo (ids de empleado
+    // incluidos); además, ningún id de usuario del reloj, nombre ni hora de
+    // marcación aparece en el texto.
     const text = JSON.stringify(r.body);
-    for (const leak of [uidA, uidB, '90001', 'Sintético', 'Crudo', '08:00', 'employee', String(ids.empA)]) {
+    for (const leak of [uidA, uidB, '90001', 'Sintético', 'Crudo', '08:00', 'employee']) {
       expect(text).not.toContain(leak);
     }
   });

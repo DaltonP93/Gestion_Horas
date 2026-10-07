@@ -26,6 +26,7 @@ async function readAll(reader, fixture, transport) {
   const out = await reader.readAttendancesStable(DEVICE, {
     _readOnce: () => fixture.readThroughNodeZklib(RECORDS, transport),
   });
+  readAll.detail = out.detail;
   return out.logs;
 }
 const rawOf = (rec) => Object.fromEntries(RAW_KEYS.filter((k) => k in rec).map((k) => [k, rec[k]]));
@@ -39,6 +40,7 @@ describe('estado crudo de la marcación (captura de bytes descartados por node-z
       logs = await readAll(reader, require(FIXTURE), transport); // …después node-zklib (como openZK)
     });
     expect(logs).toHaveLength(RECORDS.length);
+    expect(readAll.detail[0].raw_state_missing).toBe(0);
     logs.forEach((rec, i) => {
       expect({ user: String(rec.deviceUserId), wall: reader.wallClockOf(rec.recordTime), raw: rawOf(rec) }).toEqual({
         user: RECORDS[i].deviceUserId,
@@ -91,7 +93,10 @@ describe('estado crudo de la marcación (captura de bytes descartados por node-z
       // Explícito, sin inventar valores: ni 0 ni ningún otro.
       expect(rawOf(rec)).toEqual({ zkCapture: 'no_disponible' });
     }
-    expect(reader.zkRawCaptureStatus()).toMatchObject({ installed: true, loadedBefore: ['zklibtcp', 'zklibudp'] });
+    // La lectura lo informa (va a device_sync_runs.attempts_detail). La detección
+    // por require.cache sólo existe en Node, no en el registro de módulos de jest.
+    expect(readAll.detail[0].raw_state_missing).toBe(RECORDS.length);
+    expect(reader.zkRawCaptureStatus()).toMatchObject({ installed: true });
   });
 
   test('lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles', async () => {

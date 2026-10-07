@@ -1,0 +1,68 @@
+Después del arreglo — mismas pruebas (versión final)
+Node v22.22.2 · MySQL 8.0.46-0ubuntu0.24.04.4 aislado · clases REALES de node-zklib con transporte simulado y bytes del formato real (FIXTURES: bytes sintéticos con la disposición de pyzk) · worker real
+
+=== tests/zkRawCapture.test.js · TZ=UTC: 7 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✓ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✓ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✓ longitud de registro inesperada: se indica la longitud y no se leen bytes
+=== tests/zkRawCapture.test.js · TZ=America/Asuncion: 7 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✓ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✓ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✓ longitud de registro inesperada: se indica la longitud y no se leen bytes
+=== tests/zkRawCapture.test.js · TZ=Asia/Tokyo: 7 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp16: cada marca conserva SUS bytes de estado y verificación, en orden
+  ✓ udp8: se conservan los bytes 7 y 2; la hora sigue desalineada (defecto aparte, sin corregir)
+  ✓ los campos crudos NO son tipo: no están entre los campos que reconoce el resolvedor
+  ✓ orden de carga: si node-zklib se cargó ANTES que el lector, la captura no ocurre y queda marcada
+  ✓ lecturas sin decodificador de node-zklib (inyectadas) quedan marcadas como no disponibles
+  ✓ longitud de registro inesperada: se indica la longitud y no se leen bytes
+
+=== tests/it/zkRawState.it.test.js · TZ=UTC: 6 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: crudo por marca y horas sin cambios
+  ✓ udp16: crudo por marca y horas sin cambios
+  ✓ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✓ las horas, los tipos y el staging son idénticos con y sin captura
+  ✓ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✓ reporte: exige reloj existente y rango válido (máximo 92 días)
+=== tests/it/zkRawState.it.test.js · TZ=America/Asuncion: 6 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: crudo por marca y horas sin cambios
+  ✓ udp16: crudo por marca y horas sin cambios
+  ✓ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✓ las horas, los tipos y el staging son idénticos con y sin captura
+  ✓ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✓ reporte: exige reloj existente y rango válido (máximo 92 días)
+=== tests/it/zkRawState.it.test.js · TZ=Asia/Tokyo: 6 pasadas, 0 fallidas, 0 omitidas
+  ✓ tcp40: crudo por marca y horas sin cambios
+  ✓ udp16: crudo por marca y horas sin cambios
+  ✓ captura tardía (node-zklib cargado antes que el lector): crudo por marca y horas sin cambios
+  ✓ las horas, los tipos y el staging son idénticos con y sin captura
+  ✓ reporte de solo lectura: conteos por formato, valor, ausentes e inválidos; sin datos personales
+  ✓ reporte: exige reloj existente y rango válido (máximo 92 días)
+
+--- Control: la versión final de estas pruebas sobre el código de 182feff
+zkRawCapture (TZ=UTC): 1 pasadas, 6 fallidas, 0 omitidas
+zkRawState IT (TZ=UTC): 0 pasadas, 6 fallidas, 0 omitidas
+
+--- Horas sin cambios
+untypedPunchHours (matriz de #251) con la captura: 9/0/0 en jest UTC, America/Asuncion y Asia/Tokyo;
+matriz Markdown generada IDÉNTICA (diff vacío) a la de #251 en las tres zonas.
+zkWallClock 3/0/0 y syncJobsCivilRange 14/0/0 en las tres zonas.
+zkRawState: asistencia, tipos (unknown), staging y daily_summary idénticos con TCP 40, UDP 16 y captura tardía.
+
+--- Orden de carga en Node real (fuera de jest)
+warn: [zkRawCapture] node-zklib (zklibtcp, zklibudp) se cargó antes que el lector: esas lecturas no conservan el estado crudo y quedan marcadas zkCapture='no_disponible' {"timestamp":"2026-10-07 18:52:54"}
+node-zklib cargado ANTES del lector → {"installed":true,"loadedBefore":["zklibtcp","zklibudp"],"error":null}
+orden normal (lector primero) → {"installed":true,"loadedBefore":[],"error":null}
+
+Suite API completa: 2883 pasadas, 0 fallidas en UTC, America/Asuncion y Asia/Tokyo (542 omitidas = IT que requieren IT_DB).
+
+ESTADO DE PRODUCCIÓN NO VERIFICADO: estos resultados salen de fixtures; qué formato y valores envían los relojes reales no se midió.

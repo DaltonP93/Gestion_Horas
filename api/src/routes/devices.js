@@ -1113,6 +1113,28 @@ router.get('/sync-status', requirePermission('dashboard', 'view'), async (req, r
   }
 });
 
+// GET /api/devices/:id/raw-state-report?from=YYYY-MM-DD&to=YYYY-MM-DD — SOLO
+// LECTURA. Conteos del estado crudo conservado en raw_json (bytes de estado y
+// verificación que node-zklib descarta): por captura, formato y valor. Sin
+// nombres, ids de usuario/empleado ni marcaciones. Rango obligatorio, ≤ 92 días.
+// Tener el byte no demuestra su significado: ver docs/design/horas-marcas-sin-tipo.md.
+router.get('/:id/raw-state-report', authorize('admin', 'gestor'), async (req, res) => {
+  const { rawStateReport, validateRange } = require('../services/zkRawStateReport');
+  const deviceId = parseInt(req.params.id, 10);
+  const { from, to } = req.query;
+  const invalid = validateRange(from, to);
+  if (!Number.isInteger(deviceId) || deviceId <= 0) return res.status(400).json({ ok: false, error: 'Reloj inválido' });
+  if (invalid) return res.status(400).json({ ok: false, error: invalid });
+  try {
+    const [[device]] = await sequelize.query('SELECT id FROM devices WHERE id = ?', { replacements: [deviceId] });
+    if (!device) return res.status(404).json({ ok: false, error: 'Reloj no encontrado' });
+    res.json(await rawStateReport({ deviceId, from, to }));
+  } catch (err) {
+    try { require('../config/logger').error('raw-state-report:', err); } catch {}
+    res.status(500).json({ ok: false, error: 'No se pudo generar el reporte' });
+  }
+});
+
 // GET /api/devices/:id/sync-runs — historial de corridas de un reloj (read-only).
 router.get('/:id/sync-runs', authorize('admin', 'gestor', 'hr'), async (req, res) => {
   try {
