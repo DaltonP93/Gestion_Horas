@@ -1,0 +1,32 @@
+Reproducción sobre 7dd78eb (#249) — web/src/app/(app)/configuracion/sincronizacion/__tests__/defaultDatesPy.test.tsx
+Node v22.22.2 · jsdom · HTTP simulado (sin API ni att2000) · cuerpos REALES de los POST de la pantalla
+
+=== TZ del navegador=UTC
+    ✓ a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) envía lectura 2026-10-04..2026-10-07 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-31T16:00:00Z (Paraguay 2026-10-31 13:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✕ a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T03:00:00Z (Paraguay 2026-11-01 00:00) envía lectura 2026-10-29..2026-11-01 y att2000 desde 2026-11-01
+Tests:       3 failed, 4 passed, 7 total
+=== TZ del navegador=America/Asuncion
+    ✓ a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) envía lectura 2026-10-04..2026-10-07 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-31T16:00:00Z (Paraguay 2026-10-31 13:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✕ a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T03:00:00Z (Paraguay 2026-11-01 00:00) envía lectura 2026-10-29..2026-11-01 y att2000 desde 2026-11-01
+Tests:       3 failed, 4 passed, 7 total
+=== TZ del navegador=Asia/Tokyo
+    ✓ a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) envía lectura 2026-10-04..2026-10-07 y att2000 desde 2026-10-01
+    ✕ a las 2026-10-31T16:00:00Z (Paraguay 2026-10-31 13:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✕ a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T03:00:00Z (Paraguay 2026-11-01 00:00) envía lectura 2026-10-29..2026-11-01 y att2000 desde 2026-11-01
+Tests:       4 failed, 3 passed, 7 total
+
+Ejemplo (TZ=Asia/Tokyo, 2026-10-31T16:00Z = 13:00 en Paraguay): att2000 dateFrom 2026-11-01 00:00:00 > dateTo 2026-10-31 23:59:59 (rango invertido).

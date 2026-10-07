@@ -182,6 +182,16 @@ jobs:
         run: node ../api/scripts/ci/audit-gate.js --root . --exceptions scripts/ci/audit-exceptions.json
       - name: Unit tests
         run: npm test
+      # Fechas iniciales de Sincronización en el calendario de Paraguay: la zona
+      # del proceso es la del «navegador» de jsdom, así que se corre en las tres.
+      - name: Fechas iniciales de Sincronización (3 TZ de navegador)
+        run: |
+          set -o pipefail
+          for tz in UTC America/Asuncion Asia/Tokyo; do
+            out="/tmp/web-default-dates-$(echo "$tz" | tr '/' '_').json"
+            TZ="$tz" npx jest --runTestsByPath 'src/app/(app)/configuracion/sincronizacion/__tests__/defaultDatesPy.test.tsx' --json --outputFile="$out"
+            TZ_LABEL="$tz" node -e 'const r=require(process.argv[1]); console.log(`fechas iniciales Sincronización (TZ=${process.env.TZ_LABEL}): ${r.numPassedTests} pasadas, ${r.numPendingTests + r.numTodoTests} omitidas, ${r.numFailedTests} fallidas`); if (!r.success || r.numPassedTests === 0 || r.numPendingTests + r.numTodoTests > 0) process.exit(1)' "$out"
+          done
       - run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: '1'
