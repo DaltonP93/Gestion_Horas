@@ -98,6 +98,9 @@ Matriz completa: `docs/evidence/horas-sin-tipo/matriz.md`. Resumen:
 
 ## 5. Siguiente cambio propuesto (mínimo, sin política de inferencia)
 
+> Actualización: el paso 1 (conservar el byte como dato crudo) y el reporte de
+> solo lectura están implementados; ver §5.1.
+
 **Conservar el estado de marcación que el reloj ya envía, como dato crudo de
 diagnóstico, sin usarlo todavía como tipo.**
 
@@ -120,6 +123,56 @@ paralelo, y antes de cualquier activación del writer del motor, conviene que el
 motor marque como anomalía los tramos emparejados por posición, para que la
 consola de FASE E y los reportes muestren la incertidumbre que hoy es invisible.
 
+## 5.1 Estado crudo conservado (implementado)
+
+El paso 1 de la propuesta ya está en el código (`api/src/services/zkRawCapture.js`).
+Cada registro leído por `node-zklib` lleva en `raw_device_punches.raw_json`:
+
+| Campo | Contenido |
+|---|---|
+| `zkCapture` | `ok` · `longitud_inesperada` · `no_disponible` |
+| `zkRecordFormat` | `tcp40` · `udp16` · `udp8` (sólo con `ok`) |
+| `zkPunchState` | byte de estado de marcación, 0–255, sin interpretar (sólo con `ok`) |
+| `zkVerify` | byte de modo de verificación, 0–255, sin interpretar (sólo con `ok`) |
+| `zkRecordLength` | longitud recibida (sólo con `longitud_inesperada`) |
+
+- **Crudos, no tipo.** Los nombres no coinciden con los campos que reconoce el
+  resolvedor (`inOutStatus`, `state`, `status`, `type`, `inout`); no cambian
+  tipos, horas, deduplicación, vínculos ni recálculo. Las pruebas lo verifican:
+  la matriz de §2 es idéntica antes y después, y la IT `zkRawState` compara
+  asistencia, tipos, staging y `daily_summary` con y sin captura.
+- **Captura omitida, explícita.** Los decodificadores se envuelven al cargarse el
+  lector, antes de que `openZK` cargue `node-zklib` (los módulos `zklibtcp` y
+  `zklibudp` toman el decodificador al cargarse). Si `node-zklib` se cargó antes,
+  la captura no ocurre: el registro queda `zkCapture: 'no_disponible'`, **sin
+  inventar un 0**; la lectura informa por intento cuántos registros tienen
+  `zkCapture: 'no_disponible'` (`raw_state_missing` en
+  `device_sync_runs.attempts_detail`), incluidos los que ya venían etiquetados;
+  etiquetar es idempotente y no afecta el conteo y, en Node, se avisa en el log. Lo mismo
+  vale para lecturas inyectadas sin decodificador. Verificado: en la API y en el
+  worker el lector se carga antes que `node-zklib`.
+- **Formatos.** TCP de 40 bytes (byte 31 / 26), UDP de 16 (9 / 8) y UDP de 8
+  (7 / 2). El formato de 8 bytes conserva los bytes, pero su **hora sigue
+  desalineada**: ese defecto, y el corte del id TCP a 9 caracteres, quedan
+  separados y sin corregir.
+- **Reporte de solo lectura.** `GET /api/devices/:id/raw-state-report?from&to`
+  (admin/gestor; ID de reloj entero positivo canónico —`1e2`, `1.5`, `01` o
+  signos dan 400 sin consultar la base—; rango obligatorio de hasta 92 días;
+  marcas `zkteco_direct`):
+  conteos por estado de captura, por formato y por cada valor observado de cada
+  byte, más `invalido` y `ausente`. Sin nombres, ids de usuario o empleado ni
+  marcaciones individuales. `sin_registro` cuenta marcas guardadas antes de este
+  cambio; `sin_raw_json`, marcas sin crudo.
+
+**Qué no demuestra.** Disponer del byte **no** prueba qué significa en cada
+reloj ni cómo está configurado el equipo: 0/1 sólo indica entrada/salida si el
+terminal tiene teclas de estado o cambio automático configurados. Todo lo
+anterior está verificado con **fixtures** (bytes sintéticos con la disposición
+de pyzk, pasados por las clases reales de `node-zklib`). El estado de
+**producción no está verificado**: qué formato usan los relojes, si el byte
+varía y con qué valores sólo se sabrá con el reporte sobre lecturas reales,
+cuando se autorice. Habilitar un mapeo a tipo es una decisión posterior.
+
 ## 6. Relación con #250
 
 Las pruebas de #250 (`zkWallClock.it.test.js`) validan el **recálculo con tipos
@@ -134,5 +187,6 @@ cd api
 IT_DB=1 TZ=UTC UNTYPED_HOURS_EVIDENCE_OUT=/tmp/matriz.json \
   npx jest tests/it/untypedPunchHours.it.test.js --runInBand
 node ../docs/evidence/horas-sin-tipo/matriz.js /tmp/matriz.json
-npx jest tests/zkRecordLayout.test.js
+npx jest tests/zkRecordLayout.test.js tests/zkRawCapture.test.js
+IT_DB=1 npx jest tests/it/zkRawState.it.test.js --runInBand
 ```

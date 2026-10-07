@@ -12,6 +12,7 @@ const audit = require('../services/audit');
 const { fetchPushStatus, logBridgeFailure, newCorrelationId } = require('../services/bridgeClient');
 const { getOrgScope, isGlobal, isValidScope } = require('../services/orgScope');
 const { pyDate, addCivilDays } = require('../services/syncSchedule');
+const { parsePositiveId } = require('../utils/strictId');
 
 router.use(authenticate);
 
@@ -1110,6 +1111,30 @@ router.get('/sync-status', requirePermission('dashboard', 'view'), async (req, r
     });
   } catch (err) {
     res.status(200).json({ ok: false, error: fmtErr(err) });
+  }
+});
+
+// GET /api/devices/:id/raw-state-report?from=YYYY-MM-DD&to=YYYY-MM-DD — SOLO
+// LECTURA. Conteos del estado crudo conservado en raw_json (bytes de estado y
+// verificación que node-zklib descarta): por captura, formato y valor. Sin
+// nombres, ids de usuario/empleado ni marcaciones. Rango obligatorio, ≤ 92 días.
+// Tener el byte no demuestra su significado: ver docs/design/horas-marcas-sin-tipo.md.
+router.get('/:id/raw-state-report', authorize('admin', 'gestor'), async (req, res) => {
+  const { rawStateReport, validateRange } = require('../services/zkRawStateReport');
+  // ID estricto (entero positivo canónico y seguro), antes de tocar la base:
+  // parseInt aceptaría '1e2' o '1abc' como 1 y reportaría OTRO reloj.
+  const deviceId = parsePositiveId(req.params.id);
+  if (deviceId === null) return res.status(400).json({ ok: false, error: 'Reloj inválido' });
+  const { from, to } = req.query;
+  const invalid = validateRange(from, to);
+  if (invalid) return res.status(400).json({ ok: false, error: invalid });
+  try {
+    const [[device]] = await sequelize.query('SELECT id FROM devices WHERE id = ?', { replacements: [deviceId] });
+    if (!device) return res.status(404).json({ ok: false, error: 'Reloj no encontrado' });
+    res.json(await rawStateReport({ deviceId, from, to }));
+  } catch (err) {
+    try { require('../config/logger').error('raw-state-report:', err); } catch {}
+    res.status(500).json({ ok: false, error: 'No se pudo generar el reporte' });
   }
 });
 
