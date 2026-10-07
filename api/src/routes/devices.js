@@ -11,6 +11,7 @@ const { reprocessUnmapped, linkEmployeeDevice } = require('../services/deviceMap
 const audit = require('../services/audit');
 const { fetchPushStatus, logBridgeFailure, newCorrelationId } = require('../services/bridgeClient');
 const { getOrgScope, isGlobal, isValidScope } = require('../services/orgScope');
+const { pyDate, addCivilDays } = require('../services/syncSchedule');
 
 router.use(authenticate);
 
@@ -708,12 +709,17 @@ router.get('/network-metrics', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Normaliza el rango pedido (from/to en 'YYYY-MM-DD'); default: últimos 3 días.
+// Normaliza el rango pedido (from/to en 'YYYY-MM-DD', días civiles de
+// Paraguay); default: hoy en Paraguay y los 3 días anteriores. El "hoy" se toma
+// en Paraguay, no en UTC: entre las 21:00 y las 23:59 de Paraguay la fecha UTC
+// ya es la del día siguiente. Lo usan /:id/backup, /backup-all,
+// /reprocess-unmapped y /sync-jobs.
 function readRange(req) {
   const b = { ...req.query, ...req.body };
   const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
-  const to = isDate(b.to) ? b.to : new Date().toISOString().slice(0, 10);
-  const from = isDate(b.from) ? b.from : new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  const today = pyDate();
+  const to = isDate(b.to) ? b.to : today;
+  const from = isDate(b.from) ? b.from : addCivilDays(today, -3);
   return { from, to };
 }
 

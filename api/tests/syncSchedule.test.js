@@ -1,4 +1,4 @@
-const { computeNextRun, inWindow, pyDate } = require('../src/services/syncSchedule');
+const { computeNextRun, inWindow, pyDate, isCivilDate, civilDate, addCivilDays } = require('../src/services/syncSchedule');
 
 describe('syncSchedule.computeNextRun', () => {
   test('alinea al offset (intervalo 15, offset 5 → :05/:20/:35/:50)', () => {
@@ -60,5 +60,37 @@ describe('syncSchedule.inWindow', () => {
 describe('syncSchedule.pyDate', () => {
   test('formato YYYY-MM-DD', () => {
     expect(pyDate(new Date('2026-07-24T15:00:00Z'))).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+// Fechas civiles del rango de lectura: se operan como texto, sin pasar por un
+// instante UTC (independiente de la zona del proceso: CI corre en 3 zonas).
+describe('syncSchedule fechas civiles', () => {
+  test('pyDate cerca de la medianoche UTC devuelve el día de Paraguay', () => {
+    expect(pyDate(new Date('2026-10-07T02:59:59Z'))).toBe('2026-10-06');   // 23:59:59 PY
+    expect(pyDate(new Date('2026-10-07T03:00:00Z'))).toBe('2026-10-07');   // 00:00 PY
+    expect(pyDate(new Date('2026-11-01T01:00:00Z'))).toBe('2026-10-31');
+  });
+
+  test('isCivilDate exige formato y día real del calendario', () => {
+    for (const ok of ['2026-10-01', '2026-02-28', '2028-02-29', '2026-12-31']) expect(isCivilDate(ok)).toBe(true);
+    for (const bad of ['2026-02-29', '2026-13-01', '2026-10-32', '2026-1-01', '2026-10-01T00:00:00Z', '', null, undefined,
+      new Date('2026-10-01'), 20261001]) expect(isCivilDate(bad)).toBe(false);
+  });
+
+  test('civilDate conserva exactamente el texto del DATE y rechaza un Date', () => {
+    expect(civilDate('2026-10-01')).toBe('2026-10-01');
+    expect(civilDate('2026-10-05', 'date_to')).toBe('2026-10-05');
+    expect(() => civilDate(new Date('2026-10-01'), 'date_from')).toThrow(/date_from no es una fecha civil YYYY-MM-DD: Date/);
+    expect(() => civilDate('2026-02-30')).toThrow(/no es una fecha civil/);
+  });
+
+  test('addCivilDays cruza mes y año sin depender de la zona', () => {
+    expect(addCivilDays('2026-10-06', -3)).toBe('2026-10-03');
+    expect(addCivilDays('2026-10-31', -3)).toBe('2026-10-28');
+    expect(addCivilDays('2026-11-02', -3)).toBe('2026-10-30');
+    expect(addCivilDays('2026-01-01', -1)).toBe('2025-12-31');
+    expect(addCivilDays('2028-03-01', -1)).toBe('2028-02-29');
+    expect(addCivilDays('2026-10-05', 0)).toBe('2026-10-05');
   });
 });

@@ -173,7 +173,9 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
     const unmapped = UNMAPPED_WALL.filter((w) => inCivilRange(w, from, to));
     return {
       imported: mapped,
-      staged: [...mapped.map((w) => `A ${w}`), ...unmapped.map((w) => `U ${w}`)].sort(),
+      // Mismo orden que la consulta: hora civil y luego usuario.
+      staged: [...mapped.map((w) => `A ${w}`), ...unmapped.map((w) => `U ${w}`)]
+        .sort((a, b) => a.slice(2).localeCompare(b.slice(2)) || a.localeCompare(b)),
       result: {
         total_read: MAPPED_WALL.length + UNMAPPED_WALL.length,
         in_range: mapped.length + unmapped.length,
