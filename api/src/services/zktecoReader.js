@@ -178,12 +178,47 @@ function coerceDate(v) {
   return null;
 }
 
-// Devuelve { ts:Date|null, userId:string|null, inout } desde un registro crudo.
+// ─── Hora de PARED de una marca del reloj ────────────────────────
+// El reloj guarda la hora de pared (sin zona) y node-zklib la decodifica con
+// `new Date(año, mes, día, h, m, s)` (parseTimeToDate/parseHexToTime), es decir
+// en la zona LOCAL del proceso. La inversa exacta son los getters locales, en
+// cualquier zona del proceso; formatear ese Date en America/Asuncion sólo
+// coincide si el proceso corre en esa zona. Lo mismo vale para el entero
+// empaquetado (zkIntToDate), un Buffer o un texto sin zona.
+// Un instante absoluto explícito (texto con Z/±hh:mm, o epoch) sí se convierte
+// a la hora de pared de Paraguay.
+// Límite: si la zona del PROCESO tuviera cambio de horario y la hora del reloj
+// cayera en el salto, el Date ya llega corrido desde el decodificador.
+const _pad2 = n => String(n).padStart(2, '0');
+const ZONED_TEXT_RE = /(?:Z|[+-]\d{2}:?\d{2})$/;
+function localWall(d) {
+  return `${d.getFullYear()}-${_pad2(d.getMonth() + 1)}-${_pad2(d.getDate())} `
+    + `${_pad2(d.getHours())}:${_pad2(d.getMinutes())}:${_pad2(d.getSeconds())}`;
+}
+function isEpochNumber(v) {
+  const sane = d => !isNaN(d.getTime()) && d.getFullYear() >= 2010 && d.getFullYear() <= 2100;
+  return sane(new Date(v)) || sane(new Date(v * 1000));
+}
+/** 'YYYY-MM-DD HH:MM:SS' (hora de pared) del valor de hora de un registro; null si no se interpreta. */
+function wallClockOf(v) {
+  const d = coerceDate(v);
+  if (!d) return null;
+  if ((typeof v === 'string' && ZONED_TEXT_RE.test(v.trim())) || (typeof v === 'number' && isEpochNumber(v))) {
+    return pyDateTimeStr(d);
+  }
+  return localWall(d);
+}
+
+// Devuelve { ts:Date|null, wall:string|null, userId:string|null, inout } desde
+// un registro crudo. `ts` sólo ordena/compara dentro de la lectura; todo lo que
+// se filtra, guarda o compara contra la base usa `wall`.
 function normalizeRecord(l) {
-  const ts = coerceDate(pickField(l, TS_FIELDS));
+  const raw = pickField(l, TS_FIELDS);
+  const ts = coerceDate(raw);
+  const wall = ts ? wallClockOf(raw) : null;
   const uid = pickField(l, UID_FIELDS);
   const inout = pickField(l, INOUT_FIELDS);
-  return { ts, userId: uid != null ? String(uid) : null, inout };
+  return { ts, wall, userId: uid != null ? String(uid) : null, inout };
 }
 
 // Mapea un valor de in/out explícito a 'in'/'out'; null si no es concluyente.
@@ -218,7 +253,7 @@ async function resolvePunchTypes(candidates) {
     sequelize,
     source: 'zkteco_direct',
     getEmpId: (p) => p.empId,
-    getWall: (p) => pyDateTimeStr(p.ts),
+    getWall: (p) => p.wall,
     getExplicitType: (p) => (p.explicit ? p.type : null),
   });
 }
@@ -270,19 +305,21 @@ function isJunkRaw(l) {
 // (c) fecha válida más reciente, (d) más válidas, (e) menos basura.
 async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts = 1, from = null, to = null, cooldownMs = 0, ctx = null, _readOnce = null } = {}) {
   const scoreOf = (logs, truncated) => {
-    let valid = 0, inRange = 0, garbage = 0, maxTs = 0, minTs = 0;
+    let valid = 0, inRange = 0, garbage = 0, maxTs = 0, minTs = 0, minWall = null, maxWall = null;
     for (const l of logs) {
       if (isJunkRaw(l)) { garbage++; continue; }
       valid++;
-      const ts = coerceDate(pickField(l, TS_FIELDS));
+      const raw = pickField(l, TS_FIELDS);
+      const ts = coerceDate(raw);
       if (!ts) continue;
       const t = ts.getTime();
-      if (t > maxTs) maxTs = t;
-      if (!minTs || t < minTs) minTs = t;
-      if (from || to) { const d = pyDateStr(ts); if ((from && d < from) || (to && d > to)) continue; }
+      const wall = wallClockOf(raw);
+      if (t > maxTs) { maxTs = t; maxWall = wall; }
+      if (!minTs || t < minTs) { minTs = t; minWall = wall; }
+      if (from || to) { const d = wall.slice(0, 10); if ((from && d < from) || (to && d > to)) continue; }
       inRange++;
     }
-    return { total: logs.length, valid, inRange, garbage, maxTs, minTs, truncated: !!truncated };
+    return { total: logs.length, valid, inRange, garbage, maxTs, minTs, minWall, maxWall, truncated: !!truncated };
   };
 
   // Devuelve la MEJOR de dos lecturas (misma prioridad que el reduce anterior).
@@ -341,8 +378,8 @@ async function readAttendancesStable(device, { readTimeoutMs = 45000, attempts =
       attempt: i + 1, mode: device.connection_mode || 'auto',
       raw: sc.total, valid: sc.valid, in_range: sc.inRange, garbage: sc.garbage,
       truncated: sc.truncated,
-      first_valid: sc.minTs ? pyDateTimeStr(new Date(sc.minTs)) : null,
-      last_valid: sc.maxTs ? pyDateTimeStr(new Date(sc.maxTs)) : null,
+      first_valid: sc.minWall || null,
+      last_valid: sc.maxWall || null,
       duration_ms: Date.now() - t0, error: err,
       // Volumen del payload decodificado de ESTE intento. Es lo que permite
       // ver que el polling descarga el buffer entero cada vez.
@@ -678,13 +715,13 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   for (const n of norm) {
     if (n.ts) {
       report.with_date++;
-      if (!minValid || n.ts < minValid) minValid = n.ts;
-      if (!maxValid || n.ts > maxValid) maxValid = n.ts;
+      if (!minValid || n.ts < minValid.ts) minValid = n;
+      if (!maxValid || n.ts > maxValid.ts) maxValid = n;
     } else report.without_date++;
     if (n.userId) report.with_user++;
   }
-  report.first_valid = minValid ? pyDateTimeStr(minValid) : null;
-  report.last_valid = maxValid ? pyDateTimeStr(maxValid) : null;
+  report.first_valid = minValid ? minValid.wall : null;
+  report.last_valid = maxValid ? maxValid.wall : null;
 
   // Volcado de depuración (sólo si se pide): forma cruda + normalizada.
   if (debugRaw) {
@@ -693,7 +730,7 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
       raw_first5: rawLogs.slice(0, 5).map(safeStringify),
       raw_last20: rawLogs.slice(-20).map(safeStringify),
       normalized_last20: norm.filter(n => n.ts).slice(-20)
-        .map(n => ({ user: n.userId, ts_py: pyDateTimeStr(n.ts), inout: n.inout ?? null })),
+        .map(n => ({ user: n.userId, ts_py: n.wall, inout: n.inout ?? null })),
     };
   }
 
@@ -711,11 +748,12 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   // en raw_device_punches (mapeada o no).
   const punches = [];        // { raw, ts, userId, empId, type, explicit }
   const unmapped = new Map();
-  let minTs = null, maxTs = null;
+  // minWall/maxWall: hora de pared 'YYYY-MM-DD HH:MM:SS' (ordena como texto).
+  let minWall = null, maxWall = null;
   for (let i = 0; i < norm.length; i++) {
     const n = norm[i];
     if (!n.ts) continue;
-    const day = pyDateStr(n.ts);
+    const day = n.wall.slice(0, 10);
     if ((from && day < from) || (to && day > to)) { report.out_of_range++; continue; }
     report.in_range++;
     const empId = matcher.resolve(device.id, n.userId) || null;
@@ -724,9 +762,9 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
       if (n.userId != null) unmapped.set(n.userId, (unmapped.get(n.userId) || 0) + 1);
     }
     const t = explicitType(n.inout);
-    punches.push({ raw: logs[i], ts: n.ts, userId: n.userId, empId, type: t, explicit: !!t });
-    if (!minTs || n.ts < minTs) minTs = n.ts;
-    if (!maxTs || n.ts > maxTs) maxTs = n.ts;
+    punches.push({ raw: logs[i], ts: n.ts, wall: n.wall, userId: n.userId, empId, type: t, explicit: !!t });
+    if (!minWall || n.wall < minWall) minWall = n.wall;
+    if (!maxWall || n.wall > maxWall) maxWall = n.wall;
   }
 
   // Liberar los arreglos completos: `punches` ya referencia SÓLO las marcas en
@@ -765,7 +803,7 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
       `SELECT employee_id, DATE_FORMAT(\`timestamp\`, '%Y-%m-%d %H:%i:%s') AS ts
        FROM attendance_logs
        WHERE employee_id IN (${empIds.map(() => '?').join(',')}) AND \`timestamp\` BETWEEN ? AND ?`,
-      { replacements: [...empIds, minTs, maxTs] }
+      { replacements: [...empIds, minWall, maxWall] }
     );
     seen = new Set(existing.map(r => `${r.employee_id}|${r.ts}`));
   }
@@ -773,12 +811,14 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   const toInsert = [];
   const dates = new Set();
   for (const p of mapped) {
-    const key = `${p.empId}|${pyDateTimeStr(p.ts)}`;
+    const key = `${p.empId}|${p.wall}`;
     if (seen.has(key)) { p.status = 'duplicate'; report.skipped++; continue; }
     seen.add(key);
     p.status = 'mapped';
-    toInsert.push([p.empId, device.id, p.ts, p.type, 'zkteco_direct']);
-    dates.add(pyDateStr(p.ts));
+    // Hora de pared como TEXTO: mysql2 la guarda tal cual (un Date se
+    // serializaría con la zona del proceso; ver utils/attendanceTime.js).
+    toInsert.push([p.empId, device.id, p.wall, p.type, 'zkteco_direct']);
+    dates.add(p.wall.slice(0, 10));
   }
   for (const p of punches) if (!p.status) p.status = p.empId ? 'mapped' : 'unmapped';
   report.would_import = toInsert.length;
@@ -787,8 +827,8 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   if (dryRun) {
     report.staged = punches.length;
     report.dates = [...dates].sort();
-    report.sample = toInsert.slice(0, 20).map(([empId, , ts, type]) => ({
-      employee_id: empId, ts_py: pyDateTimeStr(ts), type,
+    report.sample = toInsert.slice(0, 20).map(([empId, , wall, type]) => ({
+      employee_id: empId, ts_py: wall, type,
     }));
     report.duration_ms = Date.now() - t0;
     return report;
@@ -800,7 +840,7 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
   if (hasRaw) {
     const rawRows = punches.map(p => [
       device.id, String(p.userId ?? ''), (p.raw && p.raw.userSn != null) ? p.raw.userSn : null,
-      p.ts, pyDateTimeStr(p.ts), (p.raw && p.raw.ip) || device.ip_address || null,
+      p.wall, p.wall, (p.raw && p.raw.ip) || device.ip_address || null,
       safeStringify(p.raw), 'zkteco_direct', p.status, p.empId || null,
     ]);
     const RCHUNK = 300;
@@ -858,7 +898,7 @@ async function _backupDeviceDirectImpl(device, opts = {}, out = {}) {
        WHERE r.device_id = ? AND r.employee_id IS NOT NULL
          AND r.imported_attendance_log_id IS NULL
          AND r.record_time BETWEEN ? AND ?`,
-      { replacements: [device.id, minTs, maxTs] }
+      { replacements: [device.id, minWall, maxWall] }
     );
   }
 
@@ -970,13 +1010,13 @@ async function readDeviceRaw(device, opts = {}) {
       .sort((a, b) => a.ts - b.ts);
 
     if (parsed.length) {
-      const fmt = n => ({ user_id: n.userId, ts_py: pyDateTimeStr(n.ts), in_out: n.inout ?? null });
+      const fmt = n => ({ user_id: n.userId, ts_py: n.wall, in_out: n.inout ?? null });
       report.first_mark = fmt(parsed[0]);
       report.last_mark = fmt(parsed[parsed.length - 1]);
       report.recent = parsed.slice(-recentSample).reverse().map(fmt);
 
       const byDay = new Map();
-      for (const n of parsed) { const d = pyDateStr(n.ts); byDay.set(d, (byDay.get(d) || 0) + 1); }
+      for (const n of parsed) { const d = n.wall.slice(0, 10); byDay.set(d, (byDay.get(d) || 0) + 1); }
       report.per_day = [...byDay.entries()]
         .sort((a, b) => (a[0] < b[0] ? 1 : -1))
         .slice(0, recentDays)
@@ -1034,6 +1074,6 @@ module.exports = {
   tableExists, getExistingColumns,
   pyDateStr, pyDateTimeStr,
   // Exportados para pruebas / reutilización.
-  normalizeRecord, resolvePunchTypes, explicitType, detectFields, memSnapshot,
+  normalizeRecord, wallClockOf, resolvePunchTypes, explicitType, detectFields, memSnapshot,
   recordSyncRun, recommendationFor,
 };

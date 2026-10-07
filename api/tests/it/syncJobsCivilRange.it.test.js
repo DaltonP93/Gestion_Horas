@@ -24,8 +24,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
 const { describeIT, makeConn, closeAppDb, cfg } = require('./helper');
+const { runSyncWorker } = require('./fixtures/syncWorkerProcess');
 
 jest.mock('node-zklib', () => require('./fixtures/fakeZk').FakeZK);
 jest.mock('node-zklib/zklibtcp', () => require('./fixtures/fakeZk').FakeZK);
@@ -37,17 +37,13 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'it-sync-civil-range-secret-0
 process.env.REDIS_URL = 'disabled://';
 jest.setTimeout(120000);
 
-const API_ROOT = path.resolve(__dirname, '..', '..');
-const WORKER = path.join(API_ROOT, 'src', 'workers', 'syncWorker.js');
-const PRELOAD = path.join(__dirname, 'fixtures', 'fakeZkPreload.js');
 const ZONES = ['UTC', 'America/Asuncion', 'Asia/Tokyo'];
-// Zona con la que PM2 arranca el worker en producción (ecosystem.config.js).
-// La hora que el lector guarda en attendance_logs.timestamp sale de formatear
-// un Date con la zona del PROCESO (sequelize, replacements): por eso las
-// aserciones sobre esa columna usan esta zona. Ver la prueba entre zonas.
+// Zona que DECLARA ecosystem.config.js para el worker (el entorno efectivo de
+// producción no está verificado). Las pruebas de un solo escenario usan esta;
+// la prueba entre zonas recorre las tres.
 const WORKER_TZ = 'America/Asuncion';
 
-// Marcaciones sintéticas en hora de pared de Paraguay (UTC-3 en todo el período).
+// Marcaciones sintéticas: hora de pared del reloj (Paraguay).
 const MAPPED_WALL = [
   '2026-09-30 23:59:59',
   '2026-10-01 00:00:00',
@@ -65,7 +61,6 @@ const MAPPED_WALL = [
   '2026-11-02 00:00:00',
 ];
 const UNMAPPED_WALL = ['2026-10-03 09:00:00'];
-const iso = (wall) => `${wall.replace(' ', 'T')}-03:00`;
 const inCivilRange = (wall, from, to) => wall.slice(0, 10) >= from && wall.slice(0, 10) <= to;
 
 describeIT('lectura manual por cola (integración) — rango civil de Paraguay de punta a punta', () => {
@@ -75,8 +70,10 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
   let tmpDir;
   let recordsFile;
   const ids = { uniq: `SCR${Date.now().toString(36).toUpperCase()}` };
-  const codeA = () => `${ids.uniq}A`;
-  const codeU = () => `${ids.uniq}U`;
+  // Ids de usuario del reloj: el registro de 40 bytes admite hasta 9 caracteres.
+  const uidBase = 100000000 + (Date.now() % 800000000);
+  const codeA = () => String(uidBase);
+  const codeU = () => String(uidBase + 1);
   const jwt = require('jsonwebtoken');
   const token = () => jwt.sign({ id: ids.admin, role: 'admin' }, process.env.JWT_SECRET, { algorithm: 'HS256', expiresIn: '5m' });
   const post = async (url, body) => {
@@ -93,8 +90,8 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
     fs.writeFileSync(recordsFile, JSON.stringify(list));
   }
   const allRecords = () => [
-    ...MAPPED_WALL.map((w) => ({ deviceUserId: codeA(), recordTime: iso(w) })),
-    ...UNMAPPED_WALL.map((w) => ({ deviceUserId: codeU(), recordTime: iso(w) })),
+    ...MAPPED_WALL.map((w) => ({ deviceUserId: codeA(), wall: w })),
+    ...UNMAPPED_WALL.map((w) => ({ deviceUserId: codeU(), wall: w })),
   ];
 
   async function cleanup() {
@@ -106,38 +103,7 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
   }
 
   /** Corre el worker REAL en un proceso aparte hasta que terminen los trabajos. */
-  async function runWorker(jobIds, tz) {
-    const child = spawn(process.execPath, ['-r', PRELOAD, WORKER], {
-      cwd: API_ROOT,
-      env: {
-        ...process.env,
-        TZ: tz,
-        DB_HOST: cfg.host, DB_PORT: String(cfg.port), DB_USER: cfg.user, DB_PASSWORD: cfg.password, DB_NAME: cfg.database,
-        REDIS_URL: 'disabled://',
-        ZKTECO_AUTO_POLL: 'false',
-        FAKE_ZK_RECORDS: recordsFile,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let output = '';
-    child.stdout.on('data', (d) => { output += d; });
-    child.stderr.on('data', (d) => { output += d; });
-    const exited = new Promise((resolve) => child.on('exit', resolve));
-    try {
-      for (let i = 0; i < 600; i += 1) {
-        const pending = await rows(
-          "SELECT COUNT(*) AS n FROM sync_jobs WHERE id IN (?) AND status IN ('queued','running')", [jobIds],
-        );
-        if (Number(pending[0].n) === 0) return;
-        if (child.exitCode != null) break;
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      throw new Error(`el worker no terminó los trabajos ${jobIds}:\n${output.slice(-2000)}`);
-    } finally {
-      child.kill('SIGTERM');
-      await exited;
-    }
-  }
+  const runWorker = (jobIds, tz) => runSyncWorker({ conn, cfg, jobIds, tz, recordsFile });
 
   async function enqueue(body) {
     const r = await post('/api/devices/sync-jobs', { device_ids: [ids.device], recalc: false, attempts: 1, ...body });
@@ -306,11 +272,9 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
     expect(Number(n)).toBe(exp.imported.length);
   });
 
-  // El rango, el filtro por día de Paraguay, los contadores, el staging civil
-  // (record_time_py) y la cantidad importada no dependen de la zona del
-  // proceso. Fuera de este lote: attendance_logs.timestamp sí depende de ella
-  // (se escribe formateando un Date con la zona local); producción la fija en
-  // America/Asuncion para todos los procesos PM2.
+  // Rango, filtro, contadores, staging y horas importadas no dependen de la
+  // zona del proceso del worker (el reloj simulado decodifica con node-zklib
+  // real, que arma la hora en la zona local del proceso).
   test('el resultado es idéntico con el worker en UTC, America/Asuncion y Asia/Tokyo', async () => {
     const exp = expected('2026-10-01', '2026-10-05');
     const byZone = {};
@@ -319,7 +283,7 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
       const out = await readRangeThroughCircuit('2026-10-01', '2026-10-05', tz);
       byZone[tz] = {
         job: { from: out.job.date_from, to: out.job.date_to, status: out.job.status },
-        runs: out.runs, result: out.job.result, staged: out.staged, imported_count: out.imported.length,
+        runs: out.runs, result: out.job.result, staged: out.staged, imported: out.imported,
       };
     }
     for (const tz of ZONES) {
@@ -329,7 +293,7 @@ describeIT('lectura manual por cola (integración) — rango civil de Paraguay d
         runs: [{ from_date: '2026-10-01', to_date: '2026-10-05' }],
         result: exp.result,
         staged: exp.staged,
-        imported_count: exp.imported.length,
+        imported: exp.imported,
       });
     }
   });

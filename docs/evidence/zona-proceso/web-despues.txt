@@ -1,0 +1,41 @@
+Después del arreglo — mismas pruebas + helpers (src/lib/__tests__/civilDatePy.test.ts)
+Node v22.22.2 · jsdom · HTTP simulado
+
+=== TZ del navegador=UTC
+    ✓ todayPy usa el día de Paraguay alrededor de la medianoche UTC
+    ✓ addCivilDays cruza mes y año
+    ✓ firstOfMonth
+    ✓ a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) envía lectura 2026-10-04..2026-10-07 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-31T16:00:00Z (Paraguay 2026-10-31 13:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T03:00:00Z (Paraguay 2026-11-01 00:00) envía lectura 2026-10-29..2026-11-01 y att2000 desde 2026-11-01
+Tests:       10 passed, 10 total
+=== TZ del navegador=America/Asuncion
+    ✓ todayPy usa el día de Paraguay alrededor de la medianoche UTC
+    ✓ addCivilDays cruza mes y año
+    ✓ firstOfMonth
+    ✓ a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) envía lectura 2026-10-04..2026-10-07 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-31T16:00:00Z (Paraguay 2026-10-31 13:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T03:00:00Z (Paraguay 2026-11-01 00:00) envía lectura 2026-10-29..2026-11-01 y att2000 desde 2026-11-01
+Tests:       10 passed, 10 total
+=== TZ del navegador=Asia/Tokyo
+    ✓ todayPy usa el día de Paraguay alrededor de la medianoche UTC
+    ✓ addCivilDays cruza mes y año
+    ✓ firstOfMonth
+    ✓ a las 2026-10-06T15:00:00Z (Paraguay 2026-10-06 12:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T00:00:00Z (Paraguay 2026-10-06 21:00) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T02:59:59Z (Paraguay 2026-10-06 23:59) envía lectura 2026-10-03..2026-10-06 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-07T03:00:00Z (Paraguay 2026-10-07 00:00) envía lectura 2026-10-04..2026-10-07 y att2000 desde 2026-10-01
+    ✓ a las 2026-10-31T16:00:00Z (Paraguay 2026-10-31 13:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T01:00:00Z (Paraguay 2026-10-31 22:00) envía lectura 2026-10-28..2026-10-31 y att2000 desde 2026-10-01
+    ✓ a las 2026-11-01T03:00:00Z (Paraguay 2026-11-01 00:00) envía lectura 2026-10-29..2026-11-01 y att2000 desde 2026-11-01
+Tests:       10 passed, 10 total
+
+Suite web completa (TZ por defecto): 623/623 · tsc --noEmit OK · next build OK

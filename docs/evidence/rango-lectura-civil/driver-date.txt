@@ -13,4 +13,5 @@ Hallazgo fuera del lote (no modificado): un Date en replacements se formatea con
 TZ=UTC { f: '2026-10-01 11:00:00', tz: '-03:00' }
 TZ=America/Asuncion { f: '2026-10-01 08:00:00', tz: '-03:00' }
 TZ=Asia/Tokyo { f: '2026-10-01 20:00:00', tz: '-03:00' }
-(Date = 2026-10-01T08:00:00-03:00; producción fija TZ=America/Asuncion en PM2.)
+(Date = 2026-10-01T08:00:00-03:00; ecosystem.config.js DECLARA TZ=America/Asuncion para PM2; el entorno efectivo de producción no fue verificado.)
+Corrección posterior (docs/evidence/zona-proceso/): este Date desde ISO con offset no es lo que entrega el reloj; el decodificador real de node-zklib arma la hora en la zona local del proceso.

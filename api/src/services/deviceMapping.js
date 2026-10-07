@@ -6,7 +6,7 @@
  * 'unmapped' y crea attendance_logs cuando encuentra empleado.
  */
 const { sequelize } = require('../config/database');
-const { buildEmployeeMatcher, resolvePunchTypes, pyDateStr, pyDateTimeStr } = require('./zktecoReader');
+const { buildEmployeeMatcher, resolvePunchTypes } = require('./zktecoReader');
 const punchTypeResolver = require('./punchTypeResolver');
 
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
@@ -22,7 +22,12 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
   if (deviceId != null) { where.push('device_id = ?'); repl.push(deviceId); }
 
   const [rows] = await sequelize.query(
-    `SELECT id, device_id, device_user_id, record_time, raw_json FROM raw_device_punches
+    // record_time es la hora de pared del reloj (DATETIME): se lee y se reescribe
+    // como TEXTO. Como Date, el driver la interpreta a -03:00 y al insertarla se
+    // serializa con la zona del proceso, corriendo la hora fuera de Paraguay.
+    `SELECT id, device_id, device_user_id,
+            DATE_FORMAT(record_time, '%Y-%m-%d %H:%i:%s') AS wall, raw_json
+       FROM raw_device_punches
      WHERE ${where.join(' AND ')} ORDER BY record_time`,
     { replacements: repl }
   );
@@ -37,7 +42,7 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
     // Preservar el tipo EXPLÍCITO del crudo (si el dispositivo lo trae) con el
     // MISMO extractor compartido; sin él, el resolver lo tratará por contexto.
     const explicitFromRaw = punchTypeResolver.explicitTypeFromRawJson(r.raw_json);
-    mappable.push({ rawId: r.id, empId, device_id: r.device_id, ts: new Date(r.record_time), type: explicitFromRaw, explicit: !!explicitFromRaw });
+    mappable.push({ rawId: r.id, empId, device_id: r.device_id, wall: r.wall, type: explicitFromRaw, explicit: !!explicitFromRaw });
   }
   if (!mappable.length) return result;
 
@@ -45,8 +50,8 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
   const dates = new Set();
   for (const p of mappable) {
     try {
-      const tsStr = pyDateTimeStr(p.ts);
-      dates.add(pyDateStr(p.ts));
+      const tsStr = p.wall;
+      dates.add(p.wall.slice(0, 10));
       const [dup] = await sequelize.query(
         `SELECT id FROM attendance_logs WHERE employee_id=? AND DATE_FORMAT(\`timestamp\`,'%Y-%m-%d %H:%i:%s')=? LIMIT 1`,
         { replacements: [p.empId, tsStr] }
@@ -56,7 +61,7 @@ async function reprocessUnmapped({ from = null, to = null, deviceUserId = null, 
       else {
         const [ins] = await sequelize.query(
           `INSERT IGNORE INTO attendance_logs (employee_id, device_id, \`timestamp\`, type, source) VALUES (?,?,?,?, 'zkteco_direct')`,
-          { replacements: [p.empId, p.device_id, p.ts, p.type] }
+          { replacements: [p.empId, p.device_id, p.wall, p.type] }
         );
         // OJO — NO cambiar `ins?.insertId` por el patrón de INSERT crudo
         // `[insertId, affectedRows]`. Sequelize sólo trata como INSERT las

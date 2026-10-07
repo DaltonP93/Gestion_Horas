@@ -56,3 +56,24 @@ export function fmtDateTimePy(v: string | number | Date | null | undefined, fall
     hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(d)
 }
+
+// ─── Fechas CIVILES de Paraguay ('YYYY-MM-DD') ──────────────────
+// Para valores por defecto de rangos. `toISOString()` da la fecha UTC (de
+// 21:00 a 23:59 de Paraguay ya es «mañana») y `getFullYear()/getMonth()` la
+// del navegador; ninguna de las dos es el día de Paraguay.
+
+/** Día de hoy en el calendario de Paraguay. */
+export function todayPy(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(now)
+}
+
+/** Suma días de calendario a una fecha civil (aritmética UTC pura). */
+export function addCivilDays(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+/** Primer día del mes de una fecha civil. */
+export function firstOfMonth(ymd: string): string {
+  return `${ymd.slice(0, 7)}-01`
+}

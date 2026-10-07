@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { useCurrentUser, hasRole } from '@/lib/useCurrentUser'
 import VincularEmpleadoModal from '@/components/VincularEmpleadoModal'
 import ManualClockRead from '@/components/config/ManualClockRead'
+import { addCivilDays, firstOfMonth, todayPy } from '@/lib/datetime'
 
 interface Diag {
   local?: { total?: number; last_mark?: string | null }
@@ -30,12 +31,13 @@ export default function SincronizacionPage() {
   const [loadingDiag, setLoadingDiag] = useState(false)
   const [busy, setBusy] = useState('')
   const [log, setLog] = useState<string[]>([])
-  const now = new Date()
-  const [from, setFrom] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`)
-  const [to, setTo] = useState(new Date().toISOString().slice(0, 10))
-  // Rango para la lectura directa de relojes (default: últimos 3 días — el hueco).
-  const [readFrom, setReadFrom] = useState(new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10))
-  const [readTo, setReadTo] = useState(new Date().toISOString().slice(0, 10))
+  // Valores iniciales en el calendario de Paraguay, no en UTC ni en la zona
+  // del navegador (ver lib/datetime: todayPy).
+  const [from, setFrom] = useState(() => firstOfMonth(todayPy()))
+  const [to, setTo] = useState(() => todayPy())
+  // Rango para la lectura directa de relojes (default: hoy y los 3 días anteriores).
+  const [readFrom, setReadFrom] = useState(() => addCivilDays(todayPy(), -3))
+  const [readTo, setReadTo] = useState(() => todayPy())
   // Marcaciones sin empleado (staging raw_device_punches).
   const [unmapped, setUnmapped] = useState<UnmappedRow[] | null>(null)
   const [unmappedTotals, setUnmappedTotals] = useState<{ marks: number; today: number } | null>(null)
