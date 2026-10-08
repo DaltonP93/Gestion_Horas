@@ -1,0 +1,104 @@
+# Piloto aislado de estados por reloj — DESPUÉS (cf1e6d4, sobre b21e08e)
+# Mismo entorno que antes-b21e08e.txt: MySQL 8.0 en UTC (como CI; init.sql + migraciones), Redis 7.2
+# con healthcheck cada 1 s (más exigente que el de CI, cada 10 s), reloj simulado por TCP real.
+# Sin producción, relojes físicos ni att2000. Commits de esta ronda, sobre b21e08e:
+#   d30abfe, b565bd6  reproducciones (sólo pruebas)        1a663c8  lock dual, operaciones acotadas, corte
+#   b222f96           evidencia antes                      8f3a3f2  correcciones de la revisión adversarial
+#   b4c99bb           evidencia de la revisión             dd30aea  IT: sin contar el healthcheck de CI
+#   cf1e6d4           clave de conexión vacía; escáneres
+
+## Mandato → reproducción (antes) → después
+| Punto | b21e08e | cf1e6d4 |
+|---|---|---|
+| 1. Exclusión con el fallback MySQL | el helper habitual REAL en fallback obtiene el lock con el piloto leyendo (`backend: "mysql"`); el worker en fallback retiene el lock y el piloto lee igual (consulta en la zona del servidor) | lock dual (clave Redis + fila propia, sesión -03:00 verificada): el habitual en fallback NO obtiene el lock y, si lo retiene, el piloto no lee (código 4) |
+| 2. Operaciones pendientes y límite total | 5 pruebas colgadas a los 45 s (renovación, verificación, consulta inicial, límite total, QUIT) | todas terminan dentro de --max-duration + 17 s; cancelar = destruir el socket / disconnect, gracia de 400 ms, cliente nuevo, presupuesto de cierre de 6 s, KILL atado a la identidad de la sesión, TTL provisional de 30 s |
+| 3. Corte temporal común | `--cutoff` no existe | `--cutoff`, conjunto ≤ corte con huella HMAC (PILOT_CORTE_CLAVE), decodificación en UTC, CLI de comparación (igual / distinto / no comparable) |
+
+## Pruebas locales sobre cf1e6d4 (pasadas/total)
+| Suite | UTC | America/Asuncion | Asia/Tokyo |
+|---|---|---|---|
+| zkPilotAggregate + zkPilotArgs + zkPilotIsolation (unit) | 123/123 | 123/123 | 123/123 |
+| zkStatePilot (IT, piloto) | 54/54, 0 omitidas | 54/54, 0 omitidas | 54/54, 0 omitidas |
+| API unit completa | 3023 pasadas, 0 fallidas (597 omitidas = IT sin IT_DB) | (CI) | (CI) |
+- Por suite (UTC): zkPilotAggregate 14, zkPilotArgs 72, zkPilotIsolation 37.
+- Antes/después de la IT del piloto: b21e08e 25 pruebas; b565bd6 38; b222f96 48; cf1e6d4 54.
+- señal→salida con renovaciones en vuelo sobre conexiones colgadas: 425 / 477 / 472 ms (cota 1400 ms).
+- API unit completa en las 3 zonas sobre el código de 1a663c8: 3013 pasadas, 0 fallidas en cada una.
+
+## Mutaciones (las pruebas nuevas detectan cada agujero; detalle en antes-b21e08e.txt y revision-b222f96.txt)
+- Ronda de cancelación: sin matar la sesión vieja ⇒ clave/fila huérfanas; sin gracia ⇒ señal→salida
+  > cota; sin gracia ni cliente nuevo ⇒ `por_ttl`; QUIT antes de disconnect ⇒ el proxy ve el QUIT.
+- Ronda de revisión: errno de red como respuesta ⇒ 4 unit + 2 IT; sin SIGTSTP ⇒ IT Ctrl+Z; sin
+  verificación posterior ⇒ IT exclusión perdida; KILL sin identidad ⇒ 5 unit; sin segundo "cabe" ⇒ unit;
+  señal en el cierre cambia el resultado ⇒ IT.
+- Healthcheck de Redis contado como conexión del piloto (CI 952): reproducido con la versión anterior de
+  la IT (2 de 12 fallan con healthcheck cada 1 s) y corregido (12/12; y las 54 en 3 zonas).
+
+## CI sobre el código de cf1e6d4 (runs 953 push y 954 pull_request: 14/14 jobs verdes cada uno)
+- API — install + syntax (UTC / America/Asuncion / Asia/Tokyo): verdes; UTC: `Tests: 597 skipped, 3023
+  passed, 3620 total` (las omitidas son las IT sin IT_DB; las IT corren en su job con MySQL).
+- DB — migraciones (MySQL 8 efímero), paso de la IT del piloto (falla si hay omitidas):
+  `piloto estados IT (TZ=UTC): 54 pasadas, 0 omitidas, 0 fallidas`
+  `piloto estados IT (TZ=America/Asuncion): 54 pasadas, 0 omitidas, 0 fallidas`
+  `piloto estados IT (TZ=Asia/Tokyo): 54 pasadas, 0 omitidas, 0 fallidas` (señal→salida 458/459 ms)
+- Firma PAdES — integración REAL: `✓ IT firma REAL: 3 passed, 0 skipped`.
+- Web — build Next.js, Bridge (3 zonas), Analytics, OPS, Uploads, idempotencia 072→075 y ops-migrate FASE E:
+  verdes.
+- Antes: CI 952 (pull_request sobre b4c99bb) tuvo 2 fallas NO funcionales de la IT del piloto por el
+  healthcheck de Redis (ver revision-b222f96.txt); el run 951 (push, mismo SHA) pasó 14/14.
+
+## IT del piloto (UTC; idéntico en las otras zonas)
+  PASA  control: el helper habitual, aun con Redis, intenta escribir en audit_events (el detector lo ve) (1424 ms)
+  PASA  control: el camino habitual con Promise.race devuelve el timeout y deja la conexión abierta (2640 ms)
+  PASA  lectura completa: agregado exacto, sólo comandos de lectura, escrituras sólo de la fila propia del lock (1681 ms)
+  PASA  lectura truncada y después completa: intentos reales, cada uno cerrado antes del siguiente (1070 ms)
+  PASA  captura tardía (node-zklib cargado antes): aborta antes de conectar al reloj (652 ms)
+  PASA  ID "1e2": código 2 sin abrir MySQL, Redis ni el reloj (331 ms)
+  PASA  ID "01": código 2 sin abrir MySQL, Redis ni el reloj (344 ms)
+  PASA  ID "-1": código 2 sin abrir MySQL, Redis ni el reloj (324 ms)
+  PASA  ID "1.5": código 2 sin abrir MySQL, Redis ni el reloj (345 ms)
+  PASA  ID "1abc": código 2 sin abrir MySQL, Redis ni el reloj (322 ms)
+  PASA  ID "0": código 2 sin abrir MySQL, Redis ni el reloj (335 ms)
+  PASA  ID "9007199254740993": código 2 sin abrir MySQL, Redis ni el reloj (358 ms)
+  PASA  ID " 7": código 2 sin abrir MySQL, Redis ni el reloj (326 ms)
+  PASA  ID "0x10": código 2 sin abrir MySQL, Redis ni el reloj (333 ms)
+  PASA  reloj inexistente: código 8 sin tocar Redis ni relojes (354 ms)
+  PASA  lock Redis ocupado por otro: código 4, el lock ajeno queda intacto (492 ms)
+  PASA  lock MySQL previo con Redis libre: código 4, se suelta el Redis propio y la fila ajena queda intacta (492 ms)
+  PASA  Redis caído: código 5, sin fila MySQL ni DDL, sin conectar al reloj (517 ms)
+  PASA  lectura colgada: cada intento se mata y se espera su fin; sin conexiones al liberar (4520 ms)
+  PASA  límite total: no empieza un intento que no cabe en la duración restante (2548 ms)
+  PASA  pérdida del lock durante la lectura: se mata la lectura, no se borra el lock ajeno, código 7 (1501 ms)
+  PASA  señal SIGTERM: cierra la lectura, libera el lock y escribe el JSON (código 143) (923 ms)
+  PASA  señal SIGINT: cierra la lectura, libera el lock y escribe el JSON (código 130) (899 ms)
+  PASA  señal SIGHUP: cierra la lectura, libera el lock y escribe el JSON (código 129) (902 ms)
+  PASA  SIGKILL del proceso principal: la lectura termina sola y la clave y la fila vencen por TTL (914 ms)
+  PASA  exclusión: con el piloto leyendo, el helper habitual en fallback MySQL NO obtiene el lock (4502 ms)
+  PASA  exclusión: el helper habitual en fallback toma y RETIENE el lock; después el piloto NO lee (1011 ms)
+  PASA  exclusión (control): con el piloto leyendo, el helper habitual con Redis tampoco obtiene el lock (4543 ms)
+  PASA  espera de bloqueo en el servidor: la toma se abandona en 2 s, sin fila huérfana ni lectura (2540 ms)
+  PASA  usuario sólo SELECT en device_locks: no lee el reloj y no deja fila (532 ms)
+  PASA  usuario sin UPDATE en device_locks: no lee el reloj y no deja fila (547 ms)
+  PASA  Redis sin respuesta mientras el piloto lee: la renovación se acota, se corta la lectura y termina (12549 ms)
+  PASA  MySQL sin respuesta mientras el piloto lee: la verificación se acota, se corta la lectura y termina (12555 ms)
+  PASA  MySQL sin respuesta en la consulta inicial: base_no_disponible dentro del tope, sin Redis ni reloj (5398 ms)
+  PASA  límite total con una consulta MySQL pendiente: limite_total sin esperar a la consulta (2773 ms)
+  PASA  cierre de Redis: nunca QUIT (sólo disconnect, sin ida y vuelta que pueda colgarse), con la lectura completa (1635 ms)
+  PASA  liberación de Redis lenta por el mismo cliente: se cancela, se libera por uno nuevo y el EVAL tardío no resucita ni borra nada (5912 ms)
+  PASA  señal con renovaciones en vuelo sobre conexiones colgadas: gracia corta, clientes nuevos y se libera todo (3697 ms)
+  PASA  toma de Redis demorada en la red (llega después del tope): CLIENT KILL de la sesión vieja y sin clave huérfana (8002 ms)
+  PASA  toma MySQL demorada en la red (llega después del tope): KILL CONNECTION de la sesión vieja y sin fila huérfana (8079 ms)
+  PASA  toma MySQL aplicada y la conexión reseteada por la red (RST): incierta, se compensa y no queda fila (2169 ms)
+  PASA  liberación MySQL cortada por la red (RST): se libera por una conexión nueva, no queda la fila hasta el TTL (1704 ms)
+  PASA  Ctrl+Z (SIGTSTP al grupo) durante la lectura: nada queda suspendido; interrumpe (148), cierra la lectura y libera (614 ms)
+  PASA  clave perdida a mitad de la lectura SIN desconexión (otro dueño): la lectura no vale aunque termine antes de la renovación (4120 ms)
+  PASA  señal DURANTE el cierre de una lectura completa: se registra en senal, pero el resultado sigue siendo ok (0) (2825 ms)
+  PASA  la clave del corte nunca llega al entorno ni a los argumentos del proceso de lectura (3526 ms)
+  PASA  cierre de MySQL sin confirmar (COM_QUIT sin respuesta): termina igual, con la lectura completa (1711 ms)
+  PASA  sin corte (control): con marcas nuevas entre corridas, los agregados difieren (3036 ms)
+  PASA  corte común: dos corridas con marcas nuevas entre medio dan el mismo conjunto anterior al corte (3109 ms)
+  PASA  corte común: un registro anterior al corte alterado cambia la huella del conjunto (3137 ms)
+  PASA  corte común: horas inexistentes del cambio de hora de Paraguay salen exactas (el hijo decodifica en UTC) (1604 ms)
+  PASA  corte común sin clave: sólo conteos, sin huella (no comparable) (1752 ms)
+  PASA  corte dentro del margen de 120 min: código 2 sin abrir MySQL, Redis ni el reloj (331 ms)
+  PASA  corte en el futuro: código 2 sin abrir MySQL, Redis ni el reloj (335 ms)

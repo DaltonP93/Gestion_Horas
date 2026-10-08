@@ -1,0 +1,101 @@
+# Piloto aislado de estados por reloj — reproducciones sobre 251d5dd (#252), ANTES del arreglo
+# MySQL 8 aislado (init.sql + 85 migraciones), Redis aislado, reloj simulado por TCP real (node-zklib completo).
+# Comando: TZ=<tz> IT_DB=1 IT_REDIS_URL=redis://127.0.0.1:<puerto> npx jest <archivos> --runInBand
+
+## Resumen por zona
+UTC: unitarias 0/16 pasadas (3 suites fallan al cargar el piloto inexistente) · IT 2/25 pasadas, 23 fallidas, 0 omitidas
+America/Asuncion: unitarias 0/16 pasadas (3 suites fallan al cargar el piloto inexistente) · IT 2/25 pasadas, 23 fallidas, 0 omitidas
+Asia/Tokyo: unitarias 0/16 pasadas (3 suites fallan al cargar el piloto inexistente) · IT 2/25 pasadas, 23 fallidas, 0 omitidas
+
+## Detalle (UTC; idéntico en las otras zonas)
+### tests/zkPilotArgs.test.js — failed
+  (la suite no carga: Cannot find module '../src/services/zkPilot/args' from 'tests/zkPilotArgs.test.js')
+### tests/zkPilotIsolation.test.js — failed
+  FALLA proceso principal: sin caminos de importación, auditoría ni ORM
+        → Error: ENOENT: no such file or directory, open '/home/user/Gestion_Horas/api/scripts/zk-raw-state-pilot.js' | at Object.readFileSync (node:fs:440:20)
+  FALLA proceso de lectura: sin base, Redis ni configuración; la captura se instala primero
+        → Error: ENOENT: no such file or directory, open '/home/user/Gestion_Horas/api/src/services/zkPilot/readChild.js' | at Object.readFileSync (node:fs:440:20)
+  FALLA ningún literal SQL de escritura o DDL en el código del piloto
+        → Error: ENOENT: no such file or directory, scandir '/home/user/Gestion_Horas/api/src/services/zkPilot' | at Object.readdirSync (node:fs:1590:26)
+  FALLA la clave es la misma que usa el helper habitual del worker
+        → Error: Cannot find module '../src/services/deviceLockKeys' from 'tests/zkPilotIsolation.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/node_m
+  FALLA acquire/renew/release: SET NX PX y Lua por token, sin ningún acceso a MySQL
+        → Error: Cannot find module '../src/services/zkPilot/lock' from 'tests/zkPilotIsolation.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/node_mod
+  FALLA ocupado → false; renovación ajena → false; liberar no borra un lock ajeno
+        → Error: Cannot find module '../src/services/zkPilot/lock' from 'tests/zkPilotIsolation.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/node_mod
+  FALLA Redis caído: el lock del piloto falla cerrado (lanza), sin fallback
+        → Error: Cannot find module '../src/services/zkPilot/lock' from 'tests/zkPilotIsolation.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/node_mod
+  FALLA chequeo del lock MySQL: sólo SELECT; tabla ausente, sin lock, lock vigente
+        → Error: Cannot find module '../src/services/zkPilot/lock' from 'tests/zkPilotIsolation.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/node_mod
+  FALLA con Redis: misma clave y SIGUE auditando (camino del worker sin cambios)
+        → Error: Cannot find module '../src/services/deviceLockKeys' from 'tests/zkPilotIsolation.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/node_m
+### tests/zkPilotAggregate.test.js — failed
+  FALLA tcp40: conteos, formato, distribuciones, fechas, duplicados y supresión exactos
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+  FALLA udp16: mismo conteo con el formato y el tamaño de 16 bytes
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+  FALLA udp8: se cuentan los bytes 7 y 2 por formato; la hora desalineada no se corrige aquí
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+  FALLA captura ausente, longitud inesperada, bytes inválidos/ausentes y formato desconocido quedan explícitos
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+  FALLA sin usuarios, horas individuales ni interpretación entrada/salida en la salida
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+  FALLA el umbral de supresión es explícito y configurable
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+  FALLA errores de lectura: sólo códigos, nunca el mensaje crudo
+        → Error: Cannot find module '../src/services/zkPilot/aggregate' from 'tests/zkPilotAggregate.test.js' | at Resolver._throwModNotFoundError (/home/user/Gestion_Horas/api/nod
+### tests/it/zkStatePilot.it.test.js — failed
+  PASA  control: el helper habitual, aun con Redis, intenta escribir en audit_events (el detector lo ve)
+  PASA  control: el camino habitual con Promise.race devuelve el timeout y deja la conexión abierta
+  FALLA lectura completa: agregado exacto, sólo comandos de lectura, cero escrituras y sin conexiones al liberar
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 0
+  FALLA lectura truncada y después completa: intentos reales, cada uno cerrado antes del siguiente
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 0
+  FALLA captura tardía (node-zklib cargado antes): aborta antes de conectar al reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 3
+  FALLA ID "1e2": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "01": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "-1": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "1.5": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "1abc": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "0": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "9007199254740993": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID " 7": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA ID "0x10": código 2 sin abrir MySQL, Redis ni el reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 2
+  FALLA reloj inexistente: código 8 sin tocar Redis ni relojes
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 8
+  FALLA lock Redis ocupado por otro: código 4, el lock ajeno queda intacto
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 4
+  FALLA lock MySQL previo con Redis libre: código 4, se suelta el Redis propio y no se toca la fila
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 4
+  FALLA Redis caído: código 5, sin fallback MySQL ni DDL, sin conectar al reloj
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 5
+  FALLA lectura colgada: cada intento se mata y se espera su fin; sin conexiones al liberar
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 6
+  FALLA límite total: no empieza un intento que no cabe en la duración restante
+        → Error: expect(received).toBe(expected) // Object.is equality | Expected: 6
+  FALLA pérdida del lock durante la lectura: se mata la lectura, no se borra el lock ajeno, código 7
+        → Error: el reloj simulado no recibió 1 conexiones | at Object.waitForConnections (/home/user/Gestion_Horas/api/tests/it/fixtures/fakeZkTcpServer.js:135:48)
+  FALLA señal SIGTERM: cierra la lectura, libera el lock y escribe el JSON (código 143)
+        → Error: el reloj simulado no recibió 1 conexiones | at Object.waitForConnections (/home/user/Gestion_Horas/api/tests/it/fixtures/fakeZkTcpServer.js:135:48)
+  FALLA señal SIGINT: cierra la lectura, libera el lock y escribe el JSON (código 130)
+        → Error: el reloj simulado no recibió 1 conexiones | at Object.waitForConnections (/home/user/Gestion_Horas/api/tests/it/fixtures/fakeZkTcpServer.js:135:48)
+  FALLA señal SIGHUP: cierra la lectura, libera el lock y escribe el JSON (código 129)
+        → Error: el reloj simulado no recibió 1 conexiones | at Object.waitForConnections (/home/user/Gestion_Horas/api/tests/it/fixtures/fakeZkTcpServer.js:135:48)
+  FALLA SIGKILL del proceso principal: la lectura termina sola y el lock vence por TTL
+        → Error: el reloj simulado no recibió 1 conexiones | at Object.waitForConnections (/home/user/Gestion_Horas/api/tests/it/fixtures/fakeZkTcpServer.js:135:48)
+
+## Lectura
+- Controles negativos (pasan antes y después): el helper habitual deviceLock, aun con Redis, intenta INSERT INTO audit_events
+  (general_log lo registra); y el camino habitual con Promise.race devuelve el timeout mientras la conexión TCP
+  al reloj sigue abierta (1 conexión viva después de que el lector devolvió el error).
+- Todo lo demás falla porque el piloto aislado no existe: scripts/zk-raw-state-pilot.js termina con MODULE_NOT_FOUND.

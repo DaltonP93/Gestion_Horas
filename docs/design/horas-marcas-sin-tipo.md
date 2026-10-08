@@ -173,6 +173,13 @@ de pyzk, pasados por las clases reales de `node-zklib`). El estado de
 varía y con qué valores sólo se sabrá con el reporte sobre lecturas reales,
 cuando se autorice. Habilitar un mapeo a tipo es una decisión posterior.
 
+**Piloto aislado (sin importar).** Para observar esos bytes en un reloj real
+sin pasar por la importación existe `scripts/zk-raw-state-pilot.js`. Hace una
+lectura por proceso hijo, con el lock compartido sólo por Redis y MySQL de solo
+lectura, y devuelve sólo conteos. Está descrito en
+`docs/design/piloto-estados-reloj.md`. Ejecutarlo contra relojes reales requiere
+autorización aparte.
+
 ## 6. Relación con #250
 
 Las pruebas de #250 (`zkWallClock.it.test.js`) validan el **recálculo con tipos

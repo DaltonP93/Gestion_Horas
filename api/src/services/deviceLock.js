@@ -16,11 +16,11 @@ const crypto = require('crypto');
 const { sequelize } = require('../config/database');
 const logger = require('../config/logger');
 const audit = require('./audit');
+// Clave y Lua compartidos con el piloto aislado de estados (zkPilot/lock.js).
+const { keyFor, RENEW_LUA, RELEASE_LUA } = require('./deviceLockKeys');
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;   // 15 min: cubre lecturas largas (Lavadero)
 const RETRY_REDIS_MS = 15 * 1000;        // reintentar conexión a Redis cada 15s
-
-const keyFor = (id) => `zk:lock:dev:${id}`;
 
 let redis = null;
 let redisOk = false;
@@ -111,8 +111,7 @@ async function renew(handle) {
     const r = await getRedis();
     if (!r) return false;
     try {
-      const lua = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('pexpire',KEYS[1],ARGV[2]) else return 0 end";
-      const res = await r.eval(lua, { keys: [keyFor(id)], arguments: [token, String(ttlMs)] });
+      const res = await r.eval(RENEW_LUA, { keys: [keyFor(id)], arguments: [token, String(ttlMs)] });
       return res === 1;
     } catch { return false; }
   }
@@ -132,8 +131,7 @@ async function release(handle) {
     const r = await getRedis();
     if (r) {
       try {
-        const lua = "if redis.call('get',KEYS[1])==ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end";
-        await r.eval(lua, { keys: [keyFor(id)], arguments: [token] });
+        await r.eval(RELEASE_LUA, { keys: [keyFor(id)], arguments: [token] });
       } catch { /* best-effort */ }
     }
     return;

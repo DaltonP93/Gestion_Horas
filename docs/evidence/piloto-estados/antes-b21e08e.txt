@@ -1,0 +1,64 @@
+# Piloto aislado de estados por reloj — ANTES (b21e08e): reproducciones de esta ronda
+# Entorno: MySQL 8.0 aislada en UTC (como CI), Redis 7.2 aislado, reloj simulado por TCP real
+# (node-zklib completo). Sin producción, sin relojes físicos, sin att2000.
+# Las pruebas nuevas se escribieron PRIMERO (commits d30abfe y b565bd6, sólo pruebas y fixtures) y se
+# corrieron contra el código de b21e08e. Filtro -t: sólo las reproducciones nuevas y sus controles.
+
+## Mandato y reproducción
+1. Exclusión Redis/MySQL: consultar de vez en cuando el fallback no impide locks simultáneos.
+2. Consultas MySQL, comandos Redis y cierres sin tope: el límite total no se cumple con algo pendiente.
+3. Sin corte temporal común: dos corridas no comparan el mismo conjunto histórico.
+
+## d30abfe contra b21e08e (UTC): 9 fallidas, 3 pasadas (controles)
+| Prueba nueva | b21e08e | Qué muestra |
+|---|---|---|
+| exclusión: con el piloto leyendo, el helper habitual en fallback MySQL NO obtiene el lock | FALLA | el helper habitual REAL en fallback (Redis inaccesible para él) obtiene el lock (`backend: "mysql"`) mientras el piloto lee: dos lecturas a la vez |
+| exclusión (control): con el piloto leyendo, el helper habitual con Redis tampoco obtiene el lock | pasa | por Redis sí chocan: el problema es sólo el fallback |
+| Redis sin respuesta mientras el piloto lee | FALLA | `hung: true`: el piloto sigue vivo a los 45 s (renovación sin tope) |
+| MySQL sin respuesta mientras el piloto lee | FALLA | `hung: true` a los 45 s |
+| MySQL sin respuesta en la consulta inicial | FALLA | `hung: true` a los 45 s |
+| límite total con una consulta MySQL pendiente (max 2 s) | FALLA | `hung: true` a los 45 s: el límite total no corta una consulta pendiente |
+| cierre de Redis sin confirmar (QUIT sin respuesta) | FALLA | `hung: true` a los 45 s: `quit()` sin tope |
+| cierre de MySQL sin confirmar (COM_QUIT sin respuesta) | pasa | `end()` de mysql2 resuelve sin esperar respuesta al COM_QUIT (el socket sí puede quedar abierto) |
+| sin corte (control): con marcas nuevas entre corridas, los agregados difieren | pasa | sin corte, dos corridas no son comparables |
+| corte común: dos corridas con marcas nuevas dan el mismo conjunto | FALLA | `--cutoff` no existe: código 2 (argumentos inválidos) |
+| corte común: un registro anterior alterado cambia la huella | FALLA | ídem |
+| corte en el futuro: código 2 sin conexiones | FALLA | sin JSON de salida (opción desconocida) |
+Tests: 9 failed, 25 skipped, 3 passed, 37 total
+
+## b565bd6 contra b21e08e (UTC): el worker en fallback RETIENE el lock y el piloto lee igual
+| Prueba nueva | b21e08e | Qué muestra |
+|---|---|---|
+| exclusión: el helper habitual en fallback toma y RETIENE el lock; después el piloto NO lee | FALLA | el reloj recibe una lectura completa del piloto (`CMD_CONNECT, CMD_FREE_DATA, CMD_DATA_WRRQ, CMD_FREE_DATA, CMD_EXIT`) con la fila viva del worker: la consulta de b21e08e comparaba `expires_at` (escrito en la zona de la app, -03:00) con `NOW()` en la zona del servidor (UTC) y la daba por vencida |
+Tests: 1 failed, 37 skipped, 38 total
+
+## Revisión de cancelación sobre el árbol intermedio de esta ronda (antes de la corrección final)
+Revisión adversarial independiente con un proxy que congela o demora (scripts y salidas en el
+directorio de trabajo de la revisión; no forman parte del repositorio). Dos agujeros, reproducidos de
+extremo a extremo y corregidos en esta ronda:
+- C1 · señal con una renovación en vuelo sobre conexiones colgadas (una conexión NUEVA respondía en
+  2–5 ms): la liberación se encolaba detrás de la renovación colgada en el MISMO cliente.
+    [ 2965ms] SIGTERM con la renovación pendiente (antes del tope de 5 s)
+    piloto: {"codigo":143,"resultado":"interrumpido","liberacion":{"redis":"por_ttl","mysql":"por_ttl"}}
+    estado del lock al terminar: {"redis_pttl_ms":602365, "mysql_filas":[1 fila]}
+  El worker vería el reloj ocupado ~10 min (hasta 936 s con los máximos de los argumentos).
+- C2 · toma (SET NX / INSERT) demorada 7 s en la red: la compensación por un cliente nuevo llegaba
+  ANTES que la toma, que se aplicaba después.
+    Redis: piloto {"codigo":5,"liberacion":{"redis":"no_tomado"}} · al terminar PTTL -2 ·
+           7.6 s después: PTTL 610656  ← clave huérfana, informada como no_tomado
+    MySQL: piloto {"codigo":4,"liberacion":{"mysql":"no_tomado"}} · al terminar 0 filas ·
+           7.6 s después: 1 fila      ← fila huérfana
+  Mitigación verificada aparte: matar la sesión vieja antes de compensar (sin kill: PTTL 609989 / 1
+  fila; con CLIENT KILL ID / KILL CONNECTION del mismo usuario: PTTL -2 / 0 filas).
+- Otras: `quit()` + `disconnect()` deja el socket abierto y una respuesta tardía tira el proceso
+  (TypeError); `connect()` de node-redis espera sin tope CLIENT SETINFO; topes de cierre que se suman
+  por paso; `--max-duration` igual a `--attempt-timeout` toma y suelta los locks sin leer; `git
+  rev-parse` sin tope; `bounded()` lanzaba la operación con el corte ya disparado.
+
+## Mutaciones sobre el código final (las pruebas nuevas detectan cada agujero)
+| Mutación | Prueba | Resultado con la mutación |
+|---|---|---|
+| M1: sin matar la sesión vieja antes de compensar | toma de Redis / MySQL demorada en la red | FALLAN las dos: clave y fila presentes tras la llegada tardía (`Expected: 0, Received: 1`) |
+| M2: sin la gracia que cancela lo que sigue en vuelo | señal con renovaciones en vuelo | FALLA: señal→salida 2433 ms (> 2000: espera el tope por paso del mismo cliente) |
+| M2c: sin gracia y sin pasar a un cliente nuevo (árbol intermedio) | señal con renovaciones en vuelo | FALLA: `liberacion: { redis: "por_ttl", mysql: "por_ttl" }` |
+| M4: QUIT antes de disconnect | cierre de Redis: nunca QUIT | FALLA: el proxy ve el QUIT (`frozen: true`) |
