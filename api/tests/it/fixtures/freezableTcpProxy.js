@@ -18,17 +18,22 @@
  *   cliente lo dio por perdido. Si el servidor cierra antes esa conexión (KILL),
  *   lo demorado ya no llega.
  *
+ *   rstWhen(chunk) → 'despues' REENVÍA ese bloque al servidor y corta la
+ *   conexión del cliente con RST (la respuesta se pierde: la sentencia se
+ *   aplicó sin que el cliente lo sepa); 'antes' corta con RST SIN reenviarlo.
+ *   Como un NAT o un firewall que resetea la conexión.
+ *
  * Al congelarse, las conexiones quedan abiertas en ambos extremos y todo lo
  * que llegue después se descarta. `close()` corta todo.
  */
 const net = require('net');
 
-async function startFreezableProxy({ targetHost = '127.0.0.1', targetPort, freezeWhen = null, delayWhen = null } = {}) {
+async function startFreezableProxy({ targetHost = '127.0.0.1', targetPort, freezeWhen = null, delayWhen = null, rstWhen = null } = {}) {
   const pairs = new Set();
   const state = {
     frozen: false, frozenAt: null, connections: 0, matched: null,
     // Demoras: bloques demorados, entregados (o descartados si el servidor ya cerró esa conexión).
-    delayed: 0, delivered: 0, discarded: 0, flushes: 0,
+    delayed: 0, delivered: 0, discarded: 0, flushes: 0, resets: 0,
   };
   const waiters = [];
   const flushWaiters = [];
@@ -44,7 +49,7 @@ async function startFreezableProxy({ targetHost = '127.0.0.1', targetPort, freez
   const server = net.createServer((client) => {
     state.connections += 1;
     const upstream = net.connect(targetPort, targetHost);
-    const pair = { client, upstream, frozen: false, delayed: null };
+    const pair = { client, upstream, frozen: false, delayed: null, reset: false };
     pairs.add(pair);
     const frozen = () => state.frozen || pair.frozen;
     const drop = () => {
@@ -67,7 +72,17 @@ async function startFreezableProxy({ targetHost = '127.0.0.1', targetPort, freez
     };
     client.on('data', (chunk) => {
       if (!frozen() && freezeWhen && freezeWhen(chunk)) freeze('freezeWhen');
-      if (frozen()) return;
+      if (frozen() || pair.reset) return;
+      const rst = rstWhen ? rstWhen(chunk) : null;
+      if (rst) {
+        pair.reset = true;
+        state.resets += 1;
+        if (rst === 'despues') upstream.write(chunk);
+        client.resetAndDestroy();
+        // Lo reenviado llega entero al servidor antes del cierre (FIN), como en la red.
+        setTimeout(() => { pairs.delete(pair); upstream.end(); }, rst === 'despues' ? 1000 : 0);
+        return;
+      }
       if (!pair.delayed && delayWhen) {
         const ms = delayWhen(chunk);
         if (ms > 0) { pair.delayed = []; setTimeout(flush, ms); }
@@ -82,7 +97,7 @@ async function startFreezableProxy({ targetHost = '127.0.0.1', targetPort, freez
     // Demorado: el cierre del cliente va DETRÁS de lo demorado (lo entrega flush()).
     client.on('end', () => { if (!frozen() && !pair.delayed) upstream.end(); });
     upstream.on('end', () => { if (!frozen()) client.end(); });
-    client.on('close', () => { if (!frozen() && !pair.delayed) drop(); });
+    client.on('close', () => { if (!frozen() && !pair.delayed && !pair.reset) drop(); });
     upstream.on('close', () => { if (!frozen() && !pair.delayed) drop(); });
     client.on('error', () => {});
     upstream.on('error', () => {});

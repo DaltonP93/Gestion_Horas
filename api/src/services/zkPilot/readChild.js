@@ -55,6 +55,8 @@ function sendAndExit(msg, code) {
 
 let started = false;
 process.on('disconnect', () => process.exit(10));
+// Ctrl+Z llega a todo el grupo: el hijo nunca queda suspendido con la sesión del reloj abierta.
+process.on('SIGTSTP', () => process.exit(12));
 process.on('message', async (msg) => {
   if (!msg || msg.type !== 'leer' || started) return;
   started = true;

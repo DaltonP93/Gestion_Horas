@@ -27,15 +27,18 @@ function claveId(clave) {
 }
 
 /**
- * Compara el bloque `corte` de dos salidas del piloto. 'igual' sólo si ambas terminaron 'ok', con el
- * mismo corte, canon, clave, formato y zona de decodificación, ambas con huella, y coinciden la cantidad
- * y la huella. Una huella distinta significa que el conjunto ≤ corte difiere: una marca alterada,
+ * Compara el bloque `corte` de dos salidas del piloto. 'igual' sólo si son dos corridas DISTINTAS
+ * (`corrida_id`) del MISMO reloj, ambas terminaron 'ok', con el mismo corte, canon, clave, formato y
+ * zona de decodificación, ambas con huella, y coinciden la cantidad y la huella. Una huella distinta significa que el conjunto ≤ corte difiere: una marca alterada,
  * borrada o NUEVA con la hora del reloj atrasada más que el margen. Las posteriores nunca cuentan.
  * @returns {{ resultado:'igual'|'distinto'|'no_comparable', motivo:string|null, delta_registros:number|null }}
  */
 function compararCortes(a, b) {
   const no = (motivo) => ({ resultado: 'no_comparable', motivo, delta_registros: null });
   if (!a || !b || a.resultado !== 'ok' || b.resultado !== 'ok') return no('resultado_no_ok');
+  if (!a.reloj || !b.reloj || a.reloj.id == null || a.reloj.id !== b.reloj.id) return no('reloj_distinto');
+  if (!a.corrida_id || !b.corrida_id) return no('sin_corrida');
+  if (a.corrida_id === b.corrida_id) return no('misma_corrida');
   const ca = a.corte;
   const cb = b.corte;
   if (!ca || !cb || !ca.conjunto || !cb.conjunto) return no('sin_corte');

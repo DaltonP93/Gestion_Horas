@@ -79,17 +79,21 @@ describe('piloto de estados: grafo de módulos', () => {
     expect([...c.files].sort()).toEqual(['scripts/zk-raw-state-pilot-compare.js', 'src/services/zkPilot/corte.js']);
   });
 
-  test('el proceso de lectura corre en UTC: nunca hereda la zona del principal', () => {
+  test('el proceso de lectura corre en UTC y no recibe secretos: ni la clave del corte, ni la base, ni Redis', () => {
     const { childEnv } = require('../src/services/zkPilot/runPilot');
-    const prev = process.env.TZ;
+    const SECRETS = ['PILOT_CORTE_CLAVE', 'DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD', 'REDIS_URL', 'JWT_SECRET'];
+    const saved = Object.fromEntries(['TZ', ...SECRETS].map((k) => [k, process.env[k]]));
     try {
       process.env.TZ = 'America/Asuncion';
-      expect(childEnv().TZ).toBe('UTC');
-      process.env.DB_PASSWORD_PRUEBA = 'nunca';
-      expect(Object.keys(childEnv())).not.toContain('DB_PASSWORD_PRUEBA');
+      for (const k of SECRETS) process.env[k] = k === 'PILOT_CORTE_CLAVE' ? 'ab'.repeat(32) : `valor-${k}`;
+      const env = childEnv();
+      expect(env.TZ).toBe('UTC');
+      for (const k of SECRETS) expect(Object.keys(env)).not.toContain(k);
+      // Lista blanca exacta (la clave viaja SÓLO por el canal IPC).
+      expect(Object.keys(env).every((k) => ['TZ', 'PATH', 'LANG', 'LC_ALL', 'NODE_ENV', 'NODE_OPTIONS', 'HOME'].includes(k))).toBe(true);
+      expect(JSON.stringify(env)).not.toContain('ab'.repeat(32));
     } finally {
-      if (prev === undefined) delete process.env.TZ; else process.env.TZ = prev;
-      delete process.env.DB_PASSWORD_PRUEBA;
+      for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
   });
 
@@ -105,14 +109,98 @@ describe('piloto de estados: grafo de módulos', () => {
     expect(src).not.toMatch(/require\(\s*['"]node-zklib/);
   });
 
-  test('los únicos literales SQL de escritura son los del lock propio en device_locks; ningún DDL', () => {
-    const files = [PARENT_ENTRY, ...fs.readdirSync(PILOT_DIR).map((f) => path.join(PILOT_DIR, f))];
-    const WRITE = /(['"`])([^'"`\n]*\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT)\s[^'"`\n]*)\1/gi;
+  /**
+   * Literales de cadena de un fuente JS (comillas simples, dobles y plantillas, también de varias
+   * líneas; en las plantillas, el texto fuera de `${…}`) y el código sin comentarios ni cadenas.
+   * Las expresiones regulares literales se saltan (pueden contener comillas).
+   */
+  function tokens(src) {
+    const literals = [];
+    let code = '';
+    let prev = '';
+    let i = 0;
+    const regexBefore = /[(,=:[!&|?{};+\-*%<>~^]/;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '/' && src[i + 1] === '/') { const e = src.indexOf('\n', i); i = e < 0 ? src.length : e; continue; }
+      if (c === '/' && src[i + 1] === '*') { const e = src.indexOf('*/', i + 2); i = e < 0 ? src.length : e + 2; continue; }
+      if (c === '/' && (prev === '' || regexBefore.test(prev) || /\breturn\s*$/.test(code))) {
+        let j = i + 1;
+        let cls = false;
+        while (j < src.length && (src[j] !== '/' || cls)) {
+          if (src[j] === '\\') j += 1;
+          else if (src[j] === '[') cls = true;
+          else if (src[j] === ']') cls = false;
+          j += 1;
+        }
+        i = j + 1;
+        code += ' /re/ ';
+        prev = '/';
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') {
+        let j = i + 1;
+        let buf = '';
+        while (j < src.length && src[j] !== c) {
+          if (src[j] === '\\') { buf += src[j + 1]; j += 2; continue; }
+          if (c === '`' && src[j] === '$' && src[j + 1] === '{') {
+            let depth = 1;
+            j += 2;
+            buf += ' ';
+            while (j < src.length && depth) { if (src[j] === '{') depth += 1; else if (src[j] === '}') depth -= 1; j += 1; }
+            continue;
+          }
+          buf += src[j];
+          j += 1;
+        }
+        literals.push(buf);
+        code += ' "" ';
+        prev = '"';
+        i = j + 1;
+        continue;
+      }
+      code += c;
+      if (!/\s/.test(c)) prev = c;
+      i += 1;
+    }
+    return { literals, code };
+  }
+  /** Todo lo que carga el piloto: proceso principal, proceso de lectura y CLI de comparación. */
+  const PILOT_FILES = () => [...new Set([
+    ...graph(PARENT_ENTRY).files, ...graph(CHILD_ENTRY).files, ...graph(path.join(API, 'scripts', 'zk-raw-state-pilot-compare.js')).files,
+  ])].sort();
+  const scan = (test) => {
     const found = [];
-    for (const f of files) for (const m of fs.readFileSync(f, 'utf8').matchAll(WRITE)) found.push([rel(f), m[2]]);
-    expect(found).toEqual([
+    for (const f of PILOT_FILES()) {
+      for (const lit of tokens(fs.readFileSync(path.join(API, f), 'utf8')).literals) if (test(lit)) found.push([f, lit.replace(/\s+/g, ' ').trim()]);
+    }
+    return found;
+  };
+
+  test('el tokenizador ve lo que un regex por línea no veía (comillas mezcladas, plantillas, varias líneas, piezas sueltas)', () => {
+    const src = [
+      "const a = \"UPDATE devices SET note = 'x' WHERE id = 1\";",
+      'const b = `UPDATE devices',
+      '  SET last_sync = NOW()`;',
+      "const c = ['update', 'devices'].join(' ');",
+      'const d = `KILL ${threadId}`;',
+      "const e = /['\"`]/.test(x); // 'DROP TABLE en un comentario'",
+      "/* 'DELETE FROM x' */ const f = 'ok';",
+    ].join('\n');
+    const { literals } = tokens(src);
+    expect(literals).toEqual([
+      "UPDATE devices SET note = 'x' WHERE id = 1", 'UPDATE devices\n  SET last_sync = NOW()', 'update', 'devices', ' ',
+      'KILL  ', 'ok',
+    ]);
+  });
+
+  const SQL_WRITE = /\b(INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|REPLACE\s+INTO|CREATE\s|ALTER\s|DROP\s|TRUNCATE\s|RENAME\s|GRANT\s|REVOKE\s|LOAD\s+DATA)/i;
+  const SQL_WORD = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE)\s*$/i;
+
+  test('los únicos literales SQL de escritura son los del lock propio en device_locks; ningún DDL (todo el grafo del piloto)', () => {
+    expect(scan((lit) => SQL_WRITE.test(lit) || SQL_WORD.test(lit))).toEqual([
       ['src/services/zkPilot/lock.js', 'DELETE FROM device_locks WHERE device_id = ? AND expires_at < NOW()'],
-      ['src/services/zkPilot/lock.js', 'INSERT INTO device_locks (device_id, token, owner, job_id, origin, acquired_at, expires_at) '],
+      ['src/services/zkPilot/lock.js', 'INSERT INTO device_locks (device_id, token, owner, job_id, origin, acquired_at, expires_at)'],
       ['src/services/zkPilot/lock.js', 'UPDATE device_locks SET expires_at = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE device_id = ? AND token = ?'],
       ['src/services/zkPilot/lock.js', 'DELETE FROM device_locks WHERE device_id = ? AND token = ?'],
     ]);
@@ -122,20 +210,31 @@ describe('piloto de estados: grafo de módulos', () => {
     for (const k of ['purgeExpired', 'renew', 'release']) expect(habitual).toContain(MYSQL_LOCK_SQL[k]);
   });
 
-  test('el único KILL es el de la sesión PROPIA anterior del lock (MySQL por threadId, Redis por CLIENT ID)', () => {
-    const files = [PARENT_ENTRY, ...fs.readdirSync(PILOT_DIR).map((f) => path.join(PILOT_DIR, f))];
-    const found = [];
-    for (const f of files) {
-      // Literales de código (comillas simples o dobles), en mayúsculas como se envían; no los comentarios.
-      for (const m of fs.readFileSync(f, 'utf8').matchAll(/(['"])([^'"\n]*\bKILL\b[^'"\n]*)\1/g)) found.push([rel(f), m[2]]);
-    }
-    expect(found).toEqual([
+  test('el único KILL es el de la sesión PROPIA anterior del lock, atado a su identidad; ningún FLUSH ni CONFIG', () => {
+    expect(scan((lit) => /\bkill\b/i.test(lit))).toEqual([
       ['src/services/zkPilot/lock.js', 'KILL CONNECTION ?'],
-      ['src/services/zkPilot/runPilot.js', 'KILL'],                 // sendCommand(['CLIENT', 'KILL', 'ID', <CLIENT ID propio>])
+      ['src/services/zkPilot/runPilot.js', 'KILL'],                 // sendCommand(['CLIENT', 'KILL', 'ID', id, 'ADDR', addr])
+    ]);
+    // Comandos Redis arbitrarios sólo por sendCommand, y sólo estos: identidad de la sesión y el KILL.
+    const sent = [];
+    for (const f of PILOT_FILES()) {
+      const src = fs.readFileSync(path.join(API, f), 'utf8');
+      for (const m of src.matchAll(/sendCommand\(\s*\[([^\]]*)\]/g)) sent.push([f, m[1].replace(/\s+/g, ' ').trim()]);
+      expect([f, tokens(src).code.match(/\b(clientKill|flushAll|flushDb|configSet|configRewrite|shutdown)\b/g)]).toEqual([f, null]);
+    }
+    expect(sent).toEqual([
+      ['src/services/zkPilot/runPilot.js', "'CLIENT', 'INFO'"],
+      ['src/services/zkPilot/runPilot.js', "'INFO', 'server'"],
+      ['src/services/zkPilot/runPilot.js', "'INFO', 'server'"],
+      ['src/services/zkPilot/runPilot.js', "'CLIENT', 'KILL', 'ID', id, 'ADDR', addr"],
     ]);
     const src = fs.readFileSync(path.join(PILOT_DIR, 'runPilot.js'), 'utf8');
-    expect(src).toContain("['CLIENT', 'KILL', 'ID', String(sessionIds.redis)]");
-    expect(src).toContain('MYSQL_KILL_SQL.kill, [threadId]');
+    // Redis: sólo en el MISMO servidor (run_id) y con id Y dirección de la sesión vieja.
+    expect(src).toContain("if (parseRunId(await run(() => c.sendCommand(['INFO', 'server']))) === runId) {");
+    expect(src).toContain("await run(() => c.sendCommand(['CLIENT', 'KILL', 'ID', id, 'ADDR', addr]));");
+    // MySQL: sólo con el mismo arranque del servidor y el mismo HOST del hilo.
+    expect(src).toContain('if (bootMs === null || Math.abs(bootMs - ident.bootMs) > BOOT_TOLERANCE_MS) return false;');
+    expect(src).toContain('if (String(rows[0].host) !== ident.host) return false;');
     expect(src).toMatch(/killMysqlSession\(c, run, sessionIds\.lockConn\)/);
   });
 });
@@ -292,21 +391,34 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
     jest.resetModules();
   });
 
-  // Error de red (sin respuesta del servidor): no prueba que la sentencia o el comando no se aplicó.
-  const netError = () => Object.assign(new Error('socket cerrado'), { code: 'ECONNRESET' });
+  // Error de red con la forma REAL de mysql2/node-redis: errno entero NEGATIVO (libuv), sin SQLSTATE.
+  // No prueba que la sentencia o el comando no se aplicó.
+  const netError = () => Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', errno: -104, syscall: 'read', fatal: true });
+  // Respuesta de error del servidor MySQL: errno positivo con SQLSTATE.
+  const serverError = (errno, sqlState = 'HY000') => Object.assign(new Error(`servidor ${errno}`), { errno, sqlState });
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
   /**
-   * insert: 'dup' (otro tiene la fila) | 'red' (la toma falla por red y la conexión queda rota).
+   * insert: 'dup' (otro tiene la fila) | 'red' (la toma falla por red y la conexión queda rota) | 'ok'.
    * redisSet: 'ok' | 'red' (la toma falla por red y el cliente queda roto).
    * kill: 'ok' | 'denegado' (KILL CONNECTION sin permiso: 1095).
+   * reinicio: el servidor MySQL o Redis que atiende al cliente NUEVO arrancó después (otro servidor).
+   * hostAjeno: el número de conexión vieja lo tiene OTRA conexión (otro HOST).
+   * selectMs / evalMs: demora del SELECT del reloj / de la primera renovación en Redis.
    * Las conexiones MySQL y los clientes Redis se numeran por orden; `log` registra todo en orden.
    */
-  async function runWith({ session = { tz: '-03:00', ac: 1, ro: 0, sro: 0 }, insert = 'dup', redisSet = 'ok', kill = 'ok' } = {}) {
+  async function runWith({
+    session = { tz: '-03:00', ac: 1, ro: 0, sro: 0 }, insert = 'dup', redisSet = 'ok', kill = 'ok',
+    reinicio = null, hostAjeno = false, selectMs = 0, evalMs = 0, opts = {},
+  } = {}) {
     const log = [];
     const redisOptions = [];
+    const killed = new Set();
     let n = 0;
     let rn = 0;
+    let evals = 0;
     let runPilot;
+    const t0 = Date.now();
     await jest.isolateModulesAsync(async () => {
       jest.doMock('mysql2/promise', () => ({
         createConnection: async () => {
@@ -314,20 +426,33 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
           const id = n;
           let broken = false;
           log.push([id, 'connect']);
+          // Arranque del servidor: 1 h antes de la prueba; con `reinicio: 'mysql'`, el de la conexión nueva es otro.
+          const uptimeS = () => Math.floor((Date.now() - t0) / 1000) + (reinicio === 'mysql' && id >= 3 ? 1 : 3600);
           return {
             threadId: 900 + id,
             connection: { stream: { destroyed: false, destroy() { this.destroyed = true; } }, on() {} },
             async query(sql, params) {
               const text = sql.replace(/\s+/g, ' ').trim();
-              log.push(/KILL|PROCESSLIST/.test(text) ? [id, text, params] : [id, text]);
+              log.push(/KILL|PROCESSLIST|^INSERT/.test(text) ? [id, text, params] : [id, text]);
               if (broken) throw netError();
-              if (/^SELECT id, ip_address/.test(sql)) return [[{ id: 7, ip_address: '192.0.2.1', port: 4370, connection_mode: 'tcp', timeout_ms: 1000 }]];
+              if (/^SELECT id, ip_address/.test(sql)) {
+                if (selectMs) await sleepMs(selectMs);
+                return [[{ id: 7, ip_address: '192.0.2.1', port: 4370, connection_mode: 'tcp', timeout_ms: 1000 }]];
+              }
               if (/^SELECT @@session/.test(sql)) return [[session]];
-              if (/^INSERT/.test(sql) && insert === 'dup') throw Object.assign(new Error('dup'), { errno: 1062 });
+              if (/^SHOW GLOBAL STATUS/.test(sql)) return [[{ Variable_name: 'Uptime', Value: String(uptimeS()) }]];
+              if (/PROCESSLIST/.test(sql)) {
+                const [tid] = params;
+                if (killed.has(tid)) return [[]];
+                return [[{ host: hostAjeno && id >= 3 ? '10.9.9.9:5555' : `127.0.0.1:4${tid}` }]];
+              }
+              if (/^INSERT/.test(sql) && insert === 'dup') throw serverError(1062, '23000');
               if (/^INSERT/.test(sql) && insert === 'red') { broken = true; throw netError(); }
-              if (/^KILL/.test(sql) && kill === 'denegado') throw Object.assign(new Error('no es tuya'), { errno: 1095 });
-              if (/PROCESSLIST/.test(sql)) return [[{ n: 0 }]];
-              if (/^DELETE FROM device_locks WHERE device_id = \? AND token/.test(sql)) return [{ affectedRows: 0 }];
+              if (/^KILL/.test(sql)) {
+                if (kill === 'denegado') throw serverError(1095);
+                killed.add(params[0]);
+              }
+              if (/^DELETE FROM device_locks WHERE device_id = \? AND token/.test(sql)) return [{ affectedRows: insert === 'ok' ? 1 : 0 }];
               return [{ affectedRows: 1, info: 'Rows matched: 1' }];
             },
             async end() { log.push([id, 'end']); },
@@ -341,19 +466,29 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
           const id = `r${rn}`;
           let broken = false;
           const cmd = async (name, value) => { log.push([id, name]); if (broken) throw netError(); return value; };
+          const runId = reinicio === 'redis' && rn >= 2 ? 'b'.repeat(40) : 'a'.repeat(40);
           return {
             options,
             isOpen: true,
             on() {},
             connect: () => cmd('connect'),
-            clientId: () => cmd('CLIENT ID', 101),
             async set(key, token, o) {
               log.push([id, `SET NX PX ${o.PX}`]);
               if (broken || redisSet === 'red') { broken = true; throw netError(); }
               return 'OK';
             },
-            eval: () => cmd('EVAL', 1),
-            sendCommand: (args) => cmd(args.join(' '), 1),
+            async eval() {
+              evals += 1;
+              if (evals === 1 && evalMs) await sleepMs(evalMs);
+              // Con la toma perdida en la red, la clave nunca llegó: liberar no encuentra nada.
+              return cmd('EVAL', redisSet === 'red' ? 0 : 1);
+            },
+            sendCommand: (args) => {
+              const name = args.join(' ');
+              if (name === 'CLIENT INFO') return cmd(name, `id=${rn === 1 ? 101 : 202} addr=127.0.0.1:5555 laddr=127.0.0.1:6379 fd=8 name=\n`);
+              if (name === 'INFO server') return cmd(name, `# Server\r\nredis_version:7.2.4\r\nrun_id:${runId}\r\n`);
+              return cmd(name, 1);
+            },
             quit: () => cmd('QUIT'),
             async disconnect() { log.push([id, 'disconnect']); },
           };
@@ -361,27 +496,31 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
       }));
       ({ runPilot } = require('../src/services/zkPilot/runPilot'));
     });
-    const { json } = await runPilot(OPTS, { env: {}, rootDir: REPO });
+    const { json } = await runPilot({ ...OPTS, ...opts }, { env: {}, rootDir: REPO });
     return { json, log, redisOptions };
   }
 
   test('lectura READ ONLY cerrada antes de abrir la del lock; la sesión del lock se fija y verifica ANTES de escribir', async () => {
     const { json, log } = await runWith();
     expect(json).toMatchObject({ resultado: 'lock_mysql_vigente', exclusion: { mysql: { estado: 'ocupado' } } });
-    const { LOCK_SESSION_SQL, MYSQL_LOCK_SQL } = require('../src/services/zkPilot/lock');
+    const { LOCK_SESSION_SQL, MYSQL_LOCK_SQL, MYSQL_KILL_SQL, PROVISIONAL_TTL_S } = require('../src/services/zkPilot/lock');
     expect(log).toEqual([
       [1, 'connect'],
       [1, 'SET SESSION TRANSACTION READ ONLY'],
       [1, 'SELECT id, ip_address, port, connection_mode, timeout_ms FROM devices WHERE id = ? LIMIT 1'],
       [1, 'end'],
       ['r1', 'connect'],
-      ['r1', 'CLIENT ID'],
+      ['r1', 'CLIENT INFO'],                  // identidad de la sesión Redis: id y dirección…
+      ['r1', 'INFO server'],                  // …y run_id del servidor
       ['r1', 'SET NX PX 30000'],              // TTL provisional: el completo llega con la verificación previa al intento
       [2, 'connect'],
       [2, LOCK_SESSION_SQL.set],
       [2, LOCK_SESSION_SQL.check],
+      [2, MYSQL_KILL_SQL.session, [902]],     // identidad de la sesión del lock: HOST…
+      [2, MYSQL_KILL_SQL.uptime],             // …y arranque del servidor
       [2, MYSQL_LOCK_SQL.purgeExpired],
-      [2, MYSQL_LOCK_SQL.insert.replace(/\s+/g, ' ').trim()],
+      // La fila también nace con el TTL provisional (30 s), no con el completo.
+      [2, MYSQL_LOCK_SQL.insert.replace(/\s+/g, ' ').trim(), [7, expect.stringMatching(/^pilot:[0-9a-f]{32}$/), expect.any(String), 'piloto_estados', PROVISIONAL_TTL_S]],
       ['r1', 'EVAL'],
       // Los cierres corren en paralelo: Redis con disconnect() (nunca QUIT) y MySQL con end().
       expect.anything(),
@@ -400,7 +539,7 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
     expect(log.filter(([, c]) => c === 'QUIT')).toEqual([]);
   });
 
-  test('toma MySQL incierta (red) con la conexión rota: se MATA la sesión vieja y recién después se compensa por token', async () => {
+  test('toma MySQL incierta (error de RED real: errno -104) con la conexión rota: se MATA la sesión vieja y recién después se compensa', async () => {
     const { json, log } = await runWith({ insert: 'red' });
     const { MYSQL_KILL_SQL, MYSQL_LOCK_SQL } = require('../src/services/zkPilot/lock');
     expect(json).toMatchObject({
@@ -411,8 +550,10 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
     expect(fresh).toEqual([
       'connect',
       expect.stringMatching(/^SET SESSION time_zone/),
-      [MYSQL_KILL_SQL.kill, [902]],                 // el hilo de la conexión del lock (threadId 902)
-      [MYSQL_KILL_SQL.alive, [902]],
+      MYSQL_KILL_SQL.uptime,                        // mismo servidor (mismo arranque)…
+      [MYSQL_KILL_SQL.session, [902]],              // …y el hilo 902 sigue siendo el nuestro (mismo HOST)
+      [MYSQL_KILL_SQL.kill, [902]],
+      [MYSQL_KILL_SQL.session, [902]],              // hasta que el hilo desaparece
       MYSQL_LOCK_SQL.release,
     ]);
   });
@@ -423,12 +564,46 @@ describe('piloto de estados: orden de las conexiones MySQL (dobles de mysql2 y r
     expect(json.limites.ttl_provisional_s).toBe(30);
   });
 
-  test('toma Redis incierta (red) con el cliente roto: CLIENT KILL de la sesión vieja por un cliente nuevo y después EVAL', async () => {
+  test.each([
+    ['el servidor que atiende la conexión nueva es OTRO (reinicio o cambio detrás de la misma dirección)', { reinicio: 'mysql' }],
+    ['el número de la sesión vieja lo tiene OTRA conexión (otro HOST)', { hostAjeno: true }],
+  ])('toma MySQL incierta y %s: no se mata NADA; incierto', async (_name, over) => {
+    const { json, log } = await runWith({ insert: 'red', ...over });
+    expect(log.filter(([, s]) => /^KILL/.test(String(s)))).toEqual([]);
+    expect(json.liberacion).toEqual({ redis: 'liberado', mysql: 'incierto' });
+  });
+
+  test('toma Redis incierta (red) con el cliente roto: CLIENT KILL de la sesión vieja (id Y dirección, mismo run_id) y después EVAL', async () => {
     const { json, log } = await runWith({ redisSet: 'red' });
     expect(json).toMatchObject({ resultado: 'redis_no_disponible', liberacion: { redis: 'compensado', mysql: 'no_tomado' } });
-    expect(log.filter(([id]) => id === 'r2').map(([, c]) => c)).toEqual(['connect', 'CLIENT KILL ID 101', 'EVAL', 'disconnect']);
+    expect(log.filter(([id]) => id === 'r2').map(([, c]) => c))
+      .toEqual(['connect', 'INFO server', 'CLIENT KILL ID 101 ADDR 127.0.0.1:5555', 'EVAL', 'disconnect']);
     // La base sólo se usó para leer el reloj.
     expect(log.filter(([id]) => id === 2)).toEqual([]);
+  });
+
+  test('toma Redis incierta y OTRO servidor Redis (run_id distinto): no se mata nada; incierto', async () => {
+    const { json, log } = await runWith({ redisSet: 'red', reinicio: 'redis' });
+    expect(log.filter(([, c]) => /KILL/.test(String(c)))).toEqual([]);
+    expect(json.liberacion).toEqual({ redis: 'incierto', mysql: 'no_tomado' });
+  });
+
+  test('ya no cabe un intento después de leer el reloj: limite_total SIN tomar ningún lock', async () => {
+    const { json, log } = await runWith({ selectMs: 1100, opts: { attemptTimeoutS: 1, maxDurationS: 2 } });
+    expect(json).toMatchObject({ resultado: 'limite_total', intentos_ejecutados: 0, liberacion: { redis: 'no_tomado', mysql: 'no_tomado' } });
+    expect(log.filter(([id]) => String(id).startsWith('r') || id === 2)).toEqual([]);
+  });
+
+  test('renovación previa al intento que tarda más de 4 s: no se lanza la lectura (exclusion_no_garantizada)', async () => {
+    const { json } = await runWith({ insert: 'ok', evalMs: 4200 });
+    expect(json).toMatchObject({ resultado: 'exclusion_no_garantizada', intentos_ejecutados: 0, intentos: [] });
+    expect(json.liberacion).toEqual({ redis: 'liberado', mysql: 'liberado' });
+  });
+
+  test('renovación previa lenta (pero válida) que se come el tiempo: el intento que ya no cabe no se lanza', async () => {
+    const { json } = await runWith({ insert: 'ok', evalMs: 3500, opts: { attemptTimeoutS: 5, maxDurationS: 7 } });
+    expect(json).toMatchObject({ resultado: 'limite_total', intentos_ejecutados: 0, intentos: [] });
+    expect(json.liberacion).toEqual({ redis: 'liberado', mysql: 'liberado' });
   });
 
   test.each([

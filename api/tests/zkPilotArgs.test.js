@@ -187,6 +187,15 @@ describe('piloto de estados: CLI sin conexiones ante entrada inválida', () => {
     expect(r.stdout + r.stderr).not.toContain('corta');
   });
 
+  test('clave del corte VACÍA (línea de la plantilla sin completar) = sin clave: no aborta por configuración', () => {
+    const r = spawnSync(process.execPath, [SCRIPT, '--device-id', '5', ...LIMITS, '--cutoff', '2099-01-01'], {
+      env: { PATH: process.env.PATH, TZ: 'UTC', DB_HOST: '192.0.2.1', DB_PORT: '9', REDIS_URL: 'redis://192.0.2.1:9', PILOT_CORTE_CLAVE: '' },
+      encoding: 'utf8', timeout: 20000,
+    });
+    // Sigue de largo hasta el control del corte (en el futuro): la clave vacía no es configuración inválida.
+    expect(JSON.parse(r.stdout)).toMatchObject({ resultado: 'corte_futuro', codigo_salida: 2 });
+  });
+
   test.each([
     ['en el futuro', () => '2099-01-01', 'corte_futuro'],
     ['dentro del margen de 120 min', () => {
@@ -215,8 +224,12 @@ describe('piloto de estados: CLI sin conexiones ante entrada inválida', () => {
 
 describe('piloto de estados: comparación del corte (CLI sin conexiones)', () => {
   const COMPARE = path.join(__dirname, '..', 'scripts', 'zk-raw-state-pilot-compare.js');
-  const base = (over = {}) => ({
+  // Dos corridas DISTINTAS del mismo reloj (corrida_id); `corrida` permite fabricar la misma dos veces.
+  let corridas = 0;
+  const base = (over = {}, { corrida = `c${(corridas += 1)}`, reloj = 5 } = {}) => ({
     resultado: 'ok',
+    corrida_id: corrida,
+    reloj: { id: reloj, modo_conexion: 'tcp' },
     corte: {
       hasta: '2026-10-02 23:59:59', canon: 'sishoras.zk-raw-state-pilot.corte/2', decodificacion: { zona: 'UTC' },
       conjunto: { registros: 28, formato: 'tcp40', huella: 'a'.repeat(64), clave_id: 'c'.repeat(12), huella_motivo: null, ...over },
@@ -238,6 +251,16 @@ describe('piloto de estados: comparación del corte (CLI sin conexiones)', () =>
     expect(compare(base(), base({ huella: 'b'.repeat(64) }))).toEqual({ status: 1, out: { resultado: 'distinto', motivo: null, delta_registros: 0 } });
     expect(compare(base(), base({ registros: 29, huella: 'b'.repeat(64) })).out).toMatchObject({ resultado: 'distinto', delta_registros: 1 });
     expect(compare(base(), 'no es json')).toMatchObject({ status: 2, out: { resultado: 'entrada_invalida' } });
+    // JSON válido que no es una salida del piloto (lista, null, número): también entrada inválida.
+    for (const raro of ['[]', 'null', '42', '"texto"']) expect(compare(base(), raro)).toMatchObject({ status: 2, out: { resultado: 'entrada_invalida' } });
+  });
+
+  test('no comparable: el MISMO archivo dos veces, otro reloj o sin identificador de corrida', () => {
+    const una = base();
+    expect(compare(una, una)).toEqual({ status: 3, out: { resultado: 'no_comparable', motivo: 'misma_corrida', delta_registros: null } });
+    expect(compare(base(), base({}, { reloj: 6 })).out).toMatchObject({ resultado: 'no_comparable', motivo: 'reloj_distinto' });
+    const { corrida_id: _sin, ...sinCorrida } = base();
+    expect(compare(sinCorrida, base()).out).toMatchObject({ resultado: 'no_comparable', motivo: 'sin_corrida' });
   });
 
   test.each([
@@ -254,7 +277,8 @@ describe('piloto de estados: comparación del corte (CLI sin conexiones)', () =>
     expect(compararCortes(base(), { ...base(), corte: { ...base().corte, hasta: '2026-10-01 23:59:59' } }).motivo).toBe('corte_distinto');
     expect(compararCortes(base(), { ...base(), corte: { ...base().corte, decodificacion: { zona: 'America/Asuncion' } } }).motivo).toBe('zona_distinta');
     expect(compararCortes(base(), { ...base(), corte: null }).motivo).toBe('sin_corte');
-    const sinClave = { ...base({ huella: null, clave_id: null, huella_motivo: 'sin_clave' }) };
-    expect(compararCortes(sinClave, sinClave)).toEqual({ resultado: 'no_comparable', motivo: 'sin_clave', delta_registros: null });
+    expect(compararCortes(base(), { ...base(), corte: { ...base().corte, canon: 'sishoras.zk-raw-state-pilot.corte/1' } }).motivo).toBe('canon_distinto');
+    const sinClave = (corrida) => base({ huella: null, clave_id: null, huella_motivo: 'sin_clave' }, { corrida });
+    expect(compararCortes(sinClave('x1'), sinClave('x2'))).toEqual({ resultado: 'no_comparable', motivo: 'sin_clave', delta_registros: null });
   });
 });

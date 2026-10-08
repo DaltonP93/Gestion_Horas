@@ -131,13 +131,53 @@ function hardCancelMysql(conn) {
  * bytes en vuelo llegan igual); antes de compensar una toma incierta por otra conexión, la vieja se
  * mata y se espera a que su hilo desaparezca. El mismo usuario puede matar sus propias conexiones
  * sin privilegios globales, y en PROCESSLIST ve sólo las suyas.
+ *
+ * Un número de conexión sólo identifica una sesión dentro de UNA vida del servidor: tras un
+ * reinicio o un cambio de servidor detrás de la misma dirección, el mismo número puede ser de otro
+ * proceso. Por eso la identidad de la sesión es { hilo, HOST (ip:puerto del cliente visto por el
+ * servidor), arranque del servidor }, se toma al abrir la conexión del lock y se vuelve a comprobar
+ * antes de matar: si algo no coincide, no se mata nada.
  */
 const MYSQL_KILL_SQL = Object.freeze({
   kill: 'KILL CONNECTION ?',
-  alive: 'SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE ID = ?',
+  session: 'SELECT HOST AS host FROM information_schema.PROCESSLIST WHERE ID = ?',
+  uptime: "SHOW GLOBAL STATUS LIKE 'Uptime'",
 });
 /** ER_NO_SUCH_THREAD: la conexión ya no existe en el servidor. */
 const ER_NO_SUCH_THREAD = 1094;
+/** Tolerancia al comparar el instante de arranque del servidor (Uptime entero + ida y vuelta). */
+const BOOT_TOLERANCE_MS = 2000;
+
+/** Instante de arranque del servidor MySQL (reloj local) a partir de SHOW GLOBAL STATUS 'Uptime'. */
+function mysqlBootMs(rows, now = Date.now()) {
+  const row = Array.isArray(rows) ? rows.find((r) => r && /^uptime$/i.test(String(r.Variable_name))) : null;
+  const up = row ? Number(row.Value) : NaN;
+  return Number.isFinite(up) ? now - up * 1000 : null;
+}
+
+/**
+ * ¿Respondió el SERVIDOR? Sólo un paquete de error de MySQL (errno positivo con SQLSTATE) prueba
+ * que la sentencia no se aplicó. Un error de red de Node (ECONNRESET: errno -104, EPIPE…) también
+ * trae errno entero, pero negativo: no prueba nada.
+ */
+function isMysqlServerError(err) {
+  return !!err && Number.isInteger(err.errno) && err.errno > 0 && typeof err.sqlState === 'string';
+}
+
+/**
+ * Identidad de la sesión Redis del lock: { id, addr, runId }. `CLIENT INFO` (id y dirección del
+ * cliente vista por el servidor) e `INFO server` (run_id cambia en cada arranque). null si falta algo.
+ */
+function parseRedisIdentity(clientInfo, infoServer) {
+  const id = /(?:^|\s)id=(\d+)/.exec(String(clientInfo || ''));
+  const addr = /(?:^|\s)addr=(\S+)/.exec(String(clientInfo || ''));
+  const runId = parseRunId(infoServer);
+  return id && addr && runId ? { id: id[1], addr: addr[1], runId } : null;
+}
+function parseRunId(infoServer) {
+  const m = /(?:^|\n)run_id:([0-9a-f]+)/i.exec(String(infoServer || ''));
+  return m ? m[1] : null;
+}
 
 /** Sentencias del lock MySQL del piloto: las del fallback habitual, sólo sobre su fila. */
 const MYSQL_LOCK_SQL = Object.freeze({
@@ -155,7 +195,8 @@ const MYSQL_ORIGIN = 'piloto_estados';
  * exista: tabla ausente y falta de permiso no se distinguen ('sin_acceso').
  */
 function mysqlLockError(err) {
-  const errno = err && (err.errno ?? (err.cause && err.cause.errno));
+  const src = err && (Number.isInteger(err.errno) ? err : err.cause);
+  const errno = src && src.errno > 0 ? src.errno : null;
   if (errno === 1062) return 'ocupado';
   if (errno === 1142 || errno === 1044 || errno === 1146) return 'sin_acceso';
   if (errno === 1205 || errno === 1213) return 'espera_de_bloqueo';
@@ -204,6 +245,7 @@ function createMysqlLock({ conn, deviceId, ttlS, token, owner }) {
 
 module.exports = {
   createRedisClient, createPilotLock, createMysqlLock, mysqlLockError, rowsMatched, hardCancelMysql, guardMysqlErrors,
-  lockSessionOk, MYSQL_LOCK_SQL, MYSQL_KILL_SQL, ER_NO_SUCH_THREAD, MYSQL_ORIGIN, LOCK_SESSION_SQL, DB_TIMEZONE,
+  lockSessionOk, isMysqlServerError, mysqlBootMs, parseRedisIdentity, parseRunId,
+  MYSQL_LOCK_SQL, MYSQL_KILL_SQL, ER_NO_SUCH_THREAD, BOOT_TOLERANCE_MS, MYSQL_ORIGIN, LOCK_SESSION_SQL, DB_TIMEZONE,
   SERVER_LOCK_WAIT_S, PROVISIONAL_TTL_S,
 };

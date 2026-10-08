@@ -39,6 +39,7 @@
  * No usa zktecoReader, deviceLock, auditoría, el ORM ni ningún camino de
  * importación, staging, recálculo o actualización de dispositivos.
  */
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -49,7 +50,8 @@ const { pyDateTimeStr } = require('../zkRecordShape');
 const { addMinutesWall, CANON_CORTE } = require('./corte');
 const {
   createRedisClient, createPilotLock, createMysqlLock, mysqlLockError, hardCancelMysql, guardMysqlErrors, lockSessionOk,
-  LOCK_SESSION_SQL, MYSQL_KILL_SQL, ER_NO_SUCH_THREAD, DB_TIMEZONE, MYSQL_ORIGIN, PROVISIONAL_TTL_S,
+  isMysqlServerError, mysqlBootMs, parseRedisIdentity, parseRunId,
+  LOCK_SESSION_SQL, MYSQL_KILL_SQL, ER_NO_SUCH_THREAD, BOOT_TOLERANCE_MS, DB_TIMEZONE, MYSQL_ORIGIN, PROVISIONAL_TTL_S,
 } = require('./lock');
 const { bounded, createStop, BoundedError } = require('./bounded');
 const { releaseCommit } = require('./args');
@@ -79,7 +81,9 @@ const CHILD_ENV_KEYS = ['PATH', 'LANG', 'LC_ALL', 'NODE_ENV', 'NODE_OPTIONS', 'H
 // Margen del corte respecto de "ahora": una marca nueva con el reloj atrasado hasta este tiempo no puede
 // caer dentro del conjunto.
 const CUTOFF_MARGIN_MIN = 120;
-const SIGNALS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 };
+// SIGTSTP (Ctrl+Z) también interrumpe: suspendido, el piloto no renovaría y el lock vencería con la
+// sesión del hijo con el reloj todavía abierta. (SIGSTOP o congelar el cgroup no se pueden atrapar.)
+const SIGNALS = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129, SIGTSTP: 148 };
 
 const EXIT_CODES = Object.freeze({
   ok: 0,
@@ -122,6 +126,8 @@ function skeletonFor(opts, rootDir) {
   const rel = releaseCommit(rootDir);
   return {
     formato: FORMAT,
+    // Identificador aleatorio de ESTA corrida: la comparación rechaza el mismo archivo dos veces.
+    corrida_id: crypto.randomBytes(8).toString('hex'),
     advertencia: ADVERTENCIA,
     herramienta: { commit: rel.commit, origen_commit: rel.origen, node_zklib: nodeZklibVersion(), node: process.version },
     reloj: { id: opts ? opts.deviceId : null, modo_conexion: null },
@@ -188,7 +194,8 @@ async function runPilot(opts, { env = process.env, rootDir }) {
   };
   const onSignal = {};
   for (const sig of Object.keys(SIGNALS)) {
-    onSignal[sig] = () => abort('interrumpido', sig);
+    // La PRIMERA señal queda registrada aunque el piloto ya estuviera cortando por otro motivo.
+    onSignal[sig] = () => { if (!state.signal) state.signal = sig; abort('interrumpido', sig); };
     process.on(sig, onSignal[sig]);
   }
   const deadlineTimer = setTimeout(() => abort('limite_total'), Math.max(0, deadline - Date.now()));
@@ -247,12 +254,23 @@ async function runPilot(opts, { env = process.env, rootDir }) {
   });
   /** Resultado ante un fallo: si fue un corte (límite, señal, lock perdido), manda ese motivo. */
   const failure = (err, fallback) => (err instanceof BoundedError && err.motivo === 'detenido' && state.abort ? state.abort : fallback);
-  /** ¿La operación fallida pudo aplicarse igual? Sólo un error del SERVIDOR prueba que no. */
+  /**
+   * ¿La operación fallida pudo aplicarse igual? Sólo una respuesta de error del SERVIDOR prueba que
+   * no (en MySQL, errno positivo con SQLSTATE: un error de red también trae errno, negativo).
+   */
   const outcomeUncertain = (err, kind) => {
     if (!(err instanceof BoundedError) || err.motivo !== 'error') return true;
     const c = err.cause;
     if (kind === 'redis') return !(c && c.constructor && c.constructor.name === 'ErrorReply');
-    return !(c && Number.isInteger(c.errno)) && !(c && c.code === 'PILOT_STOPPED');
+    return !isMysqlServerError(c) && !(c && c.code === 'PILOT_STOPPED');
+  };
+
+  /** Estado del lock MySQL ante un fallo: corte, tope o error (por errno; sin conexión todavía: `antes`). */
+  const estadoMysql = (e, antes = null) => {
+    if (antes) return antes;
+    if (e instanceof BoundedError && e.motivo === 'detenido') return 'detenido';
+    if (e instanceof BoundedError && e.motivo === 'timeout') return 'sin_respuesta';
+    return mysqlLockError(e && e.cause);
   };
 
   const mysqlConfig = () => ({
@@ -283,6 +301,33 @@ async function runPilot(opts, { env = process.env, rootDir }) {
     await run(() => c.query(LOCK_SESSION_SQL.set, [DB_TIMEZONE]));
     const [[row]] = await run(() => c.query(LOCK_SESSION_SQL.check));
     return lockSessionOk(row);
+  };
+  /**
+   * Identidad de la sesión del lock en el servidor (hilo, HOST visto por el servidor y arranque del
+   * servidor), para poder matarla después SÓLO si sigue siendo ella. Un error del servidor (sin
+   * permiso) deja la identidad en null: una toma incierta no podrá anularse. Un error de red lanza.
+   */
+  const mysqlIdentity = async (c, run) => {
+    try {
+      const [rows] = await run(() => c.query(MYSQL_KILL_SQL.session, [c.threadId]));
+      const [status] = await run(() => c.query(MYSQL_KILL_SQL.uptime));
+      const bootMs = mysqlBootMs(status);
+      return rows.length && rows[0].host && bootMs !== null ? { threadId: c.threadId, host: String(rows[0].host), bootMs } : null;
+    } catch (e) {
+      if (e instanceof BoundedError && e.motivo === 'error' && isMysqlServerError(e.cause)) return null;
+      throw e;
+    }
+  };
+  /** Ídem en Redis: CLIENT INFO (id y dirección del cliente) e INFO server (run_id). */
+  const redisIdentity = async (c, run) => {
+    try {
+      const info = await run(() => c.sendCommand(['CLIENT', 'INFO']));
+      const server = await run(() => c.sendCommand(['INFO', 'server']));
+      return parseRedisIdentity(info, server);
+    } catch (e) {
+      if (!outcomeUncertain(e, 'redis')) return null;   // sin permiso o Redis anterior a 6.2
+      throw e;
+    }
   };
 
   /** Renueva la clave y la fila EN PARALELO. false (y abort) si la exclusión ya no está garantizada. Nunca lanza. */
@@ -385,18 +430,26 @@ async function runPilot(opts, { env = process.env, rootDir }) {
 
   /**
    * Mata en el servidor la sesión vieja del lock MySQL y espera a que su hilo desaparezca: después,
-   * nada de lo que esa conexión tenga en vuelo puede aplicarse. true sólo si se confirmó.
+   * nada de lo que esa conexión tenga en vuelo puede aplicarse. Sólo si es el MISMO servidor (mismo
+   * arranque) y el hilo sigue siendo el nuestro (mismo HOST); si no, no se toca. true sólo si se
+   * confirmó que la sesión vieja ya no existe.
    */
-  const killMysqlSession = async (c, run, threadId) => {
+  const killMysqlSession = async (c, run, ident) => {
+    const [status] = await run(() => c.query(MYSQL_KILL_SQL.uptime));
+    const bootMs = mysqlBootMs(status);
+    if (bootMs === null || Math.abs(bootMs - ident.bootMs) > BOOT_TOLERANCE_MS) return false;   // otro servidor
+    const [rows] = await run(() => c.query(MYSQL_KILL_SQL.session, [ident.threadId]));
+    if (!rows.length) return true;                                   // ya no existe
+    if (String(rows[0].host) !== ident.host) return false;           // ese número es de otra conexión
     try {
-      await run(() => c.query(MYSQL_KILL_SQL.kill, [threadId]));
+      await run(() => c.query(MYSQL_KILL_SQL.kill, [ident.threadId]));
     } catch (e) {
       const errno = e instanceof BoundedError && e.motivo === 'error' && e.cause ? e.cause.errno : null;
       if (errno !== ER_NO_SUCH_THREAD) return false;
     }
     for (;;) {
-      const [[row]] = await run(() => c.query(MYSQL_KILL_SQL.alive, [threadId]));
-      if (Number(row.n) === 0) return true;
+      const [left] = await run(() => c.query(MYSQL_KILL_SQL.session, [ident.threadId]));
+      if (!left.length) return true;
       if (closeLeft() <= KILL_POLL_MS) return false;
       await sleep(KILL_POLL_MS);
     }
@@ -414,9 +467,16 @@ async function runPilot(opts, { env = process.env, rootDir }) {
     try {
       await run(() => c.connect());
       let killed = false;
-      if (uncertain[which] && sessionIds.redis !== null) {
-        // 1 si la cerró, 0 si ya no existía: en los dos casos la sesión vieja ya no ejecuta nada.
-        try { await run(() => c.sendCommand(['CLIENT', 'KILL', 'ID', String(sessionIds.redis)])); killed = true; } catch { /* sin confirmar */ }
+      if (uncertain[which] && sessionIds.redis) {
+        // Sólo en el MISMO servidor (run_id) y con id Y dirección de la sesión vieja (filtros en AND):
+        // 1 si la cerró, 0 si ya no existía; en los dos casos la sesión vieja ya no ejecuta nada.
+        try {
+          const { id, addr, runId } = sessionIds.redis;
+          if (parseRunId(await run(() => c.sendCommand(['INFO', 'server']))) === runId) {
+            await run(() => c.sendCommand(['CLIENT', 'KILL', 'ID', id, 'ADDR', addr]));
+            killed = true;
+          }
+        } catch { /* sin confirmar */ }
       }
       return { mine: await run(() => releaseWith(c)), killed };
     } finally {
@@ -431,7 +491,7 @@ async function runPilot(opts, { env = process.env, rootDir }) {
       // autocommit explícito: el DELETE por token tiene que quedar confirmado (no usa NOW()).
       await run(() => c.query(LOCK_SESSION_SQL.set, [DB_TIMEZONE]));
       let killed = false;
-      if (uncertain[which] && sessionIds.lockConn !== null) {
+      if (uncertain[which] && sessionIds.lockConn) {
         try { killed = await killMysqlSession(c, run, sessionIds.lockConn); } catch { /* sin confirmar */ }
       }
       return { mine: await run(() => releaseWith(c)), killed };
@@ -494,9 +554,11 @@ async function runPilot(opts, { env = process.env, rootDir }) {
     const c = slot === 'conn' ? conn : lockConn;
     if (!c) return null;
     let how = 'forzado';
-    // (Tras la gracia, un cliente con algo todavía en vuelo ya quedó cancelado: `dead`.)
-    if (!dead[slot] && closeLeft() > 0) {
-      try { await closeOp(slot, () => c.end()); how = 'normal'; } catch { /* forzado */ }
+    // (Tras la gracia, un cliente con algo todavía en vuelo ya quedó cancelado: `dead`.) Una conexión
+    // rota no cierra "normal": end() de mysql2/promise resuelve igual, con el error como valor.
+    const broken = !!(c.connection && c.connection._fatalError);
+    if (!dead[slot] && !broken && closeLeft() > 0) {
+      try { how = (await closeOp(slot, () => c.end())) instanceof Error ? 'forzado' : 'normal'; } catch { /* forzado */ }
     }
     hardCancelMysql(c);
     closed[slot] = how;
@@ -544,11 +606,9 @@ async function runPilot(opts, { env = process.env, rootDir }) {
         await op('redis', () => redis.connect());
       } catch (e) { resultado = failure(e, 'redis_no_disponible'); return; }
       try {
-        sessionIds.redis = await op('redis', () => redis.clientId());
-      } catch (e) {
-        if (outcomeUncertain(e, 'redis')) { resultado = failure(e, 'redis_no_disponible'); return; }
-        // Sin permiso para CLIENT ID: una toma incierta no podrá anularse (se informará 'incierto').
-      }
+        // null sin permiso (o Redis anterior a 6.2): una toma incierta no podrá anularse ('incierto').
+        sessionIds.redis = await redisIdentity(redis, (f) => op('redis', f));
+      } catch (e) { resultado = failure(e, 'redis_no_disponible'); return; }
       lock = createPilotLock({ redis, deviceId: opts.deviceId, ttlMs });
       let acquired;
       try {
@@ -566,14 +626,14 @@ async function runPilot(opts, { env = process.env, rootDir }) {
       // …y la fila propia en device_locks, con una conexión aparte que NO es de sólo lectura.
       try {
         lockConn = await connectMysql((f) => op('lockConn', f));
-        sessionIds.lockConn = Number.isInteger(lockConn.threadId) ? lockConn.threadId : null;
         if (!(await prepareLockSession(lockConn, (f) => op('lockConn', f)))) {
           json.exclusion.mysql.estado = 'sesion_invalida';
           resultado = 'exclusion_no_garantizada';
           return;
         }
+        sessionIds.lockConn = await mysqlIdentity(lockConn, (f) => op('lockConn', f));
       } catch (e) {
-        json.exclusion.mysql.estado = 'sin_conexion';
+        json.exclusion.mysql.estado = estadoMysql(e, lockConn ? null : 'sin_conexion');
         resultado = failure(e, 'exclusion_no_garantizada');
         return;
       }
@@ -588,8 +648,7 @@ async function runPilot(opts, { env = process.env, rootDir }) {
         held.mysql = true;
       } catch (e) {
         uncertain.mysql = outcomeUncertain(e, 'mysql');
-        if (!(e instanceof BoundedError) || e.motivo === 'error') json.exclusion.mysql.estado = mysqlLockError(e && e.cause);
-        else json.exclusion.mysql.estado = e.motivo === 'detenido' ? 'detenido' : 'sin_respuesta';
+        json.exclusion.mysql.estado = estadoMysql(e);
         resultado = failure(e, 'exclusion_no_garantizada');
         return;
       }
@@ -609,12 +668,22 @@ async function runPilot(opts, { env = process.env, rootDir }) {
         if (!(await verifySerial())) break;
         // Renovación lenta: a la clave/fila podría quedarles menos vida que al hijo.
         if (Date.now() - sentAt > FRESH_RENEW_MS) { abort('exclusion_no_garantizada'); break; }
+        // La renovación pudo comerse el tiempo: un intento que ya no cabe no toca el reloj.
+        if (deadline - Date.now() < attemptMs) { stoppedByLimit = true; break; }
         const { attempt, agregado } = await runAttempt(n, device);
         json.intentos.push(attempt);
         json.intentos_ejecutados = n;
         if (attempt.cierre !== 'proceso_terminado') break;
         if (attempt.estado === 'captura_no_garantizada') { captureFailed = true; break; }
-        if (attempt.estado === 'completa') { selected = { intento: n, ...agregado }; break; }
+        if (attempt.estado === 'completa') {
+          // La lectura vale sólo si la exclusión siguió siendo NUESTRA hasta que el hijo terminó: una
+          // pérdida sin desconexión (clave borrada, otro dueño) se ve recién con una verificación
+          // enviada después. La que esté en curso se envió antes: se espera y se manda otra.
+          if (renewing) await renewing;
+          if (state.abort || !(await verifySerial())) break;
+          selected = { intento: n, ...agregado };
+          break;
+        }
         if (n < opts.attempts && opts.cooldownS > 0 && !state.abort) await sleepInterruptible(opts.cooldownS * 1000);
       }
 
@@ -634,6 +703,8 @@ async function runPilot(opts, { env = process.env, rootDir }) {
       resultado = resultado || 'error_interno';
       return;
     } finally {
+      // Una señal DURANTE el cierre se registra (`senal`) pero no cambia el resultado ya obtenido.
+      const abortBeforeClose = state.abort;
       clearTimeout(deadlineTimer);
       clearTimeout(renewTimer);
       stop.fire();
@@ -651,7 +722,7 @@ async function runPilot(opts, { env = process.env, rootDir }) {
       const [redisClose, mysqlLockClose, mysqlClose] = await Promise.all([closeRedis(), closeMysql('lockConn'), closeMysql('conn')]);
       json.cierre_clientes = { redis: redisClose, mysql: mysqlClose, mysql_lock: mysqlLockClose };
       for (const sig of Object.keys(SIGNALS)) process.removeListener(sig, onSignal[sig]);
-      if (state.abort === 'interrumpido' && resultado !== 'cierre_no_confirmado') resultado = 'interrumpido';
+      if (abortBeforeClose === 'interrumpido' && resultado !== 'cierre_no_confirmado') resultado = 'interrumpido';
       json.resultado = resultado || 'error_interno';
       json.senal = state.signal;
       json.codigo_salida = json.resultado === 'interrumpido' ? SIGNALS[state.signal] : (EXIT_CODES[json.resultado] ?? 1);

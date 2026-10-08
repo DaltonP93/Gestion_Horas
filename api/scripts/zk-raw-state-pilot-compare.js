@@ -12,17 +12,20 @@
  *   igual          el conjunto anterior al corte es el mismo en las dos corridas;
  *   distinto       difiere: una marca alterada, borrada o nueva con la hora del
  *                  reloj atrasada más que el margen (las posteriores no cuentan);
- *   no_comparable  falta algo para comparar (resultado no ok, otro corte, otra
- *                  clave, otro formato, otra zona de decodificación o sin huella).
+ *   no_comparable  falta algo para comparar (resultado no ok, otro reloj, la
+ *                  misma corrida dos veces, otro corte, otra clave, otro formato,
+ *                  otra zona de decodificación o sin huella).
  *
  * Códigos de salida: 0 igual · 1 distinto · 3 no comparable · 2 entrada inválida.
  */
 const fs = require('fs');
 const { compararCortes } = require('../src/services/zkPilot/corte');
 
+/** Una salida del piloto: un OBJETO JSON. Cualquier otra cosa (texto, null, lista, número) es inválida. */
 function readJson(file) {
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
   } catch {
     return null;
   }

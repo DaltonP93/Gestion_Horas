@@ -7,7 +7,7 @@
  *   --device-id N          reloj (entero positivo canónico; utils/strictId)
  *   --attempts N           1..5            (obligatorio)
  *   --attempt-timeout S    1..900 s        (obligatorio) por intento
- *   --max-duration S       1..3600 s       (obligatorio) total, ≥ timeout
+ *   --max-duration S       1..3600 s       (obligatorio) total, > timeout
  *   --cooldown S           0..60 s         (por defecto 4) entre intentos
  *   --renew-seconds S      1..30 s         (por defecto 5) renovación del lock
  *   --cutoff AAAA-MM-DD    corte común (día de pared de Paraguay, inclusivo; opcional): el
@@ -109,7 +109,7 @@ function parseArgs(argv) {
 }
 
 /**
- * Lee un archivo de configuración mínimo. Sólo toma DB_* y REDIS_URL (el resto
+ * Lee un archivo de configuración mínimo. Sólo toma DB_*, REDIS_URL y PILOT_CORTE_CLAVE (el resto
  * se ignora y sólo se cuenta). Exige archivo regular, no enlace, y sin permisos
  * para grupo u otros.
  */

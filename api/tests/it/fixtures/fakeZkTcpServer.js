@@ -20,6 +20,7 @@
  *   'chunked'   fuerza la entrega por bloques.
  *   'truncate'  por bloques; corta el socket tras entregar el primer bloque.
  *   'hang'      contesta CMD_CONNECT y después no responde nada más.
+ *   'slow'      como 'ok', pero entrega los datos `slowMs` después del pedido.
  *   'silent'    acepta la conexión y no contesta nada.
  */
 const net = require('net');
@@ -42,7 +43,7 @@ function attendanceBuffer(records) {
   return Buffer.concat([size, body]);
 }
 
-async function startFakeZkTcp({ records = [], scenarios = ['ok'], host = '127.0.0.1' } = {}) {
+async function startFakeZkTcp({ records = [], scenarios = ['ok'], host = '127.0.0.1', slowMs = 3000 } = {}) {
   const payload = attendanceBuffer(records);
   const connections = [];
   const sockets = new Set();
@@ -76,6 +77,7 @@ async function startFakeZkTcp({ records = [], scenarios = ['ok'], host = '127.0.
           send(COMMANDS.CMD_ACK_OK);
           return;
         case COMMANDS.CMD_DATA_WRRQ: {
+          if (scenario === 'slow') { setTimeout(() => send(COMMANDS.CMD_DATA, payload), slowMs); return; }
           const chunked = scenario !== 'ok' || payload.length > 60000;
           if (!chunked) { send(COMMANDS.CMD_DATA, payload); return; }
           const prep = Buffer.alloc(9);

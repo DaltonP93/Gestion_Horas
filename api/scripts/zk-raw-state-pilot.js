@@ -12,19 +12,22 @@
  *
  *   node scripts/zk-raw-state-pilot.js --device-id N \
  *     --attempts 3 --attempt-timeout 600 --max-duration 1900 \
- *     [--cooldown 4] [--renew-seconds 5] [--env-file pilot.env] [--out salida.json]
+ *     [--cooldown 4] [--renew-seconds 5] [--cutoff "AAAA-MM-DD HH:MM:SS"] \
+ *     [--env-file pilot.env] [--out salida.json]
  *
  * Configuración (variables de entorno o --env-file, que sólo toma estas):
  *   DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD   MySQL; sesión READ ONLY, sólo SELECT
  *   REDIS_URL                                     el mismo Redis que usa el worker
  *   PILOT_CORTE_CLAVE                             64 hex: clave de la huella del corte común
- *                                                 (la misma en las dos corridas; nunca se publica)
+ *                                                 (la misma en las dos corridas; nunca se publica).
+ *                                                 Vacía = sin clave (sólo conteos).
  *
  * Códigos de salida: 0 ok · 2 entrada inválida · 3 captura no garantizada o
  * incompleta · 4 reloj ocupado / exclusión no garantizada · 5 Redis no
  * disponible · 6 sin lectura completa / límite total · 7 lock perdido ·
  * 8 reloj inexistente o base no disponible · 1 error interno o cierre no
- * confirmado · 128+n señal (130 SIGINT, 143 SIGTERM, 129 SIGHUP).
+ * confirmado · 128+n señal (130 SIGINT, 143 SIGTERM, 129 SIGHUP, 148 SIGTSTP:
+ * Ctrl+Z interrumpe; el piloto nunca queda suspendido con el lock tomado).
  */
 const fs = require('fs');
 const path = require('path');
@@ -69,6 +72,8 @@ async function main() {
     if (!loaded.ok) return rejected('configuracion_invalida', opts, opts.out);
     env = { ...env, ...loaded.env };
   }
+  // Vacía (p. ej. la línea de la plantilla sin completar) equivale a no tenerla: sólo conteos.
+  if (env.PILOT_CORTE_CLAVE === '') delete env.PILOT_CORTE_CLAVE;
   if (env.PILOT_CORTE_CLAVE !== undefined && !CLAVE_RE.test(env.PILOT_CORTE_CLAVE)) {
     return rejected('configuracion_invalida', opts, opts.out);
   }

@@ -32,6 +32,7 @@ const mysql = require('mysql2/promise');
 const { describeIT, makeConn, cfg } = require('./helper');
 const { startFakeZkTcp } = require('./fixtures/fakeZkTcpServer');
 const { startFreezableProxy, RESP, MYSQL } = require('./fixtures/freezableTcpProxy');
+const { STOP_GRACE_MS, CLOSE_OP_MS } = require('../../src/services/zkPilot/runPilot');
 const {
   RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords, CUTOFF, AFTER_CUTOFF, withAlteredBeforeCutoff, DST_RECORDS, expectedCorteHuella,
 } = require('./fixtures/pilotRecords');
@@ -56,13 +57,22 @@ const limits = ({ attempts = 1, timeout = 20, max = 60, cooldown = 0, renew = 1 
   '--cooldown', String(cooldown), '--renew-seconds', String(renew),
 ];
 
-/** Procesos de lectura del piloto vivos (por su línea de comando). */
+/**
+ * Grupos de proceso de los pilotos que lanzó ESTA suite: cada piloto corre en su propio grupo
+ * (spawn detached) y su proceso de lectura lo hereda, aunque el piloto muera y lo adopte init.
+ */
+const pilotGroups = new Set();
+
+/** Procesos de lectura vivos de los pilotos de esta suite (por línea de comando y grupo); otros pilotos del equipo no cuentan. */
 function liveReadChildren() {
   const out = [];
   for (const pid of fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d))) {
     try {
       const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-      if (cmd.includes(CHILD_MARK)) out.push(Number(pid));
+      if (!cmd.includes(CHILD_MARK)) continue;
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const pgrp = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[2]);
+      if (pilotGroups.has(pgrp)) out.push(Number(pid));
     } catch { /* proceso terminado entre la lista y la lectura */ }
   }
   return out;
@@ -107,7 +117,8 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     const outFile = path.join(tmpDir, `out-${seq}.json`);
     const argv = [...(preload ? ['-r', preload] : []), SCRIPT, '--device-id', id, ...args, '--out', outFile];
     const t0 = Date.now();
-    const child = spawn(process.execPath, argv, { cwd: API_ROOT, env: pilotEnv(env), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, argv, { cwd: API_ROOT, env: pilotEnv(env), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    pilotGroups.add(child.pid);
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -203,6 +214,12 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     "SET SESSION time_zone = '-03:00', SESSION autocommit = 1, SESSION innodb_lock_wait_timeout = 2, SESSION lock_wait_timeout = 2",
     'SELECT @@session.time_zone AS tz, @@session.autocommit AS ac, @@global.read_only AS ro, @@global.super_read_only AS sro',
   ];
+  /** Identidad de la sesión del lock (para matarla después SÓLO si sigue siendo ella): sólo lecturas. */
+  const LOCK_IDENTITY_RES = [
+    /^SELECT HOST AS host FROM information_schema\.PROCESSLIST WHERE ID = \d+$/,
+    /^SHOW GLOBAL STATUS LIKE 'Uptime'$/,
+  ];
+  const isIdentitySql = (st) => LOCK_IDENTITY_RES.some((re) => re.test(st));
   /**
    * SQL del piloto por conexión: la de lectura sólo sesión READ ONLY + SELECT; la del lock (si se
    * abrió) sólo sentencias de su fila. Ninguna otra escritura, DDL ni auditoría.
@@ -220,7 +237,8 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     // autocommit con una hora posterior: su posición en el log no es la de ejecución; el orden
     // sesión → escrituras lo prueba la unitaria y su efecto, el caso del worker que retiene el lock.)
     if (lockConn) expect(lockStatements.filter((s) => LOCK_SESSION.includes(s)).sort()).toEqual([...LOCK_SESSION].sort());
-    const rest = lockStatements.filter((s) => !LOCK_SESSION.includes(s));
+    if (lockConn) expect(LOCK_IDENTITY_RES.map((re) => lockStatements.filter((st) => re.test(st)).length)).toEqual([1, 1]);
+    const rest = lockStatements.filter((s) => !LOCK_SESSION.includes(s) && !isIdentitySql(s));
     expect(rest.filter((s) => !isLockSql(s))).toEqual([]);
     expect(statements.filter((s) => /audit_events|CREATE\s|ALTER\s|DROP\s/i.test(s))).toEqual([]);
     return rest;
@@ -229,7 +247,7 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
   const expectNoSecretsOrPeople = (json) => {
     // El corte es un parámetro del operador y la huella es de CONJUNTO: se quitan antes de buscar
     // horas individuales o identificadores.
-    const text = JSON.stringify(json, (k, v) => (['hasta', 'huella', 'clave_id'].includes(k) ? '…' : v));
+    const text = JSON.stringify(json, (k, v) => (['hasta', 'huella', 'clave_id', 'corrida_id'].includes(k) ? '…' : v));
     for (const uid of USER_IDS) expect(text).not.toContain(uid);
     expect(text).not.toContain(ip);
     if (server) expect(text).not.toContain(String(server.port));
@@ -404,6 +422,11 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     expect(kinds[1]).toBe(1);              // INSERT de la fila propia
     expect(kinds.slice(2, -1).every((k) => k === 2)).toBe(true);   // renovaciones por token
     expect(kinds[kinds.length - 1]).toBe(3);   // liberación por token
+    // La fila nace con el TTL PROVISIONAL (30 s) y la renovación la lleva al completo (27 s = 20 + 1 + 5 + 1).
+    expect(lockSql[1]).toMatch(/INTERVAL 30 SECOND\)\)$/);
+    expect(lockSql.slice(2, -1).every((st) => /INTERVAL 27 SECOND\)/.test(st))).toBe(true);
+    // La lectura completa se acepta recién con una verificación de la exclusión POSTERIOR al fin del hijo.
+    expect(kinds.slice(2, -1).length).toBeGreaterThanOrEqual(2);
   });
 
   test('lectura truncada y después completa: intentos reales, cada uno cerrado antes del siguiente', async () => {
@@ -765,8 +788,8 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
   const redisPort = () => Number(new URL(REDIS_URL).port || 6379);
   const proxies = [];
   afterEach(async () => { for (const p of proxies.splice(0)) await p.close(); });
-  const proxyFor = async (target, freezeWhen = null, { delayWhen = null } = {}) => {
-    const p = await startFreezableProxy({ targetHost: '127.0.0.1', targetPort: target, freezeWhen, delayWhen });
+  const proxyFor = async (target, freezeWhen = null, { delayWhen = null, rstWhen = null } = {}) => {
+    const p = await startFreezableProxy({ targetHost: '127.0.0.1', targetPort: target, freezeWhen, delayWhen, rstWhen });
     proxies.push(p);
     return p;
   };
@@ -858,16 +881,16 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     expect(px.openClients()).toBe(0);
   });
 
-  test('liberación de Redis lenta por el mismo cliente (respuesta tardía): se cancela, se libera por uno nuevo y no se cae', async () => {
+  test('liberación de Redis lenta por el mismo cliente: se cancela, se libera por uno nuevo y el EVAL tardío no resucita ni borra nada', async () => {
     await useServer({ records: RECORDS, scenarios: ['ok'] });
-    // El EVAL de liberación (borra la clave) del cliente del lock tarda 3 s en llegar, más que el tope de un
+    // El EVAL de liberación (borra la clave) del cliente del lock tarda 4 s en llegar, más que el tope de un
     // paso de cierre (2 s). Sólo el primero: el del cliente nuevo pasa sin demora.
     let delayedOnce = false;
     const px = await proxyFor(redisPort(), null, {
       delayWhen: (chunk) => {
         if (delayedOnce || !RESP.contains("redis.call('del'")(chunk)) return 0;
         delayedOnce = true;
-        return 3000;
+        return 4000;
       },
     });
     const r = await runPilot({
@@ -881,10 +904,14 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
       resultado: 'ok', liberacion: { redis: 'liberado', mysql: 'liberado' }, cierre_clientes: { redis: 'forzado' },
     });
     expect(await redis.exists(lockKey)).toBe(0);
-    // Después llega el EVAL viejo (o se descarta): no borra nada ajeno ni resucita la clave.
+    // El EVAL viejo llega al servidor DESPUÉS de que el piloto terminó (su cliente ya no existe: la
+    // respuesta no tiene a quién llegar). Mientras tanto otro toma la clave: el EVAL viejo no la toca.
+    expect(px.state.flushes).toBe(0);
+    await redis.set(lockKey, 'otro-dueño', { PX: 60000 });
     expect(await px.waitDelayFlushed(1)).toBe(true);
     await sleep(300);
-    expect(await redis.exists(lockKey)).toBe(0);
+    expect(px.state.delivered).toBeGreaterThan(0);
+    expect(await redis.get(lockKey)).toBe('otro-dueño');
     expect(px.state.connections).toBe(2);         // la del lock y la nueva para liberar
   });
 
@@ -921,11 +948,12 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     // Por clientes NUEVOS: Redis (lock + nuevo) y MySQL (lectura + lock + nuevo).
     expect(rpx.state.connections).toBe(2);
     expect(mpx.state.connections).toBe(3);
-    // Gracia de 400 ms y clientes nuevos: sin esperar el tope de la renovación colgada (5 s) ni el de un
-    // paso de cierre por el mismo cliente (2 s).
+    // Gracia (400 ms) y clientes nuevos: sin esperar el tope de la renovación colgada (5 s) ni el de un
+    // paso de cierre por el mismo cliente (2 s). Correcto ≈ 0.5 s; sin la gracia ≥ CLOSE_OP_MS.
     const closeMs = t0 + r.ms - signalAt;
     process.stdout.write(`señal→salida: ${closeMs} ms\n`);
-    expect(closeMs).toBeLessThan(2000);
+    expect(STOP_GRACE_MS + 1000).toBeLessThan(CLOSE_OP_MS);
+    expect(closeMs).toBeLessThan(STOP_GRACE_MS + 1000);
     expect(await server.waitAllClosed(5000)).toBe(true);
   });
 
@@ -980,15 +1008,174 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     });
     expect(server.connections).toHaveLength(0);
     expect(await redis.exists(lockKey)).toBe(0);
-    // El INSERT viejo nunca se ejecutó; la conexión nueva mató la vieja, esperó su fin y recién después compensó.
+    // El INSERT viejo nunca se ejecutó; la conexión nueva comprobó que el hilo seguía siendo el nuestro
+    // (mismo arranque del servidor y mismo HOST), lo mató, esperó su fin y recién después compensó.
     expect(statements.filter((st) => /^INSERT INTO device_locks/.test(st))).toEqual([]);
     const kills = statements.filter((st) => /^KILL CONNECTION \d+$/.test(st));
     expect(kills).toHaveLength(1);
     const killed = kills[0].split(' ').pop();
+    const sessionSql = `SELECT HOST AS host FROM information_schema.PROCESSLIST WHERE ID = ${killed}`;
+    const before = statements.slice(0, statements.indexOf(kills[0]));
     const after = statements.slice(statements.indexOf(kills[0]) + 1);
-    expect(after).toContain(`SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST WHERE ID = ${killed}`);
+    expect(before.filter((st) => st === sessionSql).length).toBeGreaterThanOrEqual(2);   // identidad al abrir + antes de matar
+    expect(after).toContain(sessionSql);                                                  // sondeo hasta que desaparece
     expect(after.some((st) => /^DELETE FROM device_locks WHERE device_id = \d+ AND token = 'pilot:[0-9a-f]{32}'$/.test(st))).toBe(true);
     expect(statements.filter((st) => WRITE_RE.test(st) && !isLockSql(st))).toEqual([]);
+  });
+
+  // Un error de RED en MySQL (RST: errno -104) no prueba nada: la sentencia pudo aplicarse.
+  const isTokenDelete = (chunk) => chunk.length >= 5 && chunk[4] === 0x03
+    // (El texto puede ir precedido por los atributos de consulta de MySQL ≥ 8.0.23: no se ancla al inicio.)
+    && /DELETE FROM device_locks WHERE device_id = \d+ AND token/i.test(chunk.subarray(5).toString('utf8'));
+
+  test('toma MySQL aplicada y la conexión reseteada por la red (RST): incierta, se compensa y no queda fila', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    // El proxy entrega el INSERT al servidor y corta al cliente con RST: la respuesta se pierde.
+    const mpx = await proxyFor(cfg.port, null, { rstWhen: (chunk) => (MYSQL.queryContains('INSERT INTO device_locks')(chunk) ? 'despues' : null) });
+    const audit = await auditSql(async () => {
+      const out = await runPilot({
+        args: limits({ timeout: 20, max: 30 }),
+        env: { DB_HOST: '127.0.0.1', DB_PORT: String(mpx.port) },
+        killAfterMs: 45000,
+      });
+      await sleep(1500);
+      return out;
+    });
+    const { out: r, statements } = audit;
+    expect(r.hung).toBe(false);
+    expect(mpx.state.resets).toBe(1);
+    expect(await lockRows()).toBe(0);
+    expect(r.json).toMatchObject({
+      resultado: 'exclusion_no_garantizada', codigo_salida: 4,
+      liberacion: { redis: 'liberado', mysql: 'compensado' },
+      cierre_clientes: { mysql_lock: 'forzado' },
+    });
+    // El INSERT SÍ se ejecutó (sólo se perdió la respuesta) y la compensación lo borró por token.
+    expect(statements.filter((st) => /^INSERT INTO device_locks/.test(st))).toHaveLength(1);
+    expect(statements.some((st) => /^DELETE FROM device_locks WHERE device_id = \d+ AND token = 'pilot:[0-9a-f]{32}'$/.test(st))).toBe(true);
+    expect(server.connections).toHaveLength(0);
+  });
+
+  test('liberación MySQL cortada por la red (RST): se libera por una conexión nueva, no queda la fila hasta el TTL', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    let once = false;
+    const mpx = await proxyFor(cfg.port, null, {
+      rstWhen: (chunk) => {
+        if (once || !isTokenDelete(chunk)) return null;
+        once = true;
+        return 'antes';
+      },
+    });
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 30 }),
+      env: { DB_HOST: '127.0.0.1', DB_PORT: String(mpx.port) },
+      killAfterMs: 45000,
+    });
+    expect(r.hung).toBe(false);
+    expect(mpx.state.resets).toBe(1);
+    expect(r.json).toMatchObject({
+      resultado: 'ok', codigo_salida: 0,
+      liberacion: { redis: 'liberado', mysql: 'liberado' },
+      cierre_clientes: { mysql_lock: 'forzado' },
+    });
+    expect(await lockRows()).toBe(0);
+    expect(mpx.state.connections).toBe(3);        // lectura, lock y la nueva para liberar
+  });
+
+  test('Ctrl+Z (SIGTSTP al grupo) durante la lectura: nada queda suspendido; interrumpe (148), cierra la lectura y libera', async () => {
+    await useServer({ records: RECORDS, scenarios: ['hang'] });
+    const r = await runPilot({
+      args: limits(),
+      killAfterMs: 45000,
+      // Como la terminal: al grupo entero (el piloto y su proceso de lectura).
+      during: async (child) => { await server.waitForConnections(1); process.kill(-child.pid, 'SIGTSTP'); },
+    });
+    expect(r.hung).toBe(false);
+    expect(r.code).toBe(148);
+    expect(r.json).toMatchObject({
+      resultado: 'interrumpido', senal: 'SIGTSTP', codigo_salida: 148,
+      liberacion: { redis: 'liberado', mysql: 'liberado' },
+    });
+    expect(await server.waitAllClosed(5000)).toBe(true);
+    expect(await redis.exists(lockKey)).toBe(0);
+    expect(await lockRows()).toBe(0);
+  });
+
+  test('clave perdida a mitad de la lectura SIN desconexión (otro dueño): la lectura no vale aunque termine antes de la renovación', async () => {
+    // Los datos llegan 2.5 s después del pedido; la renovación es cada 10 s: ningún temporizador cae dentro.
+    await useServer({ records: RECORDS, scenarios: ['slow'], slowMs: 2500 });
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 40, renew: 10 }),
+      killAfterMs: 60000,
+      during: async () => {
+        for (let i = 0; i < 200 && !(server.connections[0] && server.connections[0].commands.includes('CMD_DATA_WRRQ')); i += 1) await sleep(25);
+        // Borrada desde afuera (DEL/FLUSH/failover) y tomada por un helper habitual por Redis.
+        await redis.del(lockKey);
+        await redis.set(lockKey, 'habitual-it', { PX: 60000 });
+      },
+    });
+    expect(r.hung).toBe(false);
+    expect(r.json.intentos).toEqual([expect.objectContaining({ estado: 'completa', cierre: 'proceso_terminado' })]);
+    expect(r.json).toMatchObject({
+      resultado: 'lock_perdido', codigo_salida: 7, lectura: null,
+      liberacion: { redis: 'perdido', mysql: 'liberado' },
+    });
+    expect(await redis.get(lockKey)).toBe('habitual-it');      // el lock ajeno, intacto
+  });
+
+  test('señal DURANTE el cierre de una lectura completa: se registra en senal, pero el resultado sigue siendo ok (0)', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    // La liberación de Redis tarda 1.2 s (menos que el tope de un paso): la señal llega en ese momento.
+    let once = false;
+    const px = await proxyFor(redisPort(), null, {
+      delayWhen: (chunk) => {
+        if (once || !RESP.contains("redis.call('del'")(chunk)) return 0;
+        once = true;
+        return 1200;
+      },
+    });
+    const r = await runPilot({
+      args: limits(),
+      env: { REDIS_URL: `redis://127.0.0.1:${px.port}` },
+      killAfterMs: 45000,
+      during: async (child) => {
+        for (let i = 0; i < 400 && px.state.delayed === 0; i += 1) await sleep(10);
+        await sleep(200);
+        child.kill('SIGTERM');
+      },
+    });
+    expect(r.hung).toBe(false);
+    expect(r.code).toBe(0);
+    expect(r.json).toMatchObject({
+      resultado: 'ok', codigo_salida: 0, senal: 'SIGTERM',
+      liberacion: { redis: 'liberado', mysql: 'liberado' },
+    });
+    expect(r.json.lectura).not.toBeNull();
+  });
+
+  test('la clave del corte nunca llega al entorno ni a los argumentos del proceso de lectura', async () => {
+    await useServer({ records: RECORDS, scenarios: ['hang'] });
+    let seen = null;
+    const r = await runPilot({
+      args: [...limits({ timeout: 3, max: 10 }), '--cutoff', CUTOFF],
+      env: { PILOT_CORTE_CLAVE: CORTE_KEY },
+      killAfterMs: 45000,
+      during: async () => {
+        await server.waitForConnections(1);
+        const [pid] = liveReadChildren();
+        seen = {
+          env: fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').filter(Boolean),
+          cmd: fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'),
+        };
+      },
+    });
+    expect(r.hung).toBe(false);
+    expect(seen.env.join('\n')).not.toContain(CORTE_KEY);
+    expect(seen.cmd).not.toContain(CORTE_KEY);
+    const keys = seen.env.map((kv) => kv.split('=')[0]);
+    expect(keys).toContain('TZ');
+    for (const k of ['PILOT_CORTE_CLAVE', 'DB_PASSWORD', 'DB_USER', 'REDIS_URL']) expect(keys).not.toContain(k);
+    expect(JSON.stringify(r.json) + r.stdout + r.stderr).not.toContain(CORTE_KEY);
   });
 
   test('cierre de MySQL sin confirmar (COM_QUIT sin respuesta): termina igual, con la lectura completa', async () => {
@@ -1083,7 +1270,9 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     const r = await runPilot({ args: corteArgs() });
     expect(r.code).toBe(0);
     expect(r.json.corte.conjunto).toMatchObject({ registros: 28, huella: null, clave_id: null, huella_motivo: 'sin_clave' });
-    expect(compareOutputs(r.json, r.json)).toMatchObject({ status: 3, out: { resultado: 'no_comparable', motivo: 'sin_clave' } });
+    // (Otra corrida sin clave: la misma salida dos veces sería `misma_corrida`.)
+    expect(compareOutputs(r.json, { ...r.json, corrida_id: 'otra-corrida' })).toMatchObject({ status: 3, out: { resultado: 'no_comparable', motivo: 'sin_clave' } });
+    expect(compareOutputs(r.json, r.json)).toMatchObject({ status: 3, out: { resultado: 'no_comparable', motivo: 'misma_corrida' } });
   });
 
   test('corte dentro del margen de 120 min: código 2 sin abrir MySQL, Redis ni el reloj', async () => {

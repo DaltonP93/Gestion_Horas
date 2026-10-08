@@ -26,7 +26,8 @@ ejecutados. Con `--cutoff`, además, el resumen comparable del conjunto históri
 token, más la limpieza de la fila **vencida** de ese reloj), con las mismas sentencias que el fallback del
 helper habitual. Es lo que hace falta para excluir de verdad a un proceso habitual en fallback (§3).
 Para anular una toma propia con resultado incierto puede, además, cerrar en el servidor **su propia**
-conexión anterior del lock (`KILL CONNECTION`, y en Redis `CLIENT KILL ID`); nunca una ajena.
+conexión anterior del lock (`KILL CONNECTION`, y en Redis `CLIENT KILL ID … ADDR …`), sólo si comprueba
+que sigue siendo ella: mismo servidor (arranque / `run_id`) y misma dirección del cliente. Nunca una ajena.
 
 **Tener el byte no demuestra qué significa** ni cómo está configurado el equipo (ver
 `horas-marcas-sin-tipo.md` §5.1).
@@ -85,8 +86,10 @@ sigue auditando el lock y cayendo a MySQL si no hay Redis.
   `devices` y se cierra antes de abrir la del lock: nunca hay dos conexiones a la vez.
 - La conexión del **lock** sólo ejecuta su sesión y las cuatro sentencias de `device_locks`. Una prueba
   de integración las verifica por conexión en el `general_log`, con el `device_id` y el token del piloto.
-  Una conexión **nueva** de liberación ejecuta su sesión, la liberación por token y, sólo ante una toma
-  incierta, `KILL CONNECTION <hilo propio anterior>` y su sondeo en `information_schema.PROCESSLIST`.
+  Además lee su propia identidad (`HOST` en `information_schema.PROCESSLIST` y `SHOW GLOBAL STATUS LIKE
+  'Uptime'`). Una conexión **nueva** de liberación ejecuta su sesión, la liberación por token y, sólo ante
+  una toma incierta, comprueba la identidad de la sesión vieja, `KILL CONNECTION <hilo propio anterior>` y
+  su sondeo en `PROCESSLIST`.
 - No carga el ORM, `audit.js` ni `zktecoReader.js`; una prueba lo verifica sobre el grafo de módulos.
 
 **Operaciones acotadas y cancelables (el límite total se cumple aunque algo quede pendiente):**
@@ -110,20 +113,33 @@ sigue auditando el lock y cayendo a MySQL si no hay Redis.
      detrás de lo enviado antes) y, si no responde (tope de 2 s por paso), por un cliente **nuevo**;
   3. Redis se cierra con `disconnect()` y MySQL con `end()` acotado y, siempre después, el socket
      destruido.
+- **Qué es incierto.** Sólo una respuesta de error del **servidor** prueba que una sentencia o un comando
+  no se aplicó: en MySQL, errno positivo con SQLSTATE; en Redis, `ErrorReply`. Un error de **red** (RST:
+  `ECONNRESET`, errno -104; `EPIPE`; conexión perdida), un tope o un corte no prueban nada: la toma es
+  incierta y una liberación fallida pasa a un cliente nuevo.
 - **Tomas inciertas.** La clave (`SET NX PX`) y la fila (`INSERT`) nacen con un **TTL provisional** de
   30 s (`limites.ttl_provisional_s`); la verificación previa a cada intento las lleva al TTL completo
   justo antes de lanzar la lectura (si el provisional venció, la renovación ve el token ajeno y no se
-  lee). Una toma con resultado **incierto** (tope, corte o red: pudo aplicarse sin que lo sepamos) se
-  compensa por token: por el mismo cliente, en orden; o, si ese cliente se canceló, por uno nuevo que
-  **antes mata la sesión vieja en el servidor** (`CLIENT KILL ID <id de CLIENT ID>`; `KILL CONNECTION
-  <threadId>` y espera con tope hasta que el hilo desaparece de `PROCESSLIST`). Así una toma demorada
-  en la red ya no puede aplicarse después de la compensación. Si no se puede matar la sesión ni hay
-  nada que borrar, se informa `incierto`: lo huérfano vence en ≤ 30 s, nunca en el TTL completo.
+  lee). Una toma con resultado **incierto** se compensa por token: por el mismo cliente, en orden; o, si
+  ese cliente se canceló, por uno nuevo que **antes mata la sesión vieja en el servidor**. Así una toma
+  demorada en la red ya no puede aplicarse después de la compensación. Si no se puede matar la sesión
+  ni hay nada que borrar, se informa `incierto`: lo huérfano vence en ≤ 30 s, nunca en el TTL completo.
+- **Matar sólo lo propio.** Un número de sesión identifica una conexión dentro de **una** vida del
+  servidor: tras un reinicio o un cambio de servidor detrás de la misma dirección, el mismo número puede
+  ser de otro proceso. Al abrir la conexión del lock se guarda su identidad y antes de matar se vuelve a
+  comprobar; si algo no coincide no se mata nada (`incierto`):
+  - Redis: `CLIENT INFO` (id y dirección del cliente vista por el servidor) e `INFO server` (`run_id`,
+    nuevo en cada arranque); se mata con `CLIENT KILL ID <id> ADDR <addr>` (filtros en AND) sólo con el
+    mismo `run_id`. Sin `CLIENT INFO`/`INFO` (ACL o Redis < 6.2), no hay identidad: nunca se mata.
+  - MySQL: hilo, `HOST` (ip:puerto del cliente) y arranque del servidor (`Uptime`, con 2 s de
+    tolerancia; `server_uuid` no cambia al reiniciar). Se mata sólo con el mismo arranque y el mismo
+    `HOST` en ese hilo; si el hilo ya no existe, la sesión vieja ya no ejecuta nada.
 - Una renovación o liberación vieja que llegue tarde no resucita ni borra nada ajeno: el Lua compara
   el token y el `UPDATE`/`DELETE` filtran por token.
-- Si ya no cabe un intento (`--max-duration` debe ser **mayor** que `--attempt-timeout`; y se vuelve a
-  comprobar antes de tomar los locks), no se toman los locks para nada (`limite_total`). `git rev-parse`
-  (versión de la herramienta) también tiene tope (2 s).
+- Si ya no cabe un intento (`--max-duration` debe ser **mayor** que `--attempt-timeout`), no se toman
+  los locks para nada (`limite_total`); se vuelve a comprobar antes de cada intento y otra vez **después**
+  de la renovación previa (que puede tardar hasta 4 s), para no tocar el reloj con un intento que ya no
+  cabe. `git rev-parse` (versión de la herramienta) también tiene tope (2 s).
 - Garantía: el piloto termina dentro de `--max-duration` más una holgura fija
   (`limites.cierre_max_s` = 17 s = terminación del hijo ≤ 10 s + presupuesto de cierre 6 s + 1 s).
 
@@ -144,7 +160,14 @@ sigue auditando el lock y cayendo a MySQL si no hay Redis.
   se lanza (`exclusion_no_garantizada`). Así, al lanzarlo, a la clave y a la fila les queda más vida que
   al hijo.
 - Si el proceso principal muere, el hijo detecta el cierre del canal IPC y sale.
-- Así el reloj nunca queda en uso cuando el lock vence.
+- **Ctrl+Z** (`SIGTSTP` al grupo) **interrumpe** (código 148): el piloto no se suspende y el hijo sale; un
+  piloto suspendido no renovaría y el lock vencería con la sesión del hijo con el reloj abierta.
+- **Lectura válida sólo con exclusión confirmada después:** una lectura completa se acepta recién con una
+  verificación de la clave y la fila **enviada después** de que el hijo terminó. Si la exclusión se
+  perdió durante la lectura sin desconexión (clave borrada desde afuera, otro dueño), el resultado es
+  `lock_perdido` (7) sin `lectura` ni `corte`, aunque la lectura haya terminado antes de la renovación.
+- Así, mientras los procesos corren, el reloj nunca queda en uso cuando el lock vence (ver los riesgos
+  residuales para lo que no se puede atrapar).
 
 **Captura:**
 - El hijo instala `zkRawCapture` **antes** de cargar `node-zklib`.
@@ -184,7 +207,9 @@ sigue auditando el lock y cayendo a MySQL si no hay Redis.
   marcas; las nuevas caen en `fuera.posteriores`. Cualquier cambio en una marca anterior al corte cambia
   la huella. `scripts/zk-raw-state-pilot-compare.js a.json b.json` lo decide sin abrir conexiones:
   `igual` (código 0), `distinto` (1, con `delta_registros`), `no_comparable` (3: resultado no `ok`,
-  otro corte, canon, zona de decodificación, formato o clave, o sin huella) o entrada inválida (2).
+  otro reloj, la misma corrida dos veces —`corrida_id`— o sin identificador de corrida, otro corte,
+  canon, zona de decodificación, formato o clave, o sin huella) o entrada inválida (2: no es un objeto
+  JSON). No comprueba el tiempo entre corridas: eso lo controla el operador (§6).
 
 **Riesgos residuales (documentados, no cubiertos):**
 - **Entre procesos habituales**: uno por Redis y otro en fallback no se excluyen, porque el helper
@@ -200,11 +225,18 @@ sigue auditando el lock y cayendo a MySQL si no hay Redis.
 - Si MySQL o Redis dejan de responder **también para una conexión nueva** con el lock tomado, su fila o
   su clave quedan hasta el TTL (`por_ttl`: el worker ve el reloj ocupado ese tiempo, hasta 936 s con los
   máximos). Una toma incierta que no se pudo anular (`incierto`) queda ≤ 30 s.
-- Matar la sesión vieja necesita `CLIENT KILL` en el ACL de Redis y que el usuario MySQL sea el mismo
-  de la sesión (KILL de una conexión propia no requiere privilegios globales). Sin eso, una toma incierta
-  se informa `incierto`. Si el ACL no permite `CLIENT ID`, el piloto sigue (la toma incierta tampoco se
-  podrá anular).
-- Una segunda señal durante el cierre no lo acorta: el cierre ya tiene su presupuesto (6 s).
+- Matar la sesión vieja necesita `CLIENT INFO`, `INFO` y `CLIENT KILL` en el ACL de Redis, y que el
+  usuario MySQL sea el mismo de la sesión (KILL de una conexión propia no requiere privilegios globales).
+  Sin eso, una toma incierta se informa `incierto`; el piloto sigue igual.
+- Una señal durante el cierre no lo acorta (el cierre ya tiene su presupuesto de 6 s) ni cambia el
+  resultado ya obtenido: se registra en `senal`.
+- **Suspensión que no se puede atrapar** (`SIGSTOP`, congelar el cgroup —`docker pause`—, pausar la VM)
+  por más que el TTL: el lock vence con la sesión del hijo con el reloj todavía abierta. Un lock con TTL
+  sin "fencing" en el reloj no lo puede cubrir; no pausar el proceso ni el contenedor durante el piloto.
+- **Archivos en el directorio de trabajo** (previo a esta ronda): el hijo carga `config/logger.js`
+  (crea `logs/` vacío en el directorio actual) y node-zklib puede escribir `*.err.log` con bytes crudos
+  ante errores de decodificación. Por eso el piloto se corre desde la copia aislada `$DIR/api`, que se
+  borra al terminar (§5, §6).
 - El agregado depende de la disposición de pyzk para los formatos (#252). UDP sólo está probado con
   transporte simulado en proceso, no por la red.
 - El corte compara la hora **del reloj**: si el reloj atrasa, una marca nueva puede quedar con hora
@@ -235,24 +267,29 @@ Cambiaría el comportamiento del worker; queda para una autorización separada:
   operación) y `cierre_max_s` (holgura fija sobre la duración total).
 - `corte`: `null` sin `--cutoff`. Con `--cutoff`: `{ hasta, canon, decodificacion: { zona },
   conjunto: { registros, usuarios, dias_con_marcas, formato, captura_completa, huella, huella_tipo:
-  'hmac-sha256', clave_id, huella_motivo }, fuera: { posteriores, futuras, basura } }` de la lectura
+  'hmac-sha256', clave_id, huella_motivo }, fuera: { posteriores, futuras, basura } }` (`futuras` es
+  parte de `posteriores`) de la lectura
   elegida; sin lectura completa, `{ hasta, canon, conjunto: null, huella_motivo: 'sin_lectura' }` (§3).
 - `exclusion`: `backend: 'redis+mysql'`, la clave, `mysql: { tabla, origen: 'piloto_estados', estado }`
   (`tomado`, `ocupado`, `sesion_invalida`, `sin_conexion`, `sin_acceso`, `espera_de_bloqueo`,
   `sin_respuesta`, `detenido` o `error`) y `auditoria_mysql: false`.
+- `corrida_id`: identificador aleatorio de la corrida (la comparación rechaza la misma corrida dos veces).
 - `liberacion`: por backend, `liberado`, `perdido` (ya no era nuestro al liberar: venció y otro lo tomó,
-  o nuestra propia liberación anterior llegó tarde), `por_ttl` (no se pudo confirmar: vence solo en
+  o nuestra propia liberación anterior llegó tarde; una lectura con la exclusión perdida no vale:
+  `lock_perdido`), `por_ttl` (no se pudo confirmar: vence solo en
   `ttl_lock_s`), `compensado` (toma incierta: confirmado que no queda nada nuestro, porque se borró o
   porque su sesión se mató antes de mirar), `incierto` (toma incierta sin confirmar: vence en
   `ttl_provisional_s`) o `no_tomado` (nunca se tomó, con certeza).
-- `cierre_clientes`: `normal`, `forzado` (socket destruido: tope vencido, gracia vencida o cliente roto)
-  o `no_conectado`.
+- `cierre_clientes`: `normal`, `forzado` (socket destruido: tope vencido, gracia vencida, conexión rota
+  o sin presupuesto de cierre), `no_conectado`, o `null` si ese cliente no llegó a crearse (lo mismo
+  `exclusion.mysql.estado`).
+- `herramienta.origen_commit`: `release-commit`, `release-commit-invalido`, `git` o `desconocido`.
 - `intentos[]`, uno por intento **realmente ejecutado**:
   - `estado`: `completa`, `truncada`, `timeout`, `cancelado`, `error` o `captura_no_garantizada`;
   - `codigo`: código corto, nunca el mensaje;
   - registros, válidos, basura, captura, bytes estimados y `cierre`.
-- `lectura`: agregado de la primera lectura completa, o `null`:
-  - formatos y distribuciones;
+- `lectura`: agregado de la primera lectura completa **con exclusión confirmada después**, o `null`:
+  - `intento` (cuál de los intentos), formatos y distribuciones;
   - fechas primera/última (sin hora), futuras, duplicados y usuarios distintos (sólo el número);
   - `por_hora` y `patrones_dia`, con supresión;
   - el bloque del corte va arriba, en `corte` (no dentro de `lectura`).
@@ -268,7 +305,7 @@ Cambiaría el comportamiento del worker; queda para una autorización separada:
 | 6 | `sin_lectura_completa`, `limite_total` |
 | 7 | `lock_perdido` |
 | 8 | `reloj_inexistente`, `reloj_sin_direccion`, `base_no_disponible` |
-| 128+n | `interrumpido` (130 SIGINT, 143 SIGTERM, 129 SIGHUP) |
+| 128+n | `interrumpido` (130 SIGINT, 143 SIGTERM, 129 SIGHUP, 148 SIGTSTP) |
 
 ## 5. Preparar una copia aislada (sin tocar la release activa)
 
@@ -300,7 +337,8 @@ PILOT_CORTE_CLAVE=  # 64 hex (p. ej. `openssl rand -hex 32`), la MISMA en las co
 ```
 
 Una `PILOT_CORTE_CLAVE` que no sea de 64 hex termina con `configuracion_invalida` (código 2) sin
-conectar. Sin clave, el corte sólo da conteos (`huella_motivo: 'sin_clave'`).
+conectar. Sin clave —la línea ausente o **vacía**— el corte sólo da conteos (`huella_motivo:
+'sin_clave'`).
 
 `--env-file` rechaza el archivo si es legible por grupo u otros, si es un enlace o si no existe.
 
@@ -338,12 +376,15 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
 ## 7. Criterios de detención
 
 - **Antes de conectar** (el piloto ya corta solo):
-  - código 2 (entrada), 3 (captura), 4 (exclusión), 5 (Redis) u 8 (reloj o base);
+  - código 2 (entrada), 3 (`captura_no_garantizada`), 4 (exclusión), 5 (Redis) u 8 (reloj o base);
   - **no** reintentar con otros parámetros sin revisar la causa.
 - **Durante:**
-  - código 6 (sin lectura completa o límite), 7 (lock perdido) o 128+n (señal);
+  - código 4 o 5 (la base o Redis dejaron de responder con la lectura en curso), 6 (sin lectura completa
+    o límite), 7 (lock perdido, también si se perdió durante una lectura que terminó) o 128+n (señal);
   - el hijo ya se cerró: registrar y detener;
   - **no** encadenar otra ejecución inmediata.
+- **Al terminar la lectura:** código 3 (`captura_incompleta`): la lectura terminó, pero la captura no es
+  completa.
 - **Después:**
   - si `lectura.captura` no es 100 % `ok`, si aparece `udp8` o `longitud_inesperada`, o si
     `validos_sin_captura > 0`, la lectura no sirve para semántica;
@@ -380,19 +421,29 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
 - argumentos y límites (incluido `--cutoff`), `--env-file` y `.release-commit`;
 - bloque del corte: conjunto, posteriores, límite inclusivo, supresión y huella calculada a mano desde la
   definición de las marcas (igual en las 3 zonas);
-- grafo de módulos sin caminos de importación ni ORM; el CLI de comparación sólo carga `corte.js`;
-- los únicos literales SQL de escritura son las cuatro sentencias de la fila propia del lock (las mismas
-  del fallback habitual);
+- grafo de módulos sin caminos de importación ni ORM; el CLI de comparación sólo carga `corte.js`; el
+  hijo no recibe la clave del corte, ni credenciales, ni `REDIS_URL` (lista blanca exacta);
+- en **todo** lo que cargan el principal, el hijo y el CLI de comparación (con un tokenizador: comillas
+  mezcladas, plantillas, varias líneas y piezas sueltas; sin comentarios): los únicos literales SQL de
+  escritura son las cuatro sentencias de la fila propia del lock (las mismas del fallback habitual), el
+  único KILL es el de la sesión propia atado a su identidad, y por `sendCommand` sólo `CLIENT INFO`,
+  `INFO server` y ese `CLIENT KILL`;
 - lock dual: clave compartida, fila propia, clasificación por `errno`, renovación por filas encontradas,
   cancelación real del socket y sesión del lock (zona igual a la de la app, autocommit, base escribible);
 - orden de las conexiones con dobles de mysql2/redis: la de lectura se cierra antes de la del lock, la
   sesión del lock se fija y verifica ANTES de escribir (sesión inválida ⇒ ninguna escritura), la toma
   usa el TTL provisional y Redis se cierra sin `QUIT`; cliente Redis sin reconexión, cola offline ni
   `CLIENT SETINFO`;
-- toma incierta con el cliente roto: la sesión vieja se mata (`KILL CONNECTION` / `CLIENT KILL ID`)
-  ANTES de compensar; sin permiso para matarla y sin nada que borrar ⇒ `incierto`;
+- toma incierta con el cliente roto (error de red con la forma REAL: errno -104): la sesión vieja se mata
+  (`KILL CONNECTION` / `CLIENT KILL ID … ADDR …`) ANTES de compensar; sin permiso para matarla y sin nada
+  que borrar ⇒ `incierto`; otro servidor (otro arranque u otro `run_id`) u otra conexión con ese número
+  (otro `HOST`) ⇒ no se mata nada, `incierto`;
+- ya no cabe un intento después de leer el reloj ⇒ ningún lock; renovación previa de más de 4 s ⇒ no se
+  lanza la lectura; renovación lenta que se come el tiempo ⇒ el intento que ya no cabe no se lanza;
 - operaciones acotadas (`bounded.js`): tope que cancela, corte que no cancela, con el corte disparado la
   operación no se lanza, resultados tardíos; `git rev-parse` con tope; `--max-duration` > timeout;
+- comparación: otro reloj, la misma corrida dos veces, sin `corrida_id`, otro canon, JSON que no es un
+  objeto; clave vacía = sin clave;
 - el helper habitual sin cambios.
 
 **Integración** (`tests/it/zkStatePilot.it.test.js`, CI en 3 zonas):
@@ -403,8 +454,11 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
   `SELECT`; la del lock sólo su sesión y las sentencias de su fila (este `device_id`, token del piloto).
   Ninguna otra escritura, DDL ni auditoría, tampoco asíncrona.
 - **Proxy TCP** delante de MySQL/Redis (`freezableTcpProxy.js`): deja de reenviar sin cerrar (todo, o
-  sólo las conexiones abiertas: una nueva funciona), a mano o al pasar un comando; o **demora** un
-  comando y todo lo que le sigue en esa conexión, cierre incluido, como un segmento TCP en vuelo.
+  sólo las conexiones abiertas: una nueva funciona), a mano o al pasar un comando; **demora** un comando
+  y todo lo que le sigue en esa conexión, cierre incluido, como un segmento TCP en vuelo; o corta al
+  cliente con **RST** antes o después de entregar un comando al servidor.
+- Sólo cuentan los procesos de lectura de los pilotos de la suite (cada piloto en su propio grupo de
+  procesos): otro piloto en el mismo equipo no hace fallar la prueba.
 - **Casos cubiertos:**
   - lectura completa;
   - lectura truncada y luego completa;
@@ -417,7 +471,10 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
   - lectura colgada;
   - límite total;
   - pérdida del lock;
-  - SIGTERM, SIGINT y SIGHUP;
+  - SIGTERM, SIGINT y SIGHUP; **Ctrl+Z** (SIGTSTP al grupo) ⇒ interrumpe (148) y libera; una señal
+    **durante el cierre** de una lectura completa ⇒ `ok` (0) con la señal en `senal`;
+  - **exclusión perdida a mitad de la lectura** sin desconexión (clave borrada y tomada por otro) ⇒
+    `lock_perdido` (7) sin `lectura`, aunque la lectura termine antes de la renovación;
   - SIGKILL del proceso principal (la clave y la fila vencen por TTL);
   - **exclusión real**: con el piloto leyendo, el helper habitual REAL en fallback (Redis inaccesible
     para él) no obtiene el lock; el helper en fallback que toma y retiene el lock con su sesión `-03:00`
@@ -426,10 +483,16 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
     colgada, el límite total con una consulta pendiente y `COM_QUIT` sin confirmar: el proceso termina
     dentro del tope; Redis nunca envía `QUIT`;
   - **cancelación**: señal con renovaciones en vuelo sobre conexiones colgadas (una nueva responde) ⇒
-    `liberado` en los dos por clientes nuevos, en menos de 2 s; liberación de Redis lenta por el mismo
-    cliente ⇒ liberada por uno nuevo y la respuesta tardía no tira el proceso; toma de Redis o MySQL
-    demorada 7 s en la red ⇒ la sesión vieja se mata, `compensado`, y ni clave ni fila 8 s después (en
-    MySQL, el `general_log` muestra que el `INSERT` viejo nunca se ejecutó);
+    `liberado` en los dos por clientes nuevos, en menos de gracia + 1 s; liberación de Redis lenta por el
+    mismo cliente ⇒ liberada por uno nuevo, y el `EVAL` viejo, que llega después de que el piloto
+    terminó, no toca la clave de otro dueño; toma de Redis o MySQL demorada 7 s en la red ⇒ la sesión
+    vieja se mata, `compensado`, y ni clave ni fila 8 s después (en MySQL, el `general_log` muestra que el
+    `INSERT` viejo nunca se ejecutó y que la identidad se comprobó antes del KILL);
+  - **errores de red (RST)**: `INSERT` aplicado y respuesta perdida ⇒ toma incierta, `compensado`, sin
+    fila (el `general_log` muestra el `INSERT` y la compensación por token); liberación cortada ⇒
+    `liberado` por una conexión nueva, sin fila hasta el TTL;
+  - la clave del corte nunca aparece en el entorno ni en los argumentos del proceso de lectura
+    (`/proc/<pid>/environ` y `cmdline` durante la lectura);
   - **corte común**: dos corridas con marcas nuevas entre medio dan la misma huella y el CLI las da por
     `igual`; una marca anterior alterada ⇒ `distinto`; horas inexistentes del cambio de hora de Paraguay
     exactas; sin clave ⇒ sólo conteos; corte dentro del margen o en el futuro (código 2 sin conexiones);
