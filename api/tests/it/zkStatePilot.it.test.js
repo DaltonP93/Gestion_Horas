@@ -536,6 +536,54 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     expect(await lockRows()).toBe(0);
   });
 
+  /**
+   * El helper HABITUAL toma el lock y lo RETIENE (como un worker leyendo) hasta `release()`. Con
+   * REDIS_URL inválida cae al fallback MySQL: Sequelize fija la sesión en la zona de la app (-03:00)
+   * y con ella escribe y compara expires_at.
+   */
+  async function habitualHold(env = {}) {
+    const code = `
+      const lock = require('./src/services/deviceLock');
+      (async () => {
+        const h = await lock.acquire(${deviceId}, { origin: 'it-habitual-retiene' });
+        process.stdout.write(JSON.stringify({ backend: h ? h.backend : null, token: h ? h.token : null }) + '\\n');
+        process.stdin.once('data', async () => {
+          if (h) await lock.release(h);
+          await require('./src/config/database').sequelize.close();
+          process.exit(0);
+        });
+      })().catch(() => { process.stdout.write(JSON.stringify({ error: true }) + '\\n'); process.exit(1); });`;
+    const p = spawn(process.execPath, ['-e', code], { cwd: API_ROOT, env: pilotEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    p.stdout.on('data', (d) => { stdout += d; });
+    const gone = new Promise((r) => p.on('exit', r));
+    for (let i = 0; i < 100 && !stdout.includes('\n'); i += 1) await sleep(100);
+    let info = null;
+    try { info = JSON.parse(stdout.trim().split('\n')[0]); } catch { /* sin salida */ }
+    return {
+      info,
+      release: async () => { try { p.stdin.write('x'); } catch { /* terminado */ } await Promise.race([gone, sleep(5000)]); p.kill('SIGKILL'); },
+    };
+  }
+
+  test('exclusión: el helper habitual en fallback toma y RETIENE el lock; después el piloto NO lee', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const held = await habitualHold({ REDIS_URL: 'disabled://' });
+    try {
+      expect(held.info).toMatchObject({ backend: 'mysql' });
+      const r = await runPilot({ args: limits(), killAfterMs: 60000 });
+      // Con el reloj tomado por el worker, el piloto no debe conectarse.
+      expect(server.connections).toHaveLength(0);
+      expect(r.code).toBe(4);
+      expect(r.json.resultado).toBe('lock_mysql_vigente');
+      const [[row]] = await conn.query('SELECT token FROM device_locks WHERE device_id = ?', [deviceId]);
+      expect(row.token).toBe(held.info.token);
+      expect(await redis.exists(lockKey)).toBe(0);
+    } finally {
+      await held.release();
+    }
+  });
+
   test('exclusión (control): con el piloto leyendo, el helper habitual con Redis tampoco obtiene el lock', async () => {
     await useServer({ records: RECORDS, scenarios: ['hang'] });
     let habitual = null;
