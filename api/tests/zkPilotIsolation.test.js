@@ -111,8 +111,8 @@ describe('piloto de estados: grafo de módulos', () => {
 
   /**
    * Literales de cadena de un fuente JS (comillas simples, dobles y plantillas, también de varias
-   * líneas; en las plantillas, el texto fuera de `${…}`) y el código sin comentarios ni cadenas.
-   * Las expresiones regulares literales se saltan (pueden contener comillas).
+   * líneas; en las plantillas, el texto y, recursivamente, lo que haya dentro de `${…}`) y el código
+   * sin comentarios ni cadenas. Las expresiones regulares literales se saltan (pueden tener comillas).
    */
   function tokens(src) {
     const literals = [];
@@ -145,9 +145,14 @@ describe('piloto de estados: grafo de módulos', () => {
           if (src[j] === '\\') { buf += src[j + 1]; j += 2; continue; }
           if (c === '`' && src[j] === '$' && src[j + 1] === '{') {
             let depth = 1;
-            j += 2;
+            const from = j + 2;
+            j = from;
             buf += ' ';
             while (j < src.length && depth) { if (src[j] === '{') depth += 1; else if (src[j] === '}') depth -= 1; j += 1; }
+            // La expresión de adentro es código: sus literales y su código cuentan igual.
+            const inner = tokens(src.slice(from, j - 1));
+            literals.push(...inner.literals);
+            code += ` ${inner.code} `;
             continue;
           }
           buf += src[j];
@@ -186,14 +191,22 @@ describe('piloto de estados: grafo de módulos', () => {
       'const d = `KILL ${threadId}`;',
       "const e = /['\"`]/.test(x); // 'DROP TABLE en un comentario'",
       "/* 'DELETE FROM x' */ const f = 'ok';",
+      "const g = `${'KILL QUERY'} 0`; c.FLUSHALL(); c.sendCommand(cmd);",
     ].join('\n');
-    const { literals } = tokens(src);
+    const { literals, code } = tokens(src);
     expect(literals).toEqual([
       "UPDATE devices SET note = 'x' WHERE id = 1", 'UPDATE devices\n  SET last_sync = NOW()', 'update', 'devices', ' ',
-      'KILL  ', 'ok',
+      'KILL  ', 'ok', 'KILL QUERY', '  0',
     ]);
+    expect(code.match(REDIS_FORBIDDEN_CODE)).toEqual(['FLUSHALL']);
+    expect(code.match(SEND_COMMAND_NOT_ARRAY)).toHaveLength(1);
   });
 
+  // Métodos/alias de node-redis que el piloto nunca usa (también en MAYÚSCULAS: CLIENT_KILL, FLUSHALL…),
+  // escrituras de Redis fuera del lock, y sendCommand con algo que no sea una lista literal.
+  const REDIS_FORBIDDEN_CODE = /\b(client_?kill|flush_?all|flush_?db|config_?set|config_?rewrite|shutdown|slaveof|replicaof)\b/gi;
+  const REDIS_WRITE_CODE = /\.\s*(del|unlink|expire|pexpire|expireat|pexpireat|setex|psetex|setnx|getdel|getset|persist|rename|renamenx|incr|incrby|decr|decrby|append|mset|msetnx|hset|hdel|lpush|rpush|sadd|srem|zadd|zrem)\s*\(/gi;
+  const SEND_COMMAND_NOT_ARRAY = /sendCommand\(\s*(?!\[)/g;
   const SQL_WRITE = /\b(INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|REPLACE\s+INTO|CREATE\s|ALTER\s|DROP\s|TRUNCATE\s|RENAME\s|GRANT\s|REVOKE\s|LOAD\s+DATA)/i;
   const SQL_WORD = /^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|RENAME|GRANT|REVOKE)\s*$/i;
 
@@ -220,7 +233,8 @@ describe('piloto de estados: grafo de módulos', () => {
     for (const f of PILOT_FILES()) {
       const src = fs.readFileSync(path.join(API, f), 'utf8');
       for (const m of src.matchAll(/sendCommand\(\s*\[([^\]]*)\]/g)) sent.push([f, m[1].replace(/\s+/g, ' ').trim()]);
-      expect([f, tokens(src).code.match(/\b(clientKill|flushAll|flushDb|configSet|configRewrite|shutdown)\b/g)]).toEqual([f, null]);
+      const { code } = tokens(src);
+      expect([f, code.match(REDIS_FORBIDDEN_CODE), code.match(REDIS_WRITE_CODE), code.match(SEND_COMMAND_NOT_ARRAY)]).toEqual([f, null, null, null]);
     }
     expect(sent).toEqual([
       ['src/services/zkPilot/runPilot.js', "'CLIENT', 'INFO'"],

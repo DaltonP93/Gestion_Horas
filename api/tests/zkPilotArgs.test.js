@@ -187,6 +187,30 @@ describe('piloto de estados: CLI sin conexiones ante entrada inválida', () => {
     expect(r.stdout + r.stderr).not.toContain('corta');
   });
 
+  test('--env-file con una clave de conexión VACÍA (DB_USER=): configuracion_invalida, nunca root por omisión', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zk-pilot-env-'));
+    const file = path.join(dir, 'pilot.env');
+    const write = (user) => fs.writeFileSync(file, [
+      'DB_HOST=192.0.2.1', 'DB_PORT=9', 'DB_NAME=asistencia', `DB_USER=${user}`, 'DB_PASSWORD=', 'REDIS_URL=redis://192.0.2.1:9',
+      'PILOT_CORTE_CLAVE=  # 64 hex',
+    ].join('\n'), { mode: 0o600 });
+    const runFile = () => spawnSync(process.execPath, [SCRIPT, '--device-id', '5', ...LIMITS, '--cutoff', '2099-01-01', '--env-file', file], {
+      env: { PATH: process.env.PATH, TZ: 'UTC' }, encoding: 'utf8', timeout: 20000,
+    });
+    try {
+      write('');
+      let r = runFile();
+      expect(r.status).toBe(2);
+      expect(JSON.parse(r.stdout)).toMatchObject({ resultado: 'configuracion_invalida', codigo_salida: 2 });
+      // Control: con usuario, la misma plantilla (clave del corte vacía y contraseña vacía) sigue de largo.
+      write('piloto');
+      r = runFile();
+      expect(JSON.parse(r.stdout)).toMatchObject({ resultado: 'corte_futuro', codigo_salida: 2 });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('clave del corte VACÍA (línea de la plantilla sin completar) = sin clave: no aborta por configuración', () => {
     const r = spawnSync(process.execPath, [SCRIPT, '--device-id', '5', ...LIMITS, '--cutoff', '2099-01-01'], {
       env: { PATH: process.env.PATH, TZ: 'UTC', DB_HOST: '192.0.2.1', DB_PORT: '9', REDIS_URL: 'redis://192.0.2.1:9', PILOT_CORTE_CLAVE: '' },

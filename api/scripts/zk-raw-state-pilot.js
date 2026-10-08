@@ -35,6 +35,9 @@ const { parseArgs, loadEnvFile } = require('../src/services/zkPilot/args');
 const { CLAVE_RE } = require('../src/services/zkPilot/corte');
 const { runPilot, skeletonFor, EXIT_CODES } = require('../src/services/zkPilot/runPilot');
 
+/** Claves de conexión que en --env-file no pueden quedar vacías (DB_PASSWORD sí puede). */
+const BLANK_NOT_ALLOWED = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'REDIS_URL'];
+
 const ROOT = path.resolve(__dirname, '..', '..');
 
 /** Escribe el JSON en `out` (nuevo, modo 0600) o en stdout. */
@@ -70,6 +73,11 @@ async function main() {
   if (opts.envFile) {
     const loaded = loadEnvFile(opts.envFile);
     if (!loaded.ok) return rejected('configuracion_invalida', opts, opts.out);
+    // Una clave de conexión VACÍA (línea de la plantilla sin completar) no cae en silencio en un valor
+    // por omisión (p. ej. DB_USER → root): es configuración inválida.
+    if (BLANK_NOT_ALLOWED.some((k) => loaded.env[k] !== undefined && !String(loaded.env[k]).trim())) {
+      return rejected('configuracion_invalida', opts, opts.out);
+    }
     env = { ...env, ...loaded.env };
   }
   // Vacía (p. ej. la línea de la plantilla sin completar) equivale a no tenerla: sólo conteos.

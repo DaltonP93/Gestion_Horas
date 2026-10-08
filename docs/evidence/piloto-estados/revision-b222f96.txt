@@ -50,3 +50,29 @@
 | Md: KILL sin comprobar la identidad | 5 unitarias FALLAN (otro servidor, otro HOST, otro run_id, forma del CLIENT KILL, escáner) |
 | Me: sin el control "cabe" después de la renovación | unitaria "renovación lenta que se come el tiempo" FALLA |
 | Mf: la señal del cierre cambia el resultado | IT "señal DURANTE el cierre" FALLA (`interrumpido` en vez de `ok`) |
+
+## Segunda pasada de verificación (sobre b4c99bb) y CI 952
+- Los verificadores que corrieron después de 8f3a3f2 dieron por corregidos en el árbol C5-1, TTL-1,
+  TTL-2, TTL-3, TTL-4, C5-4, F2, F5, F7 y F8 (los reprodujeron en b222f96 y ya no en el árbol actual).
+- Confirmaron residuos menores, corregidos en el commit siguiente a dd30aea:
+  - F6 (escáneres): alias de node-redis en MAYÚSCULAS (`CLIENT_KILL`, `FLUSHALL`, `CONFIG_SET`), literales
+    dentro de `${…}`, `sendCommand` con una variable y métodos de escritura de Redis (`del`, `expire`…)
+    no se detectaban ⇒ el tokenizador entra en `${…}` y la prueba exige alias, escrituras y
+    `sendCommand` sólo con lista literal (con un caso sintético de cada uno);
+  - F9 (relacionado, previo): `DB_USER=` vacío en `--env-file` caía en silencio en `root` ⇒ una clave de
+    conexión vacía es `configuracion_invalida` (prueba con la plantilla del documento).
+- F4: con la IT honesta, el `EVAL` viejo llega después de que el piloto terminó. Si el proceso siguiera
+  vivo, la clave borrada por nuestra propia liberación tardía se informaría `perdido`: está documentado
+  (§4) y no invalida una lectura con la exclusión confirmada después del hijo.
+
+## CI 952 (pull_request sobre b4c99bb): 2 fallas no funcionales de la IT del piloto
+- `ID "1abc"` y `corte dentro del margen`: `expect(await redisConnections()).toBe(before)` con
+  `Expected: 41 Received: 42` y `Expected: 95 Received: 96`. Las 52 pruebas funcionales pasaron; el run
+  951 (push, mismo SHA) pasó completo.
+- Causa raíz: la prueba comparaba `total_connections_received` del SERVIDOR, que también cuenta el
+  healthcheck `redis-cli ping` del contenedor de servicio de CI (cada 10 s).
+- Reproducción: Redis con healthcheck cada 1 s ⇒ el contador sube ~1/s sin clientes propios
+  (`t0 total_connections_received:2` → `t+6s :8`); la versión anterior de esas 12 pruebas: 2 fallidas
+  (`ID "0"`, `ID "0x10"`); la corregida: 12/12.
+- Corrección (dd30aea): el Redis del piloto pasa por un proxy que sólo cuenta y se exige 0 conexiones del
+  piloto, como ya hacía la prueba de la consulta inicial colgada.

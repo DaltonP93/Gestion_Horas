@@ -275,8 +275,9 @@ Cambiaría el comportamiento del worker; queda para una autorización separada:
   `sin_respuesta`, `detenido` o `error`) y `auditoria_mysql: false`.
 - `corrida_id`: identificador aleatorio de la corrida (la comparación rechaza la misma corrida dos veces).
 - `liberacion`: por backend, `liberado`, `perdido` (ya no era nuestro al liberar: venció y otro lo tomó,
-  o nuestra propia liberación anterior llegó tarde; una lectura con la exclusión perdida no vale:
-  `lock_perdido`), `por_ttl` (no se pudo confirmar: vence solo en
+  o nuestra propia liberación anterior llegó tarde; no invalida una lectura cuya exclusión ya se
+  confirmó DESPUÉS de que el hijo terminó: una pérdida durante la lectura da `lock_perdido`),
+  `por_ttl` (no se pudo confirmar: vence solo en
   `ttl_lock_s`), `compensado` (toma incierta: confirmado que no queda nada nuestro, porque se borró o
   porque su sesión se mató antes de mirar), `incierto` (toma incierta sin confirmar: vence en
   `ttl_provisional_s`) o `no_tomado` (nunca se tomó, con certeza).
@@ -338,7 +339,9 @@ PILOT_CORTE_CLAVE=  # 64 hex (p. ej. `openssl rand -hex 32`), la MISMA en las co
 
 Una `PILOT_CORTE_CLAVE` que no sea de 64 hex termina con `configuracion_invalida` (código 2) sin
 conectar. Sin clave —la línea ausente o **vacía**— el corte sólo da conteos (`huella_motivo:
-'sin_clave'`).
+'sin_clave'`). En cambio, una clave de **conexión** vacía en `--env-file` (`DB_HOST`, `DB_PORT`,
+`DB_NAME`, `DB_USER`, `REDIS_URL`) es `configuracion_invalida`: nunca cae en silencio en un valor por
+omisión (p. ej. `DB_USER` → `root`). `DB_PASSWORD` puede quedar vacía.
 
 `--env-file` rechaza el archivo si es legible por grupo u otros, si es un enlace o si no existe.
 
@@ -424,10 +427,12 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
 - grafo de módulos sin caminos de importación ni ORM; el CLI de comparación sólo carga `corte.js`; el
   hijo no recibe la clave del corte, ni credenciales, ni `REDIS_URL` (lista blanca exacta);
 - en **todo** lo que cargan el principal, el hijo y el CLI de comparación (con un tokenizador: comillas
-  mezcladas, plantillas, varias líneas y piezas sueltas; sin comentarios): los únicos literales SQL de
-  escritura son las cuatro sentencias de la fila propia del lock (las mismas del fallback habitual), el
-  único KILL es el de la sesión propia atado a su identidad, y por `sendCommand` sólo `CLIENT INFO`,
-  `INFO server` y ese `CLIENT KILL`;
+  mezcladas, plantillas —también lo que hay dentro de `${…}`—, varias líneas y piezas sueltas; sin
+  comentarios): los únicos literales SQL de escritura son las cuatro sentencias de la fila propia del
+  lock (las mismas del fallback habitual), el único KILL es el de la sesión propia atado a su identidad,
+  `sendCommand` sólo con una lista literal y sólo `CLIENT INFO`, `INFO server` y ese `CLIENT KILL`;
+  ningún método de escritura de Redis fuera del lock (`del`, `expire`, `unlink`…) ni alias como
+  `CLIENT_KILL`, `FLUSHALL` o `CONFIG_SET`;
 - lock dual: clave compartida, fila propia, clasificación por `errno`, renovación por filas encontradas,
   cancelación real del socket y sesión del lock (zona igual a la de la app, autocommit, base escribible);
 - orden de las conexiones con dobles de mysql2/redis: la de lectura se cierra antes de la del lock, la
@@ -443,7 +448,8 @@ echo "comparación=$?"   # 0 igual · 1 distinto · 3 no comparable · 2 entrada
 - operaciones acotadas (`bounded.js`): tope que cancela, corte que no cancela, con el corte disparado la
   operación no se lanza, resultados tardíos; `git rev-parse` con tope; `--max-duration` > timeout;
 - comparación: otro reloj, la misma corrida dos veces, sin `corrida_id`, otro canon, JSON que no es un
-  objeto; clave vacía = sin clave;
+  objeto; clave del corte vacía = sin clave; clave de conexión vacía en `--env-file` = configuración
+  inválida;
 - el helper habitual sin cambios.
 
 **Integración** (`tests/it/zkStatePilot.it.test.js`, CI en 3 zonas):
