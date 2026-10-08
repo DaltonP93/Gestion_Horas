@@ -16,8 +16,13 @@
  *     "entrada" ni "salida". Disponer del byte no demuestra su semántica.
  *   - El tamaño es una ESTIMACIÓN (registros decodificados × tamaño del
  *     formato), no lo medido en la red; se declara como tal.
+ *   - Corte común (cutoffBlock): el conjunto histórico comparable entre dos
+ *     corridas se resume SÓLO con conteos y una huella de conjunto con clave
+ *     (HMAC; nunca registros ni un agregado del conjunto).
  */
+const crypto = require('crypto');
 const { isJunkRaw, normalizeRecord, pyDateTimeStr } = require('../zkRecordShape');
+const { addMinutesWall, claveId, CANON_CORTE } = require('./corte');
 const { LAYOUTS } = require('../zkRawCapture');
 
 const K_MIN = 5;
@@ -34,14 +39,6 @@ const suppress = (n, k) => (n < k ? `<${k}` : n);
 function byteKey(v) {
   if (v === undefined || v === null) return 'ausente';
   return Number.isInteger(v) && v >= 0 && v <= 255 ? String(v) : 'invalido';
-}
-
-/** Suma minutos a una hora de pared 'YYYY-MM-DD HH:MM:SS' (aritmética de calendario, sin zona). */
-function addMinutesWall(wall, minutes) {
-  const [d, t] = wall.split(' ');
-  const [y, mo, da] = d.split('-').map(Number);
-  const [h, mi, s] = t.split(':').map(Number);
-  return new Date(Date.UTC(y, mo - 1, da, h, mi + minutes, s)).toISOString().slice(0, 19).replace('T', ' ');
 }
 
 /**
@@ -144,6 +141,84 @@ function aggregateRecords(records, { nowPy = pyDateTimeStr(new Date()), kMin = K
   return out;
 }
 
+/** Fecha de prueba en la hora que Paraguay saltaba al adelantar el reloj (00:00–00:59 del 1/10/2023). */
+const DST_PROBE = [2023, 9, 1, 0, 30];
+
+/**
+ * La hora de pared de cada marca sale de getters LOCALES (zkRecordShape): es exacta sólo si la zona del
+ * proceso no tiene horas inexistentes. En America/Asuncion, una marca a las 00:30 del día del cambio de
+ * hora saldría corrida a la 01:30. El hijo de lectura corre en UTC y lo verifica con esto.
+ */
+function decodingZoneOk() {
+  return new Date(...DST_PROBE).getHours() === DST_PROBE[3];
+}
+
+/**
+ * Corte común: de los registros VÁLIDOS (no basura) separa el conjunto histórico comparable —hora de
+ * pared ≤ `hasta`— de los posteriores. Sólo CONTEOS y una huella de conjunto: ni agregado del conjunto
+ * (restado del agregado completo revelaría las marcas posteriores), ni registros.
+ *
+ * Huella: HMAC-SHA256 con la clave del operador (`clave`, 64 hex, nunca se publica) sobre la lista
+ * canónica ORDENADA (multiconjunto) de [usuario, hora de pared, byte de estado, byte de verificación].
+ * Sin clave no hay huella: una huella sin clave se rompe por fuerza bruta conociendo las demás marcas.
+ * Tampoco la hay con menos de `kMin` marcas o usuarios, con captura incompleta o con formatos mezclados
+ * (el mismo historial leído por TCP y por UDP no da la misma lista): `huella: null` y `huella_motivo`.
+ *
+ * @param {object[]} records
+ * @param {{ hasta:string, clave?:string|null, nowPy?:string, kMin?:number, zona?:string|null }} o
+ */
+function cutoffBlock(records, { hasta, clave = null, nowPy = pyDateTimeStr(new Date()), kMin = K_MIN, zona = process.env.TZ || null }) {
+  const list = Array.isArray(records) ? records : [];
+  const futureLimit = addMinutesWall(nowPy, FUTURE_MARGIN_MIN);
+  const lines = [];
+  const users = new Set();
+  const days = new Set();
+  const formats = new Set();
+  let capturaCompleta = true;
+  let posteriores = 0;
+  let futuras = 0;
+  let basura = 0;
+  for (const rec of list) {
+    if (isJunkRaw(rec)) { basura += 1; continue; }
+    const n = normalizeRecord(rec);
+    if (!n.wall || n.wall > hasta) {
+      posteriores += 1;
+      if (n.wall && n.wall > futureLimit) futuras += 1;
+      continue;
+    }
+    users.add(n.userId);
+    days.add(n.wall.slice(0, 10));
+    if (rec.zkCapture === 'ok' && FORMAT_BYTES[rec.zkRecordFormat]) formats.add(rec.zkRecordFormat);
+    else capturaCompleta = false;
+    lines.push(JSON.stringify([n.userId, n.wall, byteKey(rec.zkPunchState), byteKey(rec.zkVerify)]));
+  }
+  let motivo = null;
+  if (!clave) motivo = 'sin_clave';
+  else if (lines.length < kMin) motivo = 'pocos_registros';
+  else if (users.size < kMin) motivo = 'pocos_usuarios';
+  else if (!capturaCompleta) motivo = 'captura_incompleta';
+  else if (formats.size !== 1) motivo = 'formatos_mixtos';
+  const huella = motivo ? null : crypto.createHmac('sha256', Buffer.from(clave, 'hex'))
+    .update(`${CANON_CORTE}\n${lines.length}\n${lines.sort().join('\n')}`).digest('hex');
+  return {
+    hasta,
+    canon: CANON_CORTE,
+    decodificacion: { zona },
+    conjunto: {
+      registros: lines.length,
+      usuarios: suppress(users.size, kMin),
+      dias_con_marcas: suppress(days.size, kMin),
+      formato: formats.size === 1 ? [...formats][0] : (formats.size ? 'mixto' : null),
+      captura_completa: capturaCompleta,
+      huella,
+      huella_tipo: 'hmac-sha256',
+      clave_id: clave ? claveId(clave) : null,
+      huella_motivo: motivo,
+    },
+    fuera: { posteriores, futuras, basura },
+  };
+}
+
 /** Código corto del error de lectura. Nunca devuelve el mensaje (puede llevar IP o datos). */
 function classifyReadError(err) {
   const msg = String((err && (err.message || (err.err && err.err.message))) || (typeof err === 'string' ? err : ''));
@@ -155,4 +230,4 @@ function classifyReadError(err) {
   return 'error_lectura';
 }
 
-module.exports = { aggregateRecords, classifyReadError, byteKey, K_MIN, FORMAT_BYTES };
+module.exports = { aggregateRecords, cutoffBlock, decodingZoneOk, classifyReadError, byteKey, K_MIN, FORMAT_BYTES };

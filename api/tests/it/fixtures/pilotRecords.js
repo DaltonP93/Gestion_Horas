@@ -92,6 +92,30 @@ function withAlteredBeforeCutoff() {
   return out;
 }
 
+/**
+ * Marcas en la hora que Paraguay se saltaba al adelantar el reloj (1/10/2023, 00:00–00:59) y en la
+ * siguiente: decodificadas en la zona America/Asuncion, las 00:30 saldrían como 01:30. 5 usuarios.
+ */
+const DST_RECORDS = ['7101', '7102', '7103', '7104', '7105'].flatMap((uid, u) => [
+  { deviceUserId: uid, userSn: 50 + u, wall: `2023-10-01 00:${pad(30 + u)}:00`, punchByte: 0, verifyByte: 1 },
+  { deviceUserId: uid, userSn: 50 + u, wall: `2023-10-01 01:${pad(30 + u)}:00`, punchByte: 1, verifyByte: 1 },
+  { deviceUserId: uid, userSn: 50 + u, wall: `2023-10-01 08:${pad(u)}:00`, punchByte: 0, verifyByte: 15 },
+]);
+
+/**
+ * Huella esperada del conjunto anterior al corte, calculada a mano desde la DEFINICIÓN de las marcas
+ * (no con el código bajo prueba): HMAC-SHA256 con la clave sobre el canon, la cantidad y las líneas
+ * [usuario, hora de pared, estado, verificación] ordenadas. Relleno (sin usuario o año 2000) fuera.
+ */
+function expectedCorteHuella(input, cutoff, keyHex) {
+  const lines = input
+    .filter((r) => r.deviceUserId !== '' && !r.wall.startsWith('2000-') && r.wall <= cutoff)
+    .map((r) => JSON.stringify([r.deviceUserId, r.wall, String(r.punchByte), String(r.verifyByte)]))
+    .sort();
+  return require('crypto').createHmac('sha256', Buffer.from(keyHex, 'hex'))
+    .update(`sishoras.zk-raw-state-pilot.corte/2\n${lines.length}\n${lines.join('\n')}`).digest('hex');
+}
+
 /** Muchas marcas (más de un bloque de 65.472 bytes en TCP) para lecturas por bloques/truncadas. */
 function manyRecords(n) {
   return Array.from({ length: n }, (_, i) => ({
@@ -103,4 +127,6 @@ function manyRecords(n) {
   }));
 }
 
-module.exports = { RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords, CUTOFF, AFTER_CUTOFF, withAlteredBeforeCutoff };
+module.exports = {
+  RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords, CUTOFF, AFTER_CUTOFF, withAlteredBeforeCutoff, DST_RECORDS, expectedCorteHuella,
+};

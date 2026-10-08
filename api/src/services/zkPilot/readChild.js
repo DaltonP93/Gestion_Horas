@@ -18,6 +18,10 @@
  *     también si el proceso principal desaparece (canal IPC cerrado).
  *   - Sólo usa los comandos de lectura de node-zklib (conectar, liberar
  *     buffer, pedir marcaciones, salir): no deshabilita, borra ni configura.
+ *   - Corre en UTC (el padre no le pasa la zona): la hora de pared sale exacta,
+ *     sin horas inexistentes. Si la zona no lo garantiza, no se conecta.
+ *   - Con un corte común (`msg.corte`), agrega el bloque `corte`: conteos y una
+ *     huella con la clave recibida por IPC (nunca registros ni la clave).
  */
 const zkRawCapture = require('../zkRawCapture');
 
@@ -25,7 +29,7 @@ const captureStatus = zkRawCapture.install();
 
 const path = require('path');
 const { openZK } = require('../zkClient');
-const { aggregateRecords, classifyReadError } = require('./aggregate');
+const { aggregateRecords, cutoffBlock, classifyReadError, decodingZoneOk } = require('./aggregate');
 const { pyDateTimeStr } = require('../zkRecordShape');
 
 const FORBIDDEN = [
@@ -56,7 +60,7 @@ process.on('message', async (msg) => {
   started = true;
   setTimeout(() => process.exit(9), Number(msg.limiteMs) || 1000);
 
-  if (!captureOk() || !isolationOk()) {
+  if (!captureOk() || !isolationOk() || !decodingZoneOk()) {
     sendAndExit({ type: 'captura', ok: false }, 3);
     return;
   }
@@ -76,11 +80,16 @@ process.on('message', async (msg) => {
   const records = res && Array.isArray(res.data) ? res.data : [];
   zkRawCapture.markMissing(records);
   const truncated = !error && !!(res && res.err);
+  const nowPy = pyDateTimeStr(new Date());
+  const agregado = aggregateRecords(records, { nowPy });
+  if (msg.corte && typeof msg.corte.hasta === 'string') {
+    agregado.corte = cutoffBlock(records, { hasta: msg.corte.hasta, clave: msg.corte.clave || null, nowPy });
+  }
   sendAndExit({
     type: 'resultado',
     estado: error ? 'error' : (truncated ? 'truncada' : 'completa'),
     codigo: error ? classifyReadError(error) : (truncated ? 'lectura_incompleta' : null),
     duracion_ms: Date.now() - t0,
-    agregado: aggregateRecords(records, { nowPy: pyDateTimeStr(new Date()) }),
+    agregado,
   }, 0);
 });

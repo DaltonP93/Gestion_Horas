@@ -17,6 +17,8 @@
  * Configuración (variables de entorno o --env-file, que sólo toma estas):
  *   DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD   MySQL; sesión READ ONLY, sólo SELECT
  *   REDIS_URL                                     el mismo Redis que usa el worker
+ *   PILOT_CORTE_CLAVE                             64 hex: clave de la huella del corte común
+ *                                                 (la misma en las dos corridas; nunca se publica)
  *
  * Códigos de salida: 0 ok · 2 entrada inválida · 3 captura no garantizada o
  * incompleta · 4 reloj ocupado / exclusión no garantizada · 5 Redis no
@@ -27,6 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const { parseArgs, loadEnvFile } = require('../src/services/zkPilot/args');
+const { CLAVE_RE } = require('../src/services/zkPilot/corte');
 const { runPilot, skeletonFor, EXIT_CODES } = require('../src/services/zkPilot/runPilot');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -65,6 +68,9 @@ async function main() {
     const loaded = loadEnvFile(opts.envFile);
     if (!loaded.ok) return rejected('configuracion_invalida', opts, opts.out);
     env = { ...env, ...loaded.env };
+  }
+  if (env.PILOT_CORTE_CLAVE !== undefined && !CLAVE_RE.test(env.PILOT_CORTE_CLAVE)) {
+    return rejected('configuracion_invalida', opts, opts.out);
   }
 
   const { json, exitCode } = await runPilot(opts, { env, rootDir: ROOT });
