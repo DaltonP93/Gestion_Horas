@@ -74,6 +74,24 @@ const EXPECTED_TCP40 = {
   bytes_estimados: { valor: 4 + 31 * 40, es_estimacion: true, metodo: 'tamano_por_registro_decodificado', registros_sin_longitud: 0 },
 };
 
+/**
+ * Corte común para comparar dos corridas: fin del último día hábil de RECORDS.
+ * Queda fuera la marca de 2099 (posterior) y el relleno (basura, sin fecha útil).
+ */
+const CUTOFF = '2026-10-02 23:59:59';
+
+/** Marcas nuevas, POSTERIORES al corte: llegan al reloj entre la 1.ª y la 2.ª corrida. */
+const AFTER_CUTOFF = USERS.map((uid, u) => ({
+  deviceUserId: uid, userSn: 11 + u, wall: `2026-10-03 07:${pad(40 + u)}:00`, punchByte: 0, verifyByte: 1,
+}));
+
+/** RECORDS con UN registro anterior al corte alterado (otro byte de estado, misma hora y usuario). */
+function withAlteredBeforeCutoff() {
+  const out = RECORDS.map((r) => ({ ...r }));
+  out[0] = { ...out[0], punchByte: 3 };
+  return out;
+}
+
 /** Muchas marcas (más de un bloque de 65.472 bytes en TCP) para lecturas por bloques/truncadas. */
 function manyRecords(n) {
   return Array.from({ length: n }, (_, i) => ({
@@ -85,4 +103,4 @@ function manyRecords(n) {
   }));
 }
 
-module.exports = { RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords };
+module.exports = { RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords, CUTOFF, AFTER_CUTOFF, withAlteredBeforeCutoff };

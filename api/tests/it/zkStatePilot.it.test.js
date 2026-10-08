@@ -29,7 +29,10 @@ const { spawn } = require('child_process');
 const mysql = require('mysql2/promise');
 const { describeIT, makeConn, cfg } = require('./helper');
 const { startFakeZkTcp } = require('./fixtures/fakeZkTcpServer');
-const { RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords } = require('./fixtures/pilotRecords');
+const { startFreezableProxy, RESP, MYSQL } = require('./fixtures/freezableTcpProxy');
+const {
+  RECORDS, USER_IDS, EXPECTED_TCP40, manyRecords, CUTOFF, AFTER_CUTOFF, withAlteredBeforeCutoff,
+} = require('./fixtures/pilotRecords');
 
 jest.setTimeout(300000);
 
@@ -90,8 +93,11 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     return server;
   }
 
-  /** Corre el piloto como proceso real; `during(child)` actúa mientras corre. */
-  async function runPilot({ args, env = {}, preload = null, during = null, id = String(deviceId) }) {
+  /**
+   * Corre el piloto como proceso real; `during(child)` actúa mientras corre.
+   * Si no termina en `killAfterMs`, se mata con SIGKILL y se informa `hung`.
+   */
+  async function runPilot({ args, env = {}, preload = null, during = null, id = String(deviceId), killAfterMs = 120000 }) {
     seq += 1;
     const outFile = path.join(tmpDir, `out-${seq}.json`);
     const argv = [...(preload ? ['-r', preload] : []), SCRIPT, '--device-id', id, ...args, '--out', outFile];
@@ -102,10 +108,41 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
     const exited = new Promise((r) => child.on('exit', (code, signal) => r({ code, signal })));
-    if (during) await during(child);
+    let hung = false;
+    const killer = setTimeout(() => { hung = true; child.kill('SIGKILL'); }, killAfterMs);
+    try {
+      if (during) await during(child);
+    } catch (e) {
+      child.kill('SIGKILL');
+      throw e;
+    }
     const { code, signal } = await exited;
+    clearTimeout(killer);
     const json = fs.existsSync(outFile) ? JSON.parse(fs.readFileSync(outFile, 'utf8')) : null;
-    return { code, signal, json, stdout, stderr, ms: Date.now() - t0, pid: child.pid };
+    return { code, signal, json, stdout, stderr, ms: Date.now() - t0, pid: child.pid, hung };
+  }
+
+  /** Corre el helper HABITUAL del worker (deviceLock.js) en un proceso propio: adquiere, informa y libera. */
+  function habitualAcquire(env = {}) {
+    const code = `
+      const lock = require('./src/services/deviceLock');
+      (async () => {
+        const h = await lock.acquire(${deviceId}, { origin: 'it-habitual' });
+        process.stdout.write(JSON.stringify({ backend: h ? h.backend : null }) + '\\n');
+        if (h) await lock.release(h);
+        await require('./src/config/database').sequelize.close();
+        process.exit(0);
+      })().catch(() => { process.stdout.write(JSON.stringify({ error: true }) + '\\n'); process.exit(1); });`;
+    return new Promise((resolve) => {
+      const p = spawn(process.execPath, ['-e', code], { cwd: API_ROOT, env: pilotEnv(env), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      p.stdout.on('data', (d) => { stdout += d; });
+      p.on('exit', (c) => {
+        let parsed = null;
+        try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch { /* sin salida */ }
+        resolve({ code: c, ...parsed });
+      });
+    });
   }
 
   /** Corre `fn` con general_log activo y devuelve las sentencias de OTROS hilos (el piloto). */
@@ -469,5 +506,211 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual((30 + 1 + 5 + 1) * 1000);
     expectReadOnly(statements);
+  });
+
+  // ─── Exclusión real con el fallback MySQL del helper habitual ─────
+
+  const lockRows = async () => Number((await conn.query('SELECT COUNT(*) AS n FROM device_locks WHERE device_id = ?', [deviceId]))[0][0].n);
+
+  test('exclusión: con el piloto leyendo, el helper habitual en fallback MySQL NO obtiene el lock', async () => {
+    await useServer({ records: RECORDS, scenarios: ['hang'] });
+    let habitual = null;
+    let openDuring = null;
+    const r = await runPilot({
+      args: limits({ timeout: 4, max: 20, renew: 1 }),
+      killAfterMs: 60000,
+      during: async () => {
+        await server.waitForConnections(1);
+        openDuring = server.openCount();
+        // Redis inaccesible SÓLO para el helper habitual ⇒ cae a device_locks.
+        habitual = await habitualAcquire({ REDIS_URL: 'disabled://' });
+      },
+    });
+    expect(openDuring).toBe(1);
+    // Con el piloto leyendo, el lock habitual debe estar OCUPADO: si no, hay dos lecturas a la vez.
+    expect(habitual).toMatchObject({ code: 0, backend: null });
+    expect(r.hung).toBe(false);
+    expect(r.json).toMatchObject({ resultado: 'sin_lectura_completa', codigo_salida: 6 });
+    expect(await server.waitAllClosed(5000)).toBe(true);
+    expect(await redis.exists(lockKey)).toBe(0);
+    expect(await lockRows()).toBe(0);
+  });
+
+  test('exclusión (control): con el piloto leyendo, el helper habitual con Redis tampoco obtiene el lock', async () => {
+    await useServer({ records: RECORDS, scenarios: ['hang'] });
+    let habitual = null;
+    const r = await runPilot({
+      args: limits({ timeout: 4, max: 20, renew: 1 }),
+      killAfterMs: 60000,
+      during: async () => {
+        await server.waitForConnections(1);
+        habitual = await habitualAcquire();
+      },
+    });
+    expect(habitual).toMatchObject({ code: 0, backend: null });
+    expect(r.hung).toBe(false);
+    expect(await server.waitAllClosed(5000)).toBe(true);
+  });
+
+  // ─── Operaciones pendientes: el límite total se cumple igual ─────
+
+  // Garantía documentada: el piloto termina dentro de --max-duration más una holgura FIJA de cierre.
+  const CLOSE_SLACK_S = 15;
+  const redisPort = () => Number(new URL(REDIS_URL).port || 6379);
+  const proxies = [];
+  afterEach(async () => { for (const p of proxies.splice(0)) await p.close(); });
+  const proxyFor = async (target, freezeWhen = null) => {
+    const p = await startFreezableProxy({ targetHost: '127.0.0.1', targetPort: target, freezeWhen });
+    proxies.push(p);
+    return p;
+  };
+
+  test('Redis sin respuesta mientras el piloto lee: la renovación se acota, se corta la lectura y termina', async () => {
+    await useServer({ records: RECORDS, scenarios: ['hang'] });
+    const px = await proxyFor(redisPort());
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 30, renew: 1 }),
+      env: { REDIS_URL: `redis://127.0.0.1:${px.port}` },
+      killAfterMs: 45000,
+      during: async () => { await server.waitForConnections(1); px.freeze(); },
+    });
+    expect(r.hung).toBe(false);
+    expect(r.ms).toBeLessThan(20000);
+    expect(r.json).toMatchObject({ resultado: 'redis_no_disponible', codigo_salida: 5 });
+    expect(await server.waitAllClosed(5000)).toBe(true);
+    expect(liveReadChildren()).toEqual([]);
+    // La liberación en Redis no pudo confirmarse: la clave vence por TTL (nunca queda sin vencimiento).
+    const ttl = await redis.pTTL(lockKey);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual((20 + 1 + 5 + 1) * 1000);
+  });
+
+  test('MySQL sin respuesta mientras el piloto lee: la verificación se acota, se corta la lectura y termina', async () => {
+    await useServer({ records: RECORDS, scenarios: ['hang'] });
+    const px = await proxyFor(cfg.port);
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 30, renew: 1 }),
+      env: { DB_HOST: '127.0.0.1', DB_PORT: String(px.port) },
+      killAfterMs: 45000,
+      during: async () => { await server.waitForConnections(1); px.freeze(); },
+    });
+    expect(r.hung).toBe(false);
+    expect(r.ms).toBeLessThan(20000);
+    expect(r.json).toMatchObject({ resultado: 'exclusion_no_garantizada', codigo_salida: 4 });
+    expect(await server.waitAllClosed(5000)).toBe(true);
+    // Redis sano: la clave propia se libera.
+    expect(await redis.exists(lockKey)).toBe(0);
+  });
+
+  test('MySQL sin respuesta en la consulta inicial: base_no_disponible dentro del tope, sin Redis ni reloj', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const before = await redisConnections();
+    const px = await proxyFor(cfg.port, MYSQL.queryContains('FROM devices'));
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 30 }),
+      env: { DB_HOST: '127.0.0.1', DB_PORT: String(px.port) },
+      killAfterMs: 45000,
+    });
+    expect(px.state.frozen).toBe(true);
+    expect(r.hung).toBe(false);
+    expect(r.ms).toBeLessThan(20000);
+    expect(r.json).toMatchObject({ resultado: 'base_no_disponible', codigo_salida: 8 });
+    expect(await redisConnections()).toBe(before);
+    expect(server.connections).toHaveLength(0);
+  });
+
+  test('límite total con una consulta MySQL pendiente: limite_total sin esperar a la consulta', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const px = await proxyFor(cfg.port, MYSQL.queryContains('FROM devices'));
+    const r = await runPilot({
+      args: limits({ timeout: 1, max: 2 }),
+      env: { DB_HOST: '127.0.0.1', DB_PORT: String(px.port) },
+      killAfterMs: 45000,
+    });
+    expect(px.state.frozen).toBe(true);
+    expect(r.hung).toBe(false);
+    expect(r.ms).toBeLessThan((2 + CLOSE_SLACK_S) * 1000);
+    expect(r.json).toMatchObject({ resultado: 'limite_total', codigo_salida: 6 });
+    expect(server.connections).toHaveLength(0);
+  });
+
+  test('cierre de Redis sin confirmar (QUIT sin respuesta): termina igual, con la lectura completa', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const px = await proxyFor(redisPort(), RESP.contains('QUIT'));
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 30 }),
+      env: { REDIS_URL: `redis://127.0.0.1:${px.port}` },
+      killAfterMs: 45000,
+    });
+    expect(px.state.frozen).toBe(true);
+    expect(r.hung).toBe(false);
+    expect(r.ms).toBeLessThan(20000);
+    expect(r.json).toMatchObject({ resultado: 'ok', codigo_salida: 0 });
+    // El lock se liberó ANTES del QUIT.
+    expect(await redis.exists(lockKey)).toBe(0);
+  });
+
+  test('cierre de MySQL sin confirmar (COM_QUIT sin respuesta): termina igual, con la lectura completa', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const px = await proxyFor(cfg.port, MYSQL.comQuit);
+    const r = await runPilot({
+      args: limits({ timeout: 20, max: 30 }),
+      env: { DB_HOST: '127.0.0.1', DB_PORT: String(px.port) },
+      killAfterMs: 45000,
+    });
+    expect(px.state.frozen).toBe(true);
+    expect(r.hung).toBe(false);
+    expect(r.ms).toBeLessThan(20000);
+    expect(r.json).toMatchObject({ resultado: 'ok', codigo_salida: 0 });
+    expect(await lockRows()).toBe(0);
+  });
+
+  // ─── Corte temporal común: el mismo conjunto histórico en dos corridas ─
+
+  test('sin corte (control): con marcas nuevas entre corridas, los agregados difieren', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const r1 = await runPilot({ args: limits() });
+    await useServer({ records: [...RECORDS, ...AFTER_CUTOFF], scenarios: ['ok'] });
+    const r2 = await runPilot({ args: limits() });
+    expect([r1.code, r2.code]).toEqual([0, 0]);
+    expect([r1.json.lectura.registros, r2.json.lectura.registros]).toEqual([31, 37]);
+  });
+
+  test('corte común: dos corridas con marcas nuevas entre medio dan el mismo conjunto anterior al corte', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const r1 = await runPilot({ args: [...limits(), '--cutoff', CUTOFF] });
+    await useServer({ records: [...RECORDS, ...AFTER_CUTOFF], scenarios: ['ok'] });
+    const r2 = await runPilot({ args: [...limits(), '--cutoff', CUTOFF] });
+    expect([r1.code, r2.code]).toEqual([0, 0]);
+    expect(r1.json.lectura.registros).not.toBe(r2.json.lectura.registros);
+    expect(r1.json.lectura.corte.hasta).toBe(CUTOFF);
+    expect(r1.json.lectura.corte.conjunto).toEqual(r2.json.lectura.corte.conjunto);
+    // 29 válidos menos la marca de 2099: 28 en el conjunto; posteriores 1 y 7.
+    expect(r1.json.lectura.corte.conjunto.registros).toBe(28);
+    expect([r1.json.lectura.corte.fuera.posteriores, r2.json.lectura.corte.fuera.posteriores]).toEqual([1, 7]);
+    expect(r1.json.lectura.corte.conjunto.huella).toMatch(/^[0-9a-f]{64}$/);
+    expectNoSecretsOrPeople(r1.json);
+    expectNoSecretsOrPeople(r2.json);
+  });
+
+  test('corte común: un registro anterior al corte alterado cambia la huella del conjunto', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const r1 = await runPilot({ args: [...limits(), '--cutoff', CUTOFF] });
+    await useServer({ records: withAlteredBeforeCutoff(), scenarios: ['ok'] });
+    const r2 = await runPilot({ args: [...limits(), '--cutoff', CUTOFF] });
+    expect([r1.code, r2.code]).toEqual([0, 0]);
+    expect(r2.json.lectura.corte.conjunto.registros).toBe(r1.json.lectura.corte.conjunto.registros);
+    expect(r2.json.lectura.corte.conjunto.huella).not.toBe(r1.json.lectura.corte.conjunto.huella);
+  });
+
+  test('corte en el futuro: código 2 sin abrir MySQL, Redis ni el reloj', async () => {
+    await useServer({ records: RECORDS, scenarios: ['ok'] });
+    const before = await redisConnections();
+    const { out: r, statements, connects } = await auditSql(() => runPilot({ args: [...limits(), '--cutoff', '2099-01-01 00:00:00'] }));
+    expect(r.code).toBe(2);
+    expect(r.json).toMatchObject({ resultado: 'corte_futuro', intentos_ejecutados: 0 });
+    expect([statements, connects]).toEqual([[], 0]);
+    expect(await redisConnections()).toBe(before);
+    expect(server.connections).toHaveLength(0);
   });
 });
