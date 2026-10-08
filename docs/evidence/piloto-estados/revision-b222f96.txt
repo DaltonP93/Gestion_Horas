@@ -1,0 +1,52 @@
+# Piloto aislado de estados por reloj — revisión adversarial sobre b222f96 y sus correcciones
+# Tres lentes independientes (cierre/cancelación, TTL/exclusión, contrato/documentación/pruebas) con
+# corridas reales del CLI contra MySQL 8.0.46 y Redis 7 propios de cada revisor (reloj simulado por TCP
+# real, proxy que congela, demora o corta con RST), y un verificador escéptico por hallazgo que intentó
+# refutarlo. Sin producción, relojes físicos ni att2000. Scripts y salidas en el directorio de trabajo de
+# la revisión (no forman parte del repositorio).
+
+## Lo que la revisión confirmó que se cumple (b222f96)
+- 65 corridas reales del CLI con señales en cada fase (conexión Redis, identidad, SET NX, conexión del
+  lock, SET SESSION, verificación, limpieza, INSERT, renovaciones, intento, liberación, COM_QUIT), con
+  congelamiento y con demora: las 65 escribieron el JSON y terminaron dentro de --max-duration + 17 s
+  (peor caso señal→salida 1.9 s; ambos backends con cliente nuevo mudo: 6017 ms, por_ttl/por_ttl).
+- Límite total (--attempt-timeout 1 --max-duration 3) con una operación congelada o demorada en cada fase:
+  21 corridas, todas código 6 a ≈ 3.5 s, liberación correcta y sin restos.
+- Matemática del TTL: la renovación previa cubre sola la vida del hijo con 2 + renovación s de margen;
+  la zona -03:00 de la sesión del lock en un servidor UTC es la del helper habitual; una renovación o
+  liberación tardía de un cliente cancelado no toca un lock tomado después por otro (Lua y SQL por token).
+- Contrato JSON en 18 resultados reales = §4; la clave del corte nunca está en el entorno ni en los
+  argumentos del hijo, ni en el JSON ni en stderr; las tablas de antes-b21e08e.txt se reproducen exactas.
+
+## Hallazgos (confirmados por su verificador o reproducidos por el revisor) y corrección
+| Id | Sev. | Hallazgo en b222f96 | Evidencia real | Corrección |
+|---|---|---|---|---|
+| C5-1/F1 | P2 | Un error de RED de mysql2 (ECONNRESET: errno -104, entero) se tomaba como respuesta del servidor | RST tras el INSERT: `liberacion.mysql: "no_tomado"` con la fila del piloto viva 30 s; RST en el DELETE de liberación: `por_ttl` sin probar un cliente nuevo, fila 27 s | Respuesta del servidor = errno > 0 con SQLSTATE (`isMysqlServerError`); dobles con la forma real del error |
+| TTL-1 | P2 | Ctrl+Z (SIGTSTP) suspendía al piloto y al hijo: el lock vencía y el helper habitual lo tomaba con la sesión del hijo con el reloj abierta | pty con `bash -i`: lock vencido a los 26.7 s, `habitual toma: mysql true redis true` con 1 conexión abierta al reloj; resultado `sin_lectura_completa` | SIGTSTP interrumpe (148) en el principal; el hijo sale ante SIGTSTP |
+| TTL-2 | P2 | Exclusión perdida a mitad de la lectura sin desconexión: una lectura que terminaba antes de la renovación salía `ok` (0) y comparable | DEL externo + SET de otro dueño durante la lectura: `exit 0 resultado ok`, `liberacion.redis: perdido`, comparación `igual` | La lectura completa se acepta sólo con una verificación de la exclusión enviada DESPUÉS del fin del hijo; si no, `lock_perdido` (7) sin lectura ni corte |
+| C5-2/TTL-3 | P3 | CLIENT KILL ID / KILL CONNECTION por número suelto: tras un reinicio o cambio de servidor mataba una sesión ajena | Redis reiniciado: `cliente AJENO id 5 → Socket closed unexpectedly`, informe `compensado`; MySQL reiniciado: `cliente AJENO id 16 → PROTOCOL_CONNECTION_LOST` (server_uuid igual antes y después) | Identidad al abrir: Redis id+addr+run_id (`CLIENT KILL ID … ADDR …` sólo con el mismo run_id); MySQL hilo+HOST+arranque (`Uptime`); si no coincide, no se mata nada (`incierto`) |
+| TTL-4 | P3 | El control "cabe un intento" iba antes de la renovación previa: un intento que ya no cabía tocaba el reloj | primer EVAL demorado 3.5 s: el hijo conectó con 3103 ms restantes de --attempt-timeout 5000 y lo cortó el límite | Se repite el control después de la renovación, antes de lanzar el hijo |
+| C5-3 | P3 | `cierre_clientes` decía `normal` para una conexión rota | RST en la conexión del lock: `mysql_lock: "normal"` (end() de mysql2/promise resuelve con el error) | Conexión rota o end() con error ⇒ `forzado` (documentado también "sin presupuesto") |
+| C5-4 | P3 | Una señal durante el cierre de una lectura completa la convertía en `interrumpido` (143) | `resultado interrumpido, lectura_registros 31, liberacion liberado/liberado` | El resultado se fija antes del cierre; la señal se registra en `senal` |
+| C5-5 | P3 | `exclusion.mysql.estado: sin_conexion` con la conexión del lock ya abierta | señal durante SET SESSION/verificación | `sin_conexion` sólo sin conexión; si no, `detenido` / `sin_respuesta` / por errno |
+| F2 | P3 | El TTL provisional de la FILA no tenía prueba | mutante sin PROVISIONAL_TTL_S en el INSERT: 48/48 IT y unitarias verdes | Unitaria (parámetro del INSERT = 30) e IT (`INTERVAL 30 SECOND` en el INSERT, 27 en las renovaciones) |
+| F3 | P3 | La comparación no miraba el reloj ni si eran dos corridas: el mismo archivo dos veces daba `igual` | `cmp same file twice: igual`; dos relojes distintos: `igual` | `corrida_id` aleatorio; `misma_corrida`, `reloj_distinto`, `sin_corrida`; JSON que no es objeto ⇒ entrada inválida |
+| F4 | P3 | La IT de liberación lenta no podía ver una respuesta tardía (el piloto terminaba antes) | `pilot_exit_at_ms 3410` vs `delayed_eval_flushed_at_ms 4396` | Título y aserción honestos: el EVAL viejo llega después de la salida y no toca la clave de otro dueño |
+| F5 | P3 | La cota de la IT de señal (< 2000 ms) coincidía con CLOSE_OP_MS (el mutante sin gracia fallaba por 66 ms) | `señal→salida: 2066 ms` | Cota = STOP_GRACE_MS + 1000 (1.4 s) y comprobación de que queda por debajo de CLOSE_OP_MS |
+| F6 | P3 | Los escáneres de literales tenían puntos ciegos (comillas mezcladas, plantillas, varias líneas, piezas sueltas, otros módulos del grafo) | mutantes con `UPDATE devices …` entre comillas dobles, plantilla `KILL ${id}`, `['client','kill']` pasaban | Tokenizador sobre TODO el grafo (principal, hijo y CLI de comparación), sin distinguir mayúsculas; lista blanca de `sendCommand` |
+| F7 | P3 | "La clave nunca viaja por variables de entorno" sin prueba | mutante con PILOT_CORTE_CLAVE en CHILD_ENV_KEYS: todo verde | Unitaria (lista blanca exacta, sin secretos) e IT (`/proc/<hijo>/environ` y `cmdline`) |
+| F8 | P3 | Tres guardas sin prueba (no cabe antes de los locks, renovación > 4 s, canon) | mutantes MU3/MU4/MU5 sin fallas | Unitarias con dobles para las tres |
+| F9 | P3 | `PILOT_CORTE_CLAVE=` vacía (plantilla) abortaba con código 2 | `clave-vacia exit 2 configuracion_invalida` | Vacía = sin clave (sólo conteos) |
+| F10 | P3 | Inconsistencias de documentación (códigos 4/5 también durante la lectura, `futuras` ⊂ `posteriores`, valores null, `lectura.intento`, comentarios de args y CLI) | salidas reales | §4, §7 y comentarios corregidos |
+| F11 | P3 | (previo a esta ronda) el hijo carga el logger (crea `logs/`) y node-zklib puede escribir `*.err.log` en el directorio actual | `logs/combined.log` creado en el directorio del revisor | Documentado como residual: correr desde la copia aislada que se borra al terminar |
+| F12 | P3 | La IT contaba procesos de lectura de TODO el equipo | 7 fallas sólo por pilotos ajenos | Sólo los de los pilotos de la suite (grupo de procesos propio) |
+
+## Mutaciones sobre las correcciones (cada prueba nueva detecta su agujero)
+| Mutación | Resultado con la mutación |
+|---|---|
+| Ma: un errno de red vuelve a contar como respuesta del servidor | 4 unitarias y 2 IT (RST tras el INSERT, RST en la liberación) FALLAN |
+| Mb: sin SIGTSTP | IT "Ctrl+Z" FALLA (sigue leyendo; no interrumpe) |
+| Mc: sin la verificación posterior a la lectura | IT "clave perdida a mitad de la lectura" FALLA (`ok` en vez de `lock_perdido`) |
+| Md: KILL sin comprobar la identidad | 5 unitarias FALLAN (otro servidor, otro HOST, otro run_id, forma del CLIENT KILL, escáner) |
+| Me: sin el control "cabe" después de la renovación | unitaria "renovación lenta que se come el tiempo" FALLA |
+| Mf: la señal del cierre cambia el resultado | IT "señal DURANTE el cierre" FALLA (`interrumpido` en vez de `ok`) |
