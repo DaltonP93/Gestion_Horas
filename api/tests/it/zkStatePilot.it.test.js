@@ -243,7 +243,15 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     expect(statements.filter((s) => /audit_events|CREATE\s|ALTER\s|DROP\s/i.test(s))).toEqual([]);
     return rest;
   };
-  const redisConnections = async () => Number(/total_connections_received:(\d+)/.exec(await redis.info('stats'))[1]);
+  /**
+   * Redis del PILOTO a través de un proxy que sólo cuenta conexiones. (El contador del servidor,
+   * total_connections_received, también cuenta las ajenas: p. ej. el healthcheck `redis-cli ping` del
+   * contenedor de CI cada 10 s.)
+   */
+  const countingRedis = async () => {
+    const p = await proxyFor(redisPort());
+    return { env: { REDIS_URL: `redis://127.0.0.1:${p.port}` }, connections: () => p.state.connections };
+  };
   const expectNoSecretsOrPeople = (json) => {
     // El corte es un parámetro del operador y la huella es de CONJUNTO: se quitan antes de buscar
     // horas individuales o identificadores.
@@ -466,24 +474,24 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
   test.each([['1e2'], ['01'], ['-1'], ['1.5'], ['1abc'], ['0'], ['9007199254740993'], [' 7'], ['0x10']])(
     'ID %p: código 2 sin abrir MySQL, Redis ni el reloj', async (raw) => {
       await useServer({ records: RECORDS, scenarios: ['ok'] });
-      const before = await redisConnections();
-      const { out: r, statements, connects } = await auditSql(() => runPilot({ args: limits(), id: raw }));
+      const rc = await countingRedis();
+      const { out: r, statements, connects } = await auditSql(() => runPilot({ args: limits(), id: raw, env: rc.env }));
       expect(r.code).toBe(2);
       expect(r.json).toMatchObject({ resultado: 'id_invalido', reloj: { id: null }, intentos_ejecutados: 0 });
       expect([statements, connects]).toEqual([[], 0]);
-      expect(await redisConnections()).toBe(before);
+      expect(rc.connections()).toBe(0);
       expect(server.connections).toHaveLength(0);
     },
   );
 
   test('reloj inexistente: código 8 sin tocar Redis ni relojes', async () => {
     await useServer({ records: RECORDS, scenarios: ['ok'] });
-    const before = await redisConnections();
-    const audit = await auditSql(() => runPilot({ args: limits(), id: String(deviceId + 100000) }));
+    const rc = await countingRedis();
+    const audit = await auditSql(() => runPilot({ args: limits(), id: String(deviceId + 100000), env: rc.env }));
     const { out: r, statements } = audit;
     expect(r.code).toBe(8);
     expect(r.json.resultado).toBe('reloj_inexistente');
-    expect(await redisConnections()).toBe(before);
+    expect(rc.connections()).toBe(0);
     expect(server.connections).toHaveLength(0);
     expectReadOnly(statements);
     expectPilotSql(audit, { lockConn: false });
@@ -1279,25 +1287,25 @@ describeIT('piloto aislado de estados por reloj (integración)', () => {
     await useServer({ records: RECORDS, scenarios: ['ok'] });
     const { pyDateTimeStr } = require('../../src/services/zkRecordShape');
     const { addMinutesWall } = require('../../src/services/zkPilot/corte');
-    const before = await redisConnections();
+    const rc = await countingRedis();
     const { out: r, statements, connects } = await auditSql(() => runPilot({
-      args: corteArgs(addMinutesWall(pyDateTimeStr(new Date()), -30)), env: corteEnv,
+      args: corteArgs(addMinutesWall(pyDateTimeStr(new Date()), -30)), env: { ...corteEnv, ...rc.env },
     }));
     expect(r.code).toBe(2);
     expect(r.json).toMatchObject({ resultado: 'corte_reciente', intentos_ejecutados: 0, corte: { conjunto: null } });
     expect([statements, connects]).toEqual([[], 0]);
-    expect(await redisConnections()).toBe(before);
+    expect(rc.connections()).toBe(0);
     expect(server.connections).toHaveLength(0);
   });
 
   test('corte en el futuro: código 2 sin abrir MySQL, Redis ni el reloj', async () => {
     await useServer({ records: RECORDS, scenarios: ['ok'] });
-    const before = await redisConnections();
-    const { out: r, statements, connects } = await auditSql(() => runPilot({ args: [...limits(), '--cutoff', '2099-01-01 00:00:00'] }));
+    const rc = await countingRedis();
+    const { out: r, statements, connects } = await auditSql(() => runPilot({ args: [...limits(), '--cutoff', '2099-01-01 00:00:00'], env: rc.env }));
     expect(r.code).toBe(2);
     expect(r.json).toMatchObject({ resultado: 'corte_futuro', intentos_ejecutados: 0 });
     expect([statements, connects]).toEqual([[], 0]);
-    expect(await redisConnections()).toBe(before);
+    expect(rc.connections()).toBe(0);
     expect(server.connections).toHaveLength(0);
   });
 });
